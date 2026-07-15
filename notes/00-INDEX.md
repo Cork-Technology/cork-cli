@@ -4,18 +4,22 @@ Working notes for the ~6h unattended design/research window (brief §6).
 
 ## Structure
 
+**Start here → `architecture-draft.md`** (the synthesis), then `questions.md` (Q1–Q8 for you),
+then `discrepancies.md` (D1–D9). Everything else is supporting evidence.
+
 - `research/` — research findings, one file per thread, with sources
-  - `cli-frameworks.md` — §5.1 evaluation
-  - `schema-once-mcp.md` — §5.3 + §5.4 (schema pattern, tool granularity, tool search)
-  - `cork-public-hypersync.md` — Cork public docs/deployments + HyperSync patterns
-  - `cork-contracts-domain.md` — domain model from euler-research + private repos
-  - `github-config-sources.md` — phoenix prod.toml + depeg-frontend config analysis
-- `experiments/` — empirical work on anvil fork / Tenderly vnet
-  - scripts live in `../experiments/`, observations recorded here
-- `assumptions.md` — ASSUMPTION(n) log
-- `questions.md` — QUESTION(n) log (prioritized at end of session)
-- `discrepancies.md` — claim-vs-observed table
-- `architecture-draft.md` — draft architecture proposal + repo skeleton (end state)
+  - `cli-frameworks.md` — §5.1: 12 candidates; recommendation trpc-cli-over-registry, runner-up stricli
+  - `schema-once-mcp.md` — §5.3+§5.4: zod v4 + MCP SDK v2; ~11 parameterized tools; no bespoke tool search
+  - `cork-public-hypersync.md` — docs/llms.txt, Sourcify verification, api-phoenix.cork.tech, audits, HyperSync token/reorg/client guidance
+  - `cork-contracts-domain.md` — full domain model: CorkAdapter=Bundler3 module, 13 actions, preview math, constraint source, 1inch LOP + ERC-7683 rollover, whitelist, events, ABI locations
+  - `github-config-sources.md` — prod.toml + depeg-frontend analysis, address triangle, CREATE2 salts
+- `experiments/` — empirical observations (runnable code in `../experiments/fork-harness/`, 9 green forge tests)
+  - `01-fork-experiments.md` — sandbox constraints, market discovery, **token-bucket rate limiter fully characterized**, swap semantics, whitelist enforcement, real-tx bundle decode
+  - `02-dx-smoke.md` — one-schema pattern verified live; gotchas G1–G5 (wire-typed boundary rule)
+- `assumptions.md` — ASSUMPTION(n) log (A3 confirmed against source)
+- `questions.md` — QUESTION(n) log, prioritized (Q1 Dutch-auction orders is the big one)
+- `discrepancies.md` — claim-vs-observed table (D1–D9)
+- `architecture-draft.md` — draft architecture + repo skeleton + build order
 
 ## Environment facts (verified 2026-07-15)
 
