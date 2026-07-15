@@ -152,3 +152,29 @@ Real mainnet swap-era tx `0xd236b725…` (found via `PoolSwap` logs on the vnet,
   (vnet artifact, not protocol behavior) — but it means: (a) experiments must `vm.mockCall` the
   oracle at head, (b) the CLI's error enrichment should map oracle panics to a labeled
   "oracle failure" rather than a generic revert. ASSUMPTION(2) in assumptions.md.
+
+## 7. Late-session verification round (all confirmed)
+
+- **MarketId re-hash integrity check works**: `keccak256(abi.encode(market(poolId)))` ==
+  poolId, byte-exact (JAN2026 pool). `cork market get` can verify every id it returns for free.
+- **Unwind fee time-decay confirmed on real mainnet data** (APR2026 pool, 0.05% fees, archive
+  reads across its life): unwind fee per 1e18 CA-in decayed linearly 4.96e14 (tte 89d) →
+  4.03e14 (72d) → 2.87e14 (51d) → 1.71e14 (30d) → 5.48e13 (9d) → 7.5e11 (~0d); slope ≈
+  baseFee × tte/lifetime with baseFee = 5e14 (0.05%) and lifetime ≈ 90.3d. Meanwhile **swap fee
+  is time-constant** at 5.0025e14 per 1e18 out = the 0.05% gross-up `1e18·100/(100−0.05) − 1e18`
+  — matches the extracted PoolLib formulas exactly. Both time-dependent mechanics (bucket +
+  fee decay) are now empirically characterized.
+- **Expired-pool previews return (0,0,0)** — confirmed on JAN2026 post-expiry (zeros, no revert).
+  Note JAN2026 was created only ~3h before its expiry (API + event data agree) — markets can be
+  born near-dead; `markets list` should compute `status` from expiry, not existence.
+- **CREATE2 address verification works end-to-end**: Sourcify
+  `creationBytecode.onchainBytecode` (NB: field name, not `onchainCreationBytecode`) →
+  `keccak256` → `cast create2 --deployer 0x914d…(Safe Singleton Factory) --salt <prod.toml
+  cork_adapter_salt>` reproduces `0xCCcC…0407` exactly. `cork meta config --verify` is
+  implementable with zero API keys.
+- **api-phoenix POST /v1/limit-orders body** (OpenAPI): 1inch LOP v4 order fields + Cork
+  metadata `side: BUY|SELL`, `premium: 0..10000` (bps), `expiry`, `nonce`,
+  `allowsPartialFills`, and an **`extension` field (default "")** — the schema *supports*
+  extensions even though every observed order has none ⇒ Dutch-auction-via-extension is
+  plausible future work, refining D1. No open orders exist right now on 42161/49222 (pools
+  expired / vnet stale), so fill-side semantics remain paper-verified only.
