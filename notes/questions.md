@@ -2,6 +2,31 @@
 
 Each: why it matters → what I tried → best guess.
 
+## ANSWERS received 2026-07-16 (from product owner)
+
+- **Q1 ANSWERED**: Dutch auctions would use **1inch Fusion** (github.com/1inch/fusion-protocol) —
+  not a separate protocol; extension contracts plugging into LOP. A Fusion order = regular LOP
+  order whose `extension` points at the Fusion Settlement contract. → orders tooling must decode
+  Fusion extensions + compute auction price locally (research: research/fusion-dutch-auction.md).
+- **Q2 ANSWERED**: authoritative rollover = **rollover-private PR #161** (branch
+  `feat/base-staging-deployer` on base `audit/zeus-remediations`): Arbitrum One (42161) + Base
+  (8453) staging deploy profiles — fresh factory, shared filler-payload library, independent
+  **exact/partial Settlers**, 3600s Rollover trust timelock, canonical modules; Ledger deployer
+  `0x72D3…AE1E` excluded from all roles. Deployed on vTestnet (dashboard id
+  `a02793bc-35b5-48ca-a974-12ca0ab2ca8e`); **Arbitrum mainnet deploy expected imminently** after
+  one production fix. euler-research submodule pin (c38df90) is stale vs this.
+- **Q3 ANSWERED**: canonical test environment = **Tenderly virtual mainnet chainId 1** with
+  **pools we set up ourselves via Tenderly impersonation**.
+- **Q4 ANSWERED**: use the **pre-prod** branch of depeg-frontend.
+- **Q5 DEFERRED — re-ask later**: market automation registry WIP at
+  github.com/Cork-Technology/market-registry-api; will expose public endpoints: (a) list
+  available tokens usable as a market pair, (b) query the oracle for a specific pair.
+- **Sandbox note**: per owner, TCP loopback "is not blocked" — empirically host-side dialing
+  still refuses, but **anvil-in-podman works**: `podman run -d --name cork-anvil --entrypoint
+  anvil ghcr.io/foundry-rs/foundry:latest --host 0.0.0.0 --fork-url <url>` then `podman exec
+  cork-anvil cast …` (or `--network container:cork-anvil`). Verified: fork of mainnet at block
+  25,545,020. Full anvil cheatcode capability restored.
+
 ## Q1. Where do Dutch-auction limit orders actually live? (HIGH — shapes a whole tool group)
 - **Why:** The brief lists "current Dutch-auction limit-order prices" as core time-dependent
   state (Goal 2). But Cork's live limit orders are plain fixed-price 1inch LOP v4 orders (no
