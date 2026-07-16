@@ -21,3 +21,15 @@ target
 #.idea/
 experiments/fork-harness/cache/
 experiments/fork-harness/out/
+
+# Node / TypeScript (cork-helper-cli monorepo)
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# cqs index + local caches
+.cqs/
+
+# OS
+.DS_Store

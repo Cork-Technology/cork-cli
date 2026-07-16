@@ -269,3 +269,26 @@ canonical example.
   49222 staging vnet — governs default `chainId` and which markets the CLI shows by default.
 - **Q-WITHDRAW** (D8/QUESTION-6): `withdraw` NatSpec says pre-expiry but code path is post-expiry;
   confirm intended semantics before labeling the enrichment.
+
+---
+
+## C14 — Implementation parity (Phase-1 core, 2026-07-16)
+
+**Claim:** the TS core reproduces on-chain Cork math bit-exactly; bundle bytes match the wire.
+
+**Tested:** `packages/*` monorepo. Golden vectors derived *independently* of the TS impl —
+Foundry unit-test literals (`computeT`, `calculateTimeDecayFee`), Python integer arithmetic
+(`_calculateRate` refill + committed-descent floor), `cast`/foundry (`MarketId` keccak, CREATE2,
+CorkAdapter action + Bundler3 `multicall` byte-parity). Live fork-parity vs the vnet fixture pool
+`0xceebea…c16a` (reads pinned to one block).
+
+**Observed — CONFIRMED.** All 60 offline unit vectors pass; fork-parity reproduces on-chain
+`swapRate`, `previewSwap`, `previewUnwindSwap`, and `MarketId` **wei-for-wei** across multiple
+amounts, and the full `runTool(cork_compute cst-swap-rate)` handler stack matches on-chain
+`previewSwap` exactly. This closes the 03-vnet-fixture flag that unwind time-decay "needs exact
+porting" — it now matches to the wei. The committed-descent impairment floor is `≤` a brute-force
+adversary simulation across a 5-point horizon matrix (conservative-safe; never optimistic). Bundler3
+`Call` struct + `multicall`/`reenter` signatures re-verified against the deployed contract via
+Sourcify (`0x6566…0245`), matching the memory note. `A()` discriminated-union helper + hex-typed
+primitives (`Address`/`Hex`/`Bytes32` → `` `0x${string}` ``) tightened so schema outputs feed
+viem/core directly.
