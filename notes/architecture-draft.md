@@ -11,7 +11,7 @@ so you can veto rather than fill blanks.
 |---|---|
 | Schema core | **zod v4 (≥4.2)** everywhere; one `defineTool` registry → CLI + MCP + TS types |
 | MCP | **Official TS SDK v2** (`@modelcontextprotocol/server`, stable ~2026-07-28); Standard Schema takes zod v4 natively |
-| CLI layer | **trpc-cli** consuming the same registry (runner-up: stricli + self-owned adapter); `--json` input mode on every command |
+| CLI layer | **trpc-cli** consuming the same registry — **RATIFIED 2026-07-16** after review-board + verification spike (experiments/04): exit to bare commander proven at 88 lines/hours; framework overhead measured ~15ms; `jsonInput: "auto"` required in wiring config; registry schemas stay framework-clean (positional meta injected at the 25-line projection); flip triggers now numeric (p50 overhead >400ms, baseline 125ms) |
 | MCP tool surface | **~11 parameterized tools** (not 13+ per-action tools); `cork_tx_prepare` takes a discriminated-union `action`; no bespoke keyword search tool (native client tool-search won) |
 | Time-dependent math | **Port to TS bigint-WAD + bit-parity CI against forge fork tests** (harness already built & proven this session); `eth_call` used for *current* values, local math only for *projections* that have no on-chain view (worst-case floor over horizon) |
 | Rust addon | **Defer for v1.** HyperSync's own Node client is already napi-over-Rust; the constraint math is trivial integer arithmetic; addon slot preserved in repo layout (`crates/`) for when fork-orchestration/RFQ-backtest features land |
