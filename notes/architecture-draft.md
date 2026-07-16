@@ -25,6 +25,19 @@ so you can veto rather than fill blanks.
 1. **Live limit orders are plain 1inch LOP v4 fixed-price orders; rollover orders are ERC-7683
    with a fixed premium floor.** No Dutch-auction pricing exists on-chain today (D1/D2, Q1/Q2).
    The `orders` tools ship with a pricing-strategy discriminator so Dutch slots in later.
+   **UPDATE 2026-07-16 (owner answers):** Dutch auctions = **1inch Fusion** (extension contracts
+   on LOP; a Fusion order is a LOP order whose extension points at the Settlement contract —
+   current v3.1 Settlement `0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5` on mainnet AND Arbitrum).
+   Full decode + price math in `research/fusion-dutch-auction.md`: detect via the 20-byte address
+   heading `makingAmountData`, branch v2/v3 layouts, piecewise-linear rate bump (1e7 = 100%) with
+   gas-linked component, nested ceil-rounding; `@1inch/fusion-sdk@2.4.x` `AuctionCalculator` is
+   reusable (port + bit-parity-test it like the floor math; price is a pure function of
+   (auctionDetails, taker, baseFee, timestamp)). Salt rule: keccak(extension) low-160 must equal
+   salt low-160 when makerTraits bit 249 set — a free integrity check for `cork decode`.
+   Rollover (PR #161, branch `feat/base-staging-deployer` / base `audit/zeus-remediations`):
+   factory + exact/partial **Settlers** + 5 modules + 3600s trust timelock, CREATE2-salted,
+   external deps `registry` + `phoenixPoolManager`; deployed on a Cork vTestnet, **Arbitrum
+   mainnet imminent** — rollover tools target that surface, schema-first now, wired post-deploy.
 2. **The impairment floor is a token bucket** (empirically characterized, see experiments):
    refill `rateChangePerDayMax`/day capped at `rateChangeCapacityMax`; one commit can spend the
    whole bucket; preview never shows more than one bucket of movement. The product-critical
@@ -41,7 +54,14 @@ so you can veto rather than fill blanks.
    limit-orders incl. POST). Multichain is real now: mainnet + Arbitrum + virtual 49222.
 6. **No live unexpired public pool exists today** (all expired ≤2026-07-12) — CI and dev must
    run against a pinned fork of the euler-research vnet (two live vnet-only markets) until new
-   pools launch (Q3).
+   pools launch (Q3). **UPDATE 2026-07-16:** owner confirmed the Tenderly vnet (chainId 1) as
+   the canonical test env with self-created pools via impersonation — done: fixture pool
+   `0xceebea35…c16a` with permissionless MockRateOracle, funded dev EOA, live swap/unwind paths
+   (see experiments/03-vnet-fixture.md). Also: **anvil works inside podman** (`podman exec` /
+   `--network container:`), restoring cheatcode-RPC workflows alongside forge in-process forks.
+   RFQ (Goal 3) gains a dependency: Cork's **market-registry-api** (WIP) will expose public
+   endpoints for (a) listable market-pair tokens, (b) per-pair oracle queries — re-ask owner
+   before designing `cork_rfq_quote` internals.
 
 ## 2. One schema, three consumers (§5.3) — the load-bearing pattern
 
