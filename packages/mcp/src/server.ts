@@ -45,13 +45,26 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
         isError: envelope.state === "unavailable",
       };
     } catch (err) {
-      const message =
-        err instanceof ToolInputError
-          ? `invalid input for ${err.tool}: ${JSON.stringify(err.issues)}`
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      return { content: [{ type: "text" as const, text: message }], isError: true };
+      const invalid = err instanceof ToolInputError;
+      const message = invalid
+        ? `invalid input for ${(err as ToolInputError).tool}: ${JSON.stringify((err as ToolInputError).issues)}`
+        : err instanceof Error
+          ? err.message.split("\n")[0]!
+          : String(err);
+      // Even the failure path honors the advertised outputSchema: emit a minimal error envelope
+      // as structuredContent so strict clients never see a schema-less error result.
+      const errorEnvelope = {
+        state: "unavailable" as const,
+        data: null,
+        warnings: [{ code: invalid ? "invalid_input" : "internal_error", message }],
+        provenance: { source: "config" as const, chainId: 1 as const, fetchedAt: new Date().toISOString() },
+        schemaVersion: SCHEMA_VERSION,
+      };
+      return {
+        content: [{ type: "text" as const, text: message }],
+        structuredContent: errorEnvelope as Record<string, unknown>,
+        isError: true,
+      };
     }
   });
 

@@ -29,7 +29,7 @@ import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
-import { mkClient, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
+import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
@@ -84,7 +84,12 @@ function rpcProvenance(format: "concise" | "full", r: ResolvedRpc): { rpc?: { so
  * `unavailable` envelope instead of letting the raw exception escape runTool — the envelope +
  * exit-code contract must hold even when the chain disagrees with the request.
  */
-function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
+function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext, endpoint?: ResolvedRpc): Envelope {
+  // A transport-class failure means the endpoint itself went bad — feed the breaker so the resolver
+  // drops it now instead of serving it until the chosen-TTL expires. (Never for contract reverts.)
+  if (endpoint && endpoint.source !== "explicit" && isTransportError(err)) {
+    reportEndpointFailure(chainId, endpoint.url);
+  }
   const cause =
     err && typeof err === "object" && "shortMessage" in err
       ? String((err as { shortMessage: unknown }).shortMessage)
@@ -244,7 +249,7 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
       const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
       return envelope({ state: "ok", data: { kind: p.kind, ...floor }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
     } catch (err) {
-      return chainReadFailed(chainId, err, w, ctx);
+      return chainReadFailed(chainId, err, w, ctx, resolved);
     }
   }
 
@@ -345,7 +350,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
     });
     return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
   } catch (err) {
-    return chainReadFailed(chainId, err, w, ctx);
+    return chainReadFailed(chainId, err, w, ctx, resolved);
   }
 }
 
@@ -440,7 +445,7 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
         ctx,
       });
     } catch (err) {
-      return chainReadFailed(chainId, err, rpcWarn(resolved), ctx);
+      return chainReadFailed(chainId, err, rpcWarn(resolved), ctx, resolved);
     }
   }
 
@@ -458,7 +463,7 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
       if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "TransactionReceiptNotFoundError") {
         return envelope({ state: "unavailable", data: { txHash: subj.txHash, found: false }, chainId, source: "chain", warnings: [{ code: "receipt_not_found", message: "no receipt for this txHash at the RPC (pending or unknown)" }], ctx });
       }
-      return chainReadFailed(chainId, err, [], ctx);
+      return chainReadFailed(chainId, err, [], ctx, resolved);
     }
   }
 
@@ -557,9 +562,25 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
           message: `Funding leg for '${input.action.type}' needs an RPC to resolve pool token addresses; re-run with an RPC or use fundingMode 'pre-funded'. Bundle contains the action leg only.`,
         });
       } else {
-        const client = mkClient(ctx.rpcUrl, input.chainId);
+        // Explicit RPC only (funding stays offline-by-default); routed through the resolver hook so
+        // tests can stub the client, and guarded like every other chain read — a revert/transport
+        // failure must map to an envelope, never escape raw (viem errors embed the RPC URL).
+        const resolved = await getRpc(ctx, input.chainId);
+        if (!resolved) return unavailable(input.chainId, "requires_rpc", "funding-leg resolution could not reach the configured RPC", ctx);
         const poolId = (input.action as { poolId: `0x${string}` }).poolId;
-        const tokens = await resolvePoolTokens(client, dep.poolManager, poolId, ctx.atBlock);
+        let tokens;
+        try {
+          tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
+        } catch (err) {
+          return chainReadFailed(input.chainId, err, [], ctx, resolved);
+        }
+        // A nonexistent pool does NOT revert here — market() returns a zeroed struct. Refuse to
+        // build funding legs against the zero address instead of emitting a plausible-looking
+        // bundle that can only revert on-chain.
+        const ZERO = "0x0000000000000000000000000000000000000000";
+        if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
+          return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
+        }
         const plan = fundingPlan(input.action, tokens, corkAdapter, mode);
         funding = plan.legs;
         if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });

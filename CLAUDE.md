@@ -19,7 +19,7 @@ Bun 1.3 is pinned in `mise.toml`.
 ```sh
 mise trust && mise install                                                               # fresh checkout: trust mise.toml + install pinned Bun
 bun install                                                                              # from repo root, once
-claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # config-only + pure math
+claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # recommended (incl. live chain reads via built-in RPCs)
 claude mcp add cork-defi -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # override built-in RPCs
 claude mcp list          # expect: cork-defi … ✔ Connected
 ```
@@ -42,7 +42,7 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | `cork_query` | **State reads** — markets, account-state, whitelist, protocol-config (and indexer feeds when available). NOT derived math, NOT tx building. | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor. NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
-| `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (+ token-authority ops). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
+| `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
 | `cork_prepare_orders` | Build **unsigned** 1inch limit-order typed-data (maker-order / cancel) for later signing. | 3 |
 | `cork_track` | Verify a resource against chain, simulate frozen bytes, or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Market-deployment artifacts. **Provisional/gated** [Q-REG]. | 4 |
@@ -69,6 +69,8 @@ Warning codes you will encounter:
 | `requires_rpc` | No RPC resolved (offline, or a chain outside defaults+fallback like vnet 49222). Set `CORK_RPC_URL`. |
 | `unknown_deployment` | No (or partial) Cork deployment config for this chainId — e.g. tx-path building or pool-whitelist on Arbitrum. Not fixable by adding an RPC. |
 | `chain_read_failed` | The RPC answered but the read reverted/failed — most often a pool that doesn't exist on that chain (e.g. a vnet-only fixture pool queried against real mainnet). Check the poolId/chainId pairing. |
+| `pool_not_found` | prepare_phoenix funding: `market(poolId)` returned a zeroed struct — the pool doesn't exist on that chain, so no funding legs are built. |
+| `invalid_input` / `internal_error` | MCP-only, in the error envelope when a call fails before/outside a handler (bad input, unexpected exception). CLI equivalents are exit 2 / exit 1. |
 | `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
 | `phase_gated` | Variant not implemented in this iteration (incl. `cork_submit`, `track mode:"simulate"`). |
 | `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |

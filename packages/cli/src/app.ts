@@ -36,11 +36,14 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
   // Group commands by their cliPath prefix so `prepare phoenix` nests under `prepare`.
   // parent.command() (vs new Command + addCommand) copies exitOverride/configureOutput from the
   // parent, so the capture wiring is declared once on `program`.
+  const GROUP_DESCRIPTIONS: Record<string, string> = {
+    prepare: "build unsigned artifacts (Bundler3 bundles, order typed-data, market deployment)",
+  };
   const groups = new Map<string, Command>();
   const groupFor = (seg: string): Command => {
     let g = groups.get(seg);
     if (!g) {
-      g = program.command(seg);
+      g = program.command(seg).description(GROUP_DESCRIPTIONS[seg] ?? `${seg} tools`);
       groups.set(seg, g);
     }
     return g;

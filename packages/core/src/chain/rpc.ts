@@ -116,22 +116,29 @@ function cacheFile(): string {
   return process.env.CORK_RPC_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "rpc-state.json");
 }
 
-let memState: RpcState | null = null;
+// Memoized per cache path — if CORK_RPC_CACHE_FILE changes mid-process, reload from the new path
+// instead of serving the old snapshot (and never write a stale snapshot to the new location).
+// Concurrent writers (a long-lived MCP server + CLI runs) are last-writer-wins by design.
+let memState: { path: string; state: RpcState } | null = null;
 function realLoadState(): RpcState {
-  if (memState) return memState;
+  const path = cacheFile();
+  if (memState?.path === path) return memState.state;
+  let state: RpcState;
   try {
-    const raw = JSON.parse(readFileSync(cacheFile(), "utf8")) as RpcState;
-    memState = raw && raw.version === 1 ? { ...emptyState(), ...raw } : emptyState();
+    const raw = JSON.parse(readFileSync(path, "utf8")) as RpcState;
+    state = raw && raw.version === 1 ? { ...emptyState(), ...raw } : emptyState();
   } catch {
-    memState = emptyState();
+    state = emptyState();
   }
-  return memState;
+  memState = { path, state };
+  return state;
 }
 function realSaveState(s: RpcState): void {
-  memState = s;
+  const path = cacheFile();
+  memState = { path, state: s };
   try {
-    mkdirSync(dirname(cacheFile()), { recursive: true });
-    writeFileSync(cacheFile(), JSON.stringify(s));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(s));
   } catch {
     /* disk cache is best-effort; in-memory memoization still holds within the process */
   }
@@ -156,7 +163,7 @@ export function filterChainlistRpcs(rpc: Array<{ url: string; tracking?: string 
   const usable = (u: string) => /^https:\/\//i.test(u) && !u.includes("${") && !/API_KEY|YOUR_/i.test(u);
   const noTrack = rpc.filter((r) => usable(r.url) && r.tracking === "none").map((r) => r.url);
   const rest = rpc.filter((r) => usable(r.url) && r.tracking !== "none").map((r) => r.url);
-  return [...noTrack, ...rest];
+  return [...new Set([...noTrack, ...rest])]; // dedupe, privacy-preserving endpoints first
 }
 
 async function realFetchChainlist(chainId: number): Promise<string[]> {
@@ -207,6 +214,30 @@ export function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * Transport-class failure? (endpoint unreachable/timeout — walks viem's cause chain.) Contract
+ * reverts deliberately do NOT count: they indicate a bad request, not a bad endpoint, and feeding
+ * them to the breaker would punish healthy RPCs.
+ */
+export function isTransportError(err: unknown): boolean {
+  for (let e = err, depth = 0; e && typeof e === "object" && depth < 6; e = (e as { cause?: unknown }).cause, depth++) {
+    const name = (e as { name?: string }).name;
+    if (name === "HttpRequestError" || name === "TimeoutError" || name === "WebSocketRequestError" || name === "SocketClosedError") return true;
+  }
+  return false;
+}
+
+/**
+ * Feed a real read failure back into the breaker so a chosen endpoint that goes bad mid-TTL is
+ * dropped instead of being served until chosenTtlMs expires. Call only for transport-class errors.
+ */
+export function reportEndpointFailure(chainId: number, url: string, cfg: RpcConfig = DEFAULT_CONFIG, deps: RpcDeps = realDeps()): void {
+  const st = deps.loadState();
+  recordFailure(st, url, cfg, deps.now());
+  if (st.chosen[chainId]?.url === url) delete st.chosen[chainId];
+  deps.saveState(st);
 }
 
 /**

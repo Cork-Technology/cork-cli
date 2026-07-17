@@ -6,6 +6,8 @@ import {
   DEFAULT_RPCS,
   FALLBACK_CHAINS,
   filterChainlistRpcs,
+  isTransportError,
+  reportEndpointFailure,
   resolveRpc,
   type ProbeResult,
   type RpcConfig,
@@ -150,11 +152,34 @@ describe("filterChainlistRpcs (chainlist candidate hygiene)", () => {
       { url: "https://clean.example/rpc", tracking: "none" },
       { url: "http://insecure.example/rpc", tracking: "none" },
       { url: "https://limited.example/rpc", tracking: "limited" },
+      { url: "https://clean.example/rpc", tracking: "yes" }, // duplicate across tiers → deduped
     ]);
     expect(out).toEqual(["https://clean.example/rpc", "https://tracked.example/rpc", "https://limited.example/rpc"]);
   });
   it("empty input → empty output", () => {
     expect(filterChainlistRpcs([])).toEqual([]);
+  });
+});
+
+describe("breaker feedback from real reads", () => {
+  it("isTransportError: transport classes (incl. nested cause) yes; contract reverts no", () => {
+    expect(isTransportError(Object.assign(new Error("x"), { name: "HttpRequestError" }))).toBe(true);
+    expect(isTransportError({ name: "ContractFunctionExecutionError", cause: { name: "TimeoutError" } })).toBe(true);
+    expect(isTransportError({ name: "ContractFunctionExecutionError", cause: { name: "ContractFunctionRevertedError" } })).toBe(false);
+    expect(isTransportError(new Error("plain"))).toBe(false);
+  });
+
+  it("reportEndpointFailure records a breaker failure and evicts a matching chosen endpoint", () => {
+    const h = harness({ probe: () => ({ ok: false, latencyMs: 1 }) });
+    const URLX = "https://was-healthy.example/rpc";
+    h.state.chosen[1] = { url: URLX, source: "chainlist", ts: h.deps.now() };
+    reportEndpointFailure(1, URLX, CFG, h.deps);
+    expect(h.state.breaker[URLX]?.failures).toBe(1);
+    expect(h.state.chosen[1]).toBeUndefined(); // evicted — resolver re-resolves instead of serving it for the TTL
+    // a failure for a DIFFERENT chain's chosen url must not evict this chain's choice
+    h.state.chosen[42161] = { url: "https://other.example", source: "default", ts: h.deps.now() };
+    reportEndpointFailure(1, "https://other.example", CFG, h.deps);
+    expect(h.state.chosen[42161]).toBeDefined();
   });
 });
 

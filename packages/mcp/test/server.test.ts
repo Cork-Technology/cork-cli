@@ -49,10 +49,15 @@ describe("MCP server in-memory roundtrip", () => {
     expect(env.data.legs[0]?.action).toBe("safeSwap");
   });
 
-  it("flags invalid input as an MCP error", async () => {
+  it("flags invalid input as an MCP error — with a schema-conforming error envelope", async () => {
     const client = await connectedClient();
     const res = await client.callTool({ name: "cork_prepare_phoenix", arguments: { chainId: 1, account: "bad", clientRequestId: "x", action: {}, format: "concise" } });
     expect(res.isError).toBe(true);
+    // even failures honor the advertised outputSchema
+    const env = res.structuredContent as { state: string; warnings: Array<{ code: string }>; schemaVersion: string };
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_input");
+    expect(env.schemaVersion).toBeTruthy();
   });
 
   it("marks phase-gated tools unavailable (isError)", async () => {

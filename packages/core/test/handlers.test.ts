@@ -171,6 +171,77 @@ describe("partial deployments gate per capability (Arbitrum 42161)", () => {
   });
 });
 
+describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
+  const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
+  const depositInput = (id: string) => ({
+    chainId: 1,
+    account: RCV,
+    clientRequestId: id,
+    fundingMode: "erc20-approve",
+    action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" },
+    format: "concise",
+  });
+
+  it("transport failure → chain_read_failed envelope (no raw escape, no URL in output)", async () => {
+    const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0001"), {
+      nowSeconds: NOW,
+      rpcUrl: "https://secret-node.example/SECRETTOKEN",
+      resolveRpc: async (_c, url) => ({
+        url: url!,
+        source: "explicit" as const,
+        client: {
+          readContract: async () => {
+            throw Object.assign(new Error("fetch failed\nURL: https://secret-node.example/SECRETTOKEN"), { name: "HttpRequestError", shortMessage: "HTTP request failed." });
+          },
+        } as never,
+      }),
+    });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+    expect(JSON.stringify(env)).not.toContain("SECRETTOKEN"); // the explicit RPC URL must not leak
+  });
+
+  it("nonexistent pool (zeroed market struct) → pool_not_found, never zero-address funding legs", async () => {
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0002"), {
+      nowSeconds: NOW,
+      rpcUrl: "https://node.example/rpc",
+      resolveRpc: async (_c, url) => ({
+        url: url!,
+        source: "explicit" as const,
+        client: {
+          // resolvePoolTokens does market() + shares(); a nonexistent pool returns zeroed values
+          readContract: async (args: { functionName: string }) =>
+            args.functionName === "market"
+              ? { collateralAsset: ZERO, referenceAsset: ZERO, expiryTimestamp: 0n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: ZERO }
+              : [ZERO, ZERO],
+        } as never,
+      }),
+    });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("pool_not_found");
+  });
+
+  it("healthy pool still builds the funding leg (happy path preserved)", async () => {
+    const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0003"), {
+      nowSeconds: NOW,
+      rpcUrl: "https://node.example/rpc",
+      resolveRpc: async (_c, url) => ({
+        url: url!,
+        source: "explicit" as const,
+        client: {
+          readContract: async (args: { functionName: string }) =>
+            args.functionName === "market"
+              ? { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: 1n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE }
+              : [SUSDE, SUSDE],
+        } as never,
+      }),
+    });
+    expect(env.state).toBe("ok");
+    expect((env.data as { fundingLegs: number }).fundingLegs).toBe(1);
+  });
+});
+
 describe("input hardening + format semantics", () => {
   it("malformed filters.poolId / filters.account → ToolInputError (CLI exit 2)", async () => {
     await expect(
