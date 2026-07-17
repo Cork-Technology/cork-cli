@@ -65,54 +65,40 @@ export type QueryInput = z.infer<typeof QueryInput>;
 // ────────────────────────────────────────────────────────────────────────────
 // 2. cork_compute (R2) — closed per-kind params
 // ────────────────────────────────────────────────────────────────────────────
-const AtPin = z
-  .object({ block: UintStr.optional(), timestamp: UintStr.optional() })
-  .strict();
+const AtPin = z.strictObject({ block: UintStr.optional(), timestamp: UintStr.optional() });
 
 export const ComputeParams = z.discriminatedUnion("kind", [
-  z
-    .object({
+  z.strictObject({
       kind: z.literal("cst-swap-rate"),
       poolId: MarketId,
       collateralAssetsOut: UintStr,
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       kind: z.literal("unwind-rate"),
       poolId: MarketId,
       collateralAssetsIn: UintStr,
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       kind: z.literal("dutch-auction-price"),
       order: z.record(z.string(), z.unknown()),
       baseFeeWei: UintStr.optional(),
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       kind: z.literal("rollover-premium-floor"),
       dstCstProduced: UintStr,
       minPremiumPerShare: UintStr,
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       kind: z.literal("impairment-floor"),
       poolId: MarketId,
       horizonSeconds: z.number().int().min(0),
-    })
-    .strict(),
-  z
-    .object({
+    }),
+  z.strictObject({
       kind: z.literal("rfq-quote"),
       marketTypeBucket: z.string(),
       durationSeconds: z.number().int().min(0),
       tokenRiskStats: z.record(z.string(), z.unknown()).optional(),
-    })
-    .strict(),
+    }),
 ]);
 export type ComputeParams = z.infer<typeof ComputeParams>;
 
@@ -139,7 +125,7 @@ export type DecodeInput = z.infer<typeof DecodeInput>;
 // 4. cork_prepare_phoenix (R4) — 13 adapter actions + 2 authority variants
 // ────────────────────────────────────────────────────────────────────────────
 const A = <T extends string, S extends z.ZodRawShape>(t: T, shape: S) =>
-  z.object({ type: z.literal(t), ...shape }).strict();
+  z.strictObject({ type: z.literal(t), ...shape });
 
 export const PhoenixAction = z.discriminatedUnion("type", [
   A("mint", {
@@ -315,18 +301,14 @@ export type PrepareMarketInput = z.infer<typeof PrepareMarketInput>;
 // 7. cork_track (R5)
 // ────────────────────────────────────────────────────────────────────────────
 export const TrackSubject = z.discriminatedUnion("kind", [
-  z
-    .object({
+  z.strictObject({
       kind: z.literal("artifact"),
       artifact: z.record(z.string(), z.unknown()),
-    })
-    .strict(),
-  z.object({ kind: z.literal("txHash"), txHash: Bytes32 }).strict(),
-  z.object({ kind: z.literal("orderHash"), orderHash: Bytes32 }).strict(),
-  z.object({ kind: z.literal("marketRef"), poolId: MarketId }).strict(),
-  z
-    .object({ kind: z.literal("submissionRef"), submissionRef: z.string() })
-    .strict(),
+    }),
+  z.strictObject({ kind: z.literal("txHash"), txHash: Bytes32 }),
+  z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }),
+  z.strictObject({ kind: z.literal("marketRef"), poolId: MarketId }),
+  z.strictObject({ kind: z.literal("submissionRef"), submissionRef: z.string() }),
 ]);
 export type TrackSubject = z.infer<typeof TrackSubject>;
 

@@ -2,9 +2,10 @@
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
-import { createPublicClient, http, keccak256, stringToHex, type PublicClient } from "viem";
+import { keccak256, stringToHex } from "viem";
 import {
   Address,
+  type ChainId,
   ComputeInput,
   DecodeInput,
   Envelope,
@@ -28,7 +29,7 @@ import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
-import { resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
+import { mkClient, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
@@ -58,11 +59,11 @@ export interface HandlerContext {
    * default → chainlist fallback, with a circuit breaker). Tests inject a stub for offline
    * determinism; a caller may inject a custom endpoint policy.
    */
-  resolveRpc?: (chainId: number, explicitUrl: string | undefined) => Promise<ResolvedRpc | null>;
+  resolveRpc?: (chainId: ChainId, explicitUrl: string | undefined) => Promise<ResolvedRpc | null>;
 }
 
 /** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver). */
-async function getRpc(ctx: HandlerContext, chainId: number): Promise<ResolvedRpc | null> {
+async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<ResolvedRpc | null> {
   return (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
 }
 
@@ -83,7 +84,7 @@ function rpcProvenance(format: "concise" | "full", r: ResolvedRpc): { rpc?: { so
  * `unavailable` envelope instead of letting the raw exception escape runTool — the envelope +
  * exit-code contract must hold even when the chain disagrees with the request.
  */
-function chainReadFailed(chainId: number, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
+function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
   const cause =
     err && typeof err === "object" && "shortMessage" in err
       ? String((err as { shortMessage: unknown }).shortMessage)
@@ -121,7 +122,7 @@ function nowIso(ctx: HandlerContext): string {
 function envelope(args: {
   state: Envelope["state"];
   data: unknown;
-  chainId: number;
+  chainId: ChainId;
   source: "chain" | "indexer" | "service" | "config";
   block?: bigint;
   warnings?: Array<{ code: string; message: string }>;
@@ -138,7 +139,7 @@ function envelope(args: {
     warnings: args.warnings ?? [],
     provenance: {
       source: args.source,
-      chainId: args.chainId as never,
+      chainId: args.chainId,
       fetchedAt: nowIso(args.ctx),
       digest,
       ...(args.block !== undefined ? { block: args.block.toString() } : {}),
@@ -148,7 +149,7 @@ function envelope(args: {
   };
 }
 
-function unavailable(chainId: number, code: string, message: string, ctx: HandlerContext): Envelope {
+function unavailable(chainId: ChainId, code: string, message: string, ctx: HandlerContext): Envelope {
   return envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code, message }], ctx });
 }
 
@@ -471,7 +472,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
   if (!def) throw new ToolInputError(name, `unknown tool: ${name}`);
   const parsed = def.input.safeParse(rawInput);
   if (!parsed.success) throw new ToolInputError(name, parsed.error.issues);
-  const chainIdOf = (x: unknown): number => (x as { chainId?: number }).chainId ?? 1;
+  const chainIdOf = (x: unknown): ChainId => (x as { chainId?: ChainId }).chainId ?? 1;
 
   switch (name) {
     case "cork_capabilities": {
@@ -556,9 +557,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
           message: `Funding leg for '${input.action.type}' needs an RPC to resolve pool token addresses; re-run with an RPC or use fundingMode 'pre-funded'. Bundle contains the action leg only.`,
         });
       } else {
-        const client = createPublicClient({ transport: http(ctx.rpcUrl) });
+        const client = mkClient(ctx.rpcUrl, input.chainId);
         const poolId = (input.action as { poolId: `0x${string}` }).poolId;
-        const tokens = await resolvePoolTokens(client as unknown as PublicClient, dep.poolManager, poolId, ctx.atBlock);
+        const tokens = await resolvePoolTokens(client, dep.poolManager, poolId, ctx.atBlock);
         const plan = fundingPlan(input.action, tokens, corkAdapter, mode);
         funding = plan.legs;
         if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });

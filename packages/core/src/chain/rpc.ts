@@ -10,7 +10,8 @@
 // on-disk cache with TTLs, so the long-lived MCP server and repeated short-lived CLI runs both skip
 // re-probing in steady state. All network/fs/clock access is injectable so the logic unit-tests
 // offline.
-import { createPublicClient, http, type PublicClient } from "viem";
+import { createPublicClient, http, type Chain, type PublicClient } from "viem";
+import { arbitrum, base, mainnet, sepolia } from "viem/chains";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -94,8 +95,20 @@ function emptyState(): RpcState {
   return { version: 1, breaker: {}, chosen: {}, candidates: {} };
 }
 
-export function mkClient(url: string): PublicClient {
-  return createPublicClient({ transport: http(url) }) as unknown as PublicClient;
+/** Known viem chain objects — attaching one types the client and enables multicall3 batching. */
+const CHAINS: Readonly<Record<number, Chain>> = { 1: mainnet, 42161: arbitrum, 8453: base, 11155111: sepolia };
+
+/**
+ * Build a typed PublicClient. When the chain is known, viem's multicall batching collapses the
+ * per-block read fan-out (e.g. readPoolState's 10 reads) into aggregate3 calls; unknown chains
+ * (like the 49222 staging vnet) get a plain client with per-call reads.
+ */
+export function mkClient(url: string, chainId?: number): PublicClient {
+  const chain = chainId !== undefined ? CHAINS[chainId] : undefined;
+  if (chain) {
+    return createPublicClient({ chain, batch: { multicall: true }, transport: http(url) }) as PublicClient;
+  }
+  return createPublicClient({ transport: http(url) });
 }
 
 // ── real dependency implementations ─────────────────────────────────────────
@@ -207,7 +220,7 @@ export async function resolveRpc(
   deps: RpcDeps = realDeps(),
 ): Promise<ResolvedRpc | null> {
   // 1. explicit URL wins verbatim — no probing, no fallback.
-  if (explicitUrl) return { url: explicitUrl, client: mkClient(explicitUrl), source: "explicit" };
+  if (explicitUrl) return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
 
   const st = deps.loadState();
   const now = deps.now();
@@ -215,7 +228,7 @@ export async function resolveRpc(
   // 2. a recently-chosen, still-trusted RPC (skips re-probing in steady state).
   const chosen = st.chosen[chainId];
   if (chosen && now - chosen.ts < cfg.chosenTtlMs && !isOpen(st, chosen.url, now, cfg)) {
-    return { url: chosen.url, client: mkClient(chosen.url), source: chosen.source };
+    return { url: chosen.url, client: mkClient(chosen.url, chainId), source: chosen.source };
   }
 
   // 3. the committed default for this chain, retried with exponential backoff.
@@ -227,7 +240,7 @@ export async function resolveRpc(
         recordSuccess(st, def);
         st.chosen[chainId] = { url: def, source: "default", ts: now };
         deps.saveState(st);
-        return { url: def, client: mkClient(def), source: "default" };
+        return { url: def, client: mkClient(def, chainId), source: "default" };
       }
       if (i < cfg.attempts - 1) await deps.sleep(cfg.baseDelayMs * 2 ** i);
     }
@@ -258,7 +271,7 @@ export async function resolveRpc(
       recordSuccess(st, best.u);
       st.chosen[chainId] = { url: best.u, source: "chainlist", ts: now };
       deps.saveState(st);
-      return { url: best.u, client: mkClient(best.u), source: "chainlist" };
+      return { url: best.u, client: mkClient(best.u, chainId), source: "chainlist" };
     }
   }
 

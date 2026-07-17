@@ -4,8 +4,14 @@
 // registerTool does accept zod v4, so this is about keeping one dispatch path, not zod coupling.)
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
+import { z } from "zod";
+import { Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
+
+// All tools return the same envelope; advertise it once so clients can rely on structuredContent.
+// io:"input": the hex primitives are transforms (string -> `0x${string}`) whose output side zod
+// cannot render; their input side has the identical wire shape (regex-checked string).
+const ENVELOPE_SCHEMA = z.toJSONSchema(Envelope, { io: "input" }) as { type: "object" };
 
 export function createCorkServer(ctx: HandlerContext = {}): Server {
   const server = new Server(
@@ -18,6 +24,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       name: t.name,
       description: t.description,
       inputSchema: inputJsonSchema(t.name) as { type: "object" },
+      outputSchema: ENVELOPE_SCHEMA,
       annotations: {
         title: t.name,
         readOnlyHint: t.annotations.readOnlyHint,

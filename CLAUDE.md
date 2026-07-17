@@ -50,8 +50,9 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 
 ## Reading the result envelope
 
-Every tool returns `{ state, data, warnings[], provenance, schemaVersion }`. **Check `state` before
-trusting `data`:**
+Every tool returns `{ state, data, warnings[], provenance, schemaVersion }` — over MCP this arrives
+as `structuredContent`, and every tool advertises this envelope as its `outputSchema`. **Check
+`state` before trusting `data`:**
 
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not

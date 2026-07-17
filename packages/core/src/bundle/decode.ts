@@ -1,7 +1,7 @@
 // Recursive Bundler3 bundle decoder: unwrap multicall/reenter Call[] and identify each leg.
 // Cork legs are decoded to {action, params}; nested bundles recurse; unknown legs are surfaced
 // raw (with selector) rather than dropped — a decoder that silently hides legs is a footgun.
-import { decodeFunctionData, toFunctionSelector } from "viem";
+import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
 import { bundlerLegAbi } from "./legs.ts";
 import { decodeMulticall, isBundlerMulticall, type Call } from "./bundler3.ts";
@@ -14,9 +14,9 @@ export type DecodedLeg =
 
 const selectorMap = (abi: readonly unknown[]): Map<string, string> =>
   new Map(
-    (abi as Array<{ type: string; name: string }>)
-      .filter((f) => f.type === "function")
-      .map((f) => [toFunctionSelector(f as never).toLowerCase(), f.name]),
+    abi
+      .filter((f): f is AbiFunction => (f as { type?: string }).type === "function")
+      .map((f) => [toFunctionSelector(f).toLowerCase(), f.name]),
   );
 
 // selector -> name, computed once from each ABI.

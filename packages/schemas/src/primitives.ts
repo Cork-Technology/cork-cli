@@ -31,13 +31,7 @@ export const UintStr = z
   .describe("unsigned integer, decimal string");
 
 export const ChainId = z
-  .union([
-    z.literal(1),
-    z.literal(42161),
-    z.literal(8453),
-    z.literal(11155111),
-    z.literal(49222),
-  ])
+  .literal([1, 42161, 8453, 11155111, 49222])
   .describe(
     "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging",
   );

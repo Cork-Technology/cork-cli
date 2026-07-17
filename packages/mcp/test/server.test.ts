@@ -24,6 +24,10 @@ describe("MCP server in-memory roundtrip", () => {
     const swap = tools.find((t) => t.name === "cork_prepare_phoenix");
     expect(swap?.inputSchema.type).toBe("object");
     expect(swap?.annotations?.readOnlyHint).toBe(true);
+    // every tool advertises the shared Envelope output schema for structuredContent
+    const out = swap?.outputSchema as { type?: string; properties?: Record<string, unknown> };
+    expect(out?.type).toBe("object");
+    expect(Object.keys(out?.properties ?? {})).toEqual(expect.arrayContaining(["state", "data", "warnings", "provenance", "schemaVersion"]));
   });
 
   it("calls cork_decode and returns a structured envelope", async () => {

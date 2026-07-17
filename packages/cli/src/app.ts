@@ -34,26 +34,26 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
     });
 
   // Group commands by their cliPath prefix so `prepare phoenix` nests under `prepare`.
+  // parent.command() (vs new Command + addCommand) copies exitOverride/configureOutput from the
+  // parent, so the capture wiring is declared once on `program`.
   const groups = new Map<string, Command>();
   const groupFor = (seg: string): Command => {
     let g = groups.get(seg);
     if (!g) {
-      g = new Command(seg).exitOverride().configureOutput({ writeOut: (s) => (out += s), writeErr: (s) => (err += s) });
+      g = program.command(seg);
       groups.set(seg, g);
-      program.addCommand(g);
     }
     return g;
   };
 
   for (const tool of REGISTRY) {
     const parent = tool.cliPath.length > 1 ? groupFor(tool.cliPath[0]!) : program;
-    const cmd = new Command(leafName(tool))
+    parent
+      .command(leafName(tool))
       .description(`[phase ${tool.phase}] ${tool.description}`)
       .option("--json <json>", "structured tool input as a JSON string")
       .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
       .option("--explain", "print the tool's contract (description + JSON schema) and exit")
-      .exitOverride()
-      .configureOutput({ writeOut: (s) => (out += s), writeErr: (s) => (err += s) })
       .action(async (opts: { json?: string; rpcUrl?: string; explain?: boolean }) => {
         if (opts.explain) {
           out += `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`;
@@ -84,7 +84,6 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
           }
         }
       });
-    parent.addCommand(cmd);
   }
 
   try {
