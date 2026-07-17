@@ -385,7 +385,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
           ctx,
         });
       }
-      const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `cork ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations });
+      const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `ch ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations });
 
       // search: keyword -> matching tools (name/cli/description), with the filled input schema.
       if (input.search) {

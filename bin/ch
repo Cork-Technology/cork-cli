@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# ch — Cork helper CLI launcher (binstub). Runs the TypeScript CLI under the repo-pinned Bun,
+# resolved to an absolute path so `ch` works from any directory regardless of PATH/mise activation.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+BUN=""
+if command -v mise >/dev/null 2>&1; then BUN="$(cd "$ROOT" && mise which bun 2>/dev/null || true)"; fi
+[ -n "${BUN:-}" ] || BUN="$(command -v bun || true)"
+[ -n "${BUN:-}" ] || { echo "ch: Bun not found — install via mise (mise install) or https://bun.sh" >&2; exit 127; }
+exec "$BUN" "$ROOT/packages/cli/src/bin.ts" "$@"

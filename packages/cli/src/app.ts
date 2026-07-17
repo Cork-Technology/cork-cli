@@ -25,8 +25,8 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
   let code: number = EXIT.ok;
   const program = new Command();
   program
-    .name("cork")
-    .description("Cork Phoenix CLI — reads, deterministic math, and unsigned tx/bundle preparation.")
+    .name("ch")
+    .description("Cork Phoenix CLI (ch) — reads, deterministic math, and unsigned tx/bundle preparation.")
     .exitOverride()
     .configureOutput({
       writeOut: (s) => (out += s),
@@ -56,7 +56,7 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
       .configureOutput({ writeOut: (s) => (out += s), writeErr: (s) => (err += s) })
       .action(async (opts: { json?: string; rpcUrl?: string; explain?: boolean }) => {
         if (opts.explain) {
-          out += `${JSON.stringify({ tool: tool.name, cli: `cork ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`;
+          out += `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`;
           return;
         }
         let input: unknown = {};

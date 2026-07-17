@@ -10,7 +10,7 @@ Run everything with **Bun**, never `node`. The `.ts` sources use TypeScript para
 Bun 1.3 is pinned in `mise.toml`.
 
 - MCP server (stdio): `bun packages/mcp/src/bin.ts`
-- CLI: `bun packages/cli/src/bin.ts <command> [--json '<input>'] [--rpc-url <url>] [--explain]`
+- CLI: invoked as **`ch`** (launcher `bin/ch`; put `bin/` on PATH). `ch <command> [--json '<input>'] [--rpc-url <url>] [--explain]`. Long form without PATH setup: `bun packages/cli/src/bin.ts <command> …`
 - Typecheck / test: `bun run typecheck` · `bun run test` (fork-parity self-skips unless `CORK_TEST_RPC` is set)
 
 ## Install / verify as an MCP server

@@ -19,7 +19,7 @@ describe("runTool: cork_capabilities", () => {
     const data = env.data as { tools: Array<{ name: string; cli: string; phase: number }> };
     expect(data.tools).toHaveLength(9);
     expect(data.tools.map((t) => t.name)).toContain("cork_prepare_phoenix");
-    expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("cork prepare phoenix");
+    expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("ch prepare phoenix");
   });
 
   it("search returns matching tools with their input schema", async () => {

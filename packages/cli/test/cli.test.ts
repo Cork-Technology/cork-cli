@@ -5,7 +5,7 @@ const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
 const RCV = "0xc0ffee0000000000000000000000000000000001";
 
-describe("cork CLI", () => {
+describe("ch CLI", () => {
   it("capabilities prints the tool list, exit 0", async () => {
     const r = await runCli(["capabilities"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.ok);

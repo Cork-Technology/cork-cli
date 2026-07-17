@@ -12,7 +12,7 @@ Tenderly virtual-mainnet fixture pool (bit-exact, wei-for-wei).
 | `@cork/schemas` | zod v4 single source of truth: hex-typed primitives, the 9-tool registry, `z.toJSONSchema` projection to MCP input schemas. |
 | `@cork/core` | Deterministic bit-exact ports of on-chain math (`MathHelper`, `TransferHelper`, `ConstraintRateAdapter._calculateRate`, `PoolLib.preview*`), the committed-descent impairment floor, `MarketId`/CREATE2 derivation, chain reads (viem), the Bundler3 encoder/recursive decoder, and the shared tool dispatch (`runTool`). |
 | `@cork/mcp` | MCP server projecting the registry via the low-level `Server` API (advertises JSON Schema directly; avoids the SDK's bundled-zod coupling). Binary: `cork-mcp` (stdio). |
-| `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`, with `--json`, `--explain`, and state-mapped exit codes. Binary: `cork`. |
+| `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`, with `--json`, `--explain`, and state-mapped exit codes. Binary: `ch` (launcher at `bin/ch`). |
 
 ## Use it with Claude Code (MCP)
 
@@ -94,16 +94,24 @@ Some variants are honestly **not implemented yet** and will tell you so (state `
 reason) rather than inventing an answer — e.g. the orderbook/fills feeds (need the indexer),
 order submission, and market deployment. That's expected; it's not a broken install.
 
-### CLI (no MCP client needed)
+### CLI: `ch` (no MCP client needed)
 
-The same tools run straight from a shell — handy for scripts and quick checks:
+The same tools run straight from a shell — handy for scripts and quick checks. The command is `ch`,
+a small launcher at `bin/ch` that runs the CLI under the repo-pinned Bun and works from any directory.
+Put it on your `PATH` once:
 
 ```sh
-bun packages/cli/src/bin.ts capabilities
-bun packages/cli/src/bin.ts query --json '{"resource":"protocol-config"}'
-bun packages/cli/src/bin.ts compute --json '{"params":{"kind":"rollover-premium-floor","dstCstProduced":"1000000000000000000000","minPremiumPerShare":"20000000000000000"}}'
-bun packages/cli/src/bin.ts compute --explain     # print a tool's contract (JSON schema) without running it
+export PATH="$(pwd)/bin:$PATH"          # this shell; or add to your shell profile
+# or symlink it into a dir already on PATH:  ln -s "$(pwd)/bin/ch" ~/.local/bin/ch
+
+ch capabilities
+ch query --json '{"resource":"protocol-config"}'
+ch compute --json '{"params":{"kind":"rollover-premium-floor","dstCstProduced":"1000000000000000000000","minPremiumPerShare":"20000000000000000"}}'
+ch compute --explain     # print a tool's contract (JSON schema) without running it
 ```
+
+Prefer not to touch `PATH`? The launcher runs the same either way — `./bin/ch capabilities` — and the
+long form still works: `bun packages/cli/src/bin.ts capabilities`.
 
 Every tool accepts an optional `"format"` in its JSON input — `"concise"` (the default, shown above)
 or `"full"` for the verbose envelope. Exit codes map the envelope state so scripts can branch: `0` ok
