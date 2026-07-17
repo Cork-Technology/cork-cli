@@ -9,6 +9,7 @@ export * from "./create2.ts";
 export * from "./orders.ts";
 export * from "./chain/abis.ts";
 export * from "./chain/reads.ts";
+export * from "./chain/rpc.ts";
 export * from "./bundle/corkAdapterAbi.ts";
 export * from "./bundle/bundler3.ts";
 export * from "./bundle/actions.ts";

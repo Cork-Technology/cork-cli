@@ -43,12 +43,18 @@ name that already exists errors; `claude mcp remove cork-defi` first if you want
 from the repo root so `$(pwd)` resolves:
 
 ```sh
-# A) state reads + math that don't touch a chain (capabilities, decode, config, pure compute)
+# A) recommended — works out of the box, including live chain reads on public chains
 claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
 
-# B) also enable chain-backed reads (live markets, swap rates, whitelist) by passing an RPC endpoint:
+# B) optional — pin your own RPC endpoint (a private/faster node, or a chain with no built-in default
+#    such as the staging vnet). This OVERRIDES the built-in defaults:
 claude mcp add cork-defi -e CORK_RPC_URL=https://your-rpc-endpoint -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
 ```
+
+Chain-backed tools work **without any RPC setup**: the server ships with built-in default endpoints for
+Ethereum mainnet and Arbitrum, and just-in-time fetches a fast public RPC from chainlist.org (with a
+circuit breaker + retry/backoff) if a default is unreachable — see "How RPC endpoints are resolved"
+below. Variant B is only for overriding that.
 
 **Why the absolute `bun` path.** Claude Code launches the server as a subprocess that may not inherit
 your shell's `PATH` (notably the desktop app), so a bare `bun` can fail with "command not found."
@@ -88,7 +94,8 @@ These work with **no RPC** (config-only or pure math):
 > - "Build an unsigned Cork swap bundle: 100 sUSDe out of pool `0xceeb…c16a`, receiver `0xc0ffee…0001`, max 101e18 cST in and 130e18 reference in." *(returns bytes only — nothing is signed)*
 > - "Decode this Bundler3 calldata for me: `0x374f435d…`"
 
-These need an **RPC** (installed via the `-e CORK_RPC_URL=…` variant above):
+These read **live chain state** — they now work out of the box (built-in mainnet/Arbitrum RPCs +
+chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) only to override:
 
 > - "Read the live state of Cork market `0xceeb…c16a`."
 > - "What's the current cST swap rate for 100e18 collateral out of that pool?"
@@ -128,7 +135,28 @@ works without the launcher at all: `bun packages/cli/src/bin.ts capabilities`.
 Every tool accepts an optional `"format"` in its JSON input — `"concise"` (the default, shown above)
 or `"full"` for the verbose envelope. Exit codes map the envelope state so scripts can branch: `0` ok
 · `2` invalid input · `3` unavailable · `4` conflict · `1` unexpected error. Chain-backed commands
-take `--rpc-url <url>` (or read `CORK_RPC_URL` from the environment).
+resolve an RPC automatically (see below); pass `--rpc-url <url>` (or set `CORK_RPC_URL`) to override.
+
+## How RPC endpoints are resolved
+
+Chain-backed reads pick an endpoint in this order, so the tools "just work" on public chains while
+staying overridable:
+
+1. **Explicit** — `CORK_RPC_URL` (env) or `--rpc-url` (CLI). Used verbatim, no probing, no fallback.
+2. **Built-in default** — a committed endpoint for the chain (Ethereum mainnet, Arbitrum). Tried with
+   retries + exponential backoff; a per-endpoint **circuit breaker** stops hammering one that's down.
+3. **chainlist.org fallback** — for public chains (mainnet, Arbitrum, Base, Sepolia), the tool fetches
+   candidate public RPCs just-in-time, latency-probes them in parallel, **verifies each reports the
+   right chainId**, and uses the fastest healthy one. The private staging vnet (49222) is not on
+   chainlist, so it needs an explicit RPC.
+
+The chosen endpoint and breaker state are cached in-process and on disk (`~/.cache/cork-helper-cli/`,
+override with `CORK_RPC_CACHE_FILE`) so repeated calls skip re-probing. When a read falls back to a
+community RPC, the result envelope carries an `rpc_fallback` warning naming the host.
+
+> Note: the two built-in default endpoints embed access tokens and are committed intentionally
+> (owner decision). This is a deliberate exception to the "never commit an RPC URL" rule, which still
+> applies to `CORK_RPC_URL` / `CORK_TEST_RPC` — those stay environment-only.
 
 ## Design invariants (RFC 011)
 
@@ -163,14 +191,18 @@ take `--rpc-url <url>` (or read `CORK_RPC_URL` from the environment).
 ```sh
 bun install
 bun run typecheck          # tsc --noEmit, strict (noUncheckedIndexedAccess, exactOptionalPropertyTypes)
-bun run test               # vitest; fork-parity self-skips unless CORK_TEST_RPC is set
+bun run test               # vitest; fork-parity + bundle-sim self-skip unless CORK_TEST_RPC is set
 
-# Empirical fork-parity vs the live vnet fixture (never commit the RPC URL):
+# Empirical fork-parity vs the live vnet fixture (never commit this RPC URL):
 CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test
+
+# Live RPC-resolver smoke (default + chainlist fallback, real network):
+CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bunx vitest run packages/core/test/rpc-live.test.ts
 ```
 
-`CORK_TEST_RPC` / `CORK_RPC_URL` are read from the environment and must never be committed;
-without them the chain-backed tests skip and chain-backed compute returns `unavailable`.
+`CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) are read from the environment
+and must never be committed. Without `CORK_TEST_RPC` the fork-parity/bundle-sim suites self-skip;
+chain-backed tools still run at request time via the built-in default RPCs + chainlist fallback.
 
 ## Status
 

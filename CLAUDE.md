@@ -19,7 +19,7 @@ Bun 1.3 is pinned in `mise.toml`.
 mise trust && mise install                                                               # fresh checkout: trust mise.toml + install pinned Bun
 bun install                                                                              # from repo root, once
 claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # config-only + pure math
-claude mcp add cork-defi -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # + chain reads
+claude mcp add cork-defi -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # override built-in RPCs
 claude mcp list          # expect: cork-defi … ✔ Connected
 ```
 
@@ -54,8 +54,9 @@ trusting `data`:**
 
 - `ok` — use `data`.
 - `unavailable` — the variant is honestly not implemented / a dependency is missing. `warnings[0].code`
-  tells you why: `requires_rpc` (install with `-e CORK_RPC_URL`), `needs_indexer`, `needs_service`,
-  `phase_gated`, `unknown_topic`. **Do not retry the same call** and do not fabricate the answer —
+  tells you why: `requires_rpc` (no RPC could be resolved — rare now that public chains have built-in
+  defaults + chainlist fallback; means an offline env or an ineligible chain like the vnet 49222),
+  `needs_indexer`, `needs_service`, `phase_gated`, `unknown_topic`. **Do not retry the same call** and do not fabricate the answer —
   report the reason. Backend-gated variants (orderbook/fills/flows, order submission, taker-fill,
   rollover-intent, dutch-auction-price, rfq-quote, market deployment) stay `unavailable` by design.
 - `conflict` — a verification mismatch (e.g. `digest_mismatch`); surface it, don't paper over it.
@@ -66,16 +67,23 @@ CLI exit codes mirror state for scripting: `0` ok · `2` invalid input · `3` un
 Every tool's input takes an optional `format`: `"concise"` (default) or `"full"` (verbose envelope) —
 omit it unless you need the fuller shape.
 
-## When you need an RPC
+## RPC resolution (chain-backed tools work by default)
 
-Config-only / pure (no RPC): `cork_capabilities`, `cork_decode`, `cork_query resource:"protocol-config"`,
-`cork_compute kind:"rollover-premium-floor"`, and `cork_prepare_*` byte-building (note:
-`cork_prepare_phoenix` funding legs need an RPC to resolve token addresses — without it you get the
-bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`).
+Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`, used verbatim)
+→ **built-in default** (committed endpoints for mainnet + Arbitrum, retried with backoff behind a
+per-endpoint circuit breaker) → **chainlist.org fallback** (public chains 1/42161/8453/11155111:
+fetch candidates just-in-time, latency-probe, verify chainId, pick fastest). Chosen endpoint + breaker
+state are cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`).
+A chainlist fallback adds an `rpc_fallback` warning to the envelope.
 
-Chain-backed (need `CORK_RPC_URL`): `cork_query` market / account-state / pool-whitelist,
-`cork_compute` cst-swap-rate / unwind-rate / impairment-floor, `cork_track` marketRef. These return
-`unavailable` + `requires_rpc` when no RPC is configured.
+So `cork_query` market/account-state/pool-whitelist, `cork_compute` cst-swap-rate/unwind-rate/
+impairment-floor, and `cork_track` marketRef **just work** on public chains — no RPC setup. They only
+return `requires_rpc` when nothing resolves (offline, or an ineligible chain like the staging vnet
+49222, which needs an explicit `CORK_RPC_URL`). Set `CORK_RPC_URL` to override with a private/faster
+node. Pure/config tools never touch a chain: `cork_capabilities`, `cork_decode`, `cork_query
+resource:"protocol-config"`, `cork_compute kind:"rollover-premium-floor"`, `cork_prepare_*` byte-building.
+(`cork_prepare_phoenix` funding-leg token resolution still needs an *explicit* RPC — offline by default,
+so without one you get the bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`.)
 
 ## Invariants that constrain how you use the tools
 
@@ -83,7 +91,9 @@ Chain-backed (need `CORK_RPC_URL`): `cork_query` market / account-state / pool-w
   signed or broadcast except `cork_submit`, which only relays a payload the caller already signed.
 - **Idempotency** [K2]. `cork_prepare_*` and `cork_submit` take a `clientRequestId` — reuse the same id
   to make a retry idempotent; use a fresh id for a genuinely new request.
-- **Never commit an RPC URL.** `CORK_RPC_URL` / `CORK_TEST_RPC` come from the environment only.
+- **Never commit an RPC URL** — `CORK_RPC_URL` / `CORK_TEST_RPC` come from the environment only. The
+  two built-in default endpoints (mainnet/Arbitrum, in `chain/rpc.ts`) are a deliberate committed
+  exception (owner decision); don't add more committed endpoints.
 - **Math is bit-exact and empirically verified** against live on-chain reads (wei-for-wei). Trust the
   tool's numbers over hand-derived ones.
 

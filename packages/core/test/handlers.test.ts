@@ -75,8 +75,10 @@ describe("runTool: cork_query", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("needs_indexer");
   });
-  it("chain resources need an RPC", async () => {
-    const env = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW });
+  it("chain resources are requires_rpc when no RPC can be resolved", async () => {
+    // Inject a resolver that yields nothing, so this deterministically exercises the no-RPC branch
+    // offline (the built-in resolver would otherwise reach the committed default over the network).
+    const env = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
@@ -101,7 +103,7 @@ describe("runTool: cork_track", () => {
   });
 
   it("marketRef needs RPC; orderHash needs service", async () => {
-    const m = await runTool("cork_track", { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, { nowSeconds: NOW });
+    const m = await runTool("cork_track", { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(m.state).toBe("unavailable");
     expect(m.warnings[0]?.code).toBe("requires_rpc");
     const o = await runTool("cork_track", { mode: "reconcile", subject: { kind: "orderHash", orderHash: `0x${"1".repeat(64)}` }, format: "concise" }, { nowSeconds: NOW });
@@ -186,7 +188,7 @@ describe("runTool: cork_compute", () => {
     const env = await runTool(
       "cork_compute",
       { params: { kind: "impairment-floor", poolId: POOL, horizonSeconds: 86400 }, format: "concise" },
-      { nowSeconds: NOW },
+      { nowSeconds: NOW, resolveRpc: async () => null },
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
