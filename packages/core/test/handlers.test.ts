@@ -22,6 +22,26 @@ describe("runTool: cork_capabilities", () => {
     expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("cork prepare phoenix");
   });
 
+  it("search returns matching tools with their input schema", async () => {
+    const env = await runTool("cork_capabilities", { search: "bundle" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { matches: Array<{ name: string; inputSchema: unknown }> };
+    expect(d.matches.length).toBeGreaterThan(0);
+    expect(d.matches.some((m) => m.name === "cork_prepare_phoenix")).toBe(true);
+    expect(d.matches[0]?.inputSchema).toBeTruthy();
+  });
+
+  it("topic resolves a tool (by name, cork_ prefix, or cli leaf)", async () => {
+    for (const topic of ["cork_compute", "compute"]) {
+      const env = await runTool("cork_capabilities", { topic }, { nowSeconds: NOW });
+      expect(env.state).toBe("ok");
+      expect((env.data as { name: string }).name).toBe("cork_compute");
+    }
+    const miss = await runTool("cork_capabilities", { topic: "nonexistent" }, { nowSeconds: NOW });
+    expect(miss.state).toBe("unavailable");
+    expect(miss.warnings[0]?.code).toBe("unknown_topic");
+  });
+
   it("topic 'verify' re-derives deployed addresses via CREATE2 (all match)", async () => {
     const env = await runTool("cork_capabilities", { topic: "verify" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
@@ -39,6 +59,89 @@ describe("envelope provenance digest", () => {
     expect(a.provenance.digest).toMatch(/^0x[0-9a-f]{64}$/);
     // same data (capabilities is static) -> same digest even though fetchedAt differs
     expect(a.provenance.digest).toBe(b.provenance.digest);
+  });
+});
+
+describe("runTool: cork_query", () => {
+  it("protocol-config returns the deployment (no RPC needed)", async () => {
+    const env = await runTool("cork_query", { resource: "protocol-config", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { deployment: { corkAdapter: string }; create2Deployer: string };
+    expect(d.deployment.corkAdapter).toBe("0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407");
+    expect(d.create2Deployer).toBe("0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7");
+  });
+  it("indexer-only resources are honestly unavailable", async () => {
+    const env = await runTool("cork_query", { resource: "orderbook", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("needs_indexer");
+  });
+  it("chain resources need an RPC", async () => {
+    const env = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("requires_rpc");
+  });
+});
+
+describe("runTool: cork_track", () => {
+  it("artifact: recomputes digest and reconciles match/mismatch", async () => {
+    const artifact = { a: 1, b: "x", nested: { c: [1, 2, 3] } };
+    const first = await runTool("cork_track", { mode: "verify", subject: { kind: "artifact", artifact }, format: "concise" }, { nowSeconds: NOW });
+    expect(first.state).toBe("ok");
+    const digest = (first.data as { computedDigest: `0x${string}` }).computedDigest;
+    expect(digest).toMatch(/^0x[0-9a-f]{64}$/);
+
+    const match = await runTool("cork_track", { mode: "verify", subject: { kind: "artifact", artifact }, expect: { artifactDigest: digest }, format: "concise" }, { nowSeconds: NOW });
+    expect(match.state).toBe("ok");
+    expect((match.data as { verified: boolean }).verified).toBe(true);
+
+    const wrong = `0x${"0".repeat(64)}` as const;
+    const mismatch = await runTool("cork_track", { mode: "verify", subject: { kind: "artifact", artifact }, expect: { artifactDigest: wrong }, format: "concise" }, { nowSeconds: NOW });
+    expect(mismatch.state).toBe("conflict");
+    expect(mismatch.warnings[0]?.code).toBe("digest_mismatch");
+  });
+
+  it("marketRef needs RPC; orderHash needs service", async () => {
+    const m = await runTool("cork_track", { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, { nowSeconds: NOW });
+    expect(m.state).toBe("unavailable");
+    expect(m.warnings[0]?.code).toBe("requires_rpc");
+    const o = await runTool("cork_track", { mode: "reconcile", subject: { kind: "orderHash", orderHash: `0x${"1".repeat(64)}` }, format: "concise" }, { nowSeconds: NOW });
+    expect(o.warnings[0]?.code).toBe("needs_service");
+  });
+});
+
+describe("runTool: cork_prepare_orders", () => {
+  const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
+  const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
+  it("maker-order returns EIP-712 typed data + orderHash", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: RCV, clientRequestId: "ord-00000001", action: { type: "maker-order", poolId: POOL, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { kind: string; orderHash: string; typedData: { domain: { name: string }; primaryType: string } };
+    expect(d.kind).toBe("maker-order");
+    expect(d.orderHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(d.typedData.primaryType).toBe("Order");
+    expect(d.typedData.domain.name).toBe("1inch Aggregation Router");
+  });
+  it("cancel returns LOP cancelOrder calldata", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: RCV, clientRequestId: "ord-00000002", action: { type: "cancel", orderHash: `0x${"2".repeat(64)}`, makerTraits: "0" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { calldata: string }).calldata.startsWith("0x")).toBe(true);
+  });
+  it("taker-fill / rollover-intent are honestly service-gated", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: RCV, clientRequestId: "ord-00000003", action: { type: "taker-fill", orderHash: `0x${"3".repeat(64)}` }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("needs_service");
   });
 });
 

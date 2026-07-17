@@ -159,6 +159,88 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
     }
   });
 
+  it("cork_query market/account-state/pool-whitelist read the live pool", async () => {
+    const DEV = "0xc0ffee0000000000000000000000000000000001";
+    const mkt = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
+    expect(mkt.state).toBe("ok");
+    expect((mkt.data as { swapRate: string }).swapRate).toBe(s.onChainSwapRate.toString());
+    expect((mkt.data as { market: { collateralAsset: string } }).market.collateralAsset.toLowerCase()).toBe(s.market.collateralAsset.toLowerCase());
+
+    const acct = await runTool("cork_query", { resource: "account-state", pageSize: 25, format: "concise", filters: { poolId: POOL, account: DEV } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
+    expect(acct.state).toBe("ok");
+    const bals = (acct.data as { balances: { cst: string; cpt: string } }).balances;
+    expect(BigInt(bals.cst) >= 0n && BigInt(bals.cpt) >= 0n).toBe(true); // DEV holds shares from setup
+
+    const wl = await runTool("cork_query", { resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: DEV } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
+    expect(wl.state).toBe("ok");
+    expect(typeof (wl.data as { isWhitelisted: boolean }).isWhitelisted).toBe("boolean");
+  });
+
+  it("LOP maker-order hash equals on-chain LOP.hashOrder (EIP-712 parity)", async () => {
+    const built = await runTool(
+      "cork_prepare_orders",
+      {
+        chainId: 1,
+        account: "0x00000000000000000000000000000000000000ab",
+        clientRequestId: "lop-parity-0001",
+        action: { type: "maker-order", poolId: POOL, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", expirySeconds: 3600 },
+        format: "concise",
+      },
+      { rpcUrl: RPC!, nowSeconds: 4_000_000_000n },
+    );
+    expect(built.state).toBe("ok");
+    const d = built.data as { lop: `0x${string}`; orderHash: `0x${string}`; typedData: { message: Record<string, string> } };
+    const o = d.typedData.message;
+    // hashOrder's canonical signature uses all-uint256 fields (LOP Address/MakerTraits are uint256).
+    const hashOrderAbi = [
+      {
+        type: "function",
+        name: "hashOrder",
+        stateMutability: "view",
+        inputs: [{
+          name: "order",
+          type: "tuple",
+          components: [
+            { name: "salt", type: "uint256" },
+            { name: "maker", type: "uint256" },
+            { name: "receiver", type: "uint256" },
+            { name: "makerAsset", type: "uint256" },
+            { name: "takerAsset", type: "uint256" },
+            { name: "makingAmount", type: "uint256" },
+            { name: "takingAmount", type: "uint256" },
+            { name: "makerTraits", type: "uint256" },
+          ],
+        }],
+        outputs: [{ type: "bytes32" }],
+      },
+    ] as const;
+    const onChain = await client.readContract({
+      address: d.lop,
+      abi: hashOrderAbi,
+      functionName: "hashOrder",
+      args: [{
+        salt: BigInt(o.salt!),
+        maker: BigInt(o.maker!),
+        receiver: BigInt(o.receiver!),
+        makerAsset: BigInt(o.makerAsset!),
+        takerAsset: BigInt(o.takerAsset!),
+        makingAmount: BigInt(o.makingAmount!),
+        takingAmount: BigInt(o.takingAmount!),
+        makerTraits: BigInt(o.makerTraits!),
+      }],
+      blockNumber: s.blockNumber,
+    });
+    expect(d.orderHash).toBe(onChain);
+  });
+
+  it("cork_track marketRef verifies the pool against chain (MarketId re-hash)", async () => {
+    const env = await runTool("cork_track", { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, { rpcUrl: RPC!, atBlock: s.blockNumber });
+    expect(env.state).toBe("ok");
+    const d = env.data as { verified: boolean; marketIdRecomputed: string };
+    expect(d.verified).toBe(true);
+    expect(d.marketIdRecomputed.toLowerCase()).toBe(POOL);
+  });
+
   it("runTool(cork_compute cst-swap-rate) matches on-chain previewSwap (full handler stack)", async () => {
     const cao = 100n * 10n ** 18n;
     const [cstSharesIn, referenceAssetsIn, fee] = await client.readContract({

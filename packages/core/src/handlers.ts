@@ -7,8 +7,11 @@ import {
   ComputeInput,
   DecodeInput,
   Envelope,
+  inputJsonSchema,
+  PrepareOrdersInput,
   PreparePhoenixInput,
   QueryInput,
+  TrackInput,
   REGISTRY,
   SCHEMA_VERSION,
   toolByName,
@@ -21,9 +24,11 @@ import { computeMarketId } from "./marketid.ts";
 import { corkActionCall, type CorkActionParamMap } from "./bundle/actions.ts";
 import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
-import { canAutoFund, fundingLegs, type FundingMode } from "./bundle/funding.ts";
+import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
+import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
+import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, deploymentFor, type CorkDeployment } from "./config.ts";
 
 export class ToolInputError extends Error {
@@ -186,6 +191,171 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
   return unavailable(chainId, "phase_gated", `compute kind '${p.kind}' is not implemented in this iteration`, ctx);
 }
 
+async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId ?? 1;
+  const dep = ctx.deployment ?? deploymentFor(chainId);
+  const filters = (input.filters ?? {}) as { poolId?: `0x${string}`; account?: `0x${string}` };
+
+  // protocol-config is pure config (no RPC needed).
+  if (input.resource === "protocol-config") {
+    if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
+    return envelope({ state: "ok", data: { chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", ctx });
+  }
+
+  const chainResources = new Set(["market", "account-state", "pool-whitelist"]);
+  if (!chainResources.has(input.resource)) {
+    return unavailable(chainId, "needs_indexer", `cork_query('${input.resource}') requires an indexer/service backend not wired in this iteration`, ctx);
+  }
+  if (!ctx.rpcUrl || !dep) {
+    return unavailable(chainId, "requires_rpc", `cork_query('${input.resource}') needs an RPC endpoint and a known deployment for chainId ${chainId}`, ctx);
+  }
+  if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
+
+  const client = createPublicClient({ transport: http(ctx.rpcUrl) }) as unknown as PublicClient;
+  const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
+
+  if (input.resource === "market") {
+    const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock);
+    return envelope({
+      state: "ok",
+      data: {
+        poolId: s.poolId,
+        market: s.market,
+        constraintState: s.constraintState,
+        swapRate: s.onChainSwapRate,
+        oracleRate: s.oracleRate,
+        swapFeePercentage: s.swapFeePercentage,
+        unwindSwapFeePercentage: s.unwindSwapFeePercentage,
+        collateralDecimals: s.collateralDecimals,
+        referenceDecimals: s.referenceDecimals,
+        cstToken: s.cstToken,
+        cptToken: s.cptToken,
+        issuedAt: s.issuedAt,
+      },
+      chainId,
+      source: "chain",
+      block: s.blockNumber,
+      ctx,
+    });
+  }
+
+  if (input.resource === "account-state") {
+    if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
+    const tokens = await resolvePoolTokens(client, dep.poolManager, filters.poolId, ctx.atBlock);
+    const bal = (token: `0x${string}`) =>
+      client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) });
+    const [collateral, reference, cst, cpt] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
+    return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens }, chainId, source: "chain", ctx });
+  }
+
+  // pool-whitelist
+  if (!filters.account) return unavailable(chainId, "missing_filter", "pool-whitelist requires filters.account", ctx);
+  const isWhitelisted = await client.readContract({
+    address: dep.whitelistManager,
+    abi: whitelistManagerAbi,
+    functionName: "isWhitelisted",
+    args: [filters.poolId, filters.account],
+    ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
+  });
+  return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", ctx });
+}
+
+async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId;
+  const action = input.action;
+
+  if (action.type === "maker-order") {
+    const lop = LOP_ADDRESSES[chainId];
+    if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    const built = buildMakerOrder({
+      chainId,
+      lop,
+      maker: input.account,
+      makerAsset: action.makerAsset,
+      takerAsset: action.takerAsset,
+      makingAmount: BigInt(action.makingAmount),
+      takingAmount: BigInt(action.takingAmount),
+      clientRequestId: input.clientRequestId,
+      ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
+      allowPartialFills: action.allowsPartialFills,
+      usePermit2: action.usePermit2,
+    });
+    return envelope({
+      state: "ok",
+      data: {
+        kind: "maker-order",
+        lop,
+        typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
+        orderHash: built.orderHash,
+        clientRequestId: input.clientRequestId,
+      },
+      chainId,
+      source: "config",
+      ctx,
+    });
+  }
+
+  if (action.type === "cancel") {
+    const lop = LOP_ADDRESSES[chainId];
+    if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+    const cancel = buildCancelOrder(BigInt(action.makerTraits), action.orderHash);
+    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash }, chainId, source: "config", ctx });
+  }
+
+  // taker-fill needs the resting order from the orderbook; rollover-intent needs the CorkSettler
+  // ERC-7683 domain (rollover PR #161) — neither backend is wired in this iteration.
+  return unavailable(chainId, "needs_service", `prepare_orders '${action.type}' requires the orderbook/rollover service not wired in this iteration`, ctx);
+}
+
+async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId ?? 1;
+  const subj = input.subject;
+
+  // artifact: recompute the content digest and reconcile against the caller's claim (pure).
+  if (subj.kind === "artifact") {
+    const digest = keccak256(stringToHex(JSON.stringify(jsonSafe(subj.artifact) ?? null)));
+    const claimed = input.expect?.artifactDigest;
+    if (claimed) {
+      const match = digest.toLowerCase() === claimed.toLowerCase();
+      return envelope({ state: match ? "ok" : "conflict", data: { verified: match, computedDigest: digest, claimedDigest: claimed }, chainId, source: "config", ...(match ? {} : { warnings: [{ code: "digest_mismatch", message: "recomputed artifact digest does not match the claimed digest" }] }), ctx });
+    }
+    return envelope({ state: "ok", data: { computedDigest: digest }, chainId, source: "config", ctx });
+  }
+
+  // chain-authoritative subjects need an RPC.
+  const dep = ctx.deployment ?? deploymentFor(chainId);
+  if (subj.kind === "marketRef") {
+    if (!ctx.rpcUrl || !dep) return unavailable(chainId, "requires_rpc", "marketRef verification needs an RPC + known deployment", ctx);
+    const client = createPublicClient({ transport: http(ctx.rpcUrl) }) as unknown as PublicClient;
+    const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
+    const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
+    return envelope({
+      state: idMatches ? "ok" : "conflict",
+      data: { verified: idMatches, poolId: s.poolId, marketIdRecomputed: computeMarketId(s.market), swapRate: s.onChainSwapRate, market: s.market },
+      chainId,
+      source: "chain",
+      block: s.blockNumber,
+      ...(idMatches ? {} : { warnings: [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }] }),
+      ctx,
+    });
+  }
+
+  if (subj.kind === "txHash") {
+    if (!ctx.rpcUrl) return unavailable(chainId, "requires_rpc", "txHash reconcile needs an RPC", ctx);
+    const client = createPublicClient({ transport: http(ctx.rpcUrl) }) as unknown as PublicClient;
+    try {
+      const r = await client.getTransactionReceipt({ hash: subj.txHash });
+      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length }, chainId, source: "chain", block: r.blockNumber, ctx });
+    } catch {
+      return envelope({ state: "unavailable", data: { txHash: subj.txHash, found: false }, chainId, source: "chain", warnings: [{ code: "receipt_not_found", message: "no receipt for this txHash at the RPC (pending or unknown)" }], ctx });
+    }
+  }
+
+  // orderHash / submissionRef need the LOP/orderbook service.
+  return unavailable(chainId, "needs_service", `track subject '${subj.kind}' requires the orderbook/LOP service not wired in this iteration`, ctx);
+}
+
 /** Validate + dispatch a tool call. Throws ToolInputError on schema failure. */
 export async function runTool(name: string, rawInput: unknown, ctx: HandlerContext = {}): Promise<Envelope> {
   const def = toolByName(name);
@@ -215,7 +385,24 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
           ctx,
         });
       }
-      const data = REGISTRY.map((t) => ({ name: t.name, cli: `cork ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations }));
+      const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `cork ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations });
+
+      // search: keyword -> matching tools (name/cli/description), with the filled input schema.
+      if (input.search) {
+        const q = input.search.toLowerCase();
+        const matches = REGISTRY.filter((t) => `${t.name} ${t.cliPath.join(" ")} ${t.description}`.toLowerCase().includes(q));
+        return envelope({ state: "ok", data: { query: input.search, matches: matches.map((t) => ({ ...card(t), inputSchema: inputJsonSchema(t.name) })) }, chainId: 1, source: "config", ctx });
+      }
+
+      // topic: a tool name (with or without cork_ prefix) or cli leaf -> that tool's full doc.
+      if (input.topic) {
+        const key = input.topic.toLowerCase();
+        const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key);
+        if (!t) return unavailable(1, "unknown_topic", `no tool matches topic '${input.topic}'; try search or omit args for the full list`, ctx);
+        return envelope({ state: "ok", data: { ...card(t), inputSchema: inputJsonSchema(t.name), output: "Envelope" }, chainId: 1, source: "config", ctx });
+      }
+
+      const data = REGISTRY.map(card);
       return envelope({ state: "ok", data: { tools: data, schemaVersion: SCHEMA_VERSION }, chainId: 1, source: "config", ctx });
     }
     case "cork_decode": {
@@ -249,10 +436,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       if (mode === "pre-funded") {
         // caller guarantees tokens already sit in the adapter — nothing to fund.
       } else if (!canAutoFund(input.action.type)) {
-        warnings.push({
-          code: "manual_funding",
-          message: `'${input.action.type}' burns shares from its \`owner\`; share funding/owner handling is caller-managed (set \`owner\` and pre-position shares). No funding leg was auto-built.`,
-        });
+        warnings.push({ code: "manual_funding", message: `'${input.action.type}' has no auto-funding model in this iteration; fund the adapter manually or use fundingMode 'pre-funded'.` });
       } else if (!ctx.rpcUrl) {
         warnings.push({
           code: "funding_needs_rpc",
@@ -262,7 +446,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         const client = createPublicClient({ transport: http(ctx.rpcUrl) });
         const poolId = (input.action as { poolId: `0x${string}` }).poolId;
         const tokens = await resolvePoolTokens(client as unknown as PublicClient, dep.poolManager, poolId, ctx.atBlock);
-        funding = fundingLegs(input.action, tokens, dep.corkAdapter, mode);
+        const plan = fundingPlan(input.action, tokens, dep.corkAdapter, mode);
+        funding = plan.legs;
+        if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
       }
 
       const bundle = [...funding, actionLeg];
@@ -276,10 +462,12 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         ctx,
       });
     }
-    case "cork_query": {
-      const input = parsed.data as QueryInput;
-      return unavailable(chainIdOf(input), "phase_gated", `cork_query('${input.resource}') requires a data-source backend not wired in this iteration`, ctx);
-    }
+    case "cork_query":
+      return handleQuery(parsed.data as QueryInput, ctx);
+    case "cork_track":
+      return handleTrack(parsed.data as TrackInput, ctx);
+    case "cork_prepare_orders":
+      return handlePrepareOrders(parsed.data as PrepareOrdersInput, ctx);
     default:
       return unavailable(chainIdOf(parsed.data), "phase_gated", `${name} is not implemented in this iteration`, ctx);
   }

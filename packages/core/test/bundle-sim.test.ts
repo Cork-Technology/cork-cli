@@ -69,6 +69,25 @@ describe.skipIf(!RPC)("bundle execution simulation vs live vnet", () => {
     ).rejects.toThrow();
   });
 
+  it("funded unwind-swap bundle (1 collateral leg) executes on vnet", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      {
+        chainId: 1,
+        account: DEV,
+        clientRequestId: "sim-unwindswap-0001",
+        fundingMode: "erc20-approve",
+        deadlineSeconds: 3600,
+        action: { type: "unwind-swap", poolId: POOL, collateralAssetsIn: "1000000000000000000", receiver: DEV, minReferenceAssetsOut: "0", minCstSharesOut: "0" },
+        format: "concise",
+      },
+      { rpcUrl: RPC!, nowSeconds: NOW },
+    );
+    const data = env.data as { fundingLegs: number; multicall: `0x${string}` };
+    expect(data.fundingLegs).toBe(1);
+    await expect(client.call({ account: DEV, to: MAINNET_DEPLOYMENT.bundler3, data: data.multicall })).resolves.toBeDefined();
+  });
+
   describe("swap path (two funding legs: cST + REF)", () => {
     const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69" as const;
     const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e" as const;
@@ -109,6 +128,25 @@ describe.skipIf(!RPC)("bundle execution simulation vs live vnet", () => {
     it("negative control: REF max too low makes the swap REVERT (SlippageExceeded)", async () => {
       const multicall = await swapBundle("1"); // 1 wei vbUSDC — cannot cover
       await expect(client.call({ account: DEV, to: MAINNET_DEPLOYMENT.bundler3, data: multicall })).rejects.toThrow();
+    });
+
+    it("funded exercise bundle (cST + REF legs) executes on vnet", async () => {
+      const env = await runTool(
+        "cork_prepare_phoenix",
+        {
+          chainId: 1,
+          account: DEV,
+          clientRequestId: "sim-exercise-0001",
+          fundingMode: "erc20-approve",
+          deadlineSeconds: 3600,
+          action: { type: "exercise", poolId: POOL, cstSharesIn: "1000000000000000000", receiver: DEV, minCollateralAssetsOut: "0", maxReferenceAssetsIn: "2000000" },
+          format: "concise",
+        },
+        { rpcUrl: RPC!, nowSeconds: NOW },
+      );
+      const data = env.data as { fundingLegs: number; multicall: `0x${string}` };
+      expect(data.fundingLegs).toBe(2); // cST + REF
+      await expect(client.call({ account: DEV, to: MAINNET_DEPLOYMENT.bundler3, data: data.multicall })).resolves.toBeDefined();
     });
   });
 });

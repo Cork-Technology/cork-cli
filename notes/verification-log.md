@@ -292,3 +292,21 @@ adversary simulation across a 5-point horizon matrix (conservative-safe; never o
 Sourcify (`0x6566…0245`), matching the memory note. `A()` discriminated-union helper + hex-typed
 primitives (`Address`/`Hex`/`Bytes32` → `` `0x${string}` ``) tightened so schema outputs feed
 viem/core directly.
+
+## C15 — Shortcut-closure round (2026-07-17)
+
+**Claim:** the self-audited Phase-1 gaps are closed rigorously/empirically.
+
+**Tested + observed — CONFIRMED.** (172 tests pass with CORK_TEST_RPC; 155 + 17 skip in CI; tsc strict clean.)
+- All 13 adapter action encoders byte-parity vs independent `cast calldata` (ABI-driven, distinct-per-field) + field-by-field decode round-trip.
+- All 6 preview functions fork-parity wei-for-wei vs live vnet (added exercise/exerciseOther/unwindExercise/unwindExerciseOther).
+- Funding legs (erc20-approve/permit2/pre-funded) built for value-in + owner==adapter burn actions; deposit/swap/unwind-swap/exercise bundles **execute** on the vnet via eth_call, each with a revert negative-control.
+- Decoder recognizes non-Cork Bundler3 legs.
+- Address primitive normalizes to EIP-55 (isAddress strict); compute handler pins reads to a block.
+- Deep JSON-Schema ajv-vs-zod agreement + pinned refinement gap.
+- CREATE2 --verify wired: re-derives deployed CorkAdapter 0xCCcC…0407 from cork_adapter_salt `0x212fafd3…860f7d` + Sourcify initCodeHash `0x2e1204ab…f682cb`. Envelopes carry a deterministic content digest.
+- cork_query (market/account-state/protocol-config/pool-whitelist), cork_track (artifact/marketRef/txHash), cork_prepare_orders (maker-order/cancel), cork_capabilities (search/topic) implemented.
+
+**CORRECTION (empirical catch):** the 1inch order-settlement contract at `0x111111125421cA6dc452d289314280a0f8842A65` reports EIP-712 domain **name "1inch Aggregation Router", version "6"** (via eip712Domain/ERC-5267) — NOT the reference repo's `EIP712("1inch Limit Order Protocol","4")`. Using the repo string produced a wrong order hash; the on-chain `hashOrder` parity test caught it. RFC/impl now use the empirically-correct domain.
+
+Still backend-blocked (not attempted): rfq-quote (market-registry-api WIP), dutch-auction-price live (no Fusion order on vnet), prepare_market (Q-REG), cork_submit relay + orderbook-backed track/taker-fill, rollover-intent (CorkSettler domain).

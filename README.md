@@ -58,9 +58,22 @@ without them the chain-backed tests skip and chain-backed compute returns `unava
 
 ## Status
 
-Phase-1 complete: `cork_capabilities`, `cork_decode` (calldata), `cork_compute`
-(rollover-premium-floor pure; cst-swap-rate / unwind-rate / impairment-floor chain-backed), and
-`cork_prepare_phoenix` (13 adapter actions) are implemented and tested. `cork_query`,
-`cork_track`, `cork_submit`, `cork_prepare_orders`, `cork_prepare_market`, and the
-authority/token-funding legs are registered and phase-gated (`unavailable`) pending their
-Phase 2–4 backends.
+Implemented + tested:
+
+- **cork_capabilities** — tool list, `search`, `topic` docs, and `topic: "verify"` (re-derives
+  deployed addresses via CREATE2 from prod.toml salt + Sourcify init-code hash).
+- **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1).
+- **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
+  (chain-backed, block-pinnable).
+- **cork_prepare_phoenix** — all 13 adapter actions; auto-built funding legs
+  (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn actions.
+  deposit / swap / unwind-swap / exercise bundles are proven to **execute** against the live vnet.
+- **cork_prepare_orders** — 1inch order maker-order EIP-712 typed data + cancel calldata; the order
+  hash is proven equal to on-chain `hashOrder`.
+- **cork_query** — market / account-state / protocol-config / pool-whitelist via chain reads.
+- **cork_track** — artifact digest reconcile + marketRef (MarketId re-hash) + txHash receipt.
+
+Honestly gated (`unavailable` with a reason, never faked): indexer/service resources of `cork_query`
+(orderbook/fills/flows), `cork_track` orderHash/submissionRef, `cork_prepare_orders` taker-fill /
+rollover-intent, `cork_compute` dutch-auction-price / rfq-quote, `cork_prepare_market` (Q-REG), and
+`cork_submit` — each pending its Phase 2–4 backend.

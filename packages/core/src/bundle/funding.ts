@@ -45,41 +45,78 @@ const FUNDING_TABLE: Partial<Record<PhoenixAction["type"], FundReq[]>> = {
   "unwind-exercise-other": [{ role: "collateral", field: "maxCollateralAssetsIn" }],
 };
 
-/**
- * Whether this action's funding can be auto-built. Share-burning actions
- * (unwind-deposit/unwind-mint/withdraw/withdraw-other/redeem) burn from `owner` with sentinel/owner
- * semantics that the caller controls via the `owner` param — we do NOT guess a leg for those.
- */
+// Share-burning actions burn from `owner` (which must be the adapter or the initiator). When
+// owner == adapter we can fund by transferring the shares in; when owner == initiator the pool
+// burns directly from the user and the caller manages the approval (no leg we should guess).
+const MAX_UINT = (1n << 256n) - 1n;
+const BURN_TABLE: Partial<Record<PhoenixAction["type"], FundReq[]>> = {
+  withdraw: [{ role: "cpt", field: "maxCptSharesIn" }],
+  "withdraw-other": [{ role: "cpt", field: "maxCptSharesIn" }],
+  redeem: [{ role: "cpt", field: "cptSharesIn" }],
+  "unwind-deposit": [
+    { role: "cpt", field: "maxCptAndCstSharesIn" },
+    { role: "cst", field: "maxCptAndCstSharesIn" },
+  ],
+  "unwind-mint": [
+    { role: "cpt", field: "cptAndCstSharesIn" },
+    { role: "cst", field: "cptAndCstSharesIn" },
+  ],
+};
+
+export function isBurnAction(type: PhoenixAction["type"]): boolean {
+  return type in BURN_TABLE;
+}
+
+/** Whether this action's funding can be auto-built (value-in always; burn only when owner==adapter). */
 export function canAutoFund(type: PhoenixAction["type"]): boolean {
-  return type in FUNDING_TABLE;
+  return type in FUNDING_TABLE || type in BURN_TABLE;
 }
 
 function tokenFor(role: TokenRole, t: PoolTokens): `0x${string}` {
   return t[role];
 }
 
-/** Build the funding legs for an action. Returns [] for pre-funded or non-auto-fundable actions. */
-export function fundingLegs(
+export interface FundingPlan {
+  legs: Call[];
+  /** Present when funding could not be auto-built and the caller must handle it. */
+  note?: string;
+}
+
+/** Build the funding plan for an action (legs + an optional owner-managed note). */
+export function fundingPlan(
   action: PhoenixAction,
   tokens: PoolTokens,
   adapter: `0x${string}`,
   mode: FundingMode,
-): Call[] {
-  if (mode === "pre-funded") return [];
-  const reqs = FUNDING_TABLE[action.type];
-  if (!reqs) return [];
+): FundingPlan {
+  if (mode === "pre-funded") return { legs: [] };
   const fn = mode === "permit2" ? "permit2TransferFrom" : "erc20TransferFrom";
-  const legs: Call[] = [];
-  for (const req of reqs) {
-    const raw = (action as unknown as Record<string, string>)[req.field];
-    if (raw === undefined) throw new Error(`funding: action ${action.type} missing field ${req.field}`);
-    const amount = BigInt(raw);
-    const data = encodeFunctionData({
-      abi: generalAdapterAbi,
-      functionName: fn,
-      args: [tokenFor(req.role, tokens), adapter, amount],
+  const build = (reqs: FundReq[]): Call[] =>
+    reqs.map((req) => {
+      const raw = (action as unknown as Record<string, string>)[req.field];
+      if (raw === undefined) throw new Error(`funding: action ${action.type} missing field ${req.field}`);
+      const data = encodeFunctionData({ abi: generalAdapterAbi, functionName: fn, args: [tokenFor(req.role, tokens), adapter, BigInt(raw)] });
+      return call(adapter, data);
     });
-    legs.push(call(adapter, data));
+
+  const valueReqs = FUNDING_TABLE[action.type];
+  if (valueReqs) return { legs: build(valueReqs) };
+
+  const burnReqs = BURN_TABLE[action.type];
+  if (burnReqs) {
+    const owner = (action as unknown as { owner?: `0x${string}` }).owner;
+    if (owner && owner.toLowerCase() !== adapter.toLowerCase()) {
+      return { legs: [], note: `owner (${owner}) is not the adapter; shares are burned from owner directly — ensure owner approved the pool manager for cPT/cST. No funding leg was built.` };
+    }
+    // owner == adapter: transfer shares in, unless a sentinel amount (uint256.max) is used.
+    const hasSentinel = burnReqs.some((r) => BigInt((action as unknown as Record<string, string>)[r.field] ?? "0") === MAX_UINT);
+    if (hasSentinel) return { legs: [], note: "owner==adapter with a uint256.max sentinel amount; pre-fund the adapter's shares directly (amount is resolved on-chain). No funding leg was built." };
+    return { legs: build(burnReqs) };
   }
-  return legs;
+  return { legs: [] };
+}
+
+/** Legs-only convenience (value-in actions). */
+export function fundingLegs(action: PhoenixAction, tokens: PoolTokens, adapter: `0x${string}`, mode: FundingMode): Call[] {
+  return fundingPlan(action, tokens, adapter, mode).legs;
 }
