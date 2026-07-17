@@ -17,14 +17,14 @@ Bun 1.3 is pinned in `mise.toml`.
 
 ```sh
 bun install                                                                              # from repo root, once
-claude mcp add cork-phoenix -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # config-only + pure math
-claude mcp add cork-phoenix -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # + chain reads
-claude mcp list          # expect: cork-phoenix … ✔ Connected
+claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # config-only + pure math
+claude mcp add cork-defi -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # + chain reads
+claude mcp list          # expect: cork-defi … ✔ Connected
 ```
 
 Use the **absolute** `bun` path (`"$(mise which bun)"`, or `"$(which bun)"` without mise): the server
 is spawned as a subprocess that may not inherit the shell `PATH`, so a bare `bun` can fail "command
-not found." The two variants share one name — re-adding errors; `claude mcp remove cork-phoenix` to
+not found." The two variants share one name — re-adding errors; `claude mcp remove cork-defi` to
 switch. Never pair `-s project` (writes a committed `.mcp.json`) with `-e CORK_RPC_URL` — the RPC
 endpoint value must not enter git.
 

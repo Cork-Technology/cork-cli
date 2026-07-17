@@ -34,40 +34,40 @@ bun install       # link the workspace packages
 ### 2. Install into Claude Code
 
 Register the server with `claude mcp add`, pointing it at `packages/mcp/src/bin.ts`. **Pick one** of
-the two variants below — they're alternatives sharing the name `cork-phoenix`, not additive (adding a
-name that already exists errors; `claude mcp remove cork-phoenix` first if you want to switch). Run
+the two variants below — they're alternatives sharing the name `cork-defi`, not additive (adding a
+name that already exists errors; `claude mcp remove cork-defi` first if you want to switch). Run
 from the repo root so `$(pwd)` resolves:
 
 ```sh
 # A) state reads + math that don't touch a chain (capabilities, decode, config, pure compute)
-claude mcp add cork-phoenix -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
+claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
 
 # B) also enable chain-backed reads (live markets, swap rates, whitelist) by passing an RPC endpoint:
-claude mcp add cork-phoenix -e CORK_RPC_URL=https://your-rpc-endpoint -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
+claude mcp add cork-defi -e CORK_RPC_URL=https://your-rpc-endpoint -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
 ```
 
 **Why the absolute `bun` path.** Claude Code launches the server as a subprocess that may not inherit
 your shell's `PATH` (notably the desktop app), so a bare `bun` can fail with "command not found."
 `"$(mise which bun)"` resolves to the real binary at `add` time (use `"$(which bun)"` if you
 installed Bun without mise). If the server won't connect, this is the first thing to check —
-`claude mcp get cork-phoenix` shows the exact command it will run.
+`claude mcp get cork-defi` shows the exact command it will run.
 
 By default this registers the server **locally** (just you, just this project; stored in your user
 config outside the repo). `-s user` makes it available in every project. **Avoid `-s project` with the
 `-e CORK_RPC_URL=…` variant:** project scope writes a *committed* `.mcp.json`, and this repo's rule is
 that the RPC endpoint value never enters git. Share via `-s project` using variant A only, and let
-each teammate configure their own endpoint locally. To uninstall: `claude mcp remove cork-phoenix`.
+each teammate configure their own endpoint locally. To uninstall: `claude mcp remove cork-defi`.
 
 ### 3. Check it's working
 
 ```sh
-claude mcp list                 # cork-phoenix should show "✔ Connected"
-claude mcp get cork-phoenix     # shows the command, args, and any env you set
+claude mcp list                 # cork-defi should show "✔ Connected"
+claude mcp get cork-defi     # shows the command, args, and any env you set
 ```
 
 Then, inside a Claude Code session, ask it to introspect the server:
 
-> **You:** Using the cork-phoenix MCP, call cork_capabilities and tell me how many tools there are and their names.
+> **You:** Using the cork-defi MCP, call cork_capabilities and tell me how many tools there are and their names.
 
 A healthy install answers **9 tools**: `cork_query`, `cork_compute`, `cork_decode`,
 `cork_capabilities`, `cork_prepare_phoenix`, `cork_prepare_orders`, `cork_prepare_market`,
@@ -78,8 +78,8 @@ re-check step 1 (Bun installed, `bun install` run) and that the path in step 2 i
 
 These work with **no RPC** (config-only or pure math):
 
-> - "Ask cork-phoenix what tools relate to *bundles*." *(searches the manual)*
-> - "Use cork-phoenix to compute the rollover premium floor for 1000e18 dstCST produced at a min premium of 0.02e18 per share." *(pure, exact math)*
+> - "Ask cork-defi what tools relate to *bundles*." *(searches the manual)*
+> - "Use cork-defi to compute the rollover premium floor for 1000e18 dstCST produced at a min premium of 0.02e18 per share." *(pure, exact math)*
 > - "Get the Cork protocol config — I want the deployed CorkAdapter and Bundler3 addresses."
 > - "Build an unsigned Cork swap bundle: 100 sUSDe out of pool `0xceeb…c16a`, receiver `0xc0ffee…0001`, max 101e18 cST in and 130e18 reference in." *(returns bytes only — nothing is signed)*
 > - "Decode this Bundler3 calldata for me: `0x374f435d…`"

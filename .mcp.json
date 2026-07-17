@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "cork-defi": {
+      "type": "stdio",
+      "command": "bun",
+      "args": [
+        "packages/mcp/src/bin.ts"
+      ],
+      "env": {}
+    }
+  }
+}
