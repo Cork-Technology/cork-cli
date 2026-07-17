@@ -16,6 +16,7 @@ Bun 1.3 is pinned in `mise.toml`.
 ## Install / verify as an MCP server
 
 ```sh
+mise trust && mise install                                                               # fresh checkout: trust mise.toml + install pinned Bun
 bun install                                                                              # from repo root, once
 claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"        # config-only + pure math
 claude mcp add cork-defi -e CORK_RPC_URL=<url> -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"  # + chain reads

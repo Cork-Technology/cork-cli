@@ -27,9 +27,13 @@ type-stripping can't run this code — it uses TypeScript parameter properties).
 `mise.toml`, so from the repo root:
 
 ```sh
+mise trust        # trust this repo's mise.toml — one-time, REQUIRED on a fresh checkout
 mise install      # installs the pinned Bun (or: curl -fsSL https://bun.sh/install | bash)
-bun install       # link the workspace packages
+bun install       # install deps + link the workspace packages
 ```
+
+(Skip `mise trust`/`mise install` if you already have Bun 1.3+ on your `PATH` by other means — then
+just `bun install`.)
 
 ### 2. Install into Claude Code
 
@@ -98,20 +102,28 @@ order submission, and market deployment. That's expected; it's not a broken inst
 
 The same tools run straight from a shell — handy for scripts and quick checks. The command is `ch`,
 a small launcher at `bin/ch` that runs the CLI under the repo-pinned Bun and works from any directory.
-Put it on your `PATH` once:
+
+From a fresh checkout:
 
 ```sh
-export PATH="$(pwd)/bin:$PATH"          # this shell; or add to your shell profile
+# 1. one-time setup (same as Prerequisites above)
+mise trust && mise install && bun install
+
+# 2. put the launcher on your PATH (this shell; or add to your shell profile)
+export PATH="$(pwd)/bin:$PATH"
 # or symlink it into a dir already on PATH:  ln -s "$(pwd)/bin/ch" ~/.local/bin/ch
 
+# 3. test it — a healthy install prints an "ok" envelope listing the 9 tools
 ch capabilities
+
 ch query --json '{"resource":"protocol-config"}'
 ch compute --json '{"params":{"kind":"rollover-premium-floor","dstCstProduced":"1000000000000000000000","minPremiumPerShare":"20000000000000000"}}'
 ch compute --explain     # print a tool's contract (JSON schema) without running it
 ```
 
-Prefer not to touch `PATH`? The launcher runs the same either way — `./bin/ch capabilities` — and the
-long form still works: `bun packages/cli/src/bin.ts capabilities`.
+`ch capabilities` returning `"state": "ok"` with 9 tools means the CLI is wired correctly. Prefer not
+to touch `PATH`? The launcher runs the same either way — `./bin/ch capabilities` — and the long form
+works without the launcher at all: `bun packages/cli/src/bin.ts capabilities`.
 
 Every tool accepts an optional `"format"` in its JSON input — `"concise"` (the default, shown above)
 or `"full"` for the verbose envelope. Exit codes map the envelope state so scripts can branch: `0` ok
