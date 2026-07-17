@@ -1,5 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // stdio entrypoint: `cork-mcp`. Data mode / RPC come from env (explicit, never silent-fallback).
+// Always launched under Bun (never node — TS parameter properties). The MCP client spawns it as
+// `bun packages/mcp/src/bin.ts`; the shebang matters only if the package bin is linked/published.
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createCorkServer } from "./server.ts";
 

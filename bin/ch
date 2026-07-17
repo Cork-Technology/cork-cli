@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # ch — Cork helper CLI launcher (binstub). Runs the TypeScript CLI under the repo-pinned Bun,
-# resolved to an absolute path so `ch` works from any directory regardless of PATH/mise activation.
+# resolved to an absolute path so `ch` works from any directory and when symlinked onto PATH.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+# Resolve this script's real location, following symlinks — portable (no GNU-only `readlink -f`,
+# which fails on macOS/BSD). Handles `ln -s .../bin/ch ~/.local/bin/ch` installs.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+ROOT="$(cd -P "$(dirname "$src")/.." >/dev/null 2>&1 && pwd)"
+
+# Resolve a real Bun binary: prefer the repo-pinned one via mise (absolute path, CWD-independent),
+# else fall back to `bun` on PATH.
 BUN=""
 if command -v mise >/dev/null 2>&1; then BUN="$(cd "$ROOT" && mise which bun 2>/dev/null || true)"; fi
 [ -n "${BUN:-}" ] || BUN="$(command -v bun || true)"
-[ -n "${BUN:-}" ] || { echo "ch: Bun not found — install via mise (mise install) or https://bun.sh" >&2; exit 127; }
+[ -n "${BUN:-}" ] || { echo "ch: Bun not found — install via mise (mise trust && mise install) or https://bun.sh" >&2; exit 127; }
+
 exec "$BUN" "$ROOT/packages/cli/src/bin.ts" "$@"
