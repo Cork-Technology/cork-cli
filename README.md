@@ -91,19 +91,27 @@ These work with **no RPC** (config-only or pure math):
 > - "Ask cork-defi what tools relate to *bundles*." *(searches the manual)*
 > - "Use cork-defi to compute the rollover premium floor for 1000e18 dstCST produced at a min premium of 0.02e18 per share." *(pure, exact math)*
 > - "Get the Cork protocol config — I want the deployed CorkAdapter and Bundler3 addresses."
-> - "Build an unsigned Cork swap bundle: 100 sUSDe out of pool `0xceeb…c16a`, receiver `0xc0ffee…0001`, max 101e18 cST in and 130e18 reference in." *(returns bytes only — nothing is signed)*
+> - "Build an unsigned Cork swap bundle: 100 sUSDe out of pool `0xd16e…cf05`, receiver `0xc0ffee…0001`, max 101e18 cST in and 130e18 reference in." *(returns bytes only — nothing is signed)*
 > - "Decode this Bundler3 calldata for me: `0x374f435d…`"
 
-These read **live chain state** — they now work out of the box (built-in mainnet/Arbitrum RPCs +
-chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) only to override:
+These read **live chain state** — they work out of the box (built-in mainnet/Arbitrum RPCs +
+chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) only to override.
+`0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` is a real mainnet pool
+(sUSDe-vbUSDC); list current pools at `api-phoenix.cork.tech/v1/pools/`:
 
-> - "Read the live state of Cork market `0xceeb…c16a`."
-> - "What's the current cST swap rate for 100e18 collateral out of that pool?"
+> - "Read the live state of Cork market `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05`."
+> - "What's the current cST swap rate for 1e18 collateral out of that pool?"
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
+Arbitrum (chainId 42161) reads work the same way — the read-path contracts are configured; bundle
+*building* on Arbitrum is still gated (`unknown_deployment`) until its CorkAdapter/Bundler3
+addresses are sourced.
+
 Some variants are honestly **not implemented yet** and will tell you so (state `unavailable` with a
-reason) rather than inventing an answer — e.g. the orderbook/fills feeds (need the indexer),
-order submission, and market deployment. That's expected; it's not a broken install.
+reason code) rather than inventing an answer — e.g. the orderbook/fills feeds (need the indexer),
+order submission, and market deployment. Reading a pool that doesn't exist on the queried chain
+returns `unavailable` with `chain_read_failed` (not a crash). That's expected; it's not a broken
+install.
 
 ### CLI: `ch` (no MCP client needed)
 
@@ -191,13 +199,15 @@ community RPC, the result envelope carries an `rpc_fallback` warning naming the 
 ```sh
 bun install
 bun run typecheck          # tsc --noEmit, strict (noUncheckedIndexedAccess, exactOptionalPropertyTypes)
-bun run test               # vitest; fork-parity + bundle-sim self-skip unless CORK_TEST_RPC is set
+bun run test               # everything; network-gated suites self-skip without their env vars
+bun run test:unit          # offline-only (excludes fork-parity / bundle-sim / rpc-live)
+bun run test:live          # just the network-gated suites (each self-skips without its env var)
 
 # Empirical fork-parity vs the live vnet fixture (never commit this RPC URL):
-CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test
+CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test:live
 
 # Live RPC-resolver smoke (default + chainlist fallback, real network):
-CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bunx vitest run packages/core/test/rpc-live.test.ts
+CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
 ```
 
 `CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) are read from the environment

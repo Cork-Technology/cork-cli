@@ -1,6 +1,7 @@
-// MCP server projection of the tool registry. Uses the low-level Server + request handlers so
-// each tool advertises its JSON Schema (from zod v4 `z.toJSONSchema`) directly on the wire,
-// avoiding the SDK's bundled-zod (v3) coupling in the high-level registerTool helper.
+// MCP server projection of the tool registry. Uses the low-level Server + request handlers —
+// a deliberate choice for single-dispatch parity with the CLI: one `runTool` validates and routes
+// every call, and the registry drives the wire schemas/annotations directly. (SDK ≥1.29's
+// registerTool does accept zod v4, so this is about keeping one dispatch path, not zod coupling.)
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";

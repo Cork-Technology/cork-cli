@@ -135,6 +135,17 @@ async function realProbe(url: string, timeoutMs: number): Promise<ProbeResult> {
   }
 }
 
+/**
+ * Filter+order chainlist candidates (pure — unit-tested offline): keep plain https URLs (no
+ * templated keys, no websockets), privacy-preserving (`tracking:"none"`) endpoints first.
+ */
+export function filterChainlistRpcs(rpc: Array<{ url: string; tracking?: string }>): string[] {
+  const usable = (u: string) => /^https:\/\//i.test(u) && !u.includes("${") && !/API_KEY|YOUR_/i.test(u);
+  const noTrack = rpc.filter((r) => usable(r.url) && r.tracking === "none").map((r) => r.url);
+  const rest = rpc.filter((r) => usable(r.url) && r.tracking !== "none").map((r) => r.url);
+  return [...noTrack, ...rest];
+}
+
 async function realFetchChainlist(chainId: number): Promise<string[]> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8_000);
@@ -143,11 +154,7 @@ async function realFetchChainlist(chainId: number): Promise<string[]> {
     if (!res.ok) return [];
     const arr = (await res.json()) as Array<{ chainId: number; rpc: Array<{ url: string; tracking?: string }> }>;
     const c = arr.find((x) => x.chainId === chainId);
-    if (!c?.rpc) return [];
-    const usable = (u: string) => /^https:\/\//i.test(u) && !u.includes("${") && !/API_KEY|YOUR_/i.test(u);
-    const noTrack = c.rpc.filter((r) => usable(r.url) && r.tracking === "none").map((r) => r.url);
-    const rest = c.rpc.filter((r) => usable(r.url) && r.tracking !== "none").map((r) => r.url);
-    return [...noTrack, ...rest]; // privacy-preserving endpoints first
+    return c?.rpc ? filterChainlistRpcs(c.rpc) : [];
   } catch {
     return [];
   } finally {

@@ -58,4 +58,16 @@ describe("MCP server in-memory roundtrip", () => {
     const env = res.structuredContent as { state: string };
     expect(env.state).toBe("unavailable");
   });
+
+  it("conflict envelopes are NOT isError (the tool executed; it reports a mismatch)", async () => {
+    const client = await connectedClient();
+    const res = await client.callTool({
+      name: "cork_track",
+      arguments: { mode: "verify", subject: { kind: "artifact", artifact: { a: 1 } }, expect: { artifactDigest: `0x${"0".repeat(64)}` }, format: "concise" },
+    });
+    expect(res.isError).toBeFalsy();
+    const env = res.structuredContent as { state: string; warnings: Array<{ code: string }> };
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+  });
 });

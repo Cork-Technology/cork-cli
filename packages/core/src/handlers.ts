@@ -4,10 +4,12 @@
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
 import { createPublicClient, http, keccak256, stringToHex, type PublicClient } from "viem";
 import {
+  Address,
   ComputeInput,
   DecodeInput,
   Envelope,
   inputJsonSchema,
+  MarketId,
   PrepareOrdersInput,
   PreparePhoenixInput,
   QueryInput,
@@ -71,6 +73,36 @@ function rpcWarn(r: ResolvedRpc): Array<{ code: string; message: string }> {
     : [];
 }
 
+/** provenance.rpc payload for format:"full" — which endpoint tier/host served the chain read. */
+function rpcProvenance(format: "concise" | "full", r: ResolvedRpc): { rpc?: { source: "explicit" | "default" | "chainlist"; host: string } } {
+  return format === "full" ? { rpc: { source: r.source, host: hostOf(r.url) } } : {};
+}
+
+/**
+ * Map a failed chain read (contract revert, missing pool, transport error) to an honest
+ * `unavailable` envelope instead of letting the raw exception escape runTool — the envelope +
+ * exit-code contract must hold even when the chain disagrees with the request.
+ */
+function chainReadFailed(chainId: number, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
+  const cause =
+    err && typeof err === "object" && "shortMessage" in err
+      ? String((err as { shortMessage: unknown }).shortMessage)
+      : err instanceof Error
+        ? err.message.split("\n")[0]!
+        : String(err);
+  return envelope({
+    state: "unavailable",
+    data: null,
+    chainId,
+    source: "chain",
+    warnings: [
+      { code: "chain_read_failed", message: `chain read failed: ${cause}. Common causes: the pool does not exist on this chain (e.g. a vnet-only fixture pool queried against the real chain), or the RPC/contract rejected the call.` },
+      ...extra,
+    ],
+    ctx,
+  });
+}
+
 /** Recursively convert bigint → decimal string so envelopes are JSON-safe. */
 export function jsonSafe(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
@@ -93,6 +125,7 @@ function envelope(args: {
   source: "chain" | "indexer" | "service" | "config";
   block?: bigint;
   warnings?: Array<{ code: string; message: string }>;
+  rpc?: { source: "explicit" | "default" | "chainlist"; host: string };
   ctx: HandlerContext;
 }): Envelope {
   const data = jsonSafe(args.data);
@@ -109,6 +142,7 @@ function envelope(args: {
       fetchedAt: nowIso(args.ctx),
       digest,
       ...(args.block !== undefined ? { block: args.block.toString() } : {}),
+      ...(args.rpc !== undefined ? { rpc: args.rpc } : {}),
     },
     schemaVersion: SCHEMA_VERSION,
   };
@@ -186,36 +220,56 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
   // Chain-backed kinds need an RPC + addresses.
   if (p.kind === "cst-swap-rate" || p.kind === "unwind-rate" || p.kind === "impairment-floor") {
     const dep = ctx.deployment ?? deploymentFor(chainId);
-    const resolved = dep ? await getRpc(ctx, chainId) : null;
-    if (!resolved || !dep) {
-      return unavailable(chainId, "requires_rpc", `${p.kind} needs an RPC endpoint and a known deployment for chainId ${chainId}`, ctx);
-    }
+    if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+    const resolved = await getRpc(ctx, chainId);
+    if (!resolved) return unavailable(chainId, "requires_rpc", `${p.kind} needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
     const client = resolved.client;
     const w = rpcWarn(resolved);
+    const rpc = rpcProvenance(input.format, resolved);
     const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
     const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
-    const s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
-    const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
+    try {
+      const s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
+      const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
 
-    if (p.kind === "cst-swap-rate") {
-      const r = previewSwap(BigInt(p.collateralAssetsOut), { swapRate, swapFeePercentage: s.swapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals });
-      return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ctx });
+      if (p.kind === "cst-swap-rate") {
+        const r = previewSwap(BigInt(p.collateralAssetsOut), { swapRate, swapFeePercentage: s.swapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals });
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+      }
+      if (p.kind === "unwind-rate") {
+        const r = previewUnwindSwap(BigInt(p.collateralAssetsIn), { swapRate, unwindSwapFeePercentage: s.unwindSwapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals, issuedAt: s.issuedAt, expiryTimestamp: s.market.expiryTimestamp, nowTs: s.blockTimestamp });
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+      }
+      const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
+      return envelope({ state: "ok", data: { kind: p.kind, ...floor }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+    } catch (err) {
+      return chainReadFailed(chainId, err, w, ctx);
     }
-    if (p.kind === "unwind-rate") {
-      const r = previewUnwindSwap(BigInt(p.collateralAssetsIn), { swapRate, unwindSwapFeePercentage: s.unwindSwapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals, issuedAt: s.issuedAt, expiryTimestamp: s.market.expiryTimestamp, nowTs: s.blockTimestamp });
-      return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ctx });
-    }
-    const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
-    return envelope({ state: "ok", data: { kind: p.kind, ...floor }, chainId, source: "chain", block: s.blockNumber, warnings: w, ctx });
   }
 
   return unavailable(chainId, "phase_gated", `compute kind '${p.kind}' is not implemented in this iteration`, ctx);
 }
 
+/** Parse the free-form filters record into typed poolId/account, rejecting malformed values (exit 2). */
+function parseQueryFilters(raw: Record<string, unknown> | undefined): { poolId?: `0x${string}`; account?: `0x${string}` } {
+  const out: { poolId?: `0x${string}`; account?: `0x${string}` } = {};
+  if (raw?.poolId !== undefined) {
+    const r = MarketId.safeParse(raw.poolId);
+    if (!r.success) throw new ToolInputError("cork_query", [{ path: ["filters", "poolId"], message: "not a valid 32-byte pool id" }]);
+    out.poolId = r.data;
+  }
+  if (raw?.account !== undefined) {
+    const r = Address.safeParse(raw.account);
+    if (!r.success) throw new ToolInputError("cork_query", [{ path: ["filters", "account"], message: "not a valid EVM address" }]);
+    out.account = r.data;
+  }
+  return out;
+}
+
 async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const dep = ctx.deployment ?? deploymentFor(chainId);
-  const filters = (input.filters ?? {}) as { poolId?: `0x${string}`; account?: `0x${string}` };
+  const filters = parseQueryFilters(input.filters);
 
   // protocol-config is pure config (no RPC needed).
   if (input.resource === "protocol-config") {
@@ -227,61 +281,71 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
   if (!chainResources.has(input.resource)) {
     return unavailable(chainId, "needs_indexer", `cork_query('${input.resource}') requires an indexer/service backend not wired in this iteration`, ctx);
   }
-  const resolved = dep ? await getRpc(ctx, chainId) : null;
-  if (!resolved || !dep) {
-    return unavailable(chainId, "requires_rpc", `cork_query('${input.resource}') needs an RPC endpoint and a known deployment for chainId ${chainId}`, ctx);
+  if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+  if (input.resource === "pool-whitelist" && !dep.whitelistManager) {
+    return unavailable(chainId, "unknown_deployment", `whitelistManager address is not configured for chainId ${chainId} (partial deployment — read tools for market/account-state still work)`, ctx);
+  }
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) {
+    return unavailable(chainId, "requires_rpc", `cork_query('${input.resource}') needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
   }
   if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
 
   const client = resolved.client;
   const w = rpcWarn(resolved);
+  const rpc = rpcProvenance(input.format, resolved);
   const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
 
-  if (input.resource === "market") {
-    const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock);
-    return envelope({
-      state: "ok",
-      data: {
-        poolId: s.poolId,
-        market: s.market,
-        constraintState: s.constraintState,
-        swapRate: s.onChainSwapRate,
-        oracleRate: s.oracleRate,
-        swapFeePercentage: s.swapFeePercentage,
-        unwindSwapFeePercentage: s.unwindSwapFeePercentage,
-        collateralDecimals: s.collateralDecimals,
-        referenceDecimals: s.referenceDecimals,
-        cstToken: s.cstToken,
-        cptToken: s.cptToken,
-        issuedAt: s.issuedAt,
-      },
-      chainId,
-      source: "chain",
-      block: s.blockNumber,
-      warnings: w,
-      ctx,
+  try {
+    if (input.resource === "market") {
+      const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock);
+      return envelope({
+        state: "ok",
+        data: {
+          poolId: s.poolId,
+          market: s.market,
+          constraintState: s.constraintState,
+          swapRate: s.onChainSwapRate,
+          oracleRate: s.oracleRate,
+          swapFeePercentage: s.swapFeePercentage,
+          unwindSwapFeePercentage: s.unwindSwapFeePercentage,
+          collateralDecimals: s.collateralDecimals,
+          referenceDecimals: s.referenceDecimals,
+          cstToken: s.cstToken,
+          cptToken: s.cptToken,
+          issuedAt: s.issuedAt,
+        },
+        chainId,
+        source: "chain",
+        block: s.blockNumber,
+        warnings: w,
+        ...rpc,
+        ctx,
+      });
+    }
+
+    if (input.resource === "account-state") {
+      if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
+      const tokens = await resolvePoolTokens(client, dep.poolManager, filters.poolId, ctx.atBlock);
+      const bal = (token: `0x${string}`) =>
+        client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) });
+      const [collateral, reference, cst, cpt] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
+      return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+    }
+
+    // pool-whitelist (wlm presence checked above)
+    if (!filters.account) return unavailable(chainId, "missing_filter", "pool-whitelist requires filters.account", ctx);
+    const isWhitelisted = await client.readContract({
+      address: dep.whitelistManager!,
+      abi: whitelistManagerAbi,
+      functionName: "isWhitelisted",
+      args: [filters.poolId, filters.account],
+      ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
     });
+    return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+  } catch (err) {
+    return chainReadFailed(chainId, err, w, ctx);
   }
-
-  if (input.resource === "account-state") {
-    if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
-    const tokens = await resolvePoolTokens(client, dep.poolManager, filters.poolId, ctx.atBlock);
-    const bal = (token: `0x${string}`) =>
-      client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) });
-    const [collateral, reference, cst, cpt] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
-    return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens }, chainId, source: "chain", warnings: w, ctx });
-  }
-
-  // pool-whitelist
-  if (!filters.account) return unavailable(chainId, "missing_filter", "pool-whitelist requires filters.account", ctx);
-  const isWhitelisted = await client.readContract({
-    address: dep.whitelistManager,
-    abi: whitelistManagerAbi,
-    functionName: "isWhitelisted",
-    args: [filters.poolId, filters.account],
-    ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
-  });
-  return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ctx });
 }
 
 async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
@@ -336,6 +400,12 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
   const chainId = input.chainId ?? 1;
   const subj = input.subject;
 
+  // simulate (dry-running frozen bytes against a fork) is a distinct capability that is not
+  // implemented yet — gate it explicitly instead of silently behaving like verify [K1].
+  if (input.mode === "simulate") {
+    return unavailable(chainId, "phase_gated", "track mode 'simulate' (dry-run of frozen bytes) is not implemented in this iteration; use mode 'verify' or 'reconcile'", ctx);
+  }
+
   // artifact: recompute the content digest and reconcile against the caller's claim (pure).
   if (subj.kind === "artifact") {
     const digest = keccak256(stringToHex(JSON.stringify(jsonSafe(subj.artifact) ?? null)));
@@ -350,31 +420,44 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
   // chain-authoritative subjects need an RPC.
   const dep = ctx.deployment ?? deploymentFor(chainId);
   if (subj.kind === "marketRef") {
-    const resolved = dep ? await getRpc(ctx, chainId) : null;
-    if (!resolved || !dep) return unavailable(chainId, "requires_rpc", "marketRef verification needs an RPC + known deployment", ctx);
+    if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+    const resolved = await getRpc(ctx, chainId);
+    if (!resolved) return unavailable(chainId, "requires_rpc", "marketRef verification needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
     const client = resolved.client;
-    const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
-    const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
-    return envelope({
-      state: idMatches ? "ok" : "conflict",
-      data: { verified: idMatches, poolId: s.poolId, marketIdRecomputed: computeMarketId(s.market), swapRate: s.onChainSwapRate, market: s.market },
-      chainId,
-      source: "chain",
-      block: s.blockNumber,
-      warnings: idMatches ? rpcWarn(resolved) : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved)],
-      ctx,
-    });
+    const rpc = rpcProvenance(input.format, resolved);
+    try {
+      const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
+      const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
+      return envelope({
+        state: idMatches ? "ok" : "conflict",
+        data: { verified: idMatches, poolId: s.poolId, marketIdRecomputed: computeMarketId(s.market), swapRate: s.onChainSwapRate, market: s.market },
+        chainId,
+        source: "chain",
+        block: s.blockNumber,
+        warnings: idMatches ? rpcWarn(resolved) : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved)],
+        ...rpc,
+        ctx,
+      });
+    } catch (err) {
+      return chainReadFailed(chainId, err, rpcWarn(resolved), ctx);
+    }
   }
 
   if (subj.kind === "txHash") {
     const resolved = await getRpc(ctx, chainId);
-    if (!resolved) return unavailable(chainId, "requires_rpc", "txHash reconcile needs an RPC", ctx);
+    if (!resolved) return unavailable(chainId, "requires_rpc", "txHash reconcile needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
     const client = resolved.client;
+    const rpc = rpcProvenance(input.format, resolved);
     try {
       const r = await client.getTransactionReceipt({ hash: subj.txHash });
-      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length }, chainId, source: "chain", block: r.blockNumber, ctx });
-    } catch {
-      return envelope({ state: "unavailable", data: { txHash: subj.txHash, found: false }, chainId, source: "chain", warnings: [{ code: "receipt_not_found", message: "no receipt for this txHash at the RPC (pending or unknown)" }], ctx });
+      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length }, chainId, source: "chain", block: r.blockNumber, ...rpc, ctx });
+    } catch (err) {
+      // A missing receipt is a normal outcome (pending/unknown tx); anything else is a real
+      // chain-read failure and must not masquerade as "not found".
+      if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "TransactionReceiptNotFoundError") {
+        return envelope({ state: "unavailable", data: { txHash: subj.txHash, found: false }, chainId, source: "chain", warnings: [{ code: "receipt_not_found", message: "no receipt for this txHash at the RPC (pending or unknown)" }], ctx });
+      }
+      return chainReadFailed(chainId, err, [], ctx);
     }
   }
 
@@ -449,12 +532,16 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       const input = parsed.data as PreparePhoenixInput;
       const dep = ctx.deployment ?? deploymentFor(input.chainId);
       if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
+      const { corkAdapter, bundler3 } = dep;
+      if (!corkAdapter || !bundler3) {
+        return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
+      }
       const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
       const deadline = nowSecs + BigInt(input.deadlineSeconds);
       if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
         return unavailable(input.chainId, "phase_gated", `token-authority op '${input.action.type}' is not built in this iteration`, ctx);
       }
-      const actionLeg = buildPhoenixCall(input.action, dep.corkAdapter, deadline);
+      const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
       const warnings: Array<{ code: string; message: string }> = [];
       let funding: Call[] = [];
       const mode = input.fundingMode as FundingMode;
@@ -472,7 +559,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         const client = createPublicClient({ transport: http(ctx.rpcUrl) });
         const poolId = (input.action as { poolId: `0x${string}` }).poolId;
         const tokens = await resolvePoolTokens(client as unknown as PublicClient, dep.poolManager, poolId, ctx.atBlock);
-        const plan = fundingPlan(input.action, tokens, dep.corkAdapter, mode);
+        const plan = fundingPlan(input.action, tokens, corkAdapter, mode);
         funding = plan.legs;
         if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
       }
@@ -481,7 +568,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       const multicall = encodeMulticall(bundle);
       return envelope({
         state: "ok",
-        data: { bundler3: dep.bundler3, corkAdapter: dep.corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, bundle, multicall, clientRequestId: input.clientRequestId },
+        data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, bundle, multicall, clientRequestId: input.clientRequestId },
         chainId: input.chainId,
         source: ctx.rpcUrl && funding.length ? "chain" : "config",
         warnings,

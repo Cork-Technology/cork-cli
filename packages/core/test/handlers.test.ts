@@ -84,6 +84,125 @@ describe("runTool: cork_query", () => {
   });
 });
 
+// A resolver stub whose client fails on first use — drives the chain_read_failed path offline.
+const throwingResolver = async () => ({
+  url: "https://stub.invalid/rpc",
+  source: "default" as const,
+  client: {
+    getBlockNumber: async () => {
+      throw Object.assign(new Error("execution reverted\nlong viem detail"), { shortMessage: "The contract function \"swapRate\" reverted." });
+    },
+    readContract: async () => {
+      throw new Error("should not reach");
+    },
+  } as never,
+});
+
+describe("chain-read failures map to envelopes (never raw exceptions)", () => {
+  it("compute cst-swap-rate: revert → unavailable + chain_read_failed", async () => {
+    const env = await runTool(
+      "cork_compute",
+      { params: { kind: "cst-swap-rate", poolId: POOL, collateralAssetsOut: "1" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: throwingResolver },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+    expect(env.warnings[0]?.message).toContain("reverted");
+    expect(env.warnings[0]?.message).not.toContain("long viem detail"); // trimmed, not a stack dump
+  });
+
+  it("query market: revert → unavailable + chain_read_failed", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { nowSeconds: NOW, resolveRpc: throwingResolver },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+  });
+
+  it("track marketRef: revert → unavailable + chain_read_failed", async () => {
+    const env = await runTool(
+      "cork_track",
+      { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: throwingResolver },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+  });
+});
+
+describe("partial deployments gate per capability (Arbitrum 42161)", () => {
+  it("pool-whitelist on 42161 → unknown_deployment (wlm not configured), before any RPC use", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    // resolver returns null, but the wlm gate must fire FIRST with the more truthful reason
+    const env42 = await runTool(
+      "cork_query",
+      { chainId: 42161, resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(env.state).toBe("unavailable"); // mainnet has wlm → falls through to requires_rpc
+    expect(env.warnings[0]?.code).toBe("requires_rpc");
+    expect(env42.state).toBe("unavailable");
+    expect(env42.warnings[0]?.code).toBe("unknown_deployment");
+  });
+
+  it("prepare_phoenix on 42161 → unknown_deployment (corkAdapter/bundler3 not configured)", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 42161, account: RCV, clientRequestId: "arb-0001", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+  });
+
+  it("query on a chain with no deployment at all (8453) → unknown_deployment, not requires_rpc", async () => {
+    const env = await runTool(
+      "cork_query",
+      { chainId: 8453, resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+  });
+});
+
+describe("input hardening + format semantics", () => {
+  it("malformed filters.poolId / filters.account → ToolInputError (CLI exit 2)", async () => {
+    await expect(
+      runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: "not-a-pool" } }, { nowSeconds: NOW }),
+    ).rejects.toBeInstanceOf(ToolInputError);
+    await expect(
+      runTool("cork_query", { resource: "account-state", pageSize: 25, format: "concise", filters: { poolId: POOL, account: "0x123" } }, { nowSeconds: NOW }),
+    ).rejects.toBeInstanceOf(ToolInputError);
+  });
+
+  it("track mode 'simulate' is honestly phase-gated (not silently treated as verify)", async () => {
+    const env = await runTool("cork_track", { mode: "simulate", subject: { kind: "artifact", artifact: { a: 1 } }, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("phase_gated");
+  });
+
+  it("format 'full' adds provenance.rpc (endpoint tier + host) on chain-backed reads", async () => {
+    const okResolver = async () => ({
+      url: "https://rpc.example.org/x",
+      source: "default" as const,
+      client: {
+        getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }),
+      } as never,
+    });
+    const full = await runTool("cork_track", { mode: "reconcile", subject: { kind: "txHash", txHash: `0x${"a".repeat(64)}` }, format: "full" }, { nowSeconds: NOW, resolveRpc: okResolver });
+    expect(full.state).toBe("ok");
+    expect(full.provenance.rpc).toEqual({ source: "default", host: "rpc.example.org" });
+    const concise = await runTool("cork_track", { mode: "reconcile", subject: { kind: "txHash", txHash: `0x${"a".repeat(64)}` }, format: "concise" }, { nowSeconds: NOW, resolveRpc: okResolver });
+    expect(concise.provenance.rpc).toBeUndefined();
+  });
+});
+
 describe("runTool: cork_track", () => {
   it("artifact: recomputes digest and reconciles match/mismatch", async () => {
     const artifact = { a: 1, b: "x", nested: { c: [1, 2, 3] } };

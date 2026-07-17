@@ -51,6 +51,16 @@ describe("ch CLI", () => {
     expect(JSON.parse(r.stdout).state).toBe("unavailable");
   });
 
+  it("conflict (track digest mismatch) → exit 4", async () => {
+    const wrong = `0x${"0".repeat(64)}`;
+    const r = await runCli(
+      ["track", "--json", JSON.stringify({ mode: "verify", subject: { kind: "artifact", artifact: { a: 1 } }, expect: { artifactDigest: wrong } })],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.conflict);
+    expect(JSON.parse(r.stdout).state).toBe("conflict");
+  });
+
   it("compute rollover-premium-floor via --json, exit 0", async () => {
     const r = await runCli(
       ["compute", "--json", JSON.stringify({ params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } })],

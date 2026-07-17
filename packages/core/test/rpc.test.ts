@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_RPCS,
   FALLBACK_CHAINS,
+  filterChainlistRpcs,
   resolveRpc,
   type ProbeResult,
   type RpcConfig,
@@ -136,6 +137,24 @@ describe("fallback scope", () => {
 
   it("all four public chains are eligible", () => {
     for (const c of [1, 42161, 8453, 11155111]) expect(FALLBACK_CHAINS.has(c)).toBe(true);
+  });
+});
+
+describe("filterChainlistRpcs (chainlist candidate hygiene)", () => {
+  it("keeps plain https, drops templated/ws/API-key URLs, orders tracking:none first", () => {
+    const out = filterChainlistRpcs([
+      { url: "https://tracked.example/rpc", tracking: "yes" },
+      { url: "wss://ws.example/rpc", tracking: "none" },
+      { url: "https://keyed.example/${INFURA_API_KEY}", tracking: "none" },
+      { url: "https://needs.example/YOUR_API_KEY", tracking: "none" },
+      { url: "https://clean.example/rpc", tracking: "none" },
+      { url: "http://insecure.example/rpc", tracking: "none" },
+      { url: "https://limited.example/rpc", tracking: "limited" },
+    ]);
+    expect(out).toEqual(["https://clean.example/rpc", "https://tracked.example/rpc", "https://limited.example/rpc"]);
+  });
+  it("empty input → empty output", () => {
+    expect(filterChainlistRpcs([])).toEqual([]);
   });
 });
 

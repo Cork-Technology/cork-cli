@@ -1,15 +1,21 @@
-// Deployed Cork addresses (mainnet / chainId 1; the Tenderly vnet forks mainnet so they match).
-// Verified against notes/research/cork-contracts-domain.md + Sourcify (C10). These are defaults;
-// production callers should re-verify via CREATE2 (create2.ts) before trusting them.
+// Deployed Cork addresses per chain. A deployment always carries the two read-path contracts
+// (poolManager + constraintAdapter — enough for query/compute/track); the tx-path contracts
+// (corkAdapter/bundler3) and whitelistManager are optional because not every chain's deployment
+// is fully known/verified yet — handlers gate per-capability with an honest `unknown_deployment`
+// rather than pretending. Production callers should re-verify via CREATE2 (create2.ts) where an
+// attestation exists.
 import type { CorkAddresses } from "./chain/reads.ts";
 
 export interface CorkDeployment extends CorkAddresses {
-  corkAdapter: `0x${string}`;
-  bundler3: `0x${string}`;
-  whitelistManager: `0x${string}`;
+  corkAdapter?: `0x${string}`;
+  bundler3?: `0x${string}`;
+  whitelistManager?: `0x${string}`;
 }
 
-export const MAINNET_DEPLOYMENT: CorkDeployment = {
+// Chain 1. Verified against notes/research/cork-contracts-domain.md + Sourcify (C10); corkAdapter
+// re-derivable via CREATE2 (CREATE2_ATTESTATIONS below). The Tenderly vnet forks mainnet, so these
+// match there too.
+export const MAINNET_DEPLOYMENT: Required<CorkDeployment> = {
   poolManager: "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
   constraintAdapter: "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A",
   corkAdapter: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
@@ -17,8 +23,23 @@ export const MAINNET_DEPLOYMENT: CorkDeployment = {
   whitelistManager: "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE",
 };
 
+// Chain 42161 — partial (read path only). Empirically derived 2026-07-17:
+//  - poolManager from the Cork API (api-phoenix.cork.tech/v1/pools?chainId=42161 →
+//    poolManagerAddress), code verified on-chain (ERC-1967 proxy, same shape as mainnet).
+//  - constraintAdapter discovered by debug_traceCall of PM.swapRate(poolId): on mainnet the
+//    identical call-tree position is the known adapter (0xCCcC…F03A), on Arbitrum it is this
+//    address (proxy → impl 0x64ecde96…, same delegate pattern). Code verified on-chain.
+//  - corkAdapter/bundler3/whitelistManager: NOT yet discoverable (mainnet vanity addresses have no
+//    code on Arbitrum; no whitelist-enabled pools or bundler flows exist to trace). Left unset →
+//    prepare_phoenix and pool-whitelist on 42161 gate with `unknown_deployment` until sourced.
+export const ARBITRUM_DEPLOYMENT: CorkDeployment = {
+  poolManager: "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
+  constraintAdapter: "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E",
+};
+
 export const DEPLOYMENTS: Record<number, CorkDeployment> = {
   1: MAINNET_DEPLOYMENT,
+  42161: ARBITRUM_DEPLOYMENT,
 };
 
 export function deploymentFor(chainId: number): CorkDeployment | undefined {

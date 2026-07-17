@@ -11,7 +11,8 @@ Bun 1.3 is pinned in `mise.toml`.
 
 - MCP server (stdio): `bun packages/mcp/src/bin.ts`
 - CLI: invoked as **`ch`** (launcher `bin/ch`; put `bin/` on PATH). `ch <command> [--json '<input>'] [--rpc-url <url>] [--explain]`. Long form without PATH setup: `bun packages/cli/src/bin.ts <command> …`
-- Typecheck / test: `bun run typecheck` · `bun run test` (fork-parity self-skips unless `CORK_TEST_RPC` is set)
+- Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip without env) ·
+  `bun run test:unit` (offline only) · `bun run test:live` (vnet/live suites; need `CORK_TEST_RPC` / `CORK_RPC_LIVE=1`)
 
 ## Install / verify as an MCP server
 
@@ -53,19 +54,37 @@ Every tool returns `{ state, data, warnings[], provenance, schemaVersion }`. **C
 trusting `data`:**
 
 - `ok` — use `data`.
-- `unavailable` — the variant is honestly not implemented / a dependency is missing. `warnings[0].code`
-  tells you why: `requires_rpc` (no RPC could be resolved — rare now that public chains have built-in
-  defaults + chainlist fallback; means an offline env or an ineligible chain like the vnet 49222),
-  `needs_indexer`, `needs_service`, `phase_gated`, `unknown_topic`. **Do not retry the same call** and do not fabricate the answer —
-  report the reason. Backend-gated variants (orderbook/fills/flows, order submission, taker-fill,
-  rollover-intent, dutch-auction-price, rfq-quote, market deployment) stay `unavailable` by design.
-- `conflict` — a verification mismatch (e.g. `digest_mismatch`); surface it, don't paper over it.
+- `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
+  retry the same call** and do not fabricate the answer — report the reason. Backend-gated variants
+  (orderbook/fills/flows, order submission, taker-fill, rollover-intent, dutch-auction-price,
+  rfq-quote, market deployment, decode order/event/receipt, track simulate) stay `unavailable` by design.
+- `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
+  surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
-CLI exit codes mirror state for scripting: `0` ok · `2` invalid input · `3` unavailable · `4` conflict
-· `1` unexpected error.
+Warning codes you will encounter:
 
-Every tool's input takes an optional `format`: `"concise"` (default) or `"full"` (verbose envelope) —
-omit it unless you need the fuller shape.
+| Code | Meaning / what to do |
+|---|---|
+| `requires_rpc` | No RPC resolved (offline, or a chain outside defaults+fallback like vnet 49222). Set `CORK_RPC_URL`. |
+| `unknown_deployment` | No (or partial) Cork deployment config for this chainId — e.g. tx-path building or pool-whitelist on Arbitrum. Not fixable by adding an RPC. |
+| `chain_read_failed` | The RPC answered but the read reverted/failed — most often a pool that doesn't exist on that chain (e.g. a vnet-only fixture pool queried against real mainnet). Check the poolId/chainId pairing. |
+| `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
+| `phase_gated` | Variant not implemented in this iteration (incl. `cork_submit`, `track mode:"simulate"`). |
+| `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |
+| `unknown_topic` / `no_lop` | Capabilities topic not found / no 1inch LOP deployment for the chain. |
+| `receipt_not_found` | txHash unknown/pending at the RPC (a normal outcome, not a failure). |
+| `rpc_fallback` | Informational on `ok`: the default RPC was down, a chainlist public endpoint served the read. |
+| `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Informational on `ok` prepare results: why funding legs were omitted. |
+| `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. |
+
+CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed
+`filters.*`) · `3` unavailable · `4` conflict · `1` unexpected error.
+
+Every tool's input takes an optional `format`: `"concise"` (default) or `"full"`. `"full"` adds
+`provenance.rpc = { source: explicit|default|chainlist, host }` on chain-backed reads — use it when
+you need to know which endpoint served the data. Some schema fields are accepted but reserved for
+later phases (`cork_query` `mode`/`cursor`/`pageSize`, `cork_compute` `at.timestamp`,
+`cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
 
 ## RPC resolution (chain-backed tools work by default)
 
@@ -84,6 +103,15 @@ node. Pure/config tools never touch a chain: `cork_capabilities`, `cork_decode`,
 resource:"protocol-config"`, `cork_compute kind:"rollover-premium-floor"`, `cork_prepare_*` byte-building.
 (`cork_prepare_phoenix` funding-leg token resolution still needs an *explicit* RPC — offline by default,
 so without one you get the bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`.)
+
+Per-chain deployment coverage (`config.ts DEPLOYMENTS`): chainId 1 is **full** (all 5 contracts;
+prepare + all reads). chainId 42161 is **partial, read-path only** — poolManager + constraintAdapter
+were empirically derived (API + debug_traceCall calibrated against mainnet) so market/account-state/
+compute/track reads work, but corkAdapter/bundler3/whitelistManager are unknown → prepare_phoenix and
+pool-whitelist return `unknown_deployment` there. A real mainnet pool for examples/tests:
+`0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` (current list:
+`api-phoenix.cork.tech/v1/pools/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the vnet —
+querying it on chainId 1 without a vnet RPC yields `chain_read_failed`, by design.
 
 ## Invariants that constrain how you use the tools
 

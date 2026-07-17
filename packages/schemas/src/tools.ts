@@ -22,6 +22,8 @@ export const Provenance = z.object({
   fetchedAt: z.string(),
   digest: Bytes32.optional(),
   staleness: z.number().optional(),
+  /** Which RPC endpoint served a chain read (format:"full" only): resolution tier + host. */
+  rpc: z.object({ source: z.enum(["explicit", "default", "chainlist"]), host: z.string() }).optional(),
 });
 
 export const Envelope = z.object({
