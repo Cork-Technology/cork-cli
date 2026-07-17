@@ -12,6 +12,7 @@
       },
       "devDependencies": {
         "@types/node": "^22.10.0",
+        "ajv": "^8.17.1",
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
@@ -52,6 +53,7 @@
       "name": "@cork/schemas",
       "version": "0.0.1",
       "dependencies": {
+        "viem": "^2.21.0",
         "zod": "^4.0.0",
       },
     },

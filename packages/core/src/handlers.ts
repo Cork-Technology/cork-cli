@@ -2,7 +2,7 @@
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
-import { createPublicClient, http, type PublicClient } from "viem";
+import { createPublicClient, http, keccak256, stringToHex, type PublicClient } from "viem";
 import {
   ComputeInput,
   DecodeInput,
@@ -21,8 +21,10 @@ import { computeMarketId } from "./marketid.ts";
 import { corkActionCall, type CorkActionParamMap } from "./bundle/actions.ts";
 import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
-import { readPoolState, type CorkAddresses } from "./chain/reads.ts";
-import { deploymentFor, type CorkDeployment } from "./config.ts";
+import { canAutoFund, fundingLegs, type FundingMode } from "./bundle/funding.ts";
+import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
+import { verifyCreate2 } from "./create2.ts";
+import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, deploymentFor, type CorkDeployment } from "./config.ts";
 
 export class ToolInputError extends Error {
   constructor(
@@ -41,6 +43,8 @@ export interface HandlerContext {
   rpcUrl?: string;
   /** Address overrides; defaults to the built-in deployment for the chainId. */
   deployment?: CorkDeployment;
+  /** Pin all chain reads to this block (else latest). Makes chain-backed compute reproducible. */
+  atBlock?: bigint;
 }
 
 /** Recursively convert bigint → decimal string so envelopes are JSON-safe. */
@@ -67,14 +71,19 @@ function envelope(args: {
   warnings?: Array<{ code: string; message: string }>;
   ctx: HandlerContext;
 }): Envelope {
+  const data = jsonSafe(args.data);
+  // Content digest over the canonical (bigint-normalized) data — lets a caller detect drift /
+  // pin a result. Deterministic for identical data.
+  const digest = keccak256(stringToHex(JSON.stringify(data ?? null)));
   return {
     state: args.state,
-    data: jsonSafe(args.data),
+    data,
     warnings: args.warnings ?? [],
     provenance: {
       source: args.source,
       chainId: args.chainId as never,
       fetchedAt: nowIso(args.ctx),
+      digest,
       ...(args.block !== undefined ? { block: args.block.toString() } : {}),
     },
     schemaVersion: SCHEMA_VERSION,
@@ -158,7 +167,8 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
     }
     const client = createPublicClient({ transport: http(ctx.rpcUrl) });
     const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
-    const s = await readPoolState(client as unknown as PublicClient, addrs, p.poolId);
+    const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
+    const s = await readPoolState(client as unknown as PublicClient, addrs, p.poolId, pinnedBlock);
     const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
 
     if (p.kind === "cst-swap-rate") {
@@ -186,6 +196,25 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
 
   switch (name) {
     case "cork_capabilities": {
+      const input = parsed.data as { topic?: string; search?: string };
+      if (input.topic === "verify") {
+        // Independently re-derive each deployed address from (deployer, salt, initCodeHash) [C10].
+        const verifications = CREATE2_ATTESTATIONS.map((a) => ({
+          name: a.name,
+          ...verifyCreate2({ deployer: CREATE2_DEPLOYER, salt: a.salt, initCodeHash: a.initCodeHash, expected: a.expected }),
+          salt: a.salt,
+          initCodeHash: a.initCodeHash,
+        }));
+        const allMatch = verifications.every((v) => v.match);
+        return envelope({
+          state: allMatch ? "ok" : "conflict",
+          data: { deployer: CREATE2_DEPLOYER, verifications },
+          chainId: 1,
+          source: "config",
+          ...(allMatch ? {} : { warnings: [{ code: "create2_mismatch", message: "a deployed address did not reproduce from its salt+initCodeHash" }] }),
+          ctx,
+        });
+      }
       const data = REGISTRY.map((t) => ({ name: t.name, cli: `cork ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations }));
       return envelope({ state: "ok", data: { tools: data, schemaVersion: SCHEMA_VERSION }, chainId: 1, source: "config", ctx });
     }
@@ -212,14 +241,37 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
         return unavailable(input.chainId, "phase_gated", `token-authority op '${input.action.type}' is not built in this iteration`, ctx);
       }
-      const leg = buildPhoenixCall(input.action, dep.corkAdapter, deadline);
-      const multicall = encodeMulticall([leg]);
-      const warnings = [{ code: "no_funding_leg", message: "Phase-1 bundle omits the token-funding leg; fund the adapter separately before submit." }];
+      const actionLeg = buildPhoenixCall(input.action, dep.corkAdapter, deadline);
+      const warnings: Array<{ code: string; message: string }> = [];
+      let funding: Call[] = [];
+      const mode = input.fundingMode as FundingMode;
+
+      if (mode === "pre-funded") {
+        // caller guarantees tokens already sit in the adapter — nothing to fund.
+      } else if (!canAutoFund(input.action.type)) {
+        warnings.push({
+          code: "manual_funding",
+          message: `'${input.action.type}' burns shares from its \`owner\`; share funding/owner handling is caller-managed (set \`owner\` and pre-position shares). No funding leg was auto-built.`,
+        });
+      } else if (!ctx.rpcUrl) {
+        warnings.push({
+          code: "funding_needs_rpc",
+          message: `Funding leg for '${input.action.type}' needs an RPC to resolve pool token addresses; re-run with an RPC or use fundingMode 'pre-funded'. Bundle contains the action leg only.`,
+        });
+      } else {
+        const client = createPublicClient({ transport: http(ctx.rpcUrl) });
+        const poolId = (input.action as { poolId: `0x${string}` }).poolId;
+        const tokens = await resolvePoolTokens(client as unknown as PublicClient, dep.poolManager, poolId, ctx.atBlock);
+        funding = fundingLegs(input.action, tokens, dep.corkAdapter, mode);
+      }
+
+      const bundle = [...funding, actionLeg];
+      const multicall = encodeMulticall(bundle);
       return envelope({
         state: "ok",
-        data: { bundler3: dep.bundler3, corkAdapter: dep.corkAdapter, deadline, action: ACTION_MAP[input.action.type], bundle: [leg], multicall, clientRequestId: input.clientRequestId },
+        data: { bundler3: dep.bundler3, corkAdapter: dep.corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, bundle, multicall, clientRequestId: input.clientRequestId },
         chainId: input.chainId,
-        source: "config",
+        source: ctx.rpcUrl && funding.length ? "chain" : "config",
         warnings,
         ctx,
       });

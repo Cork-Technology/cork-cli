@@ -95,4 +95,26 @@ describe("recursive decode round-trips", () => {
     expect(legs[0]?.kind).toBe("unknown");
     if (legs[0]?.kind === "unknown") expect(legs[0].selector).toBe("0xdeadbeef");
   });
+
+  it("decodes a realistic funding-leg + cork-action bundle (not 'unknown')", async () => {
+    const { encodeFunctionData } = await import("viem");
+    const { bundlerLegAbi } = await import("@cork/core");
+    const token = "0x9d39a5de30e57443bff2a8307a4256c8797a3497" as const;
+    const fundData = encodeFunctionData({ abi: bundlerLegAbi, functionName: "erc20TransferFrom", args: [token, ADP, 10n * 10n ** 18n] });
+    const swap = encodeCorkAction("safeSwap", {
+      poolId: POOL,
+      collateralAssetsOut: 100n * 10n ** 18n,
+      receiver: RCV,
+      maxCstSharesIn: 101n * 10n ** 18n,
+      maxReferenceAssetsIn: 130n * 10n ** 18n,
+      deadline: 1n,
+    });
+    const legs = decodeBundle(encodeMulticall([call(ADP, fundData), call(ADP, swap)]));
+    expect(legs.map((l) => l.kind)).toEqual(["leg", "cork"]);
+    expect(legs[0]?.kind === "leg" && legs[0].fn).toBe("erc20TransferFrom");
+    if (legs[0]?.kind === "leg") {
+      expect(String(legs[0].args[0]).toLowerCase()).toBe(token);
+      expect(legs[0].args[2]).toBe(10n * 10n ** 18n);
+    }
+  });
 });

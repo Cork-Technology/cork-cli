@@ -36,4 +36,26 @@ describe("hex-typed primitives", () => {
     expect(Address.safeParse("0x123").success).toBe(false);
     expect(Address.safeParse("nope").success).toBe(false);
   });
+
+  // Golden checksum computed independently via `cast to-check-sum-address`.
+  const CHECKSUM = "0x5AEDA56215b167893e80B4fE645BA6d5Bab767DE";
+
+  it("Address normalizes all-lowercase to EIP-55 checksum", () => {
+    const r = Address.safeParse(CHECKSUM.toLowerCase());
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toBe(CHECKSUM);
+  });
+
+  it("Address accepts a correct-checksum address unchanged", () => {
+    const r = Address.safeParse(CHECKSUM);
+    expect(r.success && r.data).toBe(CHECKSUM);
+  });
+
+  it("Address rejects a mixed-case wrong-checksum address (typo signal), cleanly", () => {
+    // flip one letter's case vs the correct checksum -> no longer valid EIP-55
+    const wrong = `0x5aEDA${CHECKSUM.slice(7)}`; // position 2 A->a
+    const r = Address.safeParse(wrong);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/EIP-55/);
+  });
 });

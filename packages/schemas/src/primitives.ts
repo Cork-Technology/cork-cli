@@ -1,13 +1,19 @@
+import { getAddress, isAddress } from "viem";
 import { z } from "zod";
 
 // Hex-typed outputs (`0x${string}`) so parsed values interoperate with viem/@cork/core directly.
 const hex = <T extends `0x${string}`>(re: RegExp, msg: string) =>
   z.string().regex(re, msg).transform((v) => v as T);
 
-/** EVM address, checksummed or lowercase; validated by shape only. */
-export const Address = hex<`0x${string}`>(/^0x[0-9a-fA-F]{40}$/, "expected 0x-prefixed 20-byte address").describe(
-  "EVM address",
-);
+// EVM address, normalized to EIP-55 via viem. All-lower/all-upper (no checksum claimed) and correct
+// mixed-case pass; a wrong mixed-case checksum (a typo) fails here cleanly via isAddress(strict)
+// instead of silently normalizing (getAddress never rejects) or throwing deep in viem at encode time.
+export const Address = z
+  .string()
+  .regex(/^0x[0-9a-fA-F]{40}$/, "expected 0x-prefixed 20-byte address")
+  .refine((v) => isAddress(v, { strict: true }), "invalid EIP-55 address checksum")
+  .transform((v): `0x${string}` => getAddress(v))
+  .describe("EVM address");
 
 export const Hex = hex<`0x${string}`>(/^0x[0-9a-fA-F]*$/, "expected 0x-prefixed hex").describe("0x-prefixed hex");
 

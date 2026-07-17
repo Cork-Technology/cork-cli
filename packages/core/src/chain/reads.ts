@@ -27,6 +27,29 @@ export interface PoolStateRead {
   issuedAt: bigint;
 }
 
+export interface PoolTokensRead {
+  collateral: `0x${string}`;
+  reference: `0x${string}`;
+  cst: `0x${string}`;
+  cpt: `0x${string}`;
+}
+
+/** Light read of the four token addresses for a pool (market + shares), for funding-leg building. */
+export async function resolvePoolTokens(
+  client: PublicClient,
+  poolManager: `0x${string}`,
+  poolId: `0x${string}`,
+  atBlock?: bigint,
+): Promise<PoolTokensRead> {
+  const pm = { address: poolManager, abi: poolManagerAbi } as const;
+  const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
+  const [market, shares] = await Promise.all([
+    client.readContract({ ...pm, functionName: "market", args: [poolId], ...blockArg }),
+    client.readContract({ ...pm, functionName: "shares", args: [poolId], ...blockArg }),
+  ]);
+  return { collateral: market.collateralAsset, reference: market.referenceAsset, cpt: shares[0], cst: shares[1] };
+}
+
 /** Reads every field required for math parity, all at a single pinned block. */
 export async function readPoolState(
   client: PublicClient,

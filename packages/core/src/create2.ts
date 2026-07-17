@@ -33,3 +33,20 @@ export function toSalt(value: bigint | number | `0x${string}`): `0x${string}` {
   if (typeof value === "string") return pad(value, { size: 32 });
   return pad(toHex(value), { size: 32 });
 }
+
+export interface Create2Verification {
+  match: boolean;
+  computed: `0x${string}`;
+  expected: `0x${string}`;
+}
+
+/** Recompute a CREATE2 address from (deployer, salt, initCodeHash) and compare to `expected`. */
+export function verifyCreate2(args: {
+  deployer: `0x${string}`;
+  salt: `0x${string}`;
+  initCodeHash: `0x${string}`;
+  expected: `0x${string}`;
+}): Create2Verification {
+  const computed = create2FromInitCodeHash(args);
+  return { match: computed.toLowerCase() === getAddress(args.expected).toLowerCase(), computed, expected: getAddress(args.expected) };
+}

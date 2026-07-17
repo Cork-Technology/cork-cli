@@ -81,6 +81,62 @@ export const poolManagerAbi = [
       { name: "fee", type: "uint256" },
     ],
   },
+  {
+    type: "function",
+    name: "previewExercise",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "cstSharesIn", type: "uint256" },
+    ],
+    outputs: [
+      { name: "collateralAssetsOut", type: "uint256" },
+      { name: "referenceAssetsIn", type: "uint256" },
+      { name: "fee", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "previewExerciseOther",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "referenceAssetsIn", type: "uint256" },
+    ],
+    outputs: [
+      { name: "collateralAssetsOut", type: "uint256" },
+      { name: "cstSharesIn", type: "uint256" },
+      { name: "fee", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "previewUnwindExercise",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "cstSharesOut", type: "uint256" },
+    ],
+    outputs: [
+      { name: "collateralAssetsIn", type: "uint256" },
+      { name: "referenceAssetsOut", type: "uint256" },
+      { name: "fee", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "previewUnwindExerciseOther",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "referenceAssetsOut", type: "uint256" },
+    ],
+    outputs: [
+      { name: "collateralAssetsIn", type: "uint256" },
+      { name: "cstSharesOut", type: "uint256" },
+      { name: "fee", type: "uint256" },
+    ],
+  },
 ] as const;
 
 export const constraintAdapterAbi = [

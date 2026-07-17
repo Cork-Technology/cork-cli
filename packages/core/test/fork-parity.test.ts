@@ -11,7 +11,11 @@ import {
   computeMarketId,
   poolManagerAbi,
   previewAdjustedRate,
+  previewExercise,
+  previewExerciseOther,
   previewSwap,
+  previewUnwindExercise,
+  previewUnwindExerciseOther,
   previewUnwindSwap,
   readPoolState,
   runTool,
@@ -107,6 +111,54 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
     }
   });
 
+  it("previewExercise + previewExerciseOther match on-chain wei-for-wei", async () => {
+    const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
+    const ctx = { swapRate, swapFeePercentage: s.swapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals };
+
+    for (const cstIn of [1n * 10n ** 18n, 250n * 10n ** 18n]) {
+      const [collateralAssetsOut, referenceAssetsIn, fee] = await client.readContract({ address: ADDR.poolManager, abi: poolManagerAbi, functionName: "previewExercise", args: [POOL, cstIn], blockNumber: s.blockNumber });
+      const ts = previewExercise(cstIn, ctx);
+      expect(ts.collateralAssetsOut, `exercise.cao @ ${cstIn}`).toBe(collateralAssetsOut);
+      expect(ts.referenceAssetsIn, `exercise.refIn @ ${cstIn}`).toBe(referenceAssetsIn);
+      expect(ts.fee, `exercise.fee @ ${cstIn}`).toBe(fee);
+    }
+    for (const refIn of [1n * 10n ** 6n, 500n * 10n ** 6n]) {
+      const [collateralAssetsOut, cstSharesIn, fee] = await client.readContract({ address: ADDR.poolManager, abi: poolManagerAbi, functionName: "previewExerciseOther", args: [POOL, refIn], blockNumber: s.blockNumber });
+      const ts = previewExerciseOther(refIn, ctx);
+      expect(ts.collateralAssetsOut, `exerciseOther.cao @ ${refIn}`).toBe(collateralAssetsOut);
+      expect(ts.cstSharesIn, `exerciseOther.cstIn @ ${refIn}`).toBe(cstSharesIn);
+      expect(ts.fee, `exerciseOther.fee @ ${refIn}`).toBe(fee);
+    }
+  });
+
+  it("previewUnwindExercise + previewUnwindExerciseOther match on-chain wei-for-wei", async () => {
+    const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
+    const ctx = {
+      swapRate,
+      unwindSwapFeePercentage: s.unwindSwapFeePercentage,
+      collateralDecimals: s.collateralDecimals,
+      referenceDecimals: s.referenceDecimals,
+      issuedAt: s.issuedAt,
+      expiryTimestamp: s.market.expiryTimestamp,
+      nowTs: s.blockTimestamp,
+    };
+
+    for (const cstOut of [1n * 10n ** 18n, 250n * 10n ** 18n]) {
+      const [collateralAssetsIn, referenceAssetsOut, fee] = await client.readContract({ address: ADDR.poolManager, abi: poolManagerAbi, functionName: "previewUnwindExercise", args: [POOL, cstOut], blockNumber: s.blockNumber });
+      const ts = previewUnwindExercise(cstOut, ctx);
+      expect(ts.collateralAssetsIn, `unwindEx.caIn @ ${cstOut}`).toBe(collateralAssetsIn);
+      expect(ts.referenceAssetsOut, `unwindEx.refOut @ ${cstOut}`).toBe(referenceAssetsOut);
+      expect(ts.fee, `unwindEx.fee @ ${cstOut}`).toBe(fee);
+    }
+    for (const refOut of [1n * 10n ** 6n, 500n * 10n ** 6n]) {
+      const [collateralAssetsIn, cstSharesOut, fee] = await client.readContract({ address: ADDR.poolManager, abi: poolManagerAbi, functionName: "previewUnwindExerciseOther", args: [POOL, refOut], blockNumber: s.blockNumber });
+      const ts = previewUnwindExerciseOther(refOut, ctx);
+      expect(ts.collateralAssetsIn, `unwindExOther.caIn @ ${refOut}`).toBe(collateralAssetsIn);
+      expect(ts.cstSharesOut, `unwindExOther.cstOut @ ${refOut}`).toBe(cstSharesOut);
+      expect(ts.fee, `unwindExOther.fee @ ${refOut}`).toBe(fee);
+    }
+  });
+
   it("runTool(cork_compute cst-swap-rate) matches on-chain previewSwap (full handler stack)", async () => {
     const cao = 100n * 10n ** 18n;
     const [cstSharesIn, referenceAssetsIn, fee] = await client.readContract({
@@ -119,12 +171,11 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
     const env = await runTool(
       "cork_compute",
       { params: { kind: "cst-swap-rate", poolId: POOL, collateralAssetsOut: cao.toString() }, format: "concise" },
-      { rpcUrl: RPC! },
+      { rpcUrl: RPC!, atBlock: s.blockNumber }, // pin the SAME block as the on-chain read — no race
     );
     expect(env.state).toBe("ok");
+    expect(env.provenance.block).toBe(s.blockNumber.toString());
     const data = env.data as { cstSharesIn: string; referenceAssetsIn: string; fee: string };
-    // Handler reads at head (a few blocks ahead of s.blockNumber); swapRate is stable on the
-    // fixture (no oracle churn), so preview must still match the pinned on-chain read.
     expect(data.cstSharesIn).toBe(cstSharesIn.toString());
     expect(data.referenceAssetsIn).toBe(referenceAssetsIn.toString());
     expect(data.fee).toBe(fee.toString());

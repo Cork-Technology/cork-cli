@@ -12,5 +12,7 @@ export * from "./bundle/corkAdapterAbi.ts";
 export * from "./bundle/bundler3.ts";
 export * from "./bundle/actions.ts";
 export * from "./bundle/decode.ts";
+export * from "./bundle/funding.ts";
+export * from "./bundle/legs.ts";
 export * from "./config.ts";
 export * from "./handlers.ts";

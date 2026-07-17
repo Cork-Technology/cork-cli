@@ -21,6 +21,25 @@ describe("runTool: cork_capabilities", () => {
     expect(data.tools.map((t) => t.name)).toContain("cork_prepare_phoenix");
     expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("cork prepare phoenix");
   });
+
+  it("topic 'verify' re-derives deployed addresses via CREATE2 (all match)", async () => {
+    const env = await runTool("cork_capabilities", { topic: "verify" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const data = env.data as { verifications: Array<{ name: string; match: boolean; computed: string }> };
+    expect(data.verifications.length).toBeGreaterThan(0);
+    expect(data.verifications.every((v) => v.match)).toBe(true);
+    expect(data.verifications.find((v) => v.name === "corkAdapter")?.computed).toBe("0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407");
+  });
+});
+
+describe("envelope provenance digest", () => {
+  it("is a deterministic bytes32 content hash of the data", async () => {
+    const a = await runTool("cork_capabilities", {}, { nowSeconds: NOW });
+    const b = await runTool("cork_capabilities", {}, { nowSeconds: NOW + 100n });
+    expect(a.provenance.digest).toMatch(/^0x[0-9a-f]{64}$/);
+    // same data (capabilities is static) -> same digest even though fetchedAt differs
+    expect(a.provenance.digest).toBe(b.provenance.digest);
+  });
 });
 
 describe("runTool: cork_decode (calldata)", () => {
@@ -89,7 +108,9 @@ describe("runTool: cork_prepare_phoenix", () => {
     expect(data.action).toBe("safeSwap");
     expect(data.deadline).toBe((NOW + 1800n).toString());
     expect(data.multicall.startsWith("0x374f435d")).toBe(true); // Bundler3.multicall selector
-    expect(env.warnings.some((w) => w.code === "no_funding_leg")).toBe(true);
+    // default fundingMode=permit2 + no RPC -> can't resolve token addresses for the funding leg
+    expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
+    expect((env.data as { fundingLegs: number }).fundingLegs).toBe(0);
   });
 
   it("rejects malformed input with ToolInputError", async () => {

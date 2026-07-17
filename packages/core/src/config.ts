@@ -24,3 +24,28 @@ export const DEPLOYMENTS: Record<number, CorkDeployment> = {
 export function deploymentFor(chainId: number): CorkDeployment | undefined {
   return DEPLOYMENTS[chainId];
 }
+
+/** Safe Singleton Factory — the CREATE2 deployer for Cork's cross-chain-identical addresses. */
+export const CREATE2_DEPLOYER = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as const;
+
+/**
+ * CREATE2 attestations: (salt from phoenix config/prod.toml [sepolia.bytes32]) + (initCodeHash =
+ * keccak of the Sourcify creation bytecode) → the deployed address. Verified empirically: cast
+ * reproduces `expected` from these exact inputs (see create2 verify test). Lets any caller
+ * independently re-derive the address instead of trusting a hardcoded value [C10].
+ */
+export interface Create2Attestation {
+  name: string;
+  salt: `0x${string}`;
+  initCodeHash: `0x${string}`;
+  expected: `0x${string}`;
+}
+
+export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
+  {
+    name: "corkAdapter",
+    salt: "0x212fafd35b277528fa898ceaadcc917285f4666e2a87556d583e345956860f7d",
+    initCodeHash: "0x2e1204abee27192079350f3f17779da88e1940a2ac222eb9f3e5a66060f682cb",
+    expected: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
+  },
+];
