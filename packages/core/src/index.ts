@@ -8,6 +8,7 @@ export * from "./marketid.ts";
 export * from "./create2.ts";
 export * from "./orders.ts";
 export * from "./rollover.ts";
+export * from "./datasources/venue.ts";
 export * from "./chain/abis.ts";
 export * from "./chain/reads.ts";
 export * from "./chain/rpc.ts";

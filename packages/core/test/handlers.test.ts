@@ -29,8 +29,8 @@ describe("runTool: cork_capabilities", () => {
     const d = env.data as { matches: Array<{ name: string; variant?: string; variantMaturity?: { status: string } }> };
     expect(d.matches[0]?.name).toBe("cork_query");
     expect(d.matches[0]?.variant).toBe("fills");
-    // the gated variant's maturity rides along so the agent knows the outcome before calling
-    expect(d.matches[0]?.variantMaturity?.status).toBe("specified");
+    // the variant's maturity rides along so the agent knows the outcome before calling
+    expect(d.matches[0]?.variantMaturity?.status).toBe("activated"); // venue-backed since R1
   });
 
   it("search returns matching tools with their input schema", async () => {
@@ -82,7 +82,7 @@ describe("runTool: cork_query", () => {
     expect(d.create2Deployer).toBe("0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7");
   });
   it("indexer-only resources are honestly unavailable", async () => {
-    const env = await runTool("cork_query", { resource: "orderbook", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    const env = await runTool("cork_query", { resource: "whitelisted-addresses", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("needs_indexer");
   });
@@ -318,12 +318,14 @@ describe("runTool: cork_track", () => {
     expect(mismatch.warnings[0]?.code).toBe("digest_mismatch");
   });
 
-  it("marketRef needs RPC; orderHash needs service", async () => {
+  it("marketRef needs RPC; orderHash fails honestly offline", async () => {
     const m = await runTool("cork_track", { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(m.state).toBe("unavailable");
     expect(m.warnings[0]?.code).toBe("requires_rpc");
-    const o = await runTool("cork_track", { mode: "reconcile", subject: { kind: "orderHash", orderHash: `0x${"1".repeat(64)}` }, format: "concise" }, { nowSeconds: NOW });
-    expect(o.warnings[0]?.code).toBe("needs_service");
+    // orderHash reconcile is venue-backed now — offline (stubbed unreachable) it fails honestly.
+    const o = await runTool("cork_track", { mode: "reconcile", subject: { kind: "orderHash", orderHash: `0x${"1".repeat(64)}` }, format: "concise" }, { nowSeconds: NOW, venueFetch: async () => { throw new Error("offline"); } });
+    expect(o.state).toBe("unavailable");
+    expect(o.warnings[0]?.code).toBe("venue_unreachable");
   });
 });
 

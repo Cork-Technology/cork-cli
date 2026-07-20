@@ -336,12 +336,118 @@ export const CapabilitiesInput = z.object({
 export type CapabilitiesInput = z.infer<typeof CapabilitiesInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 9. cork_submit (R5 submission — the only side-effecting tool)
+// 9. cork_submit (R5 submission — the only side-effecting tool; all venue writes)
 // ────────────────────────────────────────────────────────────────────────────
+// Every action is an off-chain HTTPS POST to the as-built venue relaying a CALLER-authored (and
+// where the venue verifies it, CALLER-signed) payload [K1]. Commitments in the payload are
+// recomputed locally before relaying [K3].
+const HookCallWire = z.strictObject({
+  target: Address,
+  value: UintStr,
+  callData: Hex,
+  allowFailure: z.boolean(),
+  isDelegateCall: z.boolean(),
+});
+const RolloverParamsWire = z.strictObject({
+  srcCstToken: Address,
+  dstCstToken: Address,
+  minCaReceived: UintStr,
+  minSharesOut: UintStr,
+  srcPoolId: Bytes32,
+  dstPoolId: Bytes32,
+  settler: Address,
+});
+const RolloverOrderWire = z.strictObject({
+  user: Address,
+  settler: Address,
+  fillerHint: Address,
+  exclusiveFiller: Address,
+  srcCstToken: Address,
+  dstCstToken: Address,
+  premiumToken: Address,
+  rolloverContract: Address,
+  originChainId: UintStr,
+  destinationChainId: UintStr,
+  openDeadline: UintStr,
+  fillDeadline: UintStr,
+  orderSalt: UintStr,
+  orderSize: UintStr,
+  minPremiumPerShare: UintStr,
+  allowPartialFills: z.boolean(),
+  allowUnderfill: z.boolean(),
+  premiumPaymentMode: z.union([z.literal(0), z.literal(1)]),
+  rolloverIntentHash: Bytes32,
+  rolloverParams: RolloverParamsWire,
+});
+const RolloverIntentWire = z.strictObject({
+  rolloverContract: Address,
+  deadline: UintStr,
+  nonce: UintStr,
+  preRolloverHooks: z.array(HookCallWire).max(32),
+  midRolloverHooks: z.array(HookCallWire).max(32),
+  postRolloverHooks: z.array(HookCallWire).max(32),
+  premiumHooks: z.array(HookCallWire).max(32),
+});
+const LopOrderStructWire = z.strictObject({
+  salt: UintStr,
+  maker: Address,
+  receiver: Address,
+  makerAsset: Address,
+  takerAsset: Address,
+  makingAmount: UintStr,
+  takingAmount: UintStr,
+  makerTraits: UintStr,
+});
+const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
+
+export const SubmitAction = z.discriminatedUnion("type", [
+  A("rollover-order", {
+    order: RolloverOrderWire,
+    intent: RolloverIntentWire,
+    signature: Hex,
+  }),
+  A("lop-order", {
+    order: LopOrderStructWire,
+    signature: Hex,
+    extension: Hex.default("0x"),
+    side: z.enum(["BUY", "SELL"]),
+    premium: z.number(),
+    expiry: z.number().int().nonnegative(),
+    nonce: UintStr,
+    allowsPartialFills: z.boolean(),
+    makerAccountType: z.enum(["EOA", "ERC1271"]).default("EOA"),
+    makerPermit2: Hex.default("0x"),
+    quoteRef: QuoteRef.optional(),
+  }),
+  A("rfq-open", {
+    requester: Address,
+    referenceAsset: Address,
+    collateralAsset: z.union([
+      z.strictObject({ exact: Address }),
+      z.strictObject({ one_of: z.array(Address).min(1).max(8) }),
+    ]),
+    modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1),
+    packageIds: z.array(z.string()).min(1).max(8),
+    expiryWindow: z.strictObject({ notBefore: z.number().int(), notAfter: z.number().int() }),
+    marketTemplate: z.record(z.string(), z.unknown()).optional(),
+    notionalAssets: UintStr,
+    validUntil: z.number().int(),
+    signature: Hex,
+  }),
+  A("rfq-answer", {
+    rfqId: z.string().min(1),
+    underwriter: Address,
+    status: z.enum(["quoted", "pass"]),
+    options: z.array(z.record(z.string(), z.unknown())).max(16).optional(),
+    reasonCode: z.enum(["NO_CAPACITY", "PAIR_UNSUPPORTED", "TENOR_NOT_QUOTED", "PASS"]).optional(),
+    signature: Hex,
+  }),
+]);
+
 export const SubmitInput = z.object({
-  signedOrder: z.record(z.string(), z.unknown()),
-  signature: Hex,
   chainId: ChainId,
   clientRequestId: ClientRequestId,
+  action: SubmitAction,
+  format: Format,
 });
 export type SubmitInput = z.infer<typeof SubmitInput>;

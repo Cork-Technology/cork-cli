@@ -62,7 +62,8 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Reconcile a tx receipt", input: { mode: "reconcile", subject: { kind: "txHash", txHash: "0x2222222222222222222222222222222222222222222222222222222222222222" } } },
   ],
   cork_submit: [
-    { title: "Relay a caller-signed order (gated: needs orderbook service)", input: { chainId: 1, clientRequestId: "demo-submit-0001", signedOrder: { "…signed order fields…": "" }, signature: "0x00" } },
+    { title: "Relay a signed rollover order to the venue (intent hash + digest recomputed before relay)", input: { chainId: 42161, clientRequestId: "demo-submit-0001", action: { type: "rollover-order", order: { user: DEMO_ACCOUNT, settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", fillerHint: "0x0000000000000000000000000000000000000000", exclusiveFiller: "0x0000000000000000000000000000000000000000", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, rolloverContract: DEMO_ACCOUNT, originChainId: "42161", destinationChainId: "42161", openDeadline: "1795000000", fillDeadline: "1795604800", orderSalt: "8811723641", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", allowPartialFills: false, allowUnderfill: false, premiumPaymentMode: 0, rolloverIntentHash: "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84", rolloverParams: { srcCstToken: SUSDE, dstCstToken: VBUSDC, minCaReceived: "0", minSharesOut: "0", srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D" } }, intent: { rolloverContract: DEMO_ACCOUNT, deadline: "1795604800", nonce: "1", preRolloverHooks: [], midRolloverHooks: [], postRolloverHooks: [], premiumHooks: [] }, signature: "0x8f3b00000000000000000000000000000000000000000000000000000000001c" } } },
+    { title: "Open an RFQ (buyer): cover 50k, acceptable parameter envelope", input: { chainId: 42161, clientRequestId: "demo-rfq-0001", action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: SUSDE, collateralAsset: { one_of: [VBUSDC] }, modes: ["liquidity_impairment"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: 1795000000, notAfter: 1795604800 }, notionalAssets: "50000000000", validUntil: 1794900000, signature: "0x00" } } },
   ],
 };
 
@@ -88,12 +89,12 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "account-state": { status: "activated" },
       "pool-whitelist": { status: "activated", reason: "chainId 42161: unknown_deployment (whitelistManager not configured)" },
       "protocol-config": { status: "activated" },
-      markets: { status: "specified", reason: "needs_indexer" },
+      markets: { status: "activated", reason: "venue-backed (centralized mode, api-phoenix /v1/pools)" },
       "whitelisted-addresses": { status: "specified", reason: "needs_indexer" },
-      flows: { status: "specified", reason: "needs_indexer" },
-      "limit-order-markets": { status: "specified", reason: "needs_indexer" },
-      orderbook: { status: "specified", reason: "needs_indexer" },
-      fills: { status: "specified", reason: "needs_indexer" },
+      flows: { status: "activated", reason: "venue-backed (centralized mode, /v1/rollover — filters.kind orders|fills|contracts)" },
+      "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
+      orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
+      fills: { status: "activated", reason: "venue-backed (centralized mode)" },
     },
   },
   cork_compute: {
@@ -143,11 +144,20 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "verify/marketRef": { status: "activated" },
       "reconcile/txHash": { status: "activated" },
       simulate: { status: "specified", reason: "phase_gated" },
-      "reconcile/orderHash": { status: "specified", reason: "needs_service" },
-      "reconcile/submissionRef": { status: "specified", reason: "needs_service" },
+      "reconcile/orderHash": { status: "activated", reason: "venue-reported lifecycle (centralized); chain-log verification [K7] is a later iteration" },
+      "reconcile/submissionRef": { status: "activated", reason: "venue-reported lifecycle (centralized); 32-byte digests only" },
     },
   },
-  cork_submit: { status: "specified", reason: "phase_gated (orderbook relay, Phase 3)" },
+  cork_submit: {
+    status: "implemented",
+    reason: "all four off-chain venue writes wired; activation pending the first live accepted POST",
+    variants: {
+      "rollover-order": { status: "implemented", reason: "K3 intent-hash + orderDigest recomputed before relay" },
+      "lop-order": { status: "implemented", reason: "orderHash recomputed locally; extension/salt commitment pre-flight" },
+      "rfq-open": { status: "implemented" },
+      "rfq-answer": { status: "implemented" },
+    },
+  },
 };
 
 /** The wire-description example line for a tool (first example, compact JSON). */

@@ -20,6 +20,7 @@ import {
   PrepareOrdersInput,
   PreparePhoenixInput,
   QueryInput,
+  SubmitInput,
   TrackInput,
   REGISTRY,
   SCHEMA_VERSION,
@@ -41,7 +42,28 @@ import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
-import { buildRolloverIntent } from "./rollover.ts";
+import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
+import {
+  getLopFills,
+  getLopMarkets,
+  getLopOrderbook,
+  getPools,
+  getRolloverContracts,
+  getRolloverOrder,
+  getRolloverOrders,
+  getRolloverFills,
+  postLopOrder,
+  postRfq,
+  postRfqAnswer,
+  postRolloverOrder,
+  venueBaseUrl,
+  VenueHttpError,
+  VenueUnreachable,
+  type VenueDeps,
+  type VenuePostResult,
+} from "./datasources/venue.ts";
+import { lopDomain } from "./orders.ts";
+import { hashTypedData } from "viem";
 
 export class ToolInputError extends Error {
   constructor(
@@ -70,6 +92,25 @@ export interface HandlerContext {
    * determinism; a caller may inject a custom endpoint policy.
    */
   resolveRpc?: (chainId: ChainId, explicitUrl: string | undefined) => Promise<ResolvedRpc | null>;
+  /** Override the venue fetch implementation (tests inject a stub for offline determinism). */
+  venueFetch?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Override the venue base URL (default: CORK_VENUE_URL env or api-phoenix.cork.tech/v1). */
+  venueUrl?: string;
+}
+
+function venueDepsOf(ctx: HandlerContext): VenueDeps {
+  return { ...(ctx.venueFetch ? { fetch: ctx.venueFetch } : {}), ...(ctx.venueUrl ? { baseUrl: ctx.venueUrl } : {}) };
+}
+
+/** Map a venue read failure to an honest envelope (transport vs HTTP-rejection distinguished). */
+function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext): Envelope {
+  if (err instanceof VenueHttpError) {
+    return unavailable(chainId, "venue_rejected", `venue returned HTTP ${err.status}: ${err.message}`, ctx);
+  }
+  if (err instanceof VenueUnreachable) {
+    return unavailable(chainId, "venue_unreachable", `${err.message} — check connectivity or CORK_VENUE_URL`, ctx);
+  }
+  throw err;
 }
 
 /** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver). */
@@ -164,10 +205,11 @@ function envelope(args: {
     warnings: args.warnings ?? [],
     provenance: {
       source: args.source,
-      // Every chain-backed result states its data mode [R1/§7]: all chain reads today go over
-      // RPC (built-in default / chainlist / explicit) = lite-decentralized. centralized and
-      // full-decentralized are rejected explicitly at the handler gate, never silently served.
+      // Every backed result states its data mode [R1/§7]: chain reads go over RPC =
+      // lite-decentralized; venue-backed reads/writes (api-phoenix) = centralized.
+      // full-decentralized (HyperSync) is rejected explicitly at the handler gate.
       ...(args.source === "chain" ? { mode: "lite-decentralized" as const } : {}),
+      ...(args.source === "indexer" || args.source === "service" ? { mode: "centralized" as const } : {}),
       chainId: args.chainId,
       fetchedAt: nowIso(args.ctx),
       digest,
@@ -281,30 +323,138 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
 }
 
 /** Parse the free-form filters record into typed poolId/account, rejecting malformed values (exit 2). */
-function parseQueryFilters(raw: Record<string, unknown> | undefined): { poolId?: `0x${string}`; account?: `0x${string}` } {
-  const out: { poolId?: `0x${string}`; account?: `0x${string}` } = {};
+interface QueryFilters {
+  poolId?: `0x${string}`;
+  account?: `0x${string}`;
+  kind?: "orders" | "fills" | "contracts";
+  side?: "BUY" | "SELL";
+  status?: string;
+  orderDigest?: `0x${string}`;
+  orderHash?: `0x${string}`;
+  filler?: `0x${string}`;
+  address?: `0x${string}`;
+  fillable?: boolean;
+  source?: "API" | "CHAIN";
+}
+
+function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilters {
+  const out: QueryFilters = {};
+  const fail = (key: string, message: string): never => {
+    throw new ToolInputError("cork_query", [{ path: ["filters", key], message }]);
+  };
   if (raw?.poolId !== undefined) {
     const r = MarketId.safeParse(raw.poolId);
-    if (!r.success) throw new ToolInputError("cork_query", [{ path: ["filters", "poolId"], message: "not a valid 32-byte pool id" }]);
-    out.poolId = r.data;
+    if (!r.success) fail("poolId", "not a valid 32-byte pool id");
+    else out.poolId = r.data;
   }
-  if (raw?.account !== undefined) {
-    const r = Address.safeParse(raw.account);
-    if (!r.success) throw new ToolInputError("cork_query", [{ path: ["filters", "account"], message: "not a valid EVM address" }]);
-    out.account = r.data;
+  for (const key of ["account", "filler", "address"] as const) {
+    if (raw?.[key] !== undefined) {
+      const r = Address.safeParse(raw[key]);
+      if (!r.success) fail(key, "not a valid EVM address");
+      else out[key] = r.data;
+    }
+  }
+  for (const key of ["orderDigest", "orderHash"] as const) {
+    if (raw?.[key] !== undefined) {
+      const v = String(raw[key]);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(v)) fail(key, "not a 32-byte hex hash");
+      else out[key] = v.toLowerCase() as `0x${string}`;
+    }
+  }
+  if (raw?.kind !== undefined) {
+    const v = String(raw.kind);
+    if (v !== "orders" && v !== "fills" && v !== "contracts") fail("kind", "expected 'orders' | 'fills' | 'contracts'");
+    else out.kind = v;
+  }
+  if (raw?.side !== undefined) {
+    const v = String(raw.side);
+    if (v !== "BUY" && v !== "SELL") fail("side", "expected 'BUY' | 'SELL'");
+    else out.side = v;
+  }
+  if (raw?.source !== undefined) {
+    const v = String(raw.source);
+    if (v !== "API" && v !== "CHAIN") fail("source", "expected 'API' | 'CHAIN'");
+    else out.source = v;
+  }
+  if (raw?.status !== undefined) out.status = String(raw.status);
+  if (raw?.fillable !== undefined) {
+    if (typeof raw.fillable === "boolean") out.fillable = raw.fillable;
+    else if (raw.fillable === "true" || raw.fillable === "false") out.fillable = raw.fillable === "true";
+    else fail("fillable", "expected a boolean");
   }
   return out;
 }
 
+/** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
+const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows"]);
+
 async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
-  // Data mode is explicit, never a silent fallback [R1/§7]: the only mode served today is
+  const filters = parseQueryFilters(input.filters);
+
+  if (VENUE_RESOURCES.has(input.resource)) {
+    // These resources are served by the as-built venue (api-phoenix) — the centralized data
+    // mode. Mode is explicit, never a silent substitute [R1/§7]: requesting a decentralized
+    // mode for a venue-only resource fails loudly (full-decentralized/HyperSync is a later
+    // iteration; pre-commitment order flow emits no events and can never be decentralized).
+    if (input.mode !== undefined && input.mode !== "centralized") {
+      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed (centralized) in this iteration; omit mode or use 'centralized'`, ctx);
+    }
+    const deps = venueDepsOf(ctx);
+    try {
+      let list: import("./datasources/venue.ts").VenueList;
+      if (input.resource === "markets") {
+        list = await getPools(deps, chainId);
+        if (filters.poolId) list = { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) };
+      } else if (input.resource === "orderbook") {
+        list = await getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}) });
+      } else if (input.resource === "fills") {
+        list = await getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}) });
+      } else if (input.resource === "limit-order-markets") {
+        list = await getLopMarkets(deps, chainId);
+      } else {
+        // flows = the rollover venue; filters.kind picks the feed (orders default).
+        const kind = filters.kind ?? "orders";
+        if (kind === "orders") {
+          if (filters.orderDigest) {
+            const row = await getRolloverOrder(deps, filters.orderDigest);
+            if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
+            list = { items: [row] };
+          } else {
+            list = await getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}) });
+          }
+        } else if (kind === "fills") {
+          list = await getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}) });
+        } else {
+          list = await getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}) });
+        }
+      }
+      return envelope({
+        state: "ok",
+        data: {
+          resource: input.resource,
+          ...(input.resource === "flows" ? { kind: filters.kind ?? "orders" } : {}),
+          count: list.items.length,
+          items: list.items,
+          ...(list.hasMore !== undefined ? { hasMore: list.hasMore } : {}),
+          ...(list.nextCursor != null ? { nextCursor: list.nextCursor } : {}),
+          ...(input.format === "full" ? { venue: venueBaseUrl(ctx.venueUrl) } : {}),
+        },
+        chainId,
+        source: "indexer",
+        ctx,
+      });
+    } catch (err) {
+      return venueFailed(chainId, err, ctx);
+    }
+  }
+
+  // Data mode is explicit, never a silent fallback [R1/§7]: chain resources serve only
   // lite-decentralized (RPC). Requesting an unwired mode fails loudly instead of being ignored.
   if (input.mode !== undefined && input.mode !== "lite-decentralized") {
-    return unavailable(chainId, "mode_unavailable", `data mode '${input.mode}' is not wired in this iteration (centralized indexer / full-decentralized HyperSync pending); omit mode or use 'lite-decentralized'`, ctx);
+    return unavailable(chainId, "mode_unavailable", `data mode '${input.mode}' is not available for cork_query('${input.resource}') (a live chain read); omit mode or use 'lite-decentralized'`, ctx);
   }
   const { dep, depWarn } = await getDep(ctx, chainId);
-  const filters = parseQueryFilters(input.filters);
 
   // protocol-config is pure config (no RPC needed).
   if (input.resource === "protocol-config") {
@@ -570,8 +720,279 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
     }
   }
 
-  // orderHash / submissionRef need the LOP/orderbook service.
-  return unavailable(chainId, "needs_service", `track subject '${subj.kind}' requires the orderbook/LOP service not wired in this iteration`, ctx);
+  // orderHash / submissionRef: reconcile against the venue's lifecycle rows. Venue-reported
+  // state — the independent chain-log verification leg [K7] lands in the next iteration; until
+  // then a warning discloses that provenance honestly.
+  if (subj.kind === "orderHash" || subj.kind === "submissionRef") {
+    const ref = subj.kind === "orderHash" ? subj.orderHash : subj.submissionRef;
+    const deps = venueDepsOf(ctx);
+    const venueNote = { code: "venue_reported", message: "state is venue-reported (centralized); independent chain-log verification [K7] is a later iteration" };
+    try {
+      if (/^0x[0-9a-fA-F]{64}$/.test(ref)) {
+        // A 32-byte ref is a rollover orderDigest or a LOP orderHash — try both surfaces.
+        const row = await getRolloverOrder(deps, ref.toLowerCase());
+        if (row) {
+          const order = (row.order ?? row) as Record<string, unknown>;
+          return envelope({
+            state: "ok",
+            data: {
+              kind: "rollover-order",
+              orderDigest: ref.toLowerCase(),
+              lifecycle: order.status ?? null,
+              order,
+              fills: row.fills ?? [],
+              slots: row.slots ?? [],
+            },
+            chainId,
+            source: "indexer",
+            warnings: [venueNote],
+            ctx,
+          });
+        }
+        const fills = await getLopFills(deps, { chainId, orderHash: ref.toLowerCase() });
+        if (fills.items.length > 0) {
+          return envelope({
+            state: "ok",
+            data: { kind: "lop-fills", orderHash: ref.toLowerCase(), count: fills.items.length, fills: fills.items },
+            chainId,
+            source: "indexer",
+            warnings: [venueNote],
+            ctx,
+          });
+        }
+        return unavailable(chainId, "order_not_found", `no rollover order or LOP fills known to the venue for ${ref} on chainId ${chainId} (a normal outcome for an unposted/unfilled order)`, ctx);
+      }
+      return unavailable(chainId, "order_not_found", `submissionRef '${ref}' is not a 32-byte order digest — RFQ ids (rfq_/ans_) reconcile via cork_query once the RFQ read surface is wired`, ctx);
+    } catch (err) {
+      return venueFailed(chainId, err, ctx);
+    }
+  }
+
+  // All five subject kinds are handled above; this is unreachable but keeps the return total.
+  return unavailable(chainId, "needs_service", "track subject is not reconcilable in this iteration", ctx);
+}
+
+const U160 = (1n << 160n) - 1n;
+
+async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId;
+  const action = input.action;
+  const deps = venueDepsOf(ctx);
+
+  /** Shared POST-outcome mapping (201 created / 200 idempotent replay / 4xx per venue docs). */
+  const mapPost = (res: VenuePostResult, okData: (body: Record<string, unknown>, replay: boolean) => Record<string, unknown>): Envelope => {
+    const body = (res.body ?? {}) as Record<string, unknown>;
+    const msg = typeof body.message === "string" ? body.message : `HTTP ${res.httpStatus}`;
+    if (res.httpStatus === 201 || res.httpStatus === 200) {
+      return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", ctx });
+    }
+    if (res.httpStatus === 409) {
+      return envelope({ state: "conflict", data: { venueResponse: body }, chainId, source: "service", warnings: [{ code: "venue_conflict", message: `venue 409: ${msg} (same id/digest already stored with a DIFFERENT payload — use a fresh clientRequestId for a genuinely new request [K2])` }], ctx });
+    }
+    if (res.httpStatus === 429) {
+      return unavailable(chainId, "venue_rate_limited", `venue 429: ${msg} (per-user open-order caps / 100 req/min per IP)`, ctx);
+    }
+    if (res.httpStatus === 404 || res.httpStatus === 410 || res.httpStatus === 422) {
+      return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg}${res.httpStatus === 422 ? " (permanent for this RFQ — do not retry)" : ""}`, ctx);
+    }
+    return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg}`, ctx);
+  };
+
+  try {
+    if (action.type === "rollover-order") {
+      const o = action.order;
+      // Single-chain protocol: the routing fields must match the target chain (venue rejects too).
+      if (o.originChainId !== String(chainId) || o.destinationChainId !== String(chainId)) {
+        return unavailable(chainId, "invalid_order_terms", `originChainId/destinationChainId must equal chainId ${chainId} (single-chain rollover)`, ctx);
+      }
+      if (o.rolloverParams.settler.toLowerCase() !== o.settler.toLowerCase() || o.rolloverParams.srcCstToken.toLowerCase() !== o.srcCstToken.toLowerCase() || o.rolloverParams.dstCstToken.toLowerCase() !== o.dstCstToken.toLowerCase()) {
+        return unavailable(chainId, "invalid_order_terms", "rolloverParams (settler/srcCstToken/dstCstToken) must mirror OrderData exactly — the venue rejects mismatches", ctx);
+      }
+      if (action.intent.rolloverContract.toLowerCase() !== o.rolloverContract.toLowerCase()) {
+        return unavailable(chainId, "invalid_order_terms", "intent.rolloverContract must equal order.rolloverContract", ctx);
+      }
+      // [K3] Recompute the zero-digest intent commitment; a payload whose hooks do not hash to
+      // the signed rolloverIntentHash is NOT relayed — the venue would reject it, and relaying
+      // would leak a broken payload.
+      const intentStruct: RolloverIntentStruct = {
+        rolloverContract: action.intent.rolloverContract,
+        orderDigest: `0x${"00".repeat(32)}`,
+        deadline: BigInt(action.intent.deadline),
+        nonce: BigInt(action.intent.nonce),
+        preRolloverHooks: action.intent.preRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
+        midRolloverHooks: action.intent.midRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
+        postRolloverHooks: action.intent.postRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
+        premiumHooks: action.intent.premiumHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
+      };
+      const recomputedIntentHash = intentStructHash(intentStruct);
+      if (recomputedIntentHash.toLowerCase() !== o.rolloverIntentHash.toLowerCase()) {
+        return envelope({
+          state: "conflict",
+          data: { claimed: o.rolloverIntentHash, recomputed: recomputedIntentHash },
+          chainId,
+          source: "config",
+          warnings: [{ code: "digest_mismatch", message: "intent does not hash to order.rolloverIntentHash (zero-digest EIP-712 struct hash) — the payload was NOT relayed; the intent or the signed order is inconsistent" }],
+          ctx,
+        });
+      }
+      // Recompute the ERC-7683 orderDigest locally so the venue's answer can be cross-checked.
+      const orderStruct: OrderDataStruct = {
+        user: o.user,
+        settler: o.settler,
+        fillerHint: o.fillerHint,
+        exclusiveFiller: o.exclusiveFiller,
+        srcCstToken: o.srcCstToken,
+        dstCstToken: o.dstCstToken,
+        premiumToken: o.premiumToken,
+        rolloverContract: o.rolloverContract,
+        originChainId: BigInt(o.originChainId),
+        destinationChainId: BigInt(o.destinationChainId),
+        openDeadline: BigInt(o.openDeadline),
+        fillDeadline: BigInt(o.fillDeadline),
+        orderSalt: BigInt(o.orderSalt),
+        orderSize: BigInt(o.orderSize),
+        minPremiumPerShare: BigInt(o.minPremiumPerShare),
+        allowPartialFills: o.allowPartialFills,
+        allowUnderfill: o.allowUnderfill,
+        premiumPaymentMode: o.premiumPaymentMode,
+        rolloverIntentHash: o.rolloverIntentHash,
+        rolloverParams: {
+          srcCstToken: o.rolloverParams.srcCstToken,
+          dstCstToken: o.rolloverParams.dstCstToken,
+          minCaReceived: BigInt(o.rolloverParams.minCaReceived),
+          minSharesOut: BigInt(o.rolloverParams.minSharesOut),
+          srcPoolId: o.rolloverParams.srcPoolId,
+          dstPoolId: o.rolloverParams.dstPoolId,
+          settler: o.rolloverParams.settler,
+        },
+      };
+      const localDigest = computeOrderDigest(chainId, orderStruct);
+      const res = await postRolloverOrder(deps, {
+        chainId,
+        order: o,
+        intent: action.intent,
+        signature: action.signature,
+        envelope: { orderDataType: ORDER_DATA_TYPEHASH },
+      });
+      const out = mapPost(res, (body, replay) => ({ kind: "rollover-order", accepted: true, replay, orderDigest: body.orderDigest ?? localDigest, localDigest }));
+      // Venue digest disagreement is a conflict, not a success — surface it [K7].
+      if (out.state === "ok") {
+        const venueDigest = (out.data as { orderDigest?: unknown }).orderDigest;
+        if (typeof venueDigest === "string" && venueDigest.toLowerCase() !== localDigest.toLowerCase()) {
+          return envelope({
+            state: "conflict",
+            data: { venueDigest, localDigest },
+            chainId,
+            source: "service",
+            warnings: [{ code: "digest_mismatch", message: "the venue computed a DIFFERENT orderDigest than the local EIP-712 recomputation — do not sign or rely on either until resolved" }],
+            ctx,
+          });
+        }
+      }
+      return out;
+    }
+
+    if (action.type === "lop-order") {
+      const lop = LOP_ADDRESSES[chainId];
+      if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+      const orderMsg = {
+        salt: BigInt(action.order.salt),
+        maker: action.order.maker,
+        receiver: action.order.receiver,
+        makerAsset: action.order.makerAsset,
+        takerAsset: action.order.takerAsset,
+        makingAmount: BigInt(action.order.makingAmount),
+        takingAmount: BigInt(action.order.takingAmount),
+        makerTraits: BigInt(action.order.makerTraits),
+      };
+      // [K3] The orderHash sent to the venue is recomputed locally, never caller-supplied.
+      const orderHash = hashTypedData({
+        domain: lopDomain(chainId, lop),
+        types: { Order: [
+          { name: "salt", type: "uint256" },
+          { name: "maker", type: "address" },
+          { name: "receiver", type: "address" },
+          { name: "makerAsset", type: "address" },
+          { name: "takerAsset", type: "address" },
+          { name: "makingAmount", type: "uint256" },
+          { name: "takingAmount", type: "uint256" },
+          { name: "makerTraits", type: "uint256" },
+        ] },
+        primaryType: "Order",
+        message: orderMsg,
+      });
+      // Extension commitment pre-flight: what would revert InvalidExtension at fill is caught here.
+      if (action.extension !== "0x") {
+        const saltLow = BigInt(action.order.salt) & U160;
+        const extLow = BigInt(keccak256(action.extension)) & U160;
+        if (saltLow !== extLow) {
+          return envelope({
+            state: "conflict",
+            data: { saltLow160: `0x${saltLow.toString(16)}`, extensionKeccakLow160: `0x${extLow.toString(16)}` },
+            chainId,
+            source: "config",
+            warnings: [{ code: "extension_salt_mismatch", message: "salt's low 160 bits must equal keccak256(extension)'s low 160 bits — this order would revert InvalidExtension at fill; NOT relayed" }],
+            ctx,
+          });
+        }
+      }
+      const res = await postLopOrder(deps, {
+        salt: action.order.salt,
+        maker: action.order.maker,
+        receiver: action.order.receiver,
+        makerAsset: action.order.makerAsset,
+        takerAsset: action.order.takerAsset,
+        makingAmount: action.order.makingAmount,
+        takingAmount: action.order.takingAmount,
+        makerTraits: action.order.makerTraits,
+        extension: action.extension === "0x" ? "" : action.extension,
+        orderHash,
+        signature: action.signature,
+        makerAccountType: action.makerAccountType,
+        makerPermit2: action.makerPermit2,
+        side: action.side,
+        premium: action.premium,
+        expiry: action.expiry,
+        nonce: action.nonce,
+        allowsPartialFills: action.allowsPartialFills,
+        chainId,
+        ...(action.quoteRef ? { quote_ref: { rfq_id: action.quoteRef.rfqId, answer_id: action.quoteRef.answerId, option_id: action.quoteRef.optionId } } : {}),
+      });
+      return mapPost(res, (body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash: body.orderHash ?? orderHash, localOrderHash: orderHash }));
+    }
+
+    if (action.type === "rfq-open") {
+      const res = await postRfq(deps, {
+        schema_version: "1",
+        request_id: input.clientRequestId,
+        requester: action.requester,
+        chain_id: chainId,
+        reference_asset: action.referenceAsset,
+        collateral_asset: action.collateralAsset,
+        modes: action.modes,
+        package_ids: action.packageIds,
+        expiry_window: { not_before: action.expiryWindow.notBefore, not_after: action.expiryWindow.notAfter },
+        ...(action.marketTemplate ? { market_template: action.marketTemplate } : {}),
+        notional_assets: action.notionalAssets,
+        valid_until: action.validUntil,
+        signature: action.signature,
+      });
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }));
+    }
+
+    // rfq-answer
+    const res = await postRfqAnswer(deps, action.rfqId, {
+      schema_version: "1",
+      request_id: input.clientRequestId,
+      underwriter: action.underwriter,
+      status: action.status,
+      ...(action.status === "quoted" ? { options: action.options ?? [] } : { reason_code: action.reasonCode ?? "PASS" }),
+      signature: action.signature,
+    });
+    return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId }));
+  } catch (err) {
+    return venueFailed(chainId, err, ctx);
+  }
 }
 
 /** Validate + dispatch a tool call. Throws ToolInputError on schema failure. */
@@ -717,6 +1138,8 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       return handleTrack(parsed.data as TrackInput, ctx);
     case "cork_prepare_orders":
       return handlePrepareOrders(parsed.data as PrepareOrdersInput, ctx);
+    case "cork_submit":
+      return handleSubmit(parsed.data as SubmitInput, ctx);
     default:
       return unavailable(chainIdOf(parsed.data), "phase_gated", `${name} is not implemented in this iteration`, ctx);
   }

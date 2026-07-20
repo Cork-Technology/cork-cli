@@ -40,7 +40,7 @@ export const REGISTRY = [
     cliPath: ["query"],
     phase: 1,
     description:
-      "Read any Cork resource (markets, whitelist, orderbook, fills, flows, account state, protocol config). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
+      "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     input: QueryInput,
     output: Envelope,
@@ -120,7 +120,7 @@ export const REGISTRY = [
     cliPath: ["submit"],
     phase: 3,
     description:
-      "Relay a CALLER-SIGNED limit order to the Cork orderbook service. The only side-effecting tool. Transmits an already-signed payload; never signs [K1]. Idempotent by clientRequestId [K2].",
+      "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer. Never signs [K1]; idempotent by clientRequestId [K2].",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

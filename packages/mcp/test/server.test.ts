@@ -62,7 +62,7 @@ describe("MCP server in-memory roundtrip", () => {
 
   it("marks phase-gated tools unavailable (isError)", async () => {
     const client = await connectedClient();
-    const res = await client.callTool({ name: "cork_query", arguments: { resource: "markets", pageSize: 25, format: "concise" } });
+    const res = await client.callTool({ name: "cork_query", arguments: { resource: "whitelisted-addresses", pageSize: 25, format: "concise" } });
     expect(res.isError).toBe(true);
     const env = res.structuredContent as { state: string };
     expect(env.state).toBe("unavailable");
