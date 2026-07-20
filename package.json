@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "workspaces": ["packages/*"],
-  "engines": { "bun": ">=1.3" },
+  "engines": {
+    "bun": ">=1.3"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
@@ -23,5 +25,8 @@
     "commander": "^12.1.0",
     "viem": "^2.21.0",
     "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "@envio-dev/hypersync-client": "^1.4.0"
   }
 }

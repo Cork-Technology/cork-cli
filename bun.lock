@@ -17,6 +17,9 @@
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+      "optionalDependencies": {
+        "@envio-dev/hypersync-client": "^1.4.0",
+      },
     },
     "packages/cli": {
       "name": "@cork/cli",
@@ -73,6 +76,18 @@
     "@cork/mcp": ["@cork/mcp@workspace:packages/mcp"],
 
     "@cork/schemas": ["@cork/schemas@workspace:packages/schemas"],
+
+    "@envio-dev/hypersync-client": ["@envio-dev/hypersync-client@1.4.0", "", { "optionalDependencies": { "@envio-dev/hypersync-client-darwin-arm64": "1.4.0", "@envio-dev/hypersync-client-darwin-x64": "1.4.0", "@envio-dev/hypersync-client-linux-arm64-gnu": "1.4.0", "@envio-dev/hypersync-client-linux-x64-gnu": "1.4.0", "@envio-dev/hypersync-client-linux-x64-musl": "1.4.0" } }, "sha512-nZrWVOtm2+ahQjCUGeBQBJE2qntlDfywtkoUOgQAlXuZy1Lpwhh44a4LkYc/bqynPCOBGUTmMlYR9uotXFZWcA=="],
+
+    "@envio-dev/hypersync-client-darwin-arm64": ["@envio-dev/hypersync-client-darwin-arm64@1.4.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-WShYeMSJQL+G0Fs4xxifuUqvZUa+ZAqs2yvNZ4VWrjpjC1jiyTWUwqp8DlRWk2qRtITwkLQs7ZnutnAbQnuOWg=="],
+
+    "@envio-dev/hypersync-client-darwin-x64": ["@envio-dev/hypersync-client-darwin-x64@1.4.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-hBmsyDn5iY+chwSZlKExseK/0VG5aealwKL6iG0NUvdXAw5QOGyaOWKWRYZB4NE/bldUNtthvAh1pgpnx9ejqQ=="],
+
+    "@envio-dev/hypersync-client-linux-arm64-gnu": ["@envio-dev/hypersync-client-linux-arm64-gnu@1.4.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-tqiaUfdkqKTlE+P0a3Giov37a5bTP/TiqybCyjscgVOt0UmSE3X/Bk8cBK6an1Y1/PVDaCq12k2Awj+bJooLAQ=="],
+
+    "@envio-dev/hypersync-client-linux-x64-gnu": ["@envio-dev/hypersync-client-linux-x64-gnu@1.4.0", "", { "os": "linux", "cpu": "x64" }, "sha512-zgpPTBXk/bQRloAFTx7JN3Jedm0n4m2AyIbQh+RWMwuDyBfWmWn6GAamK9NGxaCF2bkYl5TXaflNL8ms71scRg=="],
+
+    "@envio-dev/hypersync-client-linux-x64-musl": ["@envio-dev/hypersync-client-linux-x64-musl@1.4.0", "", { "os": "linux", "cpu": "x64" }, "sha512-0BE7Fw21c4swumttF73sCIR7Ud1kn2yltHK8QhPas1MguJOAGprvXV2gFejTV+GOV3cHS6cgqYNmMhmVwcPKRg=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.21.5", "", { "os": "aix", "cpu": "ppc64" }, "sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ=="],
 

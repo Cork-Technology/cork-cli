@@ -10,6 +10,7 @@ export * from "./orders.ts";
 export * from "./rollover.ts";
 export * from "./rollover-verify.ts";
 export * from "./datasources/venue.ts";
+export * from "./datasources/hypersync.ts";
 export * from "./chain/abis.ts";
 export * from "./chain/reads.ts";
 export * from "./chain/rpc.ts";

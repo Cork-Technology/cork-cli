@@ -41,9 +41,10 @@ import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
-import { resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
+import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, settlerStatusAbi, venueChainConsistent } from "./rollover-verify.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, ROLLOVER_FILL_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
 import {
   getLopFills,
   getLopMarkets,
@@ -101,6 +102,8 @@ export interface HandlerContext {
   logsUrl?: string;
   /** Override the logs fetch implementation (tests inject a stub). */
   logsFetch?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Inject a HyperSync source (tests / custom clients); default = the napi client via ENVIO_API_TOKEN. */
+  hyperSync?: HyperSyncSource;
 }
 
 function venueDepsOf(ctx: HandlerContext): VenueDeps {
@@ -198,6 +201,8 @@ function envelope(args: {
   block?: bigint;
   warnings?: Array<{ code: string; message: string }>;
   rpc?: { source: "explicit" | "default" | "chainlist"; host: string };
+  /** Explicit data-mode override (e.g. HyperSync-served raw logs = full-decentralized). */
+  mode?: "lite-decentralized" | "centralized" | "full-decentralized";
   ctx: HandlerContext;
 }): Envelope {
   const data = jsonSafe(args.data);
@@ -213,8 +218,12 @@ function envelope(args: {
       // Every backed result states its data mode [R1/§7]: chain reads go over RPC =
       // lite-decentralized; venue-backed reads/writes (api-phoenix) = centralized.
       // full-decentralized (HyperSync) is rejected explicitly at the handler gate.
-      ...(args.source === "chain" ? { mode: "lite-decentralized" as const } : {}),
-      ...(args.source === "indexer" || args.source === "service" ? { mode: "centralized" as const } : {}),
+      ...(args.mode
+        ? { mode: args.mode }
+        : {
+            ...(args.source === "chain" ? { mode: "lite-decentralized" as const } : {}),
+            ...(args.source === "indexer" || args.source === "service" ? { mode: "centralized" as const } : {}),
+          }),
       chainId: args.chainId,
       fetchedAt: nowIso(args.ctx),
       digest,
@@ -393,17 +402,96 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows"]);
 
+/**
+ * full-decentralized [C12]: the event-derived subset over HyperSync. Structural honesty:
+ * resting orders / RFQs emit no events — those resources are venue-only in EVERY mode.
+ */
+async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+  const kind = filters.kind ?? "orders";
+  const structural =
+    input.resource === "orderbook" || input.resource === "limit-order-markets"
+      ? `'${input.resource}' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)`
+      : input.resource === "flows" && kind === "orders"
+        ? "flows kind='orders' cannot be served in full-decentralized mode: pre-commitment rollover orders emit no events; use kind='fills' or kind='contracts', or centralized mode for the order feed"
+        : null;
+  if (structural) return unavailable(chainId, "mode_unavailable", structural, ctx);
+
+  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, process.env.ENVIO_API_TOKEN);
+  if ("error" in load) return unavailable(chainId, "hypersync_unavailable", load.error, ctx);
+  const hs = load.source;
+
+  try {
+    let items: Array<Record<string, unknown>>;
+    let archiveHeight: number | undefined;
+    if (input.resource === "markets") {
+      // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
+      const cfg = await resolveConfig();
+      const pms = new Set<string>();
+      const primary = cfg.defaults.deployments[String(chainId)];
+      if (primary) pms.add(primary.poolManager);
+      for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
+      if (pms.size === 0) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
+      const r = await hs.queryLogs({ fromBlock: 0, address: [...pms], topics: [[MARKET_CREATED_TOPIC]] });
+      archiveHeight = r.archiveHeight;
+      items = decodeMarketRows(r.logs);
+      if (filters.poolId) items = items.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase());
+    } else if (input.resource === "fills") {
+      const lop = LOP_ADDRESSES[chainId];
+      if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+      const r = await hs.queryLogs({ fromBlock: 0, address: [lop], topics: [[LOP_FILLED_TOPIC]] });
+      archiveHeight = r.archiveHeight;
+      items = decodeLopFillRows(r.logs);
+      if (filters.orderHash) items = items.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase());
+    } else {
+      // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
+      const { rollover } = await resolveRollover(chainId);
+      if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId}`, ctx);
+      if (kind === "fills") {
+        const topics: Array<string[] | null> = [ROLLOVER_FILL_TOPICS];
+        if (filters.orderDigest) topics.push([filters.orderDigest]);
+        const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.exactSettler, rollover.partialSettler], topics });
+        archiveHeight = r.archiveHeight;
+        items = decodeRolloverFillRows(r.logs);
+        if (filters.filler) items = items.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase());
+      } else {
+        const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.factory], topics: [[CLONE_DEPLOYED_TOPIC]] });
+        archiveHeight = r.archiveHeight;
+        items = decodeCloneRows(r.logs);
+        if (filters.account) items = items.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
+      }
+    }
+    return envelope({
+      state: "ok",
+      data: {
+        resource: input.resource,
+        ...(input.resource === "flows" ? { kind } : {}),
+        count: items.length,
+        items,
+        ...(archiveHeight !== undefined ? { archiveHeight } : {}),
+      },
+      chainId,
+      source: "chain",
+      mode: "full-decentralized",
+      ctx,
+    });
+  } catch (err) {
+    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`, ctx);
+  }
+}
+
 async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const filters = parseQueryFilters(input.filters);
 
   if (VENUE_RESOURCES.has(input.resource)) {
-    // These resources are served by the as-built venue (api-phoenix) — the centralized data
-    // mode. Mode is explicit, never a silent substitute [R1/§7]: requesting a decentralized
-    // mode for a venue-only resource fails loudly (full-decentralized/HyperSync is a later
-    // iteration; pre-commitment order flow emits no events and can never be decentralized).
+    // Explicit full-decentralized mode: serve the EVENT-DERIVED subset over HyperSync.
+    if (input.mode === "full-decentralized") {
+      return handleQueryHyperSync(input, filters, chainId, ctx);
+    }
+    // Default/centralized: the as-built venue (api-phoenix). Mode is explicit, never a silent
+    // substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
     if (input.mode !== undefined && input.mode !== "centralized") {
-      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed (centralized) in this iteration; omit mode or use 'centralized'`, ctx);
+      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (markets, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
     try {

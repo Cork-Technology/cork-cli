@@ -1,0 +1,16 @@
+{
+  "name": "hypersync-spike",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@envio-dev/hypersync-client": "^1.4.0",
+    "@envio-dev/hypersync-client-linux-arm64-gnu": "^1.4.0"
+  }
+}
