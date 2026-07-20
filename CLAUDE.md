@@ -125,7 +125,10 @@ querying it on chainId 1 without a vnet RPC yields `chain_read_failed`, by desig
 - **Prepare ≠ sign ≠ submit** [K1]. `cork_prepare_*` return unsigned bytes/typed-data. Nothing is
   signed or broadcast except `cork_submit`, which only relays a payload the caller already signed.
 - **Idempotency** [K2]. `cork_prepare_*` and `cork_submit` take a `clientRequestId` — reuse the same id
-  to make a retry idempotent; use a fresh id for a genuinely new request.
+  when retrying the same request; use a fresh id for a genuinely new request. Prepared artifacts are
+  deterministic for identical inputs + observed state + clock; deadline/expiry fields are
+  **wall-clock + duration** (owner ruling 2026-07-20), so bytes re-anchor in time on a later retry —
+  pin `ctx.nowSeconds` (or `at.block` for reads) when you need bit-identical replay.
 - **Never commit an RPC URL** — `CORK_RPC_URL` / `CORK_TEST_RPC` come from the environment only. The
   two built-in default endpoints (mainnet/Arbitrum, in `chain/rpc.ts`) are a deliberate committed
   exception (owner decision); don't add more committed endpoints.

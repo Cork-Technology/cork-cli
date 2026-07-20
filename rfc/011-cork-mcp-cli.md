@@ -258,7 +258,7 @@ otherwise cost lands on the write path. Everything beyond those three is on-dema
     "ChainId": {"type":"integer","enum":[1,42161,8453,11155111,49222],"description":"1=mainnet,42161=arbitrum,8453=base (rollover staging),11155111=sepolia,49222=cork-virtual-staging"},
     "DataMode":{"type":"string","enum":["centralized","lite-decentralized","full-decentralized"],"description":"explicit; never silent-fallback [§7]"},
     "Format":  {"type":"string","enum":["concise","full"],"default":"concise"},
-    "ClientRequestId":{"type":"string","minLength":8,"maxLength":128,"description":"caller-chosen idempotency key; retries with the same id are byte-safe [K2]"}
+    "ClientRequestId":{"type":"string","minLength":8,"maxLength":128,"description":"caller-chosen idempotency key — reuse it when retrying the same request; deadlines are wall-clock + duration, so bytes re-anchor in time on a later retry [K2]"}
   }
 }
 ```
@@ -404,7 +404,7 @@ human summary and pre-flight guards (whitelist, paused bitmap, expiry, deadline)
 ```json
 {
   "name":"cork_prepare_phoenix",
-  "description":"Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action (mint/deposit, swap/exercise coverage, unwind, withdraw/redeem) or a token-authority operation (Permit2 onboard, allowance revoke). Returns bytes intended for LATER signing — executes nothing [K1]. Use cork_prepare_orders for limit orders, cork_prepare_market for deployment. Retries with the same clientRequestId are byte-identical [K2].",
+  "description":"Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action (mint/deposit, swap/exercise coverage, unwind, withdraw/redeem) or a token-authority operation (Permit2 onboard, allowance revoke). Returns bytes intended for LATER signing — executes nothing [K1]. Use cork_prepare_orders for limit orders, cork_prepare_market for deployment. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds [K2].",
   "annotations":{"readOnlyHint":true,"idempotentHint":true},
   "inputSchema":{
     "type":"object","additionalProperties":false,
@@ -629,14 +629,23 @@ snapshot works with zero github.com access (honest caveat for Full-Decentralized
 
 ## 9. Determinism, Idempotency, Reconstruction (K2, K3)
 
-- **Determinism.** Given identical validated inputs and identical observed chain state, a
-  byte-producing tool returns identical canonical outputs and executable bytes. Local math (§5.2)
-  is deterministic integer arithmetic matched bit-for-bit against fork `eth_call`s in CI (§14).
+> **Deadline-basis ruling (2026-07-20, amends the paragraph below):** the deadline basis is the
+> **wall clock at call time** — `deadline = now + deadlineSeconds` (and order `expiry = now +
+> expirySeconds`), with the duration defaulted or caller-specified. So "byte-identical" holds for
+> identical inputs + identical observed state **+ the same clock**; a later retry with the same
+> `clientRequestId` legitimately re-anchors its deadline in time. Callers needing bit-identical
+> replay pin the clock (`ctx.nowSeconds`) or the block (`at.block`). A derived deadline-basis
+> (per-request-id anchoring) and the mismatch-surfacing digest store are NOT implemented and are
+> not v1 requirements.
+
+- **Determinism.** Given identical validated inputs, identical observed chain state, and the same
+  clock, a byte-producing tool returns identical canonical outputs and executable bytes. Local math
+  (§5.2) is deterministic integer arithmetic matched bit-for-bit against fork `eth_call`s in CI (§14).
 - **Derived idempotency.** `clientRequestId` (caller-chosen) keys idempotency for `cork_prepare_*`
-  and `cork_submit`. The canonical artifact digest = `keccak256` over the canonicalized
-  `(action, resolved-addresses, resolved-state-snapshot, deadline-basis)`. Two calls with the same
-  `clientRequestId` and the same resolved inputs return byte-identical artifacts; a mismatch is
-  surfaced, not silently re-minted.
+  and `cork_submit`: it deterministically derives order salts (and, in Phase 3, keys service-side
+  submission dedup). The canonical artifact digest = `keccak256` over the canonicalized envelope
+  data. Two calls with the same `clientRequestId`, the same resolved inputs, and the same clock
+  return byte-identical artifacts (see the ruling above for the clock term).
 - **Reconstruction / untrusted re-presentation.** When a caller hands back a stored artifact (e.g.
   to `cork_track`/`cork_submit`), the server **re-derives** it from first principles and compares
   digests before returning new executable bytes or accepting a submission (`ARTIFACT_DIGEST_MISMATCH`

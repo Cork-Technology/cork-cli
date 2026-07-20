@@ -100,7 +100,7 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
     issues,
     remediation:
       `Fix the listed field(s) and retry — all enums are closed (no free-form values). ` +
-      `Adapt the example below to your case; a retry with the same clientRequestId is idempotent.`,
+      `Adapt the example below to your case; reuse your clientRequestId when retrying the same request [K2].`,
     ...(example ? { example } : {}),
   };
 }

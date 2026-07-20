@@ -80,7 +80,7 @@ export const REGISTRY = [
     cliPath: ["prepare", "phoenix"],
     phase: 2,
     description:
-      "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Idempotent by clientRequestId [K2].",
+      "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2].",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: PreparePhoenixInput,
     output: Envelope,

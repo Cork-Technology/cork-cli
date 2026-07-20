@@ -48,4 +48,6 @@ export const ClientRequestId = z
   .string()
   .min(8)
   .max(128)
-  .describe("caller idempotency key; retries with the same id are byte-safe [K2]");
+  .describe(
+    "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry",
+  );
