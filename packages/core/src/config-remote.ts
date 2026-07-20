@@ -34,11 +34,31 @@ const DeploymentSchema = z
   })
   .strip();
 
+// Rollover venue contracts (rollover-private): the factory that self-deploys per-user clones and
+// the two ERC-7683 settlers. `settlerDomain` is the EIP-712 domain OrderData is signed under
+// (verifyingContract = the settler). `seededAtBlock` = the SettlerApproved seeding block — the
+// backfill start for event reconstruction (the factory itself deploys at most a few blocks earlier).
+const RolloverDeploymentSchema = z
+  .object({
+    factory: Address,
+    exactSettler: Address,
+    partialSettler: Address,
+    settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
+    seededAtBlock: z.number().int().nonnegative(),
+  })
+  .strip();
+export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
+
 const DefaultsSchema = z.object({
   schemaVersion: z.literal(1),
   updated: z.string(),
   deployments: z.record(z.string(), DeploymentSchema),
   lopAddresses: z.record(z.string(), Address),
+  // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
+  // Arbitrum "arbitrum-staging" shadow deployment the 2026Q3 rollover campaign runs against).
+  // Consumers must opt in by profile name; `deployments` stays the default read path.
+  deploymentProfiles: z.record(z.string(), z.record(z.string(), DeploymentSchema)).optional(),
+  rollover: z.record(z.string(), RolloverDeploymentSchema).optional(),
 });
 export type CorkDefaults = z.infer<typeof DefaultsSchema>;
 
@@ -189,4 +209,14 @@ export async function resolveDeployment(
   const cfg = await resolveConfig(deps);
   const deployment = cfg.defaults.deployments[String(chainId)] as CorkDeployment | undefined;
   return { deployment, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+}
+
+/** Rollover venue contracts for a chain (undefined where the rollover protocol isn't deployed). */
+export async function resolveRollover(
+  chainId: number,
+  deps?: ConfigDeps,
+): Promise<{ rollover: CorkRolloverDeployment | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  const cfg = await resolveConfig(deps);
+  const rollover = cfg.defaults.rollover?.[String(chainId)];
+  return { rollover, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
 }

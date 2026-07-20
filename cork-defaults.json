@@ -18,5 +18,25 @@
   "lopAddresses": {
     "1": "0x111111125421cA6dc452d289314280a0f8842A65",
     "42161": "0x111111125421cA6dc452d289314280a0f8842A65"
+  },
+  "deploymentProfiles": {
+    "42161": {
+      "arbitrum-staging": {
+        "poolManager": "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
+        "constraintAdapter": "0x248B24114D6e7df0b28AED21f7814cc0dBDB9120",
+        "corkAdapter": "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
+        "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+        "whitelistManager": "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A"
+      }
+    }
+  },
+  "rollover": {
+    "42161": {
+      "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
+      "exactSettler": "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
+      "partialSettler": "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+      "settlerDomain": { "name": "CorkSettler", "version": "1.0.0" },
+      "seededAtBlock": 484973917
+    }
   }
 }
