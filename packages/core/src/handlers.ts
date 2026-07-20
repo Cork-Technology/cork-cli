@@ -40,7 +40,8 @@ import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
-import { resolveDeployment as resolveDeploymentBuiltin } from "./config-remote.ts";
+import { resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
+import { buildRolloverIntent } from "./rollover.ts";
 
 export class ToolInputError extends Error {
   constructor(
@@ -425,9 +426,83 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
     return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash }, chainId, source: "config", ctx });
   }
 
-  // taker-fill needs the resting order from the orderbook; rollover-intent needs the CorkSettler
-  // ERC-7683 domain (rollover PR #161) — neither backend is wired in this iteration.
-  return unavailable(chainId, "needs_service", `prepare_orders '${action.type}' requires the orderbook/rollover service not wired in this iteration`, ctx);
+  if (action.type === "rollover-intent") {
+    const { rollover, warning: rolloverWarn } = await resolveRollover(chainId);
+    if (!rollover) {
+      return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One, 42161)`, ctx);
+    }
+    const warnings: Array<{ code: string; message: string }> = rolloverWarn ? [rolloverWarn] : [];
+
+    // Settler-kind pre-flight: the mode gate is enforced ON-CHAIN (ExactSettler reverts
+    // Settler__PartialFillsNotSupported on allowPartialFills:true and PartialSettler reverts
+    // Settler__ExactFillsNotSupported on false), so a mismatched order is signable but unfillable.
+    const settlerLc = action.settler.toLowerCase();
+    const kind = settlerLc === rollover.exactSettler.toLowerCase() ? "EXACT" : settlerLc === rollover.partialSettler.toLowerCase() ? "PARTIAL" : undefined;
+    if (kind === "EXACT" && action.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — use the PartialSettler ${rollover.partialSettler} or set allowPartialFills:false`, ctx);
+    }
+    if (kind === "PARTIAL" && !action.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — use the ExactSettler ${rollover.exactSettler} or set allowPartialFills:true`, ctx);
+    }
+    if (kind === undefined) {
+      warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (exact: ${rollover.exactSettler}, partial: ${rollover.partialSettler}) — the venue only admits factory-approved settlers` });
+    }
+
+    const openDeadline = BigInt(action.openDeadline);
+    const fillDeadline = BigInt(action.fillDeadline);
+    const orderSize = BigInt(action.orderSize);
+    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    if (orderSize === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
+    if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
+    if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
+
+    const built = buildRolloverIntent({
+      chainId,
+      user: input.account,
+      settler: action.settler,
+      rolloverContract: action.rolloverContract,
+      srcCstToken: action.srcCstToken,
+      dstCstToken: action.dstCstToken,
+      premiumToken: action.premiumToken,
+      srcPoolId: action.srcPoolId,
+      dstPoolId: action.dstPoolId,
+      orderSize,
+      minPremiumPerShare: BigInt(action.minPremiumPerShare),
+      openDeadline,
+      fillDeadline,
+      ...(action.minCaReceived !== undefined ? { minCaReceived: BigInt(action.minCaReceived) } : {}),
+      ...(action.minSharesOut !== undefined ? { minSharesOut: BigInt(action.minSharesOut) } : {}),
+      allowPartialFills: action.allowPartialFills,
+      allowUnderfill: action.allowUnderfill,
+      ...(action.premiumPaymentMode !== undefined ? { premiumPaymentMode: action.premiumPaymentMode } : {}),
+      ...(action.fillerHint !== undefined ? { fillerHint: action.fillerHint } : {}),
+      ...(action.exclusiveFiller !== undefined ? { exclusiveFiller: action.exclusiveFiller } : {}),
+      ...(action.orderSalt !== undefined ? { orderSalt: BigInt(action.orderSalt) } : {}),
+      ...(action.nonce !== undefined ? { nonce: BigInt(action.nonce) } : {}),
+      clientRequestId: input.clientRequestId,
+    });
+    return envelope({
+      state: "ok",
+      data: {
+        kind: "rollover-intent",
+        settler: action.settler,
+        ...(kind ? { settlerKind: kind } : {}),
+        typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
+        orderDigest: built.orderDigest,
+        rolloverIntentHash: built.rolloverIntentHash,
+        orderDataType: built.orderDataType,
+        venuePost: built.venuePost,
+        clientRequestId: input.clientRequestId,
+      },
+      chainId,
+      source: "config",
+      warnings,
+      ctx,
+    });
+  }
+
+  // taker-fill needs the resting order from the orderbook, which is not wired in this iteration.
+  return unavailable(chainId, "needs_service", `prepare_orders '${action.type}' requires the orderbook service not wired in this iteration`, ctx);
 }
 
 async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Envelope> {

@@ -51,6 +51,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_prepare_orders: [
     { title: "Signable maker order: sell 1 sUSDe for 1 vbUSDC", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-order-0001", action: { type: "maker-order", poolId: DEMO_POOL_ID, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", expirySeconds: 3600 } } },
     { title: "Cancel calldata for a resting order", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-cancel-0001", action: { type: "cancel", orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111", makerTraits: "0" } } },
+    { title: "Signable rollover order (Arbitrum, ExactSettler, all-or-nothing)", input: { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "demo-roll-0001", action: { type: "rollover-intent", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", rolloverContract: DEMO_ACCOUNT, srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1795000000", fillDeadline: "1795604800" } } },
   ],
   cork_prepare_market: [
     { title: "Deploy-wrapper artifact shape (gated: Q-REG)", input: { chainId: 1, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: SUSDE, referenceAsset: VBUSDC } } },
@@ -131,7 +132,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "maker-order": { status: "activated" },
       cancel: { status: "activated" },
       "taker-fill": { status: "specified", reason: "needs_service (orderbook)" },
-      "rollover-intent": { status: "specified", reason: "needs_service (CorkSettler)" },
+      "rollover-intent": { status: "activated", reason: "offline typed-data build; domain-separator parity proven vs both live Arbitrum settlers" },
     },
   },
   cork_prepare_market: { status: "specified", reason: "phase_gated (Q-REG: MarketRegistry surface unverified, Phase 4)" },

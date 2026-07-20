@@ -272,7 +272,12 @@ export const OrdersAction = z.discriminatedUnion("type", [
     minCaReceived: UintStr.optional(),
     minSharesOut: UintStr.optional(),
     allowPartialFills: z.boolean().default(false),
+    allowUnderfill: z.boolean().default(false),
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional(),
+    fillerHint: Address.optional(),
+    exclusiveFiller: Address.optional(),
+    orderSalt: UintStr.optional(),
+    nonce: UintStr.optional(),
   }),
 ]);
 export const PrepareOrdersInput = z.object({

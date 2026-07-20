@@ -33,29 +33,6 @@ const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
   { tool: "cork_prepare_phoenix", key: "authority-revoke", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-02", action: { type: "authority-revoke", token: T, spender: S } } },
   // cork_prepare_orders — service-backed variants
   { tool: "cork_prepare_orders", key: "taker-fill", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-03", action: { type: "taker-fill", orderHash: H } } },
-  {
-    tool: "cork_prepare_orders",
-    key: "rollover-intent",
-    input: {
-      chainId: 1,
-      account: A,
-      clientRequestId: "maturity-probe-04",
-      action: {
-        type: "rollover-intent",
-        settler: S,
-        rolloverContract: S,
-        srcPoolId: P,
-        dstPoolId: P,
-        srcCstToken: T,
-        dstCstToken: T,
-        premiumToken: T,
-        orderSize: "1",
-        minPremiumPerShare: "1",
-        openDeadline: "1",
-        fillDeadline: "2",
-      },
-    },
-  },
   // cork_track — simulate + service-backed subjects
   { tool: "cork_track", key: "simulate", input: { mode: "simulate", subject: { kind: "artifact", artifact: {} } } },
   { tool: "cork_track", key: "reconcile/orderHash", input: { mode: "reconcile", subject: { kind: "orderHash", orderHash: H } } },
