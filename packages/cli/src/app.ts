@@ -67,7 +67,7 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
           try {
             input = JSON.parse(opts.json);
           } catch (e) {
-            err += `invalid --json: ${(e as Error).message}\n`;
+            err += `${JSON.stringify({ error: { code: "invalid_json", tool: tool.name, message: `invalid --json: ${(e as Error).message}` } })}\n`;
             code = EXIT.invalid;
             return;
           }
@@ -78,11 +78,13 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
           out += `${JSON.stringify(envelope, null, 2)}\n`;
           code = envelope.state === "ok" ? EXIT.ok : envelope.state === "conflict" ? EXIT.conflict : EXIT.unavailable;
         } catch (e) {
+          // Errors are structured JSON on stderr (one object per line) with the same closed codes
+          // as the envelope, so scripts parse failures the same way they parse stdout.
           if (e instanceof ToolInputError) {
-            err += `invalid input for ${e.tool}: ${JSON.stringify(e.issues)}\n`;
+            err += `${JSON.stringify({ error: { code: "invalid_input", tool: e.tool, issues: e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example, suggestions: e.teaching.issues.filter((i) => i.suggestion) } : {}) } })}\n`;
             code = EXIT.invalid;
           } else {
-            err += `error: ${(e as Error).message}\n`;
+            err += `${JSON.stringify({ error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] } })}\n`;
             code = EXIT.error;
           }
         }

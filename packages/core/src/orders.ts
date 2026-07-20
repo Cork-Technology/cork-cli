@@ -4,12 +4,13 @@
 // The produced orderHash is proven equal to on-chain LOP.hashOrder(order) in the fork tests.
 import { encodeFunctionData, hashTypedData, keccak256, parseAbi, stringToHex, zeroAddress } from "viem";
 
-/** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin);
- *  same address on mainnet + arbitrum. */
-export const LOP_ADDRESSES: Record<number, `0x${string}`> = {
-  1: "0x111111125421cA6dc452d289314280a0f8842A65",
-  42161: "0x111111125421cA6dc452d289314280a0f8842A65",
-};
+import bundledDefaults from "../../../cork-defaults.json";
+
+/** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin).
+ *  Sourced from the bundled cork-defaults.json — no address literals in source. */
+export const LOP_ADDRESSES: Record<number, `0x${string}`> = Object.fromEntries(
+  Object.entries(bundledDefaults.lopAddresses).map(([k, v]) => [Number(k), v as `0x${string}`]),
+);
 
 // EIP-712 domain the deployed contract ACTUALLY uses — read empirically from its eip712Domain()
 // (ERC-5267): name "1inch Aggregation Router", version "6" (NOT the reference repo's LOP/"4").

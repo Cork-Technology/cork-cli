@@ -16,5 +16,8 @@ export default defineConfig({
     include: ["packages/*/test/**/*.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    // Unit tests must be deterministic offline: serve the bundled cork-defaults.json without
+    // attempting the GitHub fetch (config-remote.ts honors this).
+    env: { CORK_CONFIG_NO_FETCH: "1" },
   },
 });

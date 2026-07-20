@@ -208,6 +208,9 @@ CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test:live
 
 # Live RPC-resolver smoke (default + chainlist fallback, real network):
 CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
+
+# Agent evals (LLM-graded tool-surface quality; self-skips without a key):
+bun run eval               # see evals/README.md for grading, env knobs, held-out rule
 ```
 
 `CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) are read from the environment

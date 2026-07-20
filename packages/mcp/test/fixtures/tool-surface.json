@@ -1,0 +1,113 @@
+[
+  {
+    "name": "cork_query",
+    "description": "Read any Cork resource (markets, whitelist, orderbook, fills, flows, account state, protocol config). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
+    "descriptionTokensApprox": 95,
+    "inputSchemaSha256": "eccfedae42ac98e6d9d68853e188bcd901ba766267d1354bb4707a339f405c03",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_query",
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "cork_compute",
+    "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building. Example — How much cST + reference does 1 sUSDe out cost right now?: {\"params\":{\"kind\":\"cst-swap-rate\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsOut\":\"1000000000000000000\"}}",
+    "descriptionTokensApprox": 105,
+    "inputSchemaSha256": "ff97dd3e8924d69433090dcde3612d1b1a8985b97240566ed522659d5252abdb",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_compute",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_decode",
+    "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
+    "descriptionTokensApprox": 327,
+    "inputSchemaSha256": "75fb7586cb02a211f292cfafdcdc3a4081b8c54d2b76d9f287e7c32c313b2393",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_decode",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_capabilities",
+    "description": "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs; search → keyword to exact tool+variant+filled template. Progressive disclosure [C13]. Example — Find the right tool/variant for 'unwind': {\"search\":\"unwind\"}",
+    "descriptionTokensApprox": 66,
+    "inputSchemaSha256": "c02e17d1a374481ca28f5e67bece767701f6793d7449cf3af9c041d75380f31c",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_capabilities",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_prepare_phoenix",
+    "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Idempotent by clientRequestId [K2]. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
+    "descriptionTokensApprox": 155,
+    "inputSchemaSha256": "397389158a3e9c282b63c9f75a9cc146f5e288d87176ed7761652a8a2b68e250",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_prepare_phoenix",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_prepare_orders",
+    "description": "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit. Example — Signable maker order: sell 1 sUSDe for 1 vbUSDC: {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-order-0001\",\"action\":{\"type\":\"maker-order\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"side\":\"SELL\",\"makerAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"takerAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"makingAmount\":\"1000000000000000000\",\"takingAmount\":\"1000000\",\"expirySeconds\":3600}}",
+    "descriptionTokensApprox": 172,
+    "inputSchemaSha256": "c4dc4110d7a1536d0e2f081a4d570f18adaaf15f46aa69229b742de15f6832ff",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_prepare_orders",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_prepare_market",
+    "description": "Build unsigned market-deployment artifacts. STATUS: Phase 4, schema PROVISIONAL — MarketRegistry surface unverified [Q-REG]. Example — Deploy-wrapper artifact shape (gated: Q-REG): {\"chainId\":1,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-wrapper\",\"collateralAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"referenceAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\"}}",
+    "descriptionTokensApprox": 98,
+    "inputSchemaSha256": "e2de28601260717c7c14a6f46d431bb9620bbe359f1c81c51f6bfbe46ae4fe50",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_prepare_market",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_track",
+    "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7]. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
+    "descriptionTokensApprox": 78,
+    "inputSchemaSha256": "d00297e4a9c778ea26fca3496f17ff382915787a245f45237b6b17848a11e58a",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_track",
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "cork_submit",
+    "description": "Relay a CALLER-SIGNED limit order to the Cork orderbook service. The only side-effecting tool. Transmits an already-signed payload; never signs [K1]. Idempotent by clientRequestId [K2]. Example — Relay a caller-signed order (gated: needs orderbook service): {\"chainId\":1,\"clientRequestId\":\"demo-submit-0001\",\"signedOrder\":{\"…signed order fields…\":\"\"},\"signature\":\"0x00\"}",
+    "descriptionTokensApprox": 93,
+    "inputSchemaSha256": "dea655dfbed2258dbb6466aa3cf89a173651b90d83f2ec762239ac63d876b2fc",
+    "outputSchemaSha256": "77672d19bbf07136531f6f168cd911fbd06a09d57c30fa93376992fcdd8f9e75",
+    "annotations": {
+      "title": "cork_submit",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  }
+]

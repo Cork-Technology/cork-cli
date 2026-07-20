@@ -252,6 +252,21 @@ describe("input hardening + format semantics", () => {
     ).rejects.toBeInstanceOf(ToolInputError);
   });
 
+  it("query data mode: unsupported modes fail loudly; chain results are labeled", async () => {
+    const gated = await runTool("cork_query", { resource: "market", mode: "centralized", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    expect(gated.state).toBe("unavailable");
+    expect(gated.warnings[0]?.code).toBe("mode_unavailable");
+
+    // chain-backed envelopes state their mode (lite-decentralized), config ones stay unlabeled
+    const chainEnv = await runTool("cork_track", { mode: "reconcile", subject: { kind: "txHash", txHash: `0x${"a".repeat(64)}` }, format: "concise" }, {
+      nowSeconds: NOW,
+      resolveRpc: async () => ({ url: "https://x.example/rpc", source: "default" as const, client: { getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }) } as never }),
+    });
+    expect(chainEnv.provenance.mode).toBe("lite-decentralized");
+    const cfgEnv = await runTool("cork_query", { resource: "protocol-config", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    expect(cfgEnv.provenance.mode).toBeUndefined();
+  });
+
   it("track mode 'simulate' is honestly phase-gated (not silently treated as verify)", async () => {
     const env = await runTool("cork_track", { mode: "simulate", subject: { kind: "artifact", artifact: { a: 1 } }, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");

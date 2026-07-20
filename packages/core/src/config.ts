@@ -12,35 +12,22 @@ export interface CorkDeployment extends CorkAddresses {
   whitelistManager?: `0x${string}`;
 }
 
-// Chain 1. Verified against notes/research/cork-contracts-domain.md + Sourcify (C10); corkAdapter
-// re-derivable via CREATE2 (CREATE2_ATTESTATIONS below). The Tenderly vnet forks mainnet, so these
-// match there too.
-export const MAINNET_DEPLOYMENT: Required<CorkDeployment> = {
-  poolManager: "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
-  constraintAdapter: "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A",
-  corkAdapter: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
-  bundler3: "0x6566194141eefa99Af43Bb5Aa71460Ca2Dc90245",
-  whitelistManager: "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE",
-};
+// Addresses live in the canonical `cork-defaults.json` at the repo root — the runtime fetches the
+// latest copy from GitHub (config-remote.ts) and this bundled copy is the distribution fallback.
+// Source files carry NO address literals. Provenance of the current values: chain 1 verified via
+// Sourcify + CREATE2 (C10); chain 42161 read-path empirically derived 2026-07-17 (Cork API
+// poolManagerAddress + debug_traceCall calibration for the constraintAdapter; tx-path contracts
+// unknown → omitted, handlers gate per capability).
+import bundledDefaults from "../../../cork-defaults.json";
 
-// Chain 42161 — partial (read path only). Empirically derived 2026-07-17:
-//  - poolManager from the Cork API (api-phoenix.cork.tech/v1/pools?chainId=42161 →
-//    poolManagerAddress), code verified on-chain (ERC-1967 proxy, same shape as mainnet).
-//  - constraintAdapter discovered by debug_traceCall of PM.swapRate(poolId): on mainnet the
-//    identical call-tree position is the known adapter (0xCCcC…F03A), on Arbitrum it is this
-//    address (proxy → impl 0x64ecde96…, same delegate pattern). Code verified on-chain.
-//  - corkAdapter/bundler3/whitelistManager: NOT yet discoverable (mainnet vanity addresses have no
-//    code on Arbitrum; no whitelist-enabled pools or bundler flows exist to trace). Left unset →
-//    prepare_phoenix and pool-whitelist on 42161 gate with `unknown_deployment` until sourced.
-export const ARBITRUM_DEPLOYMENT: CorkDeployment = {
-  poolManager: "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
-  constraintAdapter: "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E",
-};
+const bundledDeployments = bundledDefaults.deployments as Record<string, CorkDeployment>;
 
-export const DEPLOYMENTS: Record<number, CorkDeployment> = {
-  1: MAINNET_DEPLOYMENT,
-  42161: ARBITRUM_DEPLOYMENT,
-};
+export const MAINNET_DEPLOYMENT: Required<CorkDeployment> = bundledDeployments["1"] as Required<CorkDeployment>;
+export const ARBITRUM_DEPLOYMENT: CorkDeployment = bundledDeployments["42161"]!;
+
+export const DEPLOYMENTS: Record<number, CorkDeployment> = Object.fromEntries(
+  Object.entries(bundledDeployments).map(([k, v]) => [Number(k), v]),
+);
 
 export function deploymentFor(chainId: number): CorkDeployment | undefined {
   return DEPLOYMENTS[chainId];

@@ -2,15 +2,21 @@
   "name": "cork-helper-cli",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
-  "engines": { "bun": ">=1.3" },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "bun": ">=1.3"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:unit": "vitest run --exclude '**/{fork-parity,bundle-sim,rpc-live}.test.ts'",
-    "test:live": "vitest run packages/core/test/fork-parity.test.ts packages/core/test/bundle-sim.test.ts packages/core/test/rpc-live.test.ts"
+    "test:live": "vitest run packages/core/test/fork-parity.test.ts packages/core/test/bundle-sim.test.ts packages/core/test/rpc-live.test.ts",
+    "eval": "bun evals/run.ts"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "@types/node": "^22.10.0",
     "ajv": "^8.17.1",
     "typescript": "^5.7.2",

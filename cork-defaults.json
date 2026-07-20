@@ -1,0 +1,22 @@
+{
+  "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
+  "schemaVersion": 1,
+  "updated": "2026-07-20",
+  "deployments": {
+    "1": {
+      "poolManager": "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
+      "constraintAdapter": "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A",
+      "corkAdapter": "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
+      "bundler3": "0x6566194141eefa99Af43Bb5Aa71460Ca2Dc90245",
+      "whitelistManager": "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE"
+    },
+    "42161": {
+      "poolManager": "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
+      "constraintAdapter": "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E"
+    }
+  },
+  "lopAddresses": {
+    "1": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "42161": "0x111111125421cA6dc452d289314280a0f8842A65"
+  }
+}

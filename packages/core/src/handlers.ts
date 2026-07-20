@@ -5,7 +5,12 @@
 import { keccak256, stringToHex } from "viem";
 import {
   Address,
+  buildTeaching,
   type ChainId,
+  MATURITY,
+  TOOL_EXAMPLES,
+  type Teaching,
+  type ToolName,
   ComputeInput,
   DecodeInput,
   Envelope,
@@ -33,12 +38,15 @@ import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuilti
 import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
-import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, deploymentFor, type CorkDeployment } from "./config.ts";
+import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
+import { resolveDeployment as resolveDeploymentBuiltin } from "./config-remote.ts";
 
 export class ToolInputError extends Error {
   constructor(
     public tool: string,
     public issues: unknown,
+    /** Agent-actionable guidance: per-issue expected/received, remediation, corrected example. */
+    public teaching?: Teaching,
   ) {
     super(`invalid input for ${tool}`);
     this.name = "ToolInputError";
@@ -65,6 +73,16 @@ export interface HandlerContext {
 /** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver). */
 async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<ResolvedRpc | null> {
   return (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
+}
+
+/**
+ * Resolve the deployment for a chain: ctx override -> remote-first defaults (GitHub-fetched,
+ * TTL-cached, bundled fallback). Returns any config-sourcing warning to append to the envelope.
+ */
+async function getDep(ctx: HandlerContext, chainId: number): Promise<{ dep: CorkDeployment | undefined; depWarn: Array<{ code: string; message: string }> }> {
+  if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
+  const r = await resolveDeploymentBuiltin(chainId);
+  return { dep: r.deployment, depWarn: r.warning ? [r.warning] : [] };
 }
 
 /** Transparency warning when chain reads fell back to a community RPC (not the configured default). */
@@ -144,6 +162,10 @@ function envelope(args: {
     warnings: args.warnings ?? [],
     provenance: {
       source: args.source,
+      // Every chain-backed result states its data mode [R1/§7]: all chain reads today go over
+      // RPC (built-in default / chainlist / explicit) = lite-decentralized. centralized and
+      // full-decentralized are rejected explicitly at the handler gate, never silently served.
+      ...(args.source === "chain" ? { mode: "lite-decentralized" as const } : {}),
       chainId: args.chainId,
       fetchedAt: nowIso(args.ctx),
       digest,
@@ -225,12 +247,12 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
 
   // Chain-backed kinds need an RPC + addresses.
   if (p.kind === "cst-swap-rate" || p.kind === "unwind-rate" || p.kind === "impairment-floor") {
-    const dep = ctx.deployment ?? deploymentFor(chainId);
+    const { dep, depWarn } = await getDep(ctx, chainId);
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", `${p.kind} needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
     const client = resolved.client;
-    const w = rpcWarn(resolved);
+    const w = [...rpcWarn(resolved), ...depWarn];
     const rpc = rpcProvenance(input.format, resolved);
     const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
     const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
@@ -274,13 +296,18 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): { poolId?:
 
 async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
-  const dep = ctx.deployment ?? deploymentFor(chainId);
+  // Data mode is explicit, never a silent fallback [R1/§7]: the only mode served today is
+  // lite-decentralized (RPC). Requesting an unwired mode fails loudly instead of being ignored.
+  if (input.mode !== undefined && input.mode !== "lite-decentralized") {
+    return unavailable(chainId, "mode_unavailable", `data mode '${input.mode}' is not wired in this iteration (centralized indexer / full-decentralized HyperSync pending); omit mode or use 'lite-decentralized'`, ctx);
+  }
+  const { dep, depWarn } = await getDep(ctx, chainId);
   const filters = parseQueryFilters(input.filters);
 
   // protocol-config is pure config (no RPC needed).
   if (input.resource === "protocol-config") {
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
-    return envelope({ state: "ok", data: { chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", ctx });
+    return envelope({ state: "ok", data: { chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", warnings: depWarn, ctx });
   }
 
   const chainResources = new Set(["market", "account-state", "pool-whitelist"]);
@@ -298,7 +325,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
   if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
 
   const client = resolved.client;
-  const w = rpcWarn(resolved);
+  const w = [...rpcWarn(resolved), ...depWarn];
   const rpc = rpcProvenance(input.format, resolved);
   const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
 
@@ -424,7 +451,7 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
   }
 
   // chain-authoritative subjects need an RPC.
-  const dep = ctx.deployment ?? deploymentFor(chainId);
+  const { dep, depWarn } = await getDep(ctx, chainId);
   if (subj.kind === "marketRef") {
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
     const resolved = await getRpc(ctx, chainId);
@@ -440,12 +467,12 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
         chainId,
         source: "chain",
         block: s.blockNumber,
-        warnings: idMatches ? rpcWarn(resolved) : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved)],
+        warnings: idMatches ? [...rpcWarn(resolved), ...depWarn] : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved), ...depWarn],
         ...rpc,
         ctx,
       });
     } catch (err) {
-      return chainReadFailed(chainId, err, rpcWarn(resolved), ctx, resolved);
+      return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...depWarn], ctx, resolved);
     }
   }
 
@@ -476,7 +503,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
   const def = toolByName(name);
   if (!def) throw new ToolInputError(name, `unknown tool: ${name}`);
   const parsed = def.input.safeParse(rawInput);
-  if (!parsed.success) throw new ToolInputError(name, parsed.error.issues);
+  if (!parsed.success) throw new ToolInputError(name, parsed.error.issues, buildTeaching(name as ToolName, parsed.error.issues, rawInput));
   const chainIdOf = (x: unknown): ChainId => (x as { chainId?: ChainId }).chainId ?? 1;
 
   switch (name) {
@@ -500,13 +527,13 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
           ctx,
         });
       }
-      const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `ch ${t.cliPath.join(" ")}`, phase: t.phase, description: t.description, annotations: t.annotations });
+      const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `ch ${t.cliPath.join(" ")}`, phase: t.phase, maturity: MATURITY[t.name], description: t.description, annotations: t.annotations });
 
       // search: keyword -> matching tools (name/cli/description), with the filled input schema.
       if (input.search) {
         const q = input.search.toLowerCase();
         const matches = REGISTRY.filter((t) => `${t.name} ${t.cliPath.join(" ")} ${t.description}`.toLowerCase().includes(q));
-        return envelope({ state: "ok", data: { query: input.search, matches: matches.map((t) => ({ ...card(t), inputSchema: inputJsonSchema(t.name) })) }, chainId: 1, source: "config", ctx });
+        return envelope({ state: "ok", data: { query: input.search, matches: matches.map((t) => ({ ...card(t), examples: TOOL_EXAMPLES[t.name], inputSchema: inputJsonSchema(t.name) })) }, chainId: 1, source: "config", ctx });
       }
 
       // topic: a tool name (with or without cork_ prefix) or cli leaf -> that tool's full doc.
@@ -514,7 +541,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         const key = input.topic.toLowerCase();
         const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key);
         if (!t) return unavailable(1, "unknown_topic", `no tool matches topic '${input.topic}'; try search or omit args for the full list`, ctx);
-        return envelope({ state: "ok", data: { ...card(t), inputSchema: inputJsonSchema(t.name), output: "Envelope" }, chainId: 1, source: "config", ctx });
+        return envelope({ state: "ok", data: { ...card(t), examples: TOOL_EXAMPLES[t.name], inputSchema: inputJsonSchema(t.name), output: "Envelope" }, chainId: 1, source: "config", ctx });
       }
 
       const data = REGISTRY.map(card);
@@ -536,7 +563,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       return handleCompute(parsed.data as ComputeInput, ctx);
     case "cork_prepare_phoenix": {
       const input = parsed.data as PreparePhoenixInput;
-      const dep = ctx.deployment ?? deploymentFor(input.chainId);
+      const { dep, depWarn } = await getDep(ctx, input.chainId);
       if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
       const { corkAdapter, bundler3 } = dep;
       if (!corkAdapter || !bundler3) {
@@ -548,7 +575,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         return unavailable(input.chainId, "phase_gated", `token-authority op '${input.action.type}' is not built in this iteration`, ctx);
       }
       const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
-      const warnings: Array<{ code: string; message: string }> = [];
+      const warnings: Array<{ code: string; message: string }> = [...depWarn];
       let funding: Call[] = [];
       const mode = input.fundingMode as FundingMode;
 

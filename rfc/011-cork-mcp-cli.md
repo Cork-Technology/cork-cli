@@ -136,10 +136,16 @@ the same release, so they cannot drift.
   hard-fail with a copy-pasteable corrected example (never hang CI).
 - **Automation:** `--request-id` (surfaces `clientRequestId`), `--dry-run` (print what would be
   sent, exit 0), `--wait [--timeout]` (block until confirmed), `--output ndjson` for long lists.
-- **Exit-code contract (the surface §14 parity-tests):** `0` success · `1` invalid input · `2`
-  unavailable/prerequisite · `3` conflict (chain-vs-service disagreement, K7) · `4`
-  transport/upstream failure. Errors are JSON on stderr with the same closed codes as the MCP lane
-  (§6); stdout stays pure data.
+- **Exit-code contract (the surface §14 parity-tests; renumbered 2026-07-20 to match the shipped
+  implementation — this table is canonical, earlier drafts of this section are superseded):**
+  `0` success · `1` unexpected/internal error (incl. transport failures that escape the envelope) ·
+  `2` invalid input (schema rejection or malformed `--json`) · `3` unavailable (honest gating:
+  requires_rpc / needs_* / phase_gated / chain_read_failed / pool_not_found) · `4` conflict
+  (chain-vs-service disagreement, K7). Once a tool is dispatched, errors are structured JSON on
+  stderr — one object per line, `{"error":{"code","tool",…}}` with the same closed codes as the
+  MCP lane (§6): `invalid_json`, `invalid_input` (carries the validation issues), `internal_error`.
+  CLI-usage errors from the command parser (unknown command, `--help`) remain human text. stdout
+  stays pure data (the envelope) in every case.
 - **Delivery:** the read/math CLI ships with Phase 1; write subcommands track their MCP phase
   (§11).
 
@@ -204,6 +210,11 @@ TTL + provenance, CREATE2-verifiable, never hardcoded **[C10]**; enrichment tabl
 against config/deployment.
 
 ### Cross-cutting engineering [CONV]
+> **Runtime amendment (ratified 2026-07-20):** the implementation is **Bun-only** (`engines: bun>=1.3`).
+> The sources use TypeScript parameter properties + `.ts` import specifiers, which Node's native
+> type-stripping rejects — "Node LTS primary" below is superseded; a Node-runnable build would
+> require an emit step and is deliberately not a v1 requirement.
+
 TS strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`); **one schema source**
 (zod v4) → MCP schemas + CLI flags + TS types; viem/abitype at the typed boundary; optional
 napi-rs/alloy addon for fork orchestration / embedded HyperSync / heavy math; HyperSync via the

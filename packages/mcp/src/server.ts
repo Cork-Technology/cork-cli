@@ -5,7 +5,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
+import { descriptionExample, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
 
 // All tools return the same envelope; advertise it once so clients can rely on structuredContent.
@@ -22,7 +22,9 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: REGISTRY.map((t) => ({
       name: t.name,
-      description: t.description,
+      // One worked example inline (shipped input examples measurably raise parameter accuracy);
+      // the full example set + filled templates live behind cork_capabilities [C13].
+      description: t.description + descriptionExample(t.name),
       inputSchema: inputJsonSchema(t.name) as { type: "object" },
       outputSchema: ENVELOPE_SCHEMA,
       annotations: {
@@ -46,16 +48,20 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       };
     } catch (err) {
       const invalid = err instanceof ToolInputError;
-      const message = invalid
-        ? `invalid input for ${(err as ToolInputError).tool}: ${JSON.stringify((err as ToolInputError).issues)}`
-        : err instanceof Error
-          ? err.message.split("\n")[0]!
-          : String(err);
-      // Even the failure path honors the advertised outputSchema: emit a minimal error envelope
-      // as structuredContent so strict clients never see a schema-less error result.
+      const teaching = invalid ? (err as ToolInputError).teaching : undefined;
+      const message = teaching
+        ? `${teaching.summary}. ${teaching.remediation}${teaching.example ? ` Example — ${teaching.example.title}: ${JSON.stringify(teaching.example.input)}` : ""}`
+        : invalid
+          ? `invalid input for ${(err as ToolInputError).tool}: ${JSON.stringify((err as ToolInputError).issues)}`
+          : err instanceof Error
+            ? err.message.split("\n")[0]!
+            : String(err);
+      // Even the failure path honors the advertised outputSchema: a minimal error envelope as
+      // structuredContent, with the teaching payload (issues/remediation/corrected example) as its
+      // data so the agent's next call can succeed without a doc lookup [v2 §5.4].
       const errorEnvelope = {
         state: "unavailable" as const,
-        data: null,
+        data: teaching ?? null,
         warnings: [{ code: invalid ? "invalid_input" : "internal_error", message }],
         provenance: { source: "config" as const, chainId: 1 as const, fetchedAt: new Date().toISOString() },
         schemaVersion: SCHEMA_VERSION,

@@ -74,6 +74,7 @@ Warning codes you will encounter:
 | `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
 | `phase_gated` | Variant not implemented in this iteration (incl. `cork_submit`, `track mode:"simulate"`). |
 | `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |
+| `mode_unavailable` | An explicitly requested data mode (`centralized`/`full-decentralized`) isn't wired yet — omit `mode` or use `lite-decentralized`. |
 | `unknown_topic` / `no_lop` | Capabilities topic not found / no 1inch LOP deployment for the chain. |
 | `receipt_not_found` | txHash unknown/pending at the RPC (a normal outcome, not a failure). |
 | `rpc_fallback` | Informational on `ok`: the default RPC was down, a chainlist public endpoint served the read. |
@@ -85,8 +86,11 @@ CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema o
 
 Every tool's input takes an optional `format`: `"concise"` (default) or `"full"`. `"full"` adds
 `provenance.rpc = { source: explicit|default|chainlist, host }` on chain-backed reads — use it when
-you need to know which endpoint served the data. Some schema fields are accepted but reserved for
-later phases (`cork_query` `mode`/`cursor`/`pageSize`, `cork_compute` `at.timestamp`,
+you need to know which endpoint served the data. Chain-backed results also state their data mode:
+`provenance.mode = "lite-decentralized"` (all reads go over RPC today). `cork_query mode` is honored
+explicitly — requesting `centralized`/`full-decentralized` returns `unavailable`/`mode_unavailable`
+(never a silent substitute) until those backends are wired. Some schema fields are accepted but
+reserved for later phases (`cork_query` `cursor`/`pageSize`, `cork_compute` `at.timestamp`,
 `cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
 
 ## RPC resolution (chain-backed tools work by default)
@@ -128,8 +132,48 @@ querying it on chainId 1 without a vnet RPC yields `chain_read_failed`, by desig
 - **Math is bit-exact and empirically verified** against live on-chain reads (wei-for-wei). Trust the
   tool's numbers over hand-derived ones.
 
+## Address config: remote-first with a bundled fallback
+
+Deployment addresses are NOT hardcoded in source. `cork-defaults.json` (repo root) is the canonical
+address file; `packages/core/src/config-remote.ts` resolves it **remote-first**: fetch the latest
+from the GitHub repo (raw.githubusercontent.com, override `CORK_DEFAULTS_URL`) → validate with a
+strict zod schema (tampered/unexpected content is rejected) → cache to disk with a 1 h TTL
+(`~/.cache/cork-helper-cli/cork-defaults.json`, override `CORK_CONFIG_CACHE_FILE`). If the fetch
+fails (repo private, offline), the tool serves the **bundled copy** and adds a `config_fetch_failed`
+warning telling the user to use an authenticated GitHub MCP server or `gh` CLI with a whitelisted
+account, or rely on the bundled fallback. `CORK_CONFIG_NO_FETCH=1` skips fetching entirely (tests
+set this via `vitest.config.ts`). Never hand-edit addresses in TS — edit `cork-defaults.json`.
+
+## Discoverability: examples, maturity, teaching errors
+
+- **Worked examples** live in `packages/schemas/src/examples.ts` (`TOOL_EXAMPLES`, all validated by
+  tests) — every tool description advertises one inline, and `cork_capabilities` search/topic return
+  the full set. The demo poolId/account there are the canonical fixture values; the Foundry script
+  `experiments/fork-harness/script/DeployDemoPool.s.sol` deploys that pool on a Tenderly virtual
+  mainnet via timelock impersonation (`--unlocked --sender 0x7CcC…89D9`).
+- **Maturity** (`MATURITY` map, same file): per-tool + per-variant `activated | implemented |
+  specified` with a reason code — surfaced through `cork_capabilities`, matching its "maturity map"
+  contract. Gated variants say so in the tool description.
+- **Teaching errors** (`packages/schemas/src/teaching.ts`): schema failures return structured
+  issues (`path`/`expected`/`received`), a levenshtein "did you mean …?" suggestion, remediation
+  text, and a corrected example that itself validates — on MCP in the error envelope, on CLI as
+  JSON on stderr.
+
+## Evals gate the tool surface
+
+`evals/README.md` is the contract. Layer A (always-on vitest): example/teaching/maturity tests plus
+the **surface-drift gate** (`packages/mcp/test/surface-drift.test.ts`) — any change to advertised
+names/descriptions/schemas fails CI until the fixture is deliberately regenerated
+(`UPDATE_SURFACE=1`). Layer B (`bun run eval`, needs an Anthropic key; self-skips otherwise): a
+fresh agent gets only the 9 tool definitions and must complete ~20 tasks against a stubbed chain;
+graded programmatically on tool selection, parameter accuracy, outcome state, efficiency, and
+error recovery. **Never tune descriptions/examples against the 5 held-out tasks.** Workflow for a
+surface change: edit → run Layer B → regenerate the drift fixture.
+
 ## Layout
 
-`packages/schemas` (zod v4 source of truth + registry) · `packages/core` (math ports, chain reads,
-Bundler3 encode/decode, `runTool` dispatch) · `packages/mcp` (stdio server) · `packages/cli` (commander
-projection). Tests: `packages/core/test/` (unit + `fork-parity`/`bundle-sim` vnet suites).
+`packages/schemas` (zod v4 source of truth + registry, examples/maturity/teaching) · `packages/core`
+(math ports, chain reads, Bundler3 encode/decode, remote config, `runTool` dispatch) · `packages/mcp`
+(stdio server) · `packages/cli` (commander projection) · `evals/` (agent-eval suite). Tests:
+`packages/core/test/` (unit + `fork-parity`/`bundle-sim` vnet suites), `packages/mcp/test/`
+(integration + surface-drift gate), `packages/schemas/test/`.
