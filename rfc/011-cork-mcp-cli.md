@@ -556,6 +556,16 @@ human summary and pre-flight guards (whitelist, paused bitmap, expiry, deadline)
 }
 ```
 
+**Amendment 2026-07-20 (ratified, owner decision):** `cork_submit` expands from LOP-only to **all
+off-chain venue writes** — a discriminated `action` union of `lop-order`, `rfq-open`, `rfq-answer`,
+and `rollover-order`, each an HTTPS POST to the as-built venue (§7 amendment). Every variant
+relays a caller-authored (and, where the venue verifies it, caller-signed) payload — [K1] intact:
+the tool never signs and never broadcasts on-chain. `clientRequestId` maps onto the venue's
+`request_id` idempotency (same-body replay → 200, different body → 409), preserving [K2] on the
+wire. The concrete input schema lands with the Phase-3 implementation and is eval-gated per §13/§14
+(surface-drift fixture + Layer B before regeneration); design detail in
+`notes/rollover-venue-plan.md` §3 (R1).
+
 **Client-adaptive presentation (not semantics).** On `initialize`, the server reads `clientInfo`
 against a versioned profile table and MAY adapt **presentation only**: schema dialect (strict
 `oneOf` canonical; a pre-flattened rendering only for profiled weak-`oneOf` clients),
@@ -613,6 +623,20 @@ response's `provenance.mode`+`source` states which produced it):
 
 Backfills start at block **24134627** (first core deploy), not the config's
 `history_last_deployment_block` (24238826 = last) (D3/C10).
+
+**Amendment 2026-07-20 (ratified; see §16 and `notes/rollover-venue-plan.md`):** the
+`centralized` backend is now concrete and as-built — `api-phoenix.cork.tech/v1` serves
+`/v1/limit-orders/{orderbook,fills,markets}`, `/v1/rfqs`, and `/v1/rollover/{orders,fills,contracts}`
+(live on Arbitrum since 2026-07-20). Within decentralized modes the division of labor is:
+**HyperRPC** (token-gated read-only JSON-RPC, `https://{chainId}.rpc.hypersync.xyz/<token>`) serves
+the targeted `eth_getLogs` reconstruction inside `cork_track` reconcile [K7]; **HyperSync** (query
+API, napi client) serves bulk-historical `cork_query` in `full-decentralized` mode. Empirical
+constraints (probed 2026-07-20): tokenless HyperRPC is **hard-rejected** (not merely
+rate-limited); neither surface has `eth_call`, so live state stays on ordinary RPC; ordinary
+public RPCs refuse historical log ranges (archive-gated or ≤10k-block-capped), which is precisely
+the gap these fill. Structural limit disclosed to callers: **RFQs, RFQ answers, and
+signed-but-unfilled orders emit no events** — the pre-commitment feed is venue-only and no data
+mode can decentralize it.
 
 ## 8. Config / Address Sourcing (C10)
 
@@ -676,7 +700,14 @@ CANCELLED | EXPIRED` from `remainingMakingAmount` + invalidator state (C5).
   verify/simulate. Token authority. Bundler3 bundle builder byte-verified against captured txs.
 - **Phase 3 (orders + submission):** `cork_prepare_orders`, `cork_submit`, `cork_compute`
   dutch-auction-price (Fusion) + rollover-premium-floor + rfq-quote. `cork_track` reconcile +
-  submission state machine.
+  submission state machine. *Amendment 2026-07-20: Phase 3 executes **rollover-first** in
+  sub-phases R0–R4 (ratified plan: `notes/rollover-venue-plan.md` §3) — R0 offline
+  rollover-intent typed-data (CorkSettler domain, local `rolloverIntentHash` recompute [K3]);
+  R1 centralized venue datasource (query flows/orderbook + the expanded `cork_submit`, §5.9
+  amendment); R2 HyperRPC verification leg in `cork_track` [K7] with an `indexer_lag` freshness
+  window (~75 s Arbitrum finality); R3 HyperSync `full-decentralized` query (gated on a Bun/napi
+  spike); R4 RFQ+LOP completion (`quote_ref` + `extension` on maker-order, numbers-contract
+  teaching errors).*
 - **Phase 4 (deployment + Safe + hosted hardening):** `cork_prepare_market` (once Q-REG resolves),
   Safe support (one exact config first), hosted-production hardening from §12 as triggered.
 
@@ -748,8 +779,12 @@ baseline on the held-out set. Descriptions are code — they change only through
 - **Q-REG (C11, blocking Phase 4):** MarketRegistry real surface — `deploy(ca,ref)` idempotency,
   `lookupWrapper`, `WRAPPER_FACTORY` — pending `market-registry-api`. `cork_prepare_market` stays
   provisional until confirmed.
-- **Q-ROLL (C8):** is there an off-chain filler-auction (frontend re-posting stepped premiums)
-  behind the "rollover prices over time" requirement? On-chain premium is a fixed floor.
+- **Q-ROLL (C8)** *(largely RESOLVED 2026-07-20)*: the off-chain half is the **rollover venue**
+  (`cork-knowledge/rfcs/rollover-venue-interface.md`, as-built): signed orders POST to
+  `api-phoenix.cork.tech/v1/rollover`, solvers poll `?fillable=true`, the indexer merges on-chain
+  lifecycle into the same rows. On-chain premium remains a fixed floor (`minPremiumPerShare`);
+  there is no price walk — a new premium means a new signed order. Remaining sub-questions moved
+  to §16.
 - **Q-FUSION-LIVE (C6):** when/where does Cork ship Fusion Dutch orders to production? The
   decode/price path is spec'd but no live Fusion order was observable.
 - **Q-CHAIN (C5/C9):** canonical production chain for limit orders (mainnet vs Arbitrum vs the
@@ -760,3 +795,60 @@ baseline on the held-out set. Descriptions are code — they change only through
 - **Q-RFQ (R2):** the RFQ config pipeline (per-market LLM-assessed config, 50–100 pre-seeded token
   risk metrics) is undefined in any repo/API seen — needs the owner's intended inputs before
   `rfq-quote` internals can be frozen.
+
+## 16. Amendment (2026-07-20, ratified) — Rollover venue, verified Arbitrum deployment, HyperSync/HyperRPC
+
+Working design doc: `notes/rollover-venue-plan.md` (build phases R0–R4, event tables, full
+verification appendix). Inputs: the as-built venue interfaces in `cork-knowledge`
+(`rollover-venue-interface.md`, `agent-rfq-venue-interface.md`), the indexer's registered event
+specs, `phoenix-private/config/arbitrum-staging.toml`, and `rollover-private @ 032d3e5a` (the
+commit the deployment pins — fetched from GitHub; local clones may be stale). Every address below
+was verified on-chain on 2026-07-20 (`eth_getCode`, ERC-5267 `eip712Domain()`, ERC-1967 impl
+slots, factory getters, event scans); evidence table in the note's §2.1.
+
+### 16.1 Verified topology (normative for Phase-3 implementation)
+
+- **Two Phoenix deployments coexist on Arbitrum One.** The production deployment
+  (`deployments["42161"]`, PM `0xc2De…54AE`) hosts all pools the venue currently indexes. The
+  **arbitrum-staging shadow deployment** (campaign `phoenix-rollover-2026q3-r1`) is a complete,
+  separate release — different PM implementation, full contract set including CorkAdapter and a
+  Bundler3 byte-identical to mainnet's. Config models this as
+  `deploymentProfiles["42161"]["arbitrum-staging"]` in `cork-defaults.json`; consumers opt in by
+  profile name and `deployments` stays the default read path.
+- **The rollover stack is hard-bound to the staging deployment.** Both settlers expose
+  `CORK_POOL_MANAGER()` = the staging PM and `ROLLOVER_CONTRACT_FACTORY()` =
+  `0xBBcC54c637c26b484A8c57b5695c04e09daCE13A` as immutables — rollover src/dst pools are
+  staging-PM pools by construction. Rollover pre-flights and computes MUST resolve the staging
+  profile, not the default deployment.
+- **Settler identities (empirical — the venue doc's example labels are inverted):**
+  ExactSettler `0x983270AE48545665Cee4D7EF61C65fF3fdC8222D`, PartialSettler
+  `0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a`. Proven three ways against pinned source
+  (partial-only selector, 5-vs-3-word `rolloverAccountingOf` return shapes, and
+  `ExactSettler._validateMode` reverting on `allowPartialFills:true` — which makes the venue
+  doc's own worked example unfillable as written). Reported upstream as a doc erratum; re-verify
+  the venue's `settlerKind` column against chain when the first order row exists [K7].
+- **Signing model confirmed:** both settlers answer ERC-5267 with
+  `CorkSettler / 1.0.0 / chainId 42161 / verifyingContract = settler`. `cork_prepare_orders`
+  `rollover-intent` builds against this domain and recomputes `rolloverIntentHash` locally [K3].
+- **Pre-launch state at ratification:** staging PM has 0 pools, factory has 0 clones, venue
+  rollover feeds are empty.
+
+### 16.2 Config (§8 addendum)
+
+`cork-defaults.json` gains two keys (already landed, zod-validated, remote-first per §8):
+`deploymentProfiles` (named alternate Phoenix deployments per chain) and `rollover` (per chain:
+`factory`, `exactSettler`, `partialSettler`, `settlerDomain`, `seededAtBlock` = 484973917, the
+`SettlerApproved` seeding block that anchors event backfills). The staging profile's CREATE2
+salts exist in `arbitrum-staging.toml` for extending `topic:"verify"` attestation later.
+
+### 16.3 Open questions (delta to §15)
+
+- **Q-SETTLER-KIND** *(resolved on-chain; doc erratum reported)* — residual: does the venue's
+  seed table share the doc's inversion? Observable from the first order row's `settlerKind`.
+- **Q-STAGING-INDEXED** *(new)*: does `cork-indexing-infra` watch the staging PM on Arbitrum?
+  The venue's POST admission checks pools against *indexed* metadata, so if not, every rollover
+  order is rejected once campaign pools exist. Self-answers when the first staging pool deploys.
+- **Q-CHAIN** *(narrowed)*: rollover is **Arbitrum One only** (settler binding). The LOP/RFQ
+  default-chain question remains open.
+- **Q-ENVIO-TIER** *(new)*: token provisioning for HyperRPC/HyperSync (user-supplied
+  `ENVIO_API_TOKEN`, never committed) — is there a team token CI can use?
