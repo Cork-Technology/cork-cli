@@ -1,6 +1,9 @@
 # Rollover venue build-out plan (+ HyperSync/HyperRPC roles)
 
-**Status:** design note for review — RFC 011 amendment follows once ratified.
+**Status:** RATIFIED and IMPLEMENTED (RFC 011 §16; phases R0–R3 + the R4 order-surface shipped
+2026-07-20 — rollover-intent build, venue datasource, [K7] verification legs, HyperSync mode,
+extension orders, numbers-contract tripwires). Remaining: live activation once campaign pools +
+first orders exist, and the open questions in §5.
 **Date:** 2026-07-20
 **Inputs:** `cork-knowledge/rfcs/rollover-venue-interface.md` (as-built, live on Arbitrum since
 2026-07-20), `cork-knowledge/rfcs/agent-rfq-venue-interface.md` (as-built), the indexer event list

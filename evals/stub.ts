@@ -53,9 +53,25 @@ function readContract(args: { address: string; functionName: string; args?: unkn
   }
 }
 
+/** Offline venue stub: canned api-phoenix responses for the eval tasks. */
+function venueFetch(url: string, init?: RequestInit): Promise<Response> {
+  const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
+  if (init?.method === "POST") {
+    if (url.includes("/rollover/orders")) return r(201, {}); // handler fills the digest from its local recomputation
+    if (url.includes("/limit-orders")) return r(201, { orderHash: "0x" });
+    if (url.includes("/rfqs")) return r(201, { rfq_id: "rfq_eval1", state: "open" });
+  }
+  if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
+  if (/\/rollover\/orders\/0x/.test(url)) return r(404, { message: "not found" });
+  if (url.includes("/rollover/")) return r(200, { items: [] });
+  if (url.includes("/limit-orders/")) return r(200, { items: [] });
+  return r(404, { message: `no stub for ${url}` });
+}
+
 export function stubContext(): HandlerContext {
   return {
     nowSeconds: NOW,
+    venueFetch,
     rpcUrl: "https://stub.vnet.example/rpc", // enables the funding path; resolver below serves it
     resolveRpc: async (_chainId, url) => ({
       url: url ?? "https://stub.vnet.example/rpc",

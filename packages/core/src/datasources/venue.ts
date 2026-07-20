@@ -177,6 +177,17 @@ export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number
   return asList(await getJson(deps, `/rollover/contracts${qs(p)}`), "rollover contracts");
 }
 
+/** GET /v1/rfqs/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
+export async function getRfq(deps: VenueDeps, rfqId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await getJson(deps, `/rfqs/${encodeURIComponent(rfqId)}`);
+    return Row.parse(raw);
+  } catch (err) {
+    if (err instanceof VenueHttpError && err.status === 404) return null;
+    throw err;
+  }
+}
+
 // ── Writes (relays of caller-authored/signed payloads [K1]) ─────────────────
 
 async function postJson(deps: VenueDeps, path: string, body: unknown): Promise<VenuePostResult> {

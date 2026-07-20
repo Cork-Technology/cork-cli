@@ -39,14 +39,14 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | Tool | Use when | Phase |
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
-| `cork_query` | **State reads** — markets, account-state, whitelist, protocol-config (and indexer feeds when available). NOT derived math, NOT tx building. | 1 |
+| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`). Event-derived subset also in `full-decentralized` mode (HyperSync). | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor. NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
-| `cork_prepare_orders` | Build **unsigned** 1inch limit-order typed-data (maker-order / cancel) for later signing. | 3 |
+| `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension orders) / cancel, and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
 | `cork_track` | Verify a resource against chain, simulate frozen bytes, or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Market-deployment artifacts. **Provisional/gated** [Q-REG]. | 4 |
-| `cork_submit` | The **only** side-effecting tool: relays a caller-signed order to the orderbook service. Transmits an already-signed payload; never signs [K1]. | 3 |
+| `cork_submit` | The **only** side-effecting tool: relays caller-signed/authored payloads to the venue — actions `rollover-order`, `lop-order`, `rfq-open`, `rfq-answer` (all off-chain POSTs). Commitments recomputed before relay [K3]; never signs [K1]. | 3 |
 
 ## Reading the result envelope
 
@@ -56,9 +56,9 @@ as `structuredContent`, and every tool advertises this envelope as its `outputSc
 
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
-  retry the same call** and do not fabricate the answer — report the reason. Backend-gated variants
-  (orderbook/fills/flows, order submission, taker-fill, rollover-intent, dutch-auction-price,
-  rfq-quote, market deployment, decode order/event/receipt, track simulate) stay `unavailable` by design.
+  retry the same call** and do not fabricate the answer — report the reason. Still-gated variants
+  (whitelisted-addresses, taker-fill, dutch-auction-price, rfq-quote, market deployment, decode
+  order/event/receipt, track simulate) stay `unavailable` by design.
 - `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
   surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
@@ -79,17 +79,29 @@ Warning codes you will encounter:
 | `receipt_not_found` | txHash unknown/pending at the RPC (a normal outcome, not a failure). |
 | `rpc_fallback` | Informational on `ok`: the default RPC was down, a chainlist public endpoint served the read. |
 | `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Informational on `ok` prepare results: why funding legs were omitted. |
-| `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. |
+| `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
+| `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (HTTP status + message) / couldn't be reached (check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
+| `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
+| `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. |
+| `settler_mode_mismatch` | rollover-intent: the chosen settler's on-chain mode gate would make the order unfillable (ExactSettler rejects `allowPartialFills:true`; PartialSettler requires it). The message names the right settler. |
+| `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). |
+| `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
+| `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
+| `hypersync_unavailable` | full-decentralized mode: no ENVIO_API_TOKEN, unsupported chain, or the napi client can't load on this host. |
+| `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / ~100x divergence from the cited quote_ref (conflict, NOT relayed). |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed
 `filters.*`) · `3` unavailable · `4` conflict · `1` unexpected error.
 
 Every tool's input takes an optional `format`: `"concise"` (default) or `"full"`. `"full"` adds
-`provenance.rpc = { source: explicit|default|chainlist, host }` on chain-backed reads — use it when
-you need to know which endpoint served the data. Chain-backed results also state their data mode:
-`provenance.mode = "lite-decentralized"` (all reads go over RPC today). `cork_query mode` is honored
-explicitly — requesting `centralized`/`full-decentralized` returns `unavailable`/`mode_unavailable`
-(never a silent substitute) until those backends are wired. Some schema fields are accepted but
+`provenance.rpc = { source: explicit|default|chainlist, host }` on chain-backed reads. Every backed
+result states its data mode: `provenance.mode = "lite-decentralized"` (RPC chain reads),
+`"centralized"` (venue-backed reads/writes via api-phoenix, override base with `CORK_VENUE_URL`), or
+`"full-decentralized"` (HyperSync event scans, needs `ENVIO_API_TOKEN`). `cork_query mode` is honored
+explicitly, never silently substituted: venue-only resources reject decentralized modes (resting
+orders/RFQs emit no events — structural, not a phase gap), chain resources reject `centralized`,
+and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
+`full-decentralized`. Some schema fields are accepted but
 reserved for later phases (`cork_query` `cursor`/`pageSize`, `cork_compute` `at.timestamp`,
 `cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
 

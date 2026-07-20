@@ -54,6 +54,7 @@ import {
   getRolloverOrder,
   getRolloverOrders,
   getRolloverFills,
+  getRfq,
   postLopOrder,
   postRfq,
   postRfqAnswer,
@@ -646,6 +647,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
       ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
       allowPartialFills: action.allowsPartialFills,
       usePermit2: action.usePermit2,
+      ...(action.extension !== undefined ? { extension: action.extension } : {}),
     });
     return envelope({
       state: "ok",
@@ -654,6 +656,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         lop,
         typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
         orderHash: built.orderHash,
+        extension: built.extension,
         clientRequestId: input.clientRequestId,
       },
       chainId,
@@ -936,11 +939,11 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
   const deps = venueDepsOf(ctx);
 
   /** Shared POST-outcome mapping (201 created / 200 idempotent replay / 4xx per venue docs). */
-  const mapPost = (res: VenuePostResult, okData: (body: Record<string, unknown>, replay: boolean) => Record<string, unknown>): Envelope => {
+  const mapPost = (res: VenuePostResult, okData: (body: Record<string, unknown>, replay: boolean) => Record<string, unknown>, okWarnings: Array<{ code: string; message: string }> = []): Envelope => {
     const body = (res.body ?? {}) as Record<string, unknown>;
     const msg = typeof body.message === "string" ? body.message : `HTTP ${res.httpStatus}`;
     if (res.httpStatus === 201 || res.httpStatus === 200) {
-      return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", ctx });
+      return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", warnings: okWarnings, ctx });
     }
     if (res.httpStatus === 409) {
       return envelope({ state: "conflict", data: { venueResponse: body }, chainId, source: "service", warnings: [{ code: "venue_conflict", message: `venue 409: ${msg} (same id/digest already stored with a DIFFERENT payload — use a fresh clientRequestId for a genuinely new request [K2])` }], ctx });
@@ -1077,6 +1080,39 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         primaryType: "Order",
         message: orderMsg,
       });
+      // Numbers-contract tripwires (RFQ doc §2.1): the book `premium` is a PERCENT number
+      // (4.1 = 4.1%), RFQ premiums are FRACTION strings ("0.041"). A sub-0.1% premium is the
+      // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
+      // orders can be legitimately tiny).
+      const lopWarnings: Array<{ code: string; message: string }> = [];
+      if (action.premium > 0 && action.premium < 0.1) {
+        lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present` });
+      }
+      // quote_ref pre-flight [K3-style]: verify the cited option exists and the premium does not
+      // contradict it (~100x divergence = a scale mistake the venue would reject at POST).
+      if (action.quoteRef) {
+        const rfq = await getRfq(deps, action.quoteRef.rfqId);
+        if (!rfq) return unavailable(chainId, "invalid_order_terms", `quote_ref cites unknown RFQ '${action.quoteRef.rfqId}'`, ctx);
+        const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
+        const answer = answers.find((a) => String(a.answer_id) === action.quoteRef!.answerId);
+        const option = answer?.answer?.options?.find((o) => String(o.option_id) === action.quoteRef!.optionId);
+        if (!option) return unavailable(chainId, "invalid_order_terms", `quote_ref option '${action.quoteRef.optionId}' not found in answer '${action.quoteRef.answerId}' of RFQ '${action.quoteRef.rfqId}'`, ctx);
+        const fraction = Number(option.premium_annualized);
+        if (Number.isFinite(fraction) && fraction > 0) {
+          const expectedPercent = fraction * 100;
+          const ratio = action.premium / expectedPercent;
+          if (ratio >= 100 || ratio <= 0.01) {
+            return envelope({
+              state: "conflict",
+              data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
+              chainId,
+              source: "service",
+              warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ~${ratio >= 100 ? Math.round(ratio) : `1/${Math.round(1 / ratio)}`}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — a scale mistake; NOT relayed (the venue rejects the same way)` }],
+              ctx,
+            });
+          }
+        }
+      }
       // Extension commitment pre-flight: what would revert InvalidExtension at fill is caught here.
       if (action.extension !== "0x") {
         const saltLow = BigInt(action.order.salt) & U160;
@@ -1114,7 +1150,7 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         chainId,
         ...(action.quoteRef ? { quote_ref: { rfq_id: action.quoteRef.rfqId, answer_id: action.quoteRef.answerId, option_id: action.quoteRef.optionId } } : {}),
       });
-      return mapPost(res, (body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash: body.orderHash ?? orderHash, localOrderHash: orderHash }));
+      return mapPost(res, (body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash: body.orderHash ?? orderHash, localOrderHash: orderHash }), lopWarnings);
     }
 
     if (action.type === "rfq-open") {
@@ -1136,7 +1172,16 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
       return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }));
     }
 
-    // rfq-answer
+    // rfq-answer — enforce the fraction contract on quoted options before relaying (§2.1: a
+    // decimal STRING < 0.5; a wad or percent pasted here fails at this boundary, with teaching).
+    if (action.status === "quoted") {
+      for (const [i, o] of (action.options ?? []).entries()) {
+        const p = o.premium_annualized;
+        if (p !== undefined && (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p) || Number(p) >= 0.5)) {
+          return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)}; percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface`, ctx);
+        }
+      }
+    }
     const res = await postRfqAnswer(deps, action.rfqId, {
       schema_version: "1",
       request_id: input.clientRequestId,

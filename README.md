@@ -107,11 +107,14 @@ Arbitrum (chainId 42161) reads work the same way — the read-path contracts are
 *building* on Arbitrum is still gated (`unknown_deployment`) until its CorkAdapter/Bundler3
 addresses are sourced.
 
-Some variants are honestly **not implemented yet** and will tell you so (state `unavailable` with a
-reason code) rather than inventing an answer — e.g. the orderbook/fills feeds (need the indexer),
-order submission, and market deployment. Reading a pool that doesn't exist on the queried chain
-returns `unavailable` with `chain_read_failed` (not a crash). That's expected; it's not a broken
-install.
+The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, order submission,
+RFQ open/answer) are served from `api-phoenix.cork.tech` and labeled `provenance.mode:
+"centralized"`; rollover orders are buildable offline (`prepare orders`, CorkSettler EIP-712) and
+reconciles are chain-verified against the settler's `orderStatus()` when an RPC resolves. A few
+variants are still honestly gated (state `unavailable` with a reason code) rather than fabricated —
+e.g. the whitelisted-addresses enumeration, taker-fill, and market deployment. Reading a pool that
+doesn't exist on the queried chain returns `unavailable` with `chain_read_failed` (not a crash).
+That's expected; it's not a broken install.
 
 ### CLI: `ch` (no MCP client needed)
 

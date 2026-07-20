@@ -21,13 +21,17 @@ const DOMAIN_VERSION = "6";
 // MakerTraits bit layout (MakerTraitsLib.sol).
 const NO_PARTIAL_FILLS_FLAG = 1n << 255n;
 const ALLOW_MULTIPLE_FILLS_FLAG = 1n << 254n;
+const HAS_EXTENSION_FLAG = 1n << 249n;
 const USE_PERMIT2_FLAG = 1n << 248n;
 const U40 = (1n << 40n) - 1n;
+const U96 = (1n << 96n) - 1n;
+const U160 = (1n << 160n) - 1n;
 
 export interface MakerTraitsParts {
   allowPartialFills: boolean;
   allowMultipleFills: boolean;
   usePermit2: boolean;
+  hasExtension?: boolean;
   expiry: bigint; // unix seconds (0 = none)
   nonce: bigint;
 }
@@ -37,6 +41,7 @@ export function buildMakerTraits(p: MakerTraitsParts): bigint {
   if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;
   if (p.allowMultipleFills) t |= ALLOW_MULTIPLE_FILLS_FLAG;
   if (p.usePermit2) t |= USE_PERMIT2_FLAG;
+  if (p.hasExtension) t |= HAS_EXTENSION_FLAG;
   t |= (p.expiry & U40) << 80n;
   t |= (p.nonce & U40) << 120n;
   return t; // low 80 bits (allowed sender) = 0 => any taker
@@ -82,6 +87,10 @@ export interface MakerOrderArgs {
   expiry?: bigint;
   allowPartialFills?: boolean;
   usePermit2?: boolean;
+  /** Cork hook extension bytes (deploy-on-fill / JIT-mint orders). When present, the salt's low
+   *  160 bits are BOUND to keccak256(extension) (OrderLib checks this at fill) and
+   *  HAS_EXTENSION_FLAG is set; determinism moves to the top 96 bits. */
+  extension?: `0x${string}`;
 }
 
 export interface MakerOrderResult {
@@ -90,17 +99,24 @@ export interface MakerOrderResult {
   types: typeof ORDER_TYPES;
   primaryType: "Order";
   orderHash: `0x${string}`;
+  /** Extension bytes the taker must pass verbatim at fill ("0x" = plain order). */
+  extension: `0x${string}`;
 }
 
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
-  // Deterministic salt from the idempotency key; kept < 2^160 (high bits are reserved for an
-  // extension hash, and this order carries no extension).
-  const salt = BigInt(keccak256(stringToHex(a.clientRequestId))) & ((1n << 160n) - 1n);
+  const hasExtension = a.extension !== undefined && a.extension !== "0x";
+  // Deterministic salt from the idempotency key. Plain order: low 160 bits of keccak(id).
+  // Extension order: low 160 bits MUST be keccak(extension)'s low 160 (OrderLib fill check);
+  // the idempotency-derived entropy moves to the free top 96 bits.
+  const salt = hasExtension
+    ? ((BigInt(keccak256(stringToHex(a.clientRequestId))) & U96) << 160n) | (BigInt(keccak256(a.extension!)) & U160)
+    : BigInt(keccak256(stringToHex(a.clientRequestId))) & U160;
   const makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
     allowMultipleFills: false,
     usePermit2: a.usePermit2 ?? false,
+    hasExtension,
     expiry: a.expiry ?? 0n,
     nonce: 0n,
   });
@@ -116,7 +132,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   };
   const domain = lopDomain(a.chainId, a.lop);
   const orderHash = hashTypedData({ domain, types: ORDER_TYPES, primaryType: "Order", message: order });
-  return { order, domain, types: ORDER_TYPES, primaryType: "Order", orderHash };
+  return { order, domain, types: ORDER_TYPES, primaryType: "Order", orderHash, extension: hasExtension ? a.extension! : "0x" };
 }
 
 const lopAbi = parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orderHash)"]);

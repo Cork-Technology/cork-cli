@@ -254,6 +254,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     expirySeconds: z.number().int().min(1).optional(),
     allowsPartialFills: z.boolean().default(true),
     usePermit2: z.boolean().default(false),
+    extension: Hex.optional(),
   }),
   A("taker-fill", { orderHash: Bytes32, fillMakingAmount: UintStr.optional() }),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr }),

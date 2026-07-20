@@ -281,3 +281,77 @@ describe("cork_track reconcile via venue lifecycle", () => {
     expect(nowhere.warnings[0]?.code).toBe("order_not_found");
   });
 });
+
+describe("R4: numbers-contract tripwires + quote_ref cross-check + extension orders", () => {
+  const lopBase = {
+    chainId: 1,
+    clientRequestId: "test-lop-r4-01",
+    action: {
+      type: "lop-order",
+      order: { salt: "123", maker: "0xc0ffee0000000000000000000000000000000001", receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" },
+      signature: `0x${"11".repeat(65)}`,
+      side: "SELL",
+      premium: 0.036, // a fraction pasted into the percent field
+      expiry: 1795000000,
+      nonce: "0",
+      allowsPartialFills: true,
+    },
+  };
+
+  it("sub-0.1% premium → premium_scale_suspect warning (relayed, matching venue leniency)", async () => {
+    const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]));
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "premium_scale_suspect")).toBe(true);
+  });
+
+  it("quote_ref citing a diverging premium → conflict premium_scale_mismatch, NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
+    const env = await runTool(
+      "cork_submit",
+      { ...lopBase, action: { ...lopBase.action, premium: 0.036, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }], seen),
+    );
+    // declared 0.036 percent vs cited 3.6 percent = 1/100x divergence
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
+    expect(seen.filter((s) => s.method === "POST").length).toBe(0);
+  });
+
+  it("quote_ref with a consistent premium relays cleanly", async () => {
+    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
+    const env = await runTool(
+      "cork_submit",
+      { ...lopBase, action: { ...lopBase.action, premium: 3.6, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]),
+    );
+    expect(env.state).toBe("ok");
+  });
+
+  it("rfq-answer options must carry fraction-string premiums (< 0.5)", async () => {
+    const bad = await runTool(
+      "cork_submit",
+      { chainId: 42161, clientRequestId: "test-ans-r4-01", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: 4.1 }], signature: "0x00" } },
+      ctxWith([]),
+    );
+    expect(bad.state).toBe("unavailable");
+    expect(bad.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(bad.warnings[0]?.message).toContain("FRACTION");
+  });
+
+  it("prepare maker-order with extension binds salt low-160 to keccak(extension) + sets the flag", async () => {
+    const ext = "0xdeadbeefcafe";
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: "0xc0ffee0000000000000000000000000000000001", clientRequestId: "test-ext-0001", action: { type: "maker-order", poolId: `0x${"ab".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", extension: ext } },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { extension: string; typedData: { message: { salt: string; makerTraits: string } } };
+    expect(d.extension).toBe(ext);
+    const salt = BigInt(d.typedData.message.salt);
+    const { keccak256 } = await import("viem");
+    expect(salt & ((1n << 160n) - 1n)).toBe(BigInt(keccak256(ext)) & ((1n << 160n) - 1n));
+    expect(BigInt(d.typedData.message.makerTraits) & (1n << 249n)).toBe(1n << 249n); // HAS_EXTENSION_FLAG
+  });
+});
