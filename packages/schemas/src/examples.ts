@@ -144,8 +144,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "verify/marketRef": { status: "activated" },
       "reconcile/txHash": { status: "activated" },
       simulate: { status: "specified", reason: "phase_gated" },
-      "reconcile/orderHash": { status: "activated", reason: "venue-reported lifecycle (centralized); chain-log verification [K7] is a later iteration" },
-      "reconcile/submissionRef": { status: "activated", reason: "venue-reported lifecycle (centralized); 32-byte digests only" },
+      "reconcile/orderHash": { status: "activated", reason: "venue lifecycle + [K7] chain verification: settler orderStatus() over RPC (automatic) and event history via HyperRPC (needs ENVIO_API_TOKEN)" },
+      "reconcile/submissionRef": { status: "activated", reason: "same as reconcile/orderHash; 32-byte digests only" },
     },
   },
   cork_submit: {

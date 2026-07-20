@@ -43,6 +43,7 @@ import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
+import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, settlerStatusAbi, venueChainConsistent } from "./rollover-verify.ts";
 import {
   getLopFills,
   getLopMarkets,
@@ -96,6 +97,10 @@ export interface HandlerContext {
   venueFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** Override the venue base URL (default: CORK_VENUE_URL env or api-phoenix.cork.tech/v1). */
   venueUrl?: string;
+  /** Override the logs-capable endpoint (default: CORK_LOGS_RPC_URL env, else HyperRPC via ENVIO_API_TOKEN). */
+  logsUrl?: string;
+  /** Override the logs fetch implementation (tests inject a stub). */
+  logsFetch?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
 function venueDepsOf(ctx: HandlerContext): VenueDeps {
@@ -726,26 +731,89 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
   if (subj.kind === "orderHash" || subj.kind === "submissionRef") {
     const ref = subj.kind === "orderHash" ? subj.orderHash : subj.submissionRef;
     const deps = venueDepsOf(ctx);
-    const venueNote = { code: "venue_reported", message: "state is venue-reported (centralized); independent chain-log verification [K7] is a later iteration" };
+    const venueNote = { code: "venue_reported", message: "state is venue-reported (centralized) and was NOT independently chain-verified for this call — configure an RPC (status leg) and ENVIO_API_TOKEN or CORK_LOGS_RPC_URL (event-history leg) to enable [K7] verification" };
     try {
       if (/^0x[0-9a-fA-F]{64}$/.test(ref)) {
         // A 32-byte ref is a rollover orderDigest or a LOP orderHash — try both surfaces.
         const row = await getRolloverOrder(deps, ref.toLowerCase());
         if (row) {
           const order = (row.order ?? row) as Record<string, unknown>;
+          const venueStatus = String(order.status ?? "");
+          const digest = ref.toLowerCase() as `0x${string}`;
+
+          // ── [K7] chain verification legs (best-effort; every gap is disclosed, never faked) ──
+          const warnings: Array<{ code: string; message: string }> = [];
+          let chainVerification: Record<string, unknown> | undefined;
+          const { rollover } = await resolveRollover(chainId);
+          const settlerAddr = typeof order.settler === "string" ? (order.settler as `0x${string}`) : undefined;
+          const resolved = settlerAddr ? await getRpc(ctx, chainId) : null;
+          if (settlerAddr && resolved) {
+            try {
+              const statusNum = (await resolved.client.readContract({
+                address: settlerAddr,
+                abi: settlerStatusAbi,
+                functionName: "orderStatus",
+                args: [digest],
+              })) as number;
+              const chainStatus = chainStatusName(statusNum);
+              const consistent = venueChainConsistent(venueStatus, chainStatus);
+              chainVerification = { leg: "orderStatus (settler view, live RPC)", settler: settlerAddr, chainStatus, venueStatus, consistent };
+              if (!consistent) {
+                // Chain outranks the venue: disagreement is an explicit conflict, with the
+                // indexer's finality lag (~75 s on Arbitrum) noted for freshly-updated rows.
+                return envelope({
+                  state: "conflict",
+                  data: { kind: "rollover-order", orderDigest: digest, venueStatus, chainStatus, order, chainVerification },
+                  chainId,
+                  source: "chain",
+                  warnings: [{ code: "status_mismatch", message: `the venue reports '${venueStatus}' but the settler's orderStatus() returns '${chainStatus}' — chain outranks indexer [K7]; if the venue row updated within the indexer finality lag (~75s on Arbitrum) retry shortly` }],
+                  ctx,
+                });
+              }
+            } catch (err) {
+              warnings.push({ code: "chain_read_failed", message: `orderStatus verification read failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — result is venue-reported only` });
+            }
+          } else {
+            warnings.push(venueNote);
+          }
+
+          // Event-history leg via a logs-capable endpoint (HyperRPC preferred).
+          const logsUrl = resolveLogsEndpoint(chainId, ctx.logsUrl);
+          if (logsUrl && rollover) {
+            try {
+              const logs = await fetchDigestLogs({
+                url: logsUrl,
+                addresses: [rollover.exactSettler, rollover.partialSettler],
+                digest,
+                fromBlock: rollover.seededAtBlock,
+                ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
+              });
+              chainVerification = { ...(chainVerification ?? {}), events: labelLogs(logs) };
+            } catch (err) {
+              warnings.push(
+                err instanceof LogsRangeLimited
+                  ? { code: "logs_range_limited", message: `the logs endpoint refused the historical range (${err.message}) — event history omitted; use HyperRPC (ENVIO_API_TOKEN) for full-range scans` }
+                  : { code: "logs_unavailable", message: `event-history leg failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` },
+              );
+            }
+          } else if (!logsUrl) {
+            warnings.push({ code: "logs_unavailable", message: "no logs-capable endpoint configured (set ENVIO_API_TOKEN for HyperRPC, or CORK_LOGS_RPC_URL) — event history omitted; status leg above still applies when an RPC resolved" });
+          }
+
           return envelope({
             state: "ok",
             data: {
               kind: "rollover-order",
-              orderDigest: ref.toLowerCase(),
+              orderDigest: digest,
               lifecycle: order.status ?? null,
               order,
               fills: row.fills ?? [],
               slots: row.slots ?? [],
+              ...(chainVerification ? { chainVerification } : {}),
             },
             chainId,
-            source: "indexer",
-            warnings: [venueNote],
+            source: chainVerification ? "chain" : "indexer",
+            warnings,
             ctx,
           });
         }
