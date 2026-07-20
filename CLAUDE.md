@@ -141,11 +141,14 @@ Deployment addresses are NOT hardcoded in source. `cork-defaults.json` (repo roo
 address file; `packages/core/src/config-remote.ts` resolves it **remote-first**: fetch the latest
 from the GitHub repo (raw.githubusercontent.com, override `CORK_DEFAULTS_URL`) → validate with a
 strict zod schema (tampered/unexpected content is rejected) → cache to disk with a 1 h TTL
-(`~/.cache/cork-helper-cli/cork-defaults.json`, override `CORK_CONFIG_CACHE_FILE`). If the fetch
-fails (repo private, offline), the tool serves the **bundled copy** and adds a `config_fetch_failed`
-warning telling the user to use an authenticated GitHub MCP server or `gh` CLI with a whitelisted
-account, or rely on the bundled fallback. `CORK_CONFIG_NO_FETCH=1` skips fetching entirely (tests
-set this via `vitest.config.ts`). Never hand-edit addresses in TS — edit `cork-defaults.json`.
+(`~/.cache/cork-helper-cli/cork-defaults.json`, override `CORK_CONFIG_CACHE_FILE`). Fallback
+semantics distinguish two negative outcomes: **HTTP 404/410** means the file is not published at
+the canonical URL (private repo / commit not pushed) — a deliberate state, so the **bundled copy is
+served silently**; a **transient failure** (network, 5xx, invalid content) serves the bundled copy
+with a one-line `config_fetch_failed` warning ("addresses may be stale…"). Either negative outcome
+is negative-cached on disk for 10 min, so fresh CLI processes don't re-attempt the fetch on every
+invocation. `CORK_CONFIG_NO_FETCH=1` skips fetching entirely (tests set this via
+`vitest.config.ts`). Never hand-edit addresses in TS — edit `cork-defaults.json`.
 
 ## Discoverability: examples, maturity, teaching errors
 

@@ -1,5 +1,6 @@
-// Offline unit tests for remote-first config sourcing: GitHub fetch (validated) → disk cache →
-// bundled fallback with the authenticated-GitHub/fallback warning. All I/O injected.
+// Offline unit tests for remote-first config sourcing: GitHub fetch (validated) → disk cache
+// (positive AND negative) → bundled fallback. Noise policy under test: 404 ("not published") is
+// silent; transient failures warn once per 10-min window. All I/O injected.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   MAINNET_DEPLOYMENT,
@@ -8,6 +9,7 @@ import {
   resolveConfig,
   resolveDeployment,
   type ConfigDeps,
+  type StoredCache,
 } from "@cork/core";
 
 const REMOTE_OK = {
@@ -30,18 +32,26 @@ const REMOTE_OK = {
   lopAddresses: { "1": "0x111111125421cA6dc452d289314280a0f8842A65" },
 };
 
-function deps(opts: { remote?: unknown | Error; cache?: { fetchedAt: number; defaults: unknown } | null; now?: number }): ConfigDeps & { saved: unknown[] } {
-  const saved: unknown[] = [];
+function deps(opts: {
+  remote?: unknown | Error | "absent";
+  cache?: StoredCache | null;
+  now?: number;
+}): ConfigDeps & { saved: StoredCache[]; fetches: () => number } {
+  const saved: StoredCache[] = [];
+  let fetchCount = 0;
   return {
     saved,
+    fetches: () => fetchCount,
     now: () => opts.now ?? 1_000_000_000,
     fetchRemote: async () => {
+      fetchCount++;
       if (opts.remote instanceof Error) throw opts.remote;
       if (opts.remote === undefined) throw new Error("no remote configured");
-      return opts.remote;
+      if (opts.remote === "absent") return { kind: "absent" };
+      return { kind: "ok", data: opts.remote };
     },
     loadCache: () => opts.cache ?? null,
-    saveCache: (fetchedAt, defaults) => saved.push({ fetchedAt, defaults }),
+    saveCache: (entry) => saved.push(entry),
   };
 }
 
@@ -64,24 +74,36 @@ describe("resolveConfig precedence", () => {
     expect(r.source).toBe("github");
     expect(r.warning).toBeUndefined();
     expect(d.saved).toHaveLength(1);
+    expect(d.saved[0]?.defaults).toBeTruthy();
     resetConfigMemo();
     const dep = await resolveDeployment(8453, deps({ remote: REMOTE_OK }));
     expect(dep.deployment?.poolManager).toBe("0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC"); // remote-only chain served
   });
 
-  it("fetch failure → bundled fallback + the authenticated-GitHub/fallback warning", async () => {
+  it("transient fetch failure → bundled fallback + one-line warning + negative cache entry", async () => {
     liftNoFetch();
-    const r = await resolveConfig(deps({ remote: new Error("HTTP 404") }));
+    const d = deps({ remote: new Error("HTTP 503") });
+    const r = await resolveConfig(d);
     expect(r.source).toBe("bundled");
     expect(r.warning?.code).toBe("config_fetch_failed");
-    expect(r.warning?.message).toMatch(/authenticated GitHub MCP|`gh` CLI/);
-    expect(r.warning?.message).toMatch(/whitelisted/);
-    expect(r.warning?.message).toMatch(/fallback address file/);
+    expect(r.warning?.message).toMatch(/bundled copy/);
+    expect(r.warning?.message).toMatch(/stale/);
+    expect(r.warning?.message).not.toContain("\n"); // one line, budgeted like success verbosity
+    expect(d.saved[0]?.failure).toBe("error");
     // bundled content still serves the known chains
     expect(r.defaults.deployments["1"]?.corkAdapter).toBe(MAINNET_DEPLOYMENT.corkAdapter);
   });
 
-  it("tampered/malformed remote content is rejected (treated as fetch failure)", async () => {
+  it("404/absent (file not published) → bundled fallback SILENTLY, negative-cached as 'absent'", async () => {
+    liftNoFetch();
+    const d = deps({ remote: "absent" });
+    const r = await resolveConfig(d);
+    expect(r.source).toBe("bundled");
+    expect(r.warning).toBeUndefined(); // a deliberate state, not a failure — no noise
+    expect(d.saved[0]?.failure).toBe("absent");
+  });
+
+  it("tampered/malformed remote content is rejected (treated as transient failure)", async () => {
     liftNoFetch();
     const evil = { ...REMOTE_OK, deployments: { "1": { poolManager: "not-an-address", constraintAdapter: "0x00" } } };
     const r = await resolveConfig(deps({ remote: evil }));
@@ -95,6 +117,33 @@ describe("resolveConfig precedence", () => {
     const r = await resolveConfig(d);
     expect(r.source).toBe("cache");
     expect(r.warning).toBeUndefined();
+    expect(d.fetches()).toBe(0);
+  });
+
+  it("fresh NEGATIVE cache suppresses refetching (error keeps its warning, absent stays silent)", async () => {
+    liftNoFetch();
+    // 60s after a transient failure: warn again, but do NOT re-attempt the fetch
+    const dErr = deps({ remote: new Error("must not be called"), cache: { fetchedAt: 999_999_940, failure: "error" }, now: 1_000_000_000 });
+    const rErr = await resolveConfig(dErr);
+    expect(rErr.source).toBe("bundled");
+    expect(rErr.warning?.code).toBe("config_fetch_failed");
+    expect(dErr.fetches()).toBe(0);
+    resetConfigMemo();
+    // 60s after an absent result: silent, no re-attempt
+    const dAbs = deps({ remote: new Error("must not be called"), cache: { fetchedAt: 999_999_940, failure: "absent" }, now: 1_000_000_000 });
+    const rAbs = await resolveConfig(dAbs);
+    expect(rAbs.warning).toBeUndefined();
+    expect(dAbs.fetches()).toBe(0);
+  });
+
+  it("expired negative cache re-attempts the fetch (and can recover to github)", async () => {
+    liftNoFetch();
+    // 11 min after a failure, with the remote now healthy: fetch again and serve it
+    const d = deps({ remote: REMOTE_OK, cache: { fetchedAt: 999_340_000, failure: "error" }, now: 1_000_000_000 });
+    const r = await resolveConfig(d);
+    expect(r.source).toBe("github");
+    expect(r.warning).toBeUndefined();
+    expect(d.fetches()).toBe(1);
   });
 
   it("CORK_CONFIG_NO_FETCH serves bundled with no warning and no I/O", async () => {
@@ -103,6 +152,7 @@ describe("resolveConfig precedence", () => {
     const r = await resolveConfig(d);
     expect(r.source).toBe("bundled");
     expect(r.warning).toBeUndefined();
+    expect(d.fetches()).toBe(0);
   });
 
   it("parseDefaults enforces checksummed addresses", () => {
