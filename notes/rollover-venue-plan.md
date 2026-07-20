@@ -80,17 +80,51 @@ by name.
 | **PartialSettler** | `0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a` | same seeding tx; code ✓ (23,359 B); **answers** `fillerSlotAccountingOf(bytes32,address,bytes32)` (`0x87c29f6d`) with zeroed slot accounting |
 | Deployed clones | none yet | `RolloverContractDeployed` scan from seeding block → 0 events; `/v1/rollover/{orders,contracts}` both empty |
 
-> **⚠️ Doc discrepancy to flag to raouf:** the rollover venue RFC's worked examples use settler
-> `0x983270ae…` with `settlerKind: "PARTIAL"` / "PartialSettler-compatible async premium mode".
-> On-chain, `0x9832…` **lacks** the partial-fill slot surface and `0x8e9c…366a` **has** it — the
-> kinds are inverted relative to the doc example. Our `cork-defaults.json` records the *empirical*
-> labels. Re-confirm against the venue's `settlerKind` column when the first real order lands
-> (exactly the [K7] chain-outranks-indexer posture, applied to documentation).
+> **⚠️ CONFIRMED doc error (flag to raouf):** the rollover venue RFC's worked examples label
+> settler `0x983270ae…` as `PARTIAL`. Three independent on-chain discriminators, each validated
+> against the **pinned deployed source** (`rollover-private @ 032d3e5a` = PR #154, fetched from
+> GitHub — the local clone was stale), prove the labels are inverted:
+> 1. `fillerSlotAccountingOf(bytes32,address,bytes32)` (PartialSettler-only at 032d3e5a):
+>    `0x8e9c…` answers it; `0x9832…` reverts.
+> 2. `rolloverAccountingOf(bytes32)` return shape: `0x9832…` returns **5 words** =
+>    `ExactRolloverAccounting{filler, settlementDestination, dstCstProduced, filledAt,
+>    premiumFired}`; `0x8e9c…` returns **3 words** = `PartialOrderAccounting`.
+> 3. `ExactSettler._validateMode` reverts `Settler__PartialFillsNotSupported` on
+>    `allowPartialFills: true` — so the RFC's §3.1 worked example (partial-fills order,
+>    settler `0x9832…`) is **unfillable on-chain as written**.
+>
+> Empirical truth: **ExactSettler = `0x9832…222D`, PartialSettler = `0x8e9c…366a`** (as recorded
+> in our `cork-defaults.json`). Whether the venue's own seed table shares the doc's inversion is
+> unobservable until the first order row exposes a `settlerKind` — a solver trusting the doc
+> example would build reverting fills, so this is a high-signal correction.
 
 Also in the toml but not yet consumed: DefaultCorkController `0xdCC0388c…6172`, SharesFactory
 `0x074BA120…FFbC`, timelocks, and the full CREATE2 salt set (constraint/wlm/pm/adapter/controller/
 shares_factory salts) — these enable extending `cork_capabilities topic:"verify"` CREATE2
 attestation to the staging profile later.
+
+### 2.1 Verification appendix (all probes 2026-07-20, Arbitrum One)
+
+The most plausible — now essentially proven — setup: **the rollover stack is a self-contained
+vertical on the staging-shadow Phoenix deployment**, disjoint from the production deployment that
+hosts today's API pools.
+
+| Claim | Evidence |
+|---|---|
+| Settlers sign under `CorkSettler / 1.0.0 / chainId 42161 / verifyingContract = settler` | `eip712Domain()` (ERC-5267) called on **both** settlers returns exactly that (fields `0x0f`, name `CorkSettler`, version `1.0.0`) — the venue doc's signing model is **correct** |
+| Both settlers are factory-approved | `factory.approvedSettlers(settler)` → `true` for both |
+| **Settlers are hard-bound to the STAGING PM** | `CORK_POOL_MANAGER()` (public immutable) on both settlers → `0x4d0a…23d2`; `ROLLOVER_CONTRACT_FACTORY()` → `0xBBcC…E13A`. Rollover src/dst pools are therefore staging-PM pools — **Q-ROLLOVER-PM answered**, and `deploymentProfiles` is required plumbing for every rollover pre-flight/compute, not an archive |
+| Factory identity | Sourcify **runtime match** verified 2026-07-17; ABI = `CorkRolloverContractFactory` (`approveSettler`, `deployRolloverContract`, `predictRolloverContractOf`, `RolloverContractDeployed`, …). Clone impl: `ROLLOVER_CONTRACT_IMPLEMENTATION()` → `0xf55855e17514262b91f8a3b4d35688972dee9050`. Settlers are NOT Sourcify-verified (worth asking the team to publish) |
+| Staging toml is faithful | ERC-1967 impl slots: staging PM → `0x4a6d1352…` and staging CRA → `0x5ca7f1be…`, both equal to the toml's `deployed_*_impl`. Production PM runs a **different** impl (`0xd31f0996…7a854481d905d7003496d176b9ba882a`) — staging is a separate, newer release, not a re-registration |
+| Staging bundler3 = Morpho Bundler3 | runtime bytecode **byte-identical** to mainnet `0x6566…0245` (1,547 bytes, same keccak) — our existing Bundler3 encoder/decoder works unchanged on the staging profile |
+| Pre-launch state | `MarketCreated` scan: staging PM **0 pools** (signature validated: the same topic0 on production PM returns exactly the API's 3 pools at blocks 482755505/482756502/482793932); factory `RolloverContractDeployed` **0 clones**; venue `/orders` + `/contracts` empty |
+| Slack event list plausible | `MarketCreated(bytes32,address,address,uint256,address,address,address)` topic0 `0x0dac57f1…` reproduces the production PM's pool set exactly |
+
+Consequence of the 0-pools state: the venue's POST admission ("both cSTs are known, pool ids
+match" against *indexed* metadata) cannot pass for any rollover order until campaign pools exist
+on the staging PM **and the indexer watches the staging PM address**. `/v1/pools?chainId=42161`
+currently returns only production-PM pools, so indexer coverage of the staging PM is
+unconfirmed — new open question Q-STAGING-INDEXED below.
 
 ## 3. Build phases (rollover-first)
 
@@ -211,11 +245,17 @@ venue-reported state with honest provenance.
 
 ## 5. Open questions
 
-- **Q-SETTLER-KIND**: RFC example vs chain inversion (§2) — confirm with raouf / first live
-  `settlerKind` row.
-- **Q-ROLLOVER-PM**: will rollover-campaign dst pools be created on the staging PM
-  (`0x4d0a…23d2`)? Presumed yes (campaign marker); confirm before wiring pre-flight pool reads,
-  since poolIds are PM-scoped.
+- **Q-SETTLER-KIND** *(RESOLVED on-chain, §2.1)*: ExactSettler = `0x9832…`, PartialSettler =
+  `0x8e9c…` — the venue RFC's example labels are inverted. Remaining sub-question: does the
+  venue's seed table share the doc's inversion? Unobservable until the first order row carries a
+  `settlerKind`; report the doc error to raouf either way.
+- **Q-ROLLOVER-PM** *(RESOLVED, §2.1)*: settlers are immutably bound to the staging PM
+  `0x4d0a…23d2`; rollover pools are staging-PM pools by construction.
+- **Q-STAGING-INDEXED** *(new)*: does `cork-indexing-infra` watch the staging PM on Arbitrum?
+  `/v1/pools?chainId=42161` shows only production-PM pools today (staging PM has 0 pools, so
+  this proves nothing yet) — if it doesn't, the venue's pool sanity-check will reject every
+  rollover order once campaign pools exist. Ask raouf, or observe once the first staging pool
+  deploys.
 - **Q-VNET-ROLLOVER**: rollover is Arbitrum-only; our Tenderly vnet is a mainnet fork — no
   rollover test fixture exists. Options: Arbitrum vnet, or impersonated deploy of the rollover
   stack on the existing vnet (heavier than the demo-pool script).
