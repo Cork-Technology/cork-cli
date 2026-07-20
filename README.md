@@ -238,3 +238,12 @@ Honestly gated (`unavailable` with a reason, never faked): indexer/service resou
 (orderbook/fills/flows), `cork_track` orderHash/submissionRef, `cork_prepare_orders` taker-fill /
 rollover-intent, `cork_compute` dutch-auction-price / rfq-quote, `cork_prepare_market` (Q-REG), and
 `cork_submit` — each pending its Phase 2–4 backend.
+
+Known gaps, sequenced deliberately (tracked, not forgotten — see the graded findings in the
+2026-07-20 session notes): per-enum-value / per-union-branch descriptions inside the registered
+JSON schemas (RFC §5.4's table); prepare pre-flight guards (whitelist / pause / expiry checks),
+sweep legs, and a human summary on bundles (RFC §5.4); `account-state` classic + Permit2 allowances,
+nonce/invalidator, and Safe config (today it returns balances + token addresses only); the closed
+lifecycle-state projection for `cork_track` reconcile (RFC §10, Phase 3); and a CI workflow that
+actually runs the gates (typecheck, unit tests, surface-drift, evals) — the gates exist, the
+runner does not yet.

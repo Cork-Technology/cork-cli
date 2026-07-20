@@ -8,6 +8,7 @@ import {
   buildTeaching,
   type ChainId,
   MATURITY,
+  searchTools,
   TOOL_EXAMPLES,
   type Teaching,
   type ToolName,
@@ -529,11 +530,22 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       }
       const card = (t: (typeof REGISTRY)[number]) => ({ name: t.name, cli: `ch ${t.cliPath.join(" ")}`, phase: t.phase, maturity: MATURITY[t.name], description: t.description, annotations: t.annotations });
 
-      // search: keyword -> matching tools (name/cli/description), with the filled input schema.
+      // search: natural-language query -> ranked tools with the best-matching VARIANT (token
+      // scoring over names/descriptions/example titles + per-variant hint phrases; search.ts).
       if (input.search) {
-        const q = input.search.toLowerCase();
-        const matches = REGISTRY.filter((t) => `${t.name} ${t.cliPath.join(" ")} ${t.description}`.toLowerCase().includes(q));
-        return envelope({ state: "ok", data: { query: input.search, matches: matches.map((t) => ({ ...card(t), examples: TOOL_EXAMPLES[t.name], inputSchema: inputJsonSchema(t.name) })) }, chainId: 1, source: "config", ctx });
+        const ranked = searchTools(input.search);
+        const matches = ranked.map((r) => {
+          const t = toolByName(r.name)!;
+          const variantMaturity = r.variant ? MATURITY[r.name]?.variants?.[r.variant] : undefined;
+          return {
+            ...card(t as (typeof REGISTRY)[number]),
+            ...(r.variant !== undefined ? { variant: r.variant } : {}),
+            ...(variantMaturity !== undefined ? { variantMaturity } : {}),
+            examples: TOOL_EXAMPLES[r.name],
+            inputSchema: inputJsonSchema(r.name),
+          };
+        });
+        return envelope({ state: "ok", data: { query: input.search, matches }, chainId: 1, source: "config", ctx });
       }
 
       // topic: a tool name (with or without cork_ prefix) or cli leaf -> that tool's full doc.

@@ -22,6 +22,17 @@ describe("runTool: cork_capabilities", () => {
     expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("ch prepare phoenix");
   });
 
+  it("search resolves natural-language queries to the tool AND variant (RFC §13 worked example)", async () => {
+    // "executed trades history" appears in no tool description — only the fills variant hint.
+    const env = await runTool("cork_capabilities", { search: "executed trades history" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { matches: Array<{ name: string; variant?: string; variantMaturity?: { status: string } }> };
+    expect(d.matches[0]?.name).toBe("cork_query");
+    expect(d.matches[0]?.variant).toBe("fills");
+    // the gated variant's maturity rides along so the agent knows the outcome before calling
+    expect(d.matches[0]?.variantMaturity?.status).toBe("specified");
+  });
+
   it("search returns matching tools with their input schema", async () => {
     const env = await runTool("cork_capabilities", { search: "bundle" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
