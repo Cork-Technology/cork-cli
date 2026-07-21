@@ -8,8 +8,10 @@ import {
   Format,
   Hex,
   MarketId,
+  TokenAmount,
   Uint64Str,
   UintStr,
+  UnixSeconds,
 } from "./primitives.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -42,23 +44,32 @@ export type Envelope = z.infer<typeof Envelope>;
 // 1. cork_query (R1)
 // ────────────────────────────────────────────────────────────────────────────
 export const QueryInput = z.object({
-  resource: z.enum([
-    "markets",
-    "market",
-    "pool-whitelist",
-    "whitelisted-addresses",
-    "flows",
-    "limit-order-markets",
-    "orderbook",
-    "fills",
-    "account-state",
-    "protocol-config",
-  ]),
+  resource: z
+    .enum([
+      "markets",
+      "market",
+      "pool-whitelist",
+      "whitelisted-addresses",
+      "flows",
+      "limit-order-markets",
+      "orderbook",
+      "fills",
+      "account-state",
+      "protocol-config",
+    ])
+    .describe(
+      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC)",
+    ),
   chainId: ChainId.optional(),
   mode: DataMode.optional(),
-  filters: z.record(z.string(), z.unknown()).optional(),
-  cursor: z.string().optional(),
-  pageSize: z.number().int().min(1).max(200).default(25),
+  filters: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address, fillable, source. Unknown keys are a teachable error",
+    ),
+  cursor: z.string().optional().describe("reserved for a later phase — accepted but not yet honored; omit"),
+  pageSize: z.number().int().min(1).max(200).default(25).describe("reserved for a later phase — accepted but not yet honored"),
   format: Format,
 });
 export type QueryInput = z.infer<typeof QueryInput>;
@@ -66,40 +77,43 @@ export type QueryInput = z.infer<typeof QueryInput>;
 // ────────────────────────────────────────────────────────────────────────────
 // 2. cork_compute (R2) — closed per-kind params
 // ────────────────────────────────────────────────────────────────────────────
-const AtPin = z.strictObject({ block: UintStr.optional(), timestamp: UintStr.optional() });
+const AtPin = z.strictObject({
+  block: UintStr.optional().describe("pin the read to this block number for bit-identical replay"),
+  timestamp: UintStr.optional().describe("reserved for a later phase — accepted but not yet honored"),
+});
 
 export const ComputeParams = z.discriminatedUnion("kind", [
   z.strictObject({
       kind: z.literal("cst-swap-rate"),
       poolId: MarketId,
-      collateralAssetsOut: UintStr,
-    }),
+      collateralAssetsOut: TokenAmount,
+    }).describe("cost (cST shares + reference assets in) of taking an exact collateral amount out via safeSwap, at the current on-chain rate"),
   z.strictObject({
       kind: z.literal("unwind-rate"),
       poolId: MarketId,
-      collateralAssetsIn: UintStr,
-    }),
+      collateralAssetsIn: TokenAmount,
+    }).describe("reverse of cst-swap-rate: what putting an exact collateral amount back in returns"),
   z.strictObject({
       kind: z.literal("dutch-auction-price"),
       order: z.record(z.string(), z.unknown()),
       baseFeeWei: UintStr.optional(),
-    }),
+    }).describe("current decayed price of a 1inch Fusion dutch-auction order (phase-gated)"),
   z.strictObject({
       kind: z.literal("rollover-premium-floor"),
-      dstCstProduced: UintStr,
-      minPremiumPerShare: UintStr,
-    }),
+      dstCstProduced: TokenAmount,
+      minPremiumPerShare: TokenAmount,
+    }).describe("minimum premium a rollover order is guaranteed to earn — pure math, no RPC needed"),
   z.strictObject({
       kind: z.literal("impairment-floor"),
       poolId: MarketId,
-      horizonSeconds: z.number().int().min(0),
-    }),
+      horizonSeconds: z.number().int().min(0).describe("look-ahead horizon, relative seconds"),
+    }).describe("worst-case rate-constrained impairment over the horizon — a floor, not a forecast"),
   z.strictObject({
       kind: z.literal("rfq-quote"),
       marketTypeBucket: z.string(),
       durationSeconds: z.number().int().min(0),
       tokenRiskStats: z.record(z.string(), z.unknown()).optional(),
-    }),
+    }).describe("indicative RFQ quote for a market-type bucket (phase-gated)"),
 ]);
 export type ComputeParams = z.infer<typeof ComputeParams>;
 
@@ -115,7 +129,9 @@ export type ComputeInput = z.infer<typeof ComputeInput>;
 // 3. cork_decode (R3)
 // ────────────────────────────────────────────────────────────────────────────
 export const DecodeInput = z.object({
-  kind: z.enum(["calldata", "order", "event", "receipt"]),
+  kind: z
+    .enum(["calldata", "order", "event", "receipt"])
+    .describe("calldata=Cork/Bundler3 tx bytes → labeled legs (live); order/event/receipt are phase-gated and return unavailable"),
   data: z.union([Hex, z.record(z.string(), z.unknown())]),
   chainId: ChainId.optional(),
   format: Format,
@@ -128,103 +144,107 @@ export type DecodeInput = z.infer<typeof DecodeInput>;
 const A = <T extends string, S extends z.ZodRawShape>(t: T, shape: S) =>
   z.strictObject({ type: z.literal(t), ...shape });
 
+// One-line disambiguation per branch: near-twin variant names (withdraw vs redeem vs unwind-*)
+// are measured hard distractors for agents, and the min*/max* fields are slippage bounds whose
+// direction the description must carry (the field name alone under-specifies).
 export const PhoenixAction = z.discriminatedUnion("type", [
   A("mint", {
     poolId: MarketId,
-    cptAndCstSharesOut: UintStr,
+    cptAndCstSharesOut: TokenAmount,
     receiver: Address,
-    maxCollateralAssetsIn: UintStr,
-  }),
+    maxCollateralAssetsIn: TokenAmount,
+  }).describe("enter exact-OUT: buy an exact number of CPT+CST share pairs; maxCollateralAssetsIn is the slippage cap on collateral paid"),
   A("deposit", {
     poolId: MarketId,
-    collateralAssetsIn: UintStr,
+    collateralAssetsIn: TokenAmount,
     receiver: Address,
-    minCptAndCstSharesOut: UintStr,
-  }),
+    minCptAndCstSharesOut: TokenAmount,
+  }).describe("enter exact-IN: deposit an exact collateral amount; minCptAndCstSharesOut is the slippage floor on share pairs received"),
   A("unwind-deposit", {
     poolId: MarketId,
-    collateralAssetsOut: UintStr,
+    collateralAssetsOut: TokenAmount,
     owner: Address,
     receiver: Address,
-    maxCptAndCstSharesIn: UintStr,
-  }),
+    maxCptAndCstSharesIn: TokenAmount,
+  }).describe("exit exact-OUT (pre-expiry): burn share pairs to get an exact collateral amount back; maxCptAndCstSharesIn caps the pairs burned"),
   A("unwind-mint", {
     poolId: MarketId,
-    cptAndCstSharesIn: UintStr,
+    cptAndCstSharesIn: TokenAmount,
     owner: Address,
     receiver: Address,
-    minCollateralAssetsOut: UintStr,
-  }),
+    minCollateralAssetsOut: TokenAmount,
+  }).describe("exit exact-IN (pre-expiry): burn an exact number of share pairs; minCollateralAssetsOut floors the collateral returned"),
   A("withdraw", {
     poolId: MarketId,
-    collateralAssetsOut: UintStr,
+    collateralAssetsOut: TokenAmount,
     owner: Address,
     receiver: Address,
-    maxCptSharesIn: UintStr,
-  }),
+    maxCptSharesIn: TokenAmount,
+  }).describe("POST-expiry settle, exact collateral out: burn at most maxCptSharesIn CPT (CPT only — vs unwind-* which burn CPT+CST pairs pre-expiry)"),
   A("withdraw-other", {
     poolId: MarketId,
-    referenceAssetsOut: UintStr,
+    referenceAssetsOut: TokenAmount,
     owner: Address,
     receiver: Address,
-    maxCptSharesIn: UintStr,
-  }),
+    maxCptSharesIn: TokenAmount,
+  }).describe("POST-expiry settle, exact REFERENCE assets out (not collateral): burn at most maxCptSharesIn CPT"),
   A("redeem", {
     poolId: MarketId,
-    cptSharesIn: UintStr,
+    cptSharesIn: TokenAmount,
     owner: Address,
     receiver: Address,
-    minReferenceAssetsOut: UintStr,
-    minCollateralAssetsOut: UintStr,
-  }),
+    minReferenceAssetsOut: TokenAmount,
+    minCollateralAssetsOut: TokenAmount,
+  }).describe("POST-expiry settle, exact-IN: burn an exact CPT amount for pro-rata reference + collateral; both min* fields are slippage floors"),
   A("swap", {
     poolId: MarketId,
-    collateralAssetsOut: UintStr,
+    collateralAssetsOut: TokenAmount,
     receiver: Address,
-    maxCstSharesIn: UintStr,
-    maxReferenceAssetsIn: UintStr,
-  }),
+    maxCstSharesIn: TokenAmount,
+    maxReferenceAssetsIn: TokenAmount,
+  }).describe("coverage payout (safeSwap): take an exact collateral amount out, paying CST + reference in; both max* fields are slippage caps"),
   A("exercise", {
     poolId: MarketId,
-    cstSharesIn: UintStr,
+    cstSharesIn: TokenAmount,
     receiver: Address,
-    minCollateralAssetsOut: UintStr,
-    maxReferenceAssetsIn: UintStr,
-  }),
+    minCollateralAssetsOut: TokenAmount,
+    maxReferenceAssetsIn: TokenAmount,
+  }).describe("coverage payout exact-IN: burn an exact CST amount (+reference capped by maxReferenceAssetsIn) for collateral floored by minCollateralAssetsOut"),
   A("exercise-other", {
     poolId: MarketId,
-    referenceAssetsIn: UintStr,
+    referenceAssetsIn: TokenAmount,
     receiver: Address,
-    minCollateralAssetsOut: UintStr,
-    maxCstSharesIn: UintStr,
-  }),
+    minCollateralAssetsOut: TokenAmount,
+    maxCstSharesIn: TokenAmount,
+  }).describe("coverage payout pinned on the REFERENCE leg: pay an exact reference amount in, CST capped, collateral floored"),
   A("unwind-swap", {
     poolId: MarketId,
-    collateralAssetsIn: UintStr,
+    collateralAssetsIn: TokenAmount,
     receiver: Address,
-    minReferenceAssetsOut: UintStr,
-    minCstSharesOut: UintStr,
-  }),
+    minReferenceAssetsOut: TokenAmount,
+    minCstSharesOut: TokenAmount,
+  }).describe("reverse of swap: put an exact collateral amount back in, receiving CST + reference (both floored)"),
   A("unwind-exercise", {
     poolId: MarketId,
-    cstSharesOut: UintStr,
+    cstSharesOut: TokenAmount,
     receiver: Address,
-    minReferenceAssetsOut: UintStr,
-    maxCollateralAssetsIn: UintStr,
-  }),
+    minReferenceAssetsOut: TokenAmount,
+    maxCollateralAssetsIn: TokenAmount,
+  }).describe("reverse of exercise: recover an exact CST amount, paying collateral (capped) and receiving reference (floored)"),
   A("unwind-exercise-other", {
     poolId: MarketId,
-    referenceAssetsOut: UintStr,
+    referenceAssetsOut: TokenAmount,
     receiver: Address,
-    minCstSharesOut: UintStr,
-    maxCollateralAssetsIn: UintStr,
-  }),
+    minCstSharesOut: TokenAmount,
+    maxCollateralAssetsIn: TokenAmount,
+  }).describe("reverse of exercise-other, pinned on the REFERENCE leg: recover an exact reference amount; CST floored, collateral capped"),
   A("authority-onboard", {
     token: Address,
     spender: Address,
-    amount: UintStr.optional(),
-  }),
-  A("authority-revoke", { token: Address, spender: Address }),
+    amount: TokenAmount.optional(),
+  }).describe("token-authority op (phase-gated): grant a standing allowance; amount omitted = unlimited"),
+  A("authority-revoke", { token: Address, spender: Address })
+    .describe("token-authority op (phase-gated): zero out an allowance"),
 ]);
 export type PhoenixAction = z.infer<typeof PhoenixAction>;
 
@@ -234,12 +254,21 @@ export const PreparePhoenixInput = z.object({
   clientRequestId: ClientRequestId,
   fundingMode: z
     .enum(["permit2", "erc20-approve", "pre-funded"])
-    .default("permit2"),
-  deadlineSeconds: z.number().int().min(1).max(86400).default(1800),
+    .default("permit2")
+    .describe(
+      "how the bundle sources tokens: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 approve legs to the cork adapter; pre-funded=no funding legs (tokens already in place)",
+    ),
+  deadlineSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(86400)
+    .default(1800)
+    .describe("RELATIVE deadline, seconds from now — re-anchors to the clock on every call, so a retry produces different bytes; pass deadlineAt instead for byte-stable retries"),
   // Absolute deadline override (unix seconds). deadlineSeconds re-anchors to the clock on every
   // call, so a retry produces different bytes; pin deadlineAt to make same-id retries BYTE-STABLE
   // [K2 §9 deadline-basis].
-  deadlineAt: Uint64Str.optional(),
+  deadlineAt: UnixSeconds.optional(),
   action: PhoenixAction,
   format: Format,
 });
@@ -251,40 +280,42 @@ export type PreparePhoenixInput = z.infer<typeof PreparePhoenixInput>;
 export const OrdersAction = z.discriminatedUnion("type", [
   A("maker-order", {
     poolId: MarketId,
-    side: z.enum(["BUY", "SELL"]),
+    side: z.enum(["BUY", "SELL"]).describe("side from the MAKER's perspective for the venue listing"),
     makerAsset: Address,
     takerAsset: Address,
-    makingAmount: UintStr,
-    takingAmount: UintStr,
-    expirySeconds: z.number().int().min(1).optional(),
+    makingAmount: TokenAmount,
+    takingAmount: TokenAmount,
+    expirySeconds: z.number().int().min(1).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry)"),
     allowsPartialFills: z.boolean().default(true),
     usePermit2: z.boolean().default(false),
-    extension: Hex.optional(),
-  }),
-  A("taker-fill", { orderHash: Bytes32, fillMakingAmount: UintStr.optional() }),
-  A("cancel", { orderHash: Bytes32, makerTraits: UintStr }),
+    extension: Hex.optional().describe("1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check)"),
+  }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then cork_submit lop-order)"),
+  A("taker-fill", { orderHash: Bytes32, fillMakingAmount: TokenAmount.optional() })
+    .describe("fill calldata against a resting order (phase-gated: needs the orderbook service)"),
+  A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
+    .describe("on-chain cancel calldata for a resting LOP order you made"),
   A("rollover-intent", {
-    settler: Address,
+    settler: Address.describe("CorkSettler to bind to: ExactSettler (all-or-nothing) or PartialSettler (partial fills) — mode gate must match allowPartialFills"),
     rolloverContract: Address,
     srcPoolId: MarketId,
     dstPoolId: MarketId,
     srcCstToken: Address,
     dstCstToken: Address,
     premiumToken: Address,
-    orderSize: UintStr,
-    minPremiumPerShare: UintStr,
-    openDeadline: Uint64Str,
-    fillDeadline: Uint64Str,
-    minCaReceived: UintStr.optional(),
-    minSharesOut: UintStr.optional(),
-    allowPartialFills: z.boolean().default(false),
+    orderSize: TokenAmount,
+    minPremiumPerShare: TokenAmount,
+    openDeadline: UnixSeconds,
+    fillDeadline: UnixSeconds,
+    minCaReceived: TokenAmount.optional(),
+    minSharesOut: TokenAmount.optional(),
+    allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
     allowUnderfill: z.boolean().default(false),
-    premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional(),
+    premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
     fillerHint: Address.optional(),
     exclusiveFiller: Address.optional(),
-    orderSalt: Uint64Str.optional(),
+    orderSalt: Uint64Str.optional().describe("pin for byte-stable retries; omitted = derived from clientRequestId"),
     nonce: Uint64Str.optional(),
-  }),
+  }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"),
 ]);
 export const PrepareOrdersInput = z.object({
   chainId: ChainId,
@@ -315,16 +346,18 @@ export const TrackSubject = z.discriminatedUnion("kind", [
   z.strictObject({
       kind: z.literal("artifact"),
       artifact: z.record(z.string(), z.unknown()),
-    }),
-  z.strictObject({ kind: z.literal("txHash"), txHash: Bytes32 }),
-  z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }),
-  z.strictObject({ kind: z.literal("marketRef"), poolId: MarketId }),
-  z.strictObject({ kind: z.literal("submissionRef"), submissionRef: z.string() }),
+    }).describe("a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is [K3]"),
+  z.strictObject({ kind: z.literal("txHash"), txHash: Bytes32 }).describe("an on-chain transaction — reconcile its receipt to an outcome"),
+  z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }).describe("a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state [K7]"),
+  z.strictObject({ kind: z.literal("marketRef"), poolId: MarketId }).describe("a pool — re-hash its MarketId against live chain state"),
+  z.strictObject({ kind: z.literal("submissionRef"), submissionRef: z.string() }).describe("a prior cork_submit reference — resolve it to a lifecycle state"),
 ]);
 export type TrackSubject = z.infer<typeof TrackSubject>;
 
 export const TrackInput = z.object({
-  mode: z.enum(["verify", "simulate", "reconcile"]),
+  mode: z
+    .enum(["verify", "simulate", "reconcile"])
+    .describe("verify=check a resource against deployed chain state; reconcile=resolve a receipt/order to a closed lifecycle state; simulate=dry-run frozen bytes (phase-gated)"),
   subject: TrackSubject,
   expect: z.object({ artifactDigest: Bytes32 }).optional(),
   chainId: ChainId.optional(),
@@ -349,7 +382,7 @@ export type CapabilitiesInput = z.infer<typeof CapabilitiesInput>;
 // recomputed locally before relaying [K3].
 const HookCallWire = z.strictObject({
   target: Address,
-  value: UintStr,
+  value: UintStr.describe("native value in wei, decimal string"),
   callData: Hex,
   allowFailure: z.boolean(),
   isDelegateCall: z.boolean(),
@@ -357,8 +390,8 @@ const HookCallWire = z.strictObject({
 const RolloverParamsWire = z.strictObject({
   srcCstToken: Address,
   dstCstToken: Address,
-  minCaReceived: UintStr,
-  minSharesOut: UintStr,
+  minCaReceived: TokenAmount,
+  minSharesOut: TokenAmount,
   srcPoolId: Bytes32,
   dstPoolId: Bytes32,
   settler: Address,
@@ -374,20 +407,20 @@ const RolloverOrderWire = z.strictObject({
   rolloverContract: Address,
   originChainId: Uint64Str,
   destinationChainId: Uint64Str,
-  openDeadline: Uint64Str,
-  fillDeadline: Uint64Str,
+  openDeadline: UnixSeconds,
+  fillDeadline: UnixSeconds,
   orderSalt: Uint64Str,
-  orderSize: UintStr,
-  minPremiumPerShare: UintStr,
+  orderSize: TokenAmount,
+  minPremiumPerShare: TokenAmount,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
   premiumPaymentMode: z.union([z.literal(0), z.literal(1)]),
-  rolloverIntentHash: Bytes32,
+  rolloverIntentHash: Bytes32.describe("EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed [K3]"),
   rolloverParams: RolloverParamsWire,
 });
 const RolloverIntentWire = z.strictObject({
   rolloverContract: Address,
-  deadline: Uint64Str,
+  deadline: UnixSeconds,
   nonce: Uint64Str,
   preRolloverHooks: z.array(HookCallWire).max(32),
   midRolloverHooks: z.array(HookCallWire).max(32),
@@ -400,8 +433,8 @@ const LopOrderStructWire = z.strictObject({
   receiver: Address,
   makerAsset: Address,
   takerAsset: Address,
-  makingAmount: UintStr,
-  takingAmount: UintStr,
+  makingAmount: TokenAmount,
+  takingAmount: TokenAmount,
   makerTraits: UintStr,
 });
 const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
@@ -410,44 +443,47 @@ export const SubmitAction = z.discriminatedUnion("type", [
   A("rollover-order", {
     order: RolloverOrderWire,
     intent: RolloverIntentWire,
-    signature: Hex,
-  }),
+    signature: Hex.describe("the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs [K1]"),
+  }).describe("relay a caller-signed rollover ERC-7683 order to the venue (build it with cork_prepare_orders rollover-intent)"),
   A("lop-order", {
     order: LopOrderStructWire,
-    signature: Hex,
+    signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]"),
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
-    premium: z.number(),
-    expiry: z.number().int().nonnegative(),
+    premium: z.number().describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires"),
+    expiry: z.number().int().nonnegative().describe("absolute unix seconds; 0 = no expiry"),
     nonce: UintStr,
     allowsPartialFills: z.boolean(),
     makerAccountType: z.enum(["EOA", "ERC1271"]).default("EOA"),
     makerPermit2: Hex.default("0x"),
-    quoteRef: QuoteRef.optional(),
-  }),
+    quoteRef: QuoteRef.optional().describe("the RFQ answer option this order executes, if any — premium is cross-checked against it before relay"),
+  }).describe("relay a caller-signed 1inch LOP v4 maker order to the venue orderbook (build it with cork_prepare_orders maker-order)"),
   A("rfq-open", {
     requester: Address,
     referenceAsset: Address,
     collateralAsset: z.union([
-      z.strictObject({ exact: Address }),
-      z.strictObject({ one_of: z.array(Address).min(1).max(8) }),
+      z.strictObject({ exact: Address }).describe("exactly this collateral token"),
+      z.strictObject({ one_of: z.array(Address).min(1).max(8) }).describe("any of these collateral tokens is acceptable"),
     ]),
     modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1),
     packageIds: z.array(z.string()).min(1).max(8),
-    expiryWindow: z.strictObject({ notBefore: z.number().int(), notAfter: z.number().int() }),
+    expiryWindow: z.strictObject({
+      notBefore: z.number().int().describe("earliest acceptable pool expiry, absolute unix seconds"),
+      notAfter: z.number().int().describe("latest acceptable pool expiry, absolute unix seconds"),
+    }),
     marketTemplate: z.record(z.string(), z.unknown()).optional(),
-    notionalAssets: UintStr,
-    validUntil: z.number().int(),
+    notionalAssets: TokenAmount,
+    validUntil: z.number().int().describe("RFQ validity cutoff, absolute unix seconds"),
     signature: Hex,
-  }),
+  }).describe("open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"),
   A("rfq-answer", {
     rfqId: z.string().min(1),
     underwriter: Address,
-    status: z.enum(["quoted", "pass"]),
-    options: z.array(z.record(z.string(), z.unknown())).max(16).optional(),
+    status: z.enum(["quoted", "pass"]).describe("quoted=submitting priced options; pass=declining (give reasonCode)"),
+    options: z.array(z.record(z.string(), z.unknown())).max(16).optional().describe("priced quote options; premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%)"),
     reasonCode: z.enum(["NO_CAPACITY", "PAIR_UNSUPPORTED", "TENOR_NOT_QUOTED", "PASS"]).optional(),
     signature: Hex,
-  }),
+  }).describe("answer an open RFQ as an underwriter: priced options or a pass"),
 ]);
 
 export const SubmitInput = z.object({

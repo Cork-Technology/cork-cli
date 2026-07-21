@@ -22,13 +22,15 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: REGISTRY.map((t) => ({
       name: t.name,
+      // Display-only label (models see name/description/schema; title is client-UI plumbing).
+      title: t.title,
       // One worked example inline (shipped input examples measurably raise parameter accuracy);
       // the full example set + filled templates live behind cork_capabilities [C13].
       description: t.description + descriptionExample(t.name),
       inputSchema: inputJsonSchema(t.name) as { type: "object" },
       outputSchema: ENVELOPE_SCHEMA,
       annotations: {
-        title: t.name,
+        title: t.title,
         readOnlyHint: t.annotations.readOnlyHint,
         ...(t.annotations.idempotentHint !== undefined ? { idempotentHint: t.annotations.idempotentHint } : {}),
         ...(t.annotations.destructiveHint !== undefined ? { destructiveHint: t.annotations.destructiveHint } : {}),

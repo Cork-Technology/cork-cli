@@ -1,5 +1,11 @@
 # Designing Multipurpose MCP Tools That Agents Actually Use Well
 
+> **2026-07 update:** the frontier has moved since this guide was written — see
+> `notes/research/mcp-frontier-2026.md` for what changed (MCP 2025-11-25 / 2026-07-28 RC,
+> `$defs` dedup now spec-legal, per-value enum semantics, measured parameter-format ROI for
+> DeFi servers, Claude Code's ~10K-token defer threshold) and which items were applied to
+> `packages/schemas` in the 2026-07 schema pass.
+
 Research-backed design guide for Cork's polymorphic tool surface (companion to
 `cork-cli-mcp-requirements-v2.md` §5; expands it into concrete mechanics). The question it
 answers: **how does one generic tool stay as easy to use as a dozen specialized ones,
