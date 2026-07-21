@@ -101,6 +101,19 @@ validation corpus + 12 offline handler envelopes diffed against the pre-pass tre
 verdict diffs, all prepared artifacts byte-identical; only the capabilities surface-report
 calls differ (intentionally). Layer B agent evals are the outstanding gate (CI-only).
 
+**Live A/B eval (2026-07-21, headless `claude -p` sessions against each tree's real MCP
+server; 10 tasks targeting the changed surface; haiku-4.5 as the sensitive grader tier,
+sonnet-5 spot-checks):** old schema 9/10 selection + 9/10 params; new schema 10/10 + 10/10.
+No degradation on any task. Two measured wins: the near-twin post-expiry task went from
+5-call exploration (old; one rep even *recommended the wrong variant*, redeem instead of
+withdraw-other) to 1 direct correct call, and the wrong-scale amount class (old sent 1e18
+for "1000 cST") resolved. Zero schema-invalid tool calls in ~40 runs. Two fix-loop
+iterations landed from observed misses: TokenAmount pass-through clause (raw base-unit
+integers are not rescaled) and a whole-number scaling example (1000 → '1000'+18 zeros).
+Residual: haiku occasionally drops the ×1000 on round-number scaling — identical on the
+old schema and deterministic-correct on sonnet-5, i.e. model-tier arithmetic noise, not
+schema-addressable. Harness: `/tmp/cork-pipeline/research/mcp26a/harness/ab/`.
+
 1. `$defs`/`$ref` dedup via `.meta({id})` primitives + `z.toJSONSchema(…, { reused: "ref" })`.
 2. `TokenAmount` / `UnixSeconds` registered primitives so unit/scale/format semantics ride
    every amount/deadline field at ~zero marginal wire cost.

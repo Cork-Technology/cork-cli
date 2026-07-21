@@ -16,7 +16,7 @@
     "name": "cork_compute",
     "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building. Example — How much cST + reference does 1 sUSDe out cost right now?: {\"params\":{\"kind\":\"cst-swap-rate\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsOut\":\"1000000000000000000\"}}",
     "descriptionTokensApprox": 105,
-    "inputSchemaSha256": "8caa83ad1e619c0f23cdb0b5959a2d8f374bd3483814c7ed43aeb73fa8dee058",
+    "inputSchemaSha256": "d35b556b25f9133c6e2622af8cb338f006a9dc866a742627f3c1753d93f14963",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: deterministic math",
@@ -52,7 +52,7 @@
     "name": "cork_prepare_phoenix",
     "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
     "descriptionTokensApprox": 222,
-    "inputSchemaSha256": "9d9d5fee18564b0c23c096a25cadbe10d69c321fca1c4ec89d40f58b5fe6fda7",
+    "inputSchemaSha256": "edc921f4b33ca775cb2e308b500e639be6f10abc96fa7977931f832a2e392859",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: build unsigned Phoenix bundle",
@@ -64,7 +64,7 @@
     "name": "cork_prepare_orders",
     "description": "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit. Example — Signable maker order: sell 1 sUSDe for 1 vbUSDC: {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-order-0001\",\"action\":{\"type\":\"maker-order\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"side\":\"SELL\",\"makerAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"takerAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"makingAmount\":\"1000000000000000000\",\"takingAmount\":\"1000000\",\"expirySeconds\":3600}}",
     "descriptionTokensApprox": 172,
-    "inputSchemaSha256": "0c6ce1a6f5fb1d489f0fb74c21a2c4c19dadb3e835516abe3dfb20c439ed293e",
+    "inputSchemaSha256": "2206e6b024c83c2a3473b44e43c5ca9300278f0c2052202cbabead07c40a6069",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: build signable order",
@@ -100,7 +100,7 @@
     "name": "cork_submit",
     "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer. Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xc0ffee0000000000000000000000000000000001\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x8f3b00000000000000000000000000000000000000000000000000000000001c\"}}",
     "descriptionTokensApprox": 496,
-    "inputSchemaSha256": "5d010e8ed89a796c03ab1d27bc6250761288b8a28a06ce10c984e2059e9e1936",
+    "inputSchemaSha256": "f5da3170d47f381252ed260ae44b5797aa89efb7193e11392e26e60a71bec490",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: relay signed payload to venue",

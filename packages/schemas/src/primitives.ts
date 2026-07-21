@@ -57,7 +57,7 @@ export const TokenAmount = z
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
   .refine((v) => BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
   .describe(
-    "token amount in the token's own smallest unit (wei-style — respect that token's decimals, e.g. 1e18 for 18-decimals, 1e6 for USDC-style), decimal string. NOT a human-readable decimal",
+    "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
   )
   .meta({ id: "TokenAmount" });
 
