@@ -94,6 +94,13 @@ fast_path: parallel_leaves — sections + source list were caller-baked; sources
 
 ## Applied (2026-07 pass)
 
+Measured net effect (full `tools/list` payload, before → after): 53,814B → 58,770B
+(**+9.2%**, ~13.5K → ~14.7K tokens). The `$defs` dedup only offset part of the added
+semantics (phoenix −5%, submit −1%; every read tool grew). Regression harness: 103-case
+validation corpus + 12 offline handler envelopes diffed against the pre-pass tree — zero
+verdict diffs, all prepared artifacts byte-identical; only the capabilities surface-report
+calls differ (intentionally). Layer B agent evals are the outstanding gate (CI-only).
+
 1. `$defs`/`$ref` dedup via `.meta({id})` primitives + `z.toJSONSchema(…, { reused: "ref" })`.
 2. `TokenAmount` / `UnixSeconds` registered primitives so unit/scale/format semantics ride
    every amount/deadline field at ~zero marginal wire cost.

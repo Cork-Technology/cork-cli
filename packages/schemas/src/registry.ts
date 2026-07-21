@@ -179,9 +179,10 @@ function inlineAnonymousDefs(doc: unknown): unknown {
 
 /** JSON Schema (draft used by zod v4) for a tool's input — the MCP inputSchema.
  *  `reused: "ref"` + the `.meta({ id })` primitives emit each shared primitive once per document
- *  as a named `$defs` entry ($ref at use sites) — cuts the union-heavy tools' wire size
- *  (spec-legal per JSON Schema 2020-12 / SEP-2106; Claude+OpenAI follow $ref). Anonymous
- *  extractions are folded back inline so discriminator consts stay visible in place. */
+ *  as a named `$defs` entry ($ref at use sites); the size win is modest (phoenix −5%) — the point
+ *  is one-place unit/format teaching on shared primitives (spec-legal per JSON Schema 2020-12 /
+ *  SEP-2106; Claude+OpenAI follow $ref). Anonymous extractions are folded back inline so
+ *  discriminator consts stay visible in place. */
 export function inputJsonSchema(name: ToolName): unknown {
   const t = toolByName(name);
   if (!t) throw new Error(`unknown tool: ${name}`);

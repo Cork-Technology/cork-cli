@@ -10,8 +10,9 @@ const hex = <T extends `0x${string}`>(re: RegExp, msg: string) =>
 // instead of silently normalizing (getAddress never rejects) or throwing deep in viem at encode time.
 //
 // The multi-use primitives carry `.meta({ id })` so z.toJSONSchema({ reused: "ref" }) emits each
-// ONCE per tool document as a named `$defs` entry with `$ref`s at every use site — cuts the
-// advertised wire size of union-heavy tools (prepare_phoenix/submit) roughly in half. `$ref` is
+// ONCE per tool document as a named `$defs` entry with `$ref`s at every use site. Measured effect
+// is modest (prepare_phoenix −5% wire) — the real payoff is that a $defs description (TokenAmount,
+// UnixSeconds) teaches unit/format once and rides every use site at ~zero marginal cost. `$ref` is
 // Claude/OpenAI-safe and spec-legal (JSON Schema 2020-12 default since MCP 2025-11-25, SEP-2106);
 // see notes/research/mcp-frontier-2026.md.
 export const Address = z
