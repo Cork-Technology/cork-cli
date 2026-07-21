@@ -8,6 +8,7 @@ import {
   resetConfigMemo,
   resolveConfig,
   resolveDeployment,
+  resolveRollover,
   type ConfigDeps,
   type StoredCache,
 } from "@cork/core";
@@ -157,5 +158,36 @@ describe("resolveConfig precedence", () => {
 
   it("parseDefaults enforces checksummed addresses", () => {
     expect(() => parseDefaults({ schemaVersion: 1, updated: "x", deployments: { "1": { poolManager: "0xccccccccccccfae2ee43f0e727a8c2969d74b9ec".toUpperCase(), constraintAdapter: "0x0" } }, lopAddresses: {} })).toThrow();
+  });
+});
+
+describe("resolveRollover", () => {
+  it("returns the bundled Arbitrum rollover deployment (factory + both settlers + seed block)", async () => {
+    const r = await resolveRollover(42161);
+    expect(r.rollover).toMatchObject({
+      factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
+      exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
+      partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+      settlerDomain: { name: "CorkSettler", version: "1.0.0" },
+      seededAtBlock: 484973917,
+    });
+  });
+  it("is undefined for chains without a rollover deployment", async () => {
+    const r = await resolveRollover(1);
+    expect(r.rollover).toBeUndefined();
+  });
+});
+
+describe("deploymentProfiles in the bundled defaults", () => {
+  it("the arbitrum-staging profile carries the full tx-path contract set", async () => {
+    const cfg = await resolveConfig();
+    const staging = cfg.defaults.deploymentProfiles?.["42161"]?.["arbitrum-staging"];
+    expect(staging).toMatchObject({
+      poolManager: "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
+      corkAdapter: "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
+      bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+    });
+    // distinct from the production read-path deployment on the same chain
+    expect(cfg.defaults.deployments["42161"]?.poolManager).not.toBe(staging?.poolManager);
   });
 });

@@ -8,6 +8,7 @@ import {
   Format,
   Hex,
   MarketId,
+  Uint64Str,
   UintStr,
 } from "./primitives.ts";
 
@@ -268,8 +269,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
     premiumToken: Address,
     orderSize: UintStr,
     minPremiumPerShare: UintStr,
-    openDeadline: UintStr,
-    fillDeadline: UintStr,
+    openDeadline: Uint64Str,
+    fillDeadline: Uint64Str,
     minCaReceived: UintStr.optional(),
     minSharesOut: UintStr.optional(),
     allowPartialFills: z.boolean().default(false),
@@ -277,8 +278,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional(),
     fillerHint: Address.optional(),
     exclusiveFiller: Address.optional(),
-    orderSalt: UintStr.optional(),
-    nonce: UintStr.optional(),
+    orderSalt: Uint64Str.optional(),
+    nonce: Uint64Str.optional(),
   }),
 ]);
 export const PrepareOrdersInput = z.object({
@@ -367,11 +368,11 @@ const RolloverOrderWire = z.strictObject({
   dstCstToken: Address,
   premiumToken: Address,
   rolloverContract: Address,
-  originChainId: UintStr,
-  destinationChainId: UintStr,
-  openDeadline: UintStr,
-  fillDeadline: UintStr,
-  orderSalt: UintStr,
+  originChainId: Uint64Str,
+  destinationChainId: Uint64Str,
+  openDeadline: Uint64Str,
+  fillDeadline: Uint64Str,
+  orderSalt: Uint64Str,
   orderSize: UintStr,
   minPremiumPerShare: UintStr,
   allowPartialFills: z.boolean(),
@@ -382,8 +383,8 @@ const RolloverOrderWire = z.strictObject({
 });
 const RolloverIntentWire = z.strictObject({
   rolloverContract: Address,
-  deadline: UintStr,
-  nonce: UintStr,
+  deadline: Uint64Str,
+  nonce: Uint64Str,
   preRolloverHooks: z.array(HookCallWire).max(32),
   midRolloverHooks: z.array(HookCallWire).max(32),
   postRolloverHooks: z.array(HookCallWire).max(32),

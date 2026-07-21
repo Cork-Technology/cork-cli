@@ -355,3 +355,88 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     expect(BigInt(d.typedData.message.makerTraits) & (1n << 249n)).toBe(1n << 249n); // HAS_EXTENSION_FLAG
   });
 });
+
+describe("edge branches: pass answers, hooks round-trip, list shapes, transport oddities", () => {
+  it("rfq-answer 'pass' relays reason_code (defaults to PASS) and never options", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_submit",
+      { chainId: 42161, clientRequestId: "test-pass-0001", action: { type: "rfq-answer", rfqId: "rfq_9", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "pass", reasonCode: "NO_CAPACITY", signature: "0x00" } },
+      ctxWith([{ match: "/rfqs/rfq_9/answers", status: 201, body: { answer_id: "ans_9" } }], seen),
+    );
+    expect(env.state).toBe("ok");
+    const body = seen[0]!.body as Record<string, unknown>;
+    expect(body.reason_code).toBe("NO_CAPACITY");
+    expect(body.options).toBeUndefined();
+    expect(body.status).toBe("pass");
+  });
+
+  it("rollover-order with NON-EMPTY hooks: recomputed hash matches → relayed with the hooks intact", async () => {
+    // Build a coherent hooked payload from the library itself, then relay it.
+    const { intentStructHash } = await import("@cork/core");
+    const hook = { target: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", value: "0", callData: "0xdeadbeef", allowFailure: false, isDelegateCall: true };
+    const example = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as {
+      action: { order: Record<string, unknown> & { rolloverIntentHash: string }; intent: Record<string, unknown> };
+    };
+    example.action.intent.preRolloverHooks = [hook];
+    example.action.order.rolloverIntentHash = intentStructHash({
+      rolloverContract: example.action.intent.rolloverContract as `0x${string}`,
+      orderDigest: `0x${"00".repeat(32)}`,
+      deadline: BigInt(example.action.intent.deadline as string),
+      nonce: BigInt(example.action.intent.nonce as string),
+      preRolloverHooks: [{ target: hook.target as `0x${string}`, value: 0n, callData: "0xdeadbeef", allowFailure: false, isDelegateCall: true }],
+      midRolloverHooks: [],
+      postRolloverHooks: [],
+      premiumHooks: [],
+    });
+    const seen: Seen[] = [];
+    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("ok");
+    const posted = seen[0]!.body as { intent: { preRolloverHooks: unknown[] } };
+    expect(posted.intent.preRolloverHooks.length).toBe(1);
+  });
+
+  it("bare-array venue responses parse as lists (shape tolerance)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "limit-order-markets", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/limit-orders/markets", body: [{ poolId: "0x1" }, { poolId: "0x2" }] }]),
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { count: number }).count).toBe(2);
+  });
+
+  it("quote_ref citing an unknown RFQ → invalid_order_terms, NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_submit",
+      { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order: { salt: "1", maker: "0xc0ffee0000000000000000000000000000000001", receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", makerTraits: "0" }, signature: "0x00", side: "SELL", premium: 3.6, expiry: 1, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
+      ctxWith([{ match: "/rfqs/rfq_missing", status: 404, body: { message: "not found" } }], seen),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(seen.filter((s) => s.method === "POST").length).toBe(0);
+  });
+
+  it("venue POST with an empty (non-JSON) error body keeps the HTTP status", async () => {
+    const env = await runTool(
+      "cork_submit",
+      TOOL_EXAMPLES.cork_submit![1]!.input,
+      { nowSeconds: NOW, venueFetch: async () => new Response(null, { status: 503 }) },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("venue_rejected");
+    expect(env.warnings[0]?.message).toContain("503");
+  });
+
+  it("submissionRef with an rfq_ prefix explains itself instead of guessing", async () => {
+    const env = await runTool(
+      "cork_track",
+      { mode: "reconcile", subject: { kind: "submissionRef", submissionRef: "rfq_abc123" }, format: "concise" },
+      ctxWith([]),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("order_not_found");
+    expect(env.warnings[0]?.message).toContain("rfq_");
+  });
+});

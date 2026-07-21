@@ -61,3 +61,40 @@ describe("teaching errors", () => {
     expect(nearestValue("zzzzzzzzzz", ["cst-swap-rate", "unwind-rate"])).toBeUndefined();
   });
 });
+
+describe("teaching builder: defensive branches", () => {
+  it("tolerates non-array issues (never throws on malformed zod output)", () => {
+    const t = buildTeaching("cork_query", { weird: true }, {});
+    expect(t.issues).toEqual([]);
+    expect(t.summary).toBe("invalid input for cork_query");
+    expect(t.remediation).toContain("closed");
+  });
+
+  it("walks array indices in issue paths to fetch the received value for suggestions", () => {
+    const t = buildTeaching(
+      "cork_query",
+      [{ code: "invalid_value", path: ["filters", "list", 0], message: "bad", values: ["orders", "fills", "contracts"] }],
+      { filters: { list: ["ordrs"] } },
+    );
+    expect(t.issues[0]?.suggestion).toBe('did you mean "orders"?');
+    expect(t.issues[0]?.expected).toBe("orders | fills | contracts");
+  });
+
+  it("offers NO suggestion when the received value is not levenshtein-close to any legal value", () => {
+    const t = buildTeaching(
+      "cork_query",
+      [{ code: "invalid_value", path: ["resource"], message: "bad", values: ["markets", "orderbook"] }],
+      { resource: "completely-unrelated-thing" },
+    );
+    expect(t.issues[0]?.suggestion).toBeUndefined();
+  });
+
+  it("non-string received values (objects) never produce a suggestion", () => {
+    const t = buildTeaching(
+      "cork_query",
+      [{ code: "invalid_value", path: ["resource"], message: "bad", values: ["markets"] }],
+      { resource: { nested: true } },
+    );
+    expect(t.issues[0]?.suggestion).toBeUndefined();
+  });
+});

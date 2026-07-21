@@ -143,3 +143,66 @@ describe("decode fidelity", () => {
     expect(rows[0]!.expiry).toBe("1798761600");
   });
 });
+
+describe("full-decentralized fills paths (previously untested decode surfaces)", () => {
+  const DIGEST = `0x${"5".repeat(64)}` as const;
+  const FILLER = "0x00000000000000000000000000000000deadbeef";
+  const SETTLER = "0x983270ae48545665cee4d7ef61c65ff3fdc8222d";
+  const LOP = "0x111111125421ca6dc452d289314280a0f8842a65";
+
+  const fillAbis = parseAbi([
+    "event RolloverLegFilled(bytes32 indexed orderDigest, address indexed filler, bytes32 indexed subFiller, uint256 srcCstProvided, uint256 dstCstProduced)",
+    "event PremiumLegFilled(bytes32 indexed orderDigest, address indexed premiumPayer, address indexed rolloverFiller, bytes32 subFiller, uint256 premium)",
+    "event DefaulterResidualReclaimed(bytes32 indexed orderId, address indexed defaulterFiller, address indexed recipientRolloverContract, uint256 amount)",
+    "event OrderFilled(bytes32 orderHash, uint256 remainingAmount)",
+  ]);
+
+  function evLog(eventName: "RolloverLegFilled" | "PremiumLegFilled" | "DefaulterResidualReclaimed", args: Record<string, unknown>, data: `0x${string}`): HyperSyncLog {
+    const topics = encodeEventTopics({ abi: fillAbis, eventName, args } as never);
+    return { address: SETTLER, topics: [...topics] as Array<string | null>, data, blockNumber: 485000010, transactionHash: `0x${"ee".repeat(32)}` };
+  }
+
+  it("flows kind=fills: all three leg kinds decode with amounts (real encodings)", async () => {
+    const logs = [
+      evLog("RolloverLegFilled", { orderDigest: DIGEST, filler: FILLER, subFiller: `0x${"0".repeat(64)}` }, encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [100n, 95n])),
+      evLog("PremiumLegFilled", { orderDigest: DIGEST, premiumPayer: FILLER, rolloverFiller: FILLER }, encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [`0x${"0".repeat(64)}`, 12n])),
+      evLog("DefaulterResidualReclaimed", { orderId: DIGEST, defaulterFiller: FILLER, recipientRolloverContract: "0xc10e000000000000000000000000000000000001" }, encodeAbiParameters([{ type: "uint256" }], [5n])),
+    ];
+    const byTopic: Record<string, HyperSyncLog[]> = {};
+    for (const l of logs) byTopic[l.topics[0]!] = [...(byTopic[l.topics[0]!] ?? []), l];
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "flows", chainId: 42161, mode: "full-decentralized", filters: { kind: "fills", orderDigest: DIGEST }, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource(byTopic, seen) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { items: Array<Record<string, unknown>> };
+    expect(d.items.map((i) => i.leg).sort()).toEqual(["PREMIUM", "RECLAIM", "ROLLOVER"]);
+    const roll = d.items.find((i) => i.leg === "ROLLOVER")!;
+    expect(roll).toMatchObject({ srcCstProvided: "100", dstCstProduced: "95" });
+    // both settlers scanned from the seeding block
+    expect(seen[0]!.fromBlock).toBe(484973917);
+    expect(seen[0]!.address!.length).toBe(2);
+  });
+
+  it("fills (LOP): OrderFilled decodes from data (non-indexed) and orderHash filters client-side", async () => {
+    const mk = (hash: `0x${string}`): HyperSyncLog => ({
+      address: LOP,
+      topics: [encodeEventTopics({ abi: fillAbis, eventName: "OrderFilled" })[0] as string],
+      data: encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [hash, 42n]),
+      blockNumber: 485000011,
+      transactionHash: `0x${"ff".repeat(32)}`,
+    });
+    const topic = encodeEventTopics({ abi: fillAbis, eventName: "OrderFilled" })[0] as string;
+    const env = await runTool(
+      "cork_query",
+      { resource: "fills", chainId: 42161, mode: "full-decentralized", filters: { orderHash: DIGEST }, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [topic]: [mk(DIGEST), mk(`0x${"6".repeat(64)}`)] }) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; items: Array<Record<string, unknown>> };
+    expect(d.count).toBe(1); // the foreign hash was filtered out
+    expect(d.items[0]).toMatchObject({ orderHash: DIGEST, remainingAmount: "42", lop: LOP });
+  });
+});

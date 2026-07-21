@@ -230,3 +230,125 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     expect(a.provenance.digest).toBe(b.provenance.digest);
   });
 });
+
+describe("intent hashing with NON-EMPTY hooks (the hard path: Call struct + array hashing)", () => {
+  const HOOK = {
+    target: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" as const,
+    value: 0n,
+    callData: "0xdeadbeef" as const,
+    allowFailure: false,
+    isDelegateCall: true,
+  };
+  const intentWithHooks = {
+    rolloverContract: CLONE,
+    orderDigest: zeroHash,
+    deadline: 1_795_604_800n,
+    nonce: 7n,
+    preRolloverHooks: [HOOK],
+    midRolloverHooks: [],
+    postRolloverHooks: [HOOK, { ...HOOK, callData: "0x" as const, isDelegateCall: true }],
+    premiumHooks: [],
+  };
+
+  it("matches viem's independent EIP-712 struct hashing (recomposed through hashTypedData)", async () => {
+    // hashTypedData(domain, types, msg) = keccak(0x1901 ‖ hashDomain ‖ structHash). viem derives
+    // the struct hash (incl. Call[] array + nested-struct rules) from the types object on its
+    // own — if our Solidity-ported intentStructHash agrees, both implementations agree on the
+    // hook-hashing rules (keccak(callData), per-element struct hash, concat-then-keccak).
+    const { hashTypedData, hashDomain, keccak256: k, concatHex: cat } = await import("viem");
+    const INTENT_TYPES = {
+      RolloverIntent: [
+        { name: "rolloverContract", type: "address" },
+        { name: "orderDigest", type: "bytes32" },
+        { name: "deadline", type: "uint64" },
+        { name: "nonce", type: "uint64" },
+        { name: "preRolloverHooks", type: "Call[]" },
+        { name: "midRolloverHooks", type: "Call[]" },
+        { name: "postRolloverHooks", type: "Call[]" },
+        { name: "premiumHooks", type: "Call[]" },
+      ],
+      Call: [
+        { name: "target", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "callData", type: "bytes" },
+        { name: "allowFailure", type: "bool" },
+        { name: "isDelegateCall", type: "bool" },
+      ],
+    } as const;
+    const domain = { name: "X", version: "1", chainId: 1, verifyingContract: CLONE } as const;
+    const viaViem = hashTypedData({ domain, types: INTENT_TYPES, primaryType: "RolloverIntent", message: intentWithHooks });
+    const domainSep = hashDomain({
+      domain: { ...domain, chainId: 1n },
+      types: { EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ] },
+    });
+    const recomposed = k(cat(["0x1901", domainSep, intentStructHash(intentWithHooks)]));
+    expect(recomposed).toBe(viaViem);
+  });
+
+  it("every hook field is commitment-bearing (callData, isDelegateCall, ordering, array slot)", () => {
+    const base = intentStructHash(intentWithHooks);
+    expect(intentStructHash({ ...intentWithHooks, preRolloverHooks: [{ ...HOOK, callData: "0xdeadbeee" }] })).not.toBe(base);
+    expect(intentStructHash({ ...intentWithHooks, preRolloverHooks: [{ ...HOOK, isDelegateCall: false }] })).not.toBe(base);
+    // same hook moved to a different phase array → different commitment
+    expect(intentStructHash({ ...intentWithHooks, preRolloverHooks: [], midRolloverHooks: [HOOK] })).not.toBe(base);
+    // order within an array matters
+    const twoA = intentStructHash({ ...intentWithHooks, postRolloverHooks: [HOOK, { ...HOOK, callData: "0x" }] });
+    const twoB = intentStructHash({ ...intentWithHooks, postRolloverHooks: [{ ...HOOK, callData: "0x" }, HOOK] });
+    expect(twoA).not.toBe(twoB);
+  });
+});
+
+describe("input bounds are teachable invalid input, never internal errors (regression: uint64/uint256 overflow)", () => {
+  const base = {
+    chainId: 42161,
+    account: CLONE,
+    clientRequestId: "test-bounds-01",
+    action: {
+      type: "rollover-intent",
+      settler: EXACT,
+      rolloverContract: CLONE,
+      srcPoolId: SRC_POOL,
+      dstPoolId: DST_POOL,
+      srcCstToken: SRC_CST,
+      dstCstToken: DST_CST,
+      premiumToken: SRC_CST,
+      orderSize: "1000",
+      minPremiumPerShare: "1",
+      openDeadline: String(NOW + 1n),
+      fillDeadline: String(NOW + 2n),
+    },
+  };
+  const U64_MAX = (1n << 64n) - 1n;
+  const U256_MAX = (1n << 256n) - 1n;
+
+  it("fillDeadline > uint64 → ToolInputError naming the field (was: raw viem IntegerOutOfRange)", async () => {
+    await expect(
+      runTool("cork_prepare_orders", { ...base, action: { ...base.action, fillDeadline: String(U64_MAX + 1n) } }, ctx),
+    ).rejects.toMatchObject({ name: "ToolInputError" });
+  });
+
+  it("orderSize > uint256 → ToolInputError (schema-level, teaching attached)", async () => {
+    try {
+      await runTool("cork_prepare_orders", { ...base, action: { ...base.action, orderSize: String(U256_MAX + 1n) } }, ctx);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      const err = e as { name: string; issues: Array<{ path: unknown[]; message: string }> };
+      expect(err.name).toBe("ToolInputError");
+      expect(JSON.stringify(err.issues)).toContain("uint256");
+    }
+  });
+
+  it("exact uint64/uint256 maxima are ACCEPTED (boundary, not off-by-one)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { ...base, action: { ...base.action, orderSize: String(U256_MAX), openDeadline: String(U64_MAX - 1n), fillDeadline: String(U64_MAX) } },
+      ctx,
+    );
+    expect(env.state).toBe("ok");
+  });
+});

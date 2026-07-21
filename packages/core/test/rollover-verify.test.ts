@@ -152,3 +152,32 @@ describe("helpers", () => {
     );
   });
 });
+
+describe("consistency map is EXACT (terminal states never cross-accept — kills map-loosening mutations)", () => {
+  it("each venue status accepts exactly its mapped chain status, nothing else", () => {
+    const matrix: Array<[string, string]> = [
+      ["PENDING", "None"],
+      ["OPENED", "Opened"],
+      ["PARTIALLY_FILLED", "Opened"],
+      ["AWAITING_PREMIUM", "Opened"],
+      ["SETTLED", "Settled"],
+      ["EXPIRED", "Expired"],
+      ["CANCELLED", "Cancelled"],
+      ["CLOSING", "Closing"],
+    ];
+    const chainStates = ["None", "Opened", "Settled", "Expired", "Cancelled", "Closing"] as const;
+    for (const [venue, allowed] of matrix) {
+      for (const chain of chainStates) {
+        expect(venueChainConsistent(venue, chain), `${venue} vs ${chain}`).toBe(chain === allowed);
+      }
+    }
+    // unknown venue statuses are never silently consistent
+    expect(venueChainConsistent("SOMETHING_NEW", "Opened")).toBe(false);
+  });
+
+  it("venue SETTLED + chain Cancelled → conflict at the tool level (terminal disagreement)", async () => {
+    const env = await track(stubCtx({ venueStatus: "SETTLED", chainStatus: 4 }));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("status_mismatch");
+  });
+});

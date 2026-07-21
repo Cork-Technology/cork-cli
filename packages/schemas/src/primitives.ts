@@ -24,11 +24,25 @@ export const MarketId = Bytes32.describe(
   "Cork MarketId = keccak256(abi.encode(Market)) [C1]",
 );
 
-/** Unsigned integer as a decimal string (bigint on the wire; wire-typed boundary). */
+const U256_MAX = (1n << 256n) - 1n;
+const U64_MAX = (1n << 64n) - 1n;
+
+/** Unsigned integer as a decimal string (bigint on the wire; wire-typed boundary). Bounded to
+ *  uint256 — anything larger would explode deep in ABI encoding as an internal error instead of
+ *  failing here as teachable invalid input. */
 export const UintStr = z
   .string()
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
+  .refine((v) => BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
   .describe("unsigned integer, decimal string");
+
+/** uint64-bounded decimal string — EIP-712 uint64 wire fields (deadlines, salts, nonces, chain
+ *  ids in OrderData). */
+export const Uint64Str = z
+  .string()
+  .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
+  .refine((v) => BigInt(v) <= U64_MAX, "exceeds uint64 (max 18446744073709551615) — this OrderData field is a uint64 on the wire")
+  .describe("unsigned 64-bit integer, decimal string");
 
 export const ChainId = z
   .literal([1, 42161, 8453, 11155111, 49222])
