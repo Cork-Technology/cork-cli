@@ -86,7 +86,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       market: { status: "activated" },
-      "account-state": { status: "activated" },
+      "account-state": { status: "activated", reason: "balances + funding allowances (corkAdapter + Permit2 spenders)" },
       "pool-whitelist": { status: "activated", reason: "chainId 42161: unknown_deployment (whitelistManager not configured)" },
       "protocol-config": { status: "activated" },
       markets: { status: "activated", reason: "centralized (venue /v1/pools) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },

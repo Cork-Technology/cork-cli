@@ -606,10 +606,34 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
     if (input.resource === "account-state") {
       if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
       const tokens = await resolvePoolTokens(client, dep.poolManager, filters.poolId, ctx.atBlock);
+      const blockOpt = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
       const bal = (token: `0x${string}`) =>
-        client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) });
+        client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });
       const [collateral, reference, cst, cpt] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
-      return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+      // Allowances that gate the funding UX [funding.ts]: erc20-approve mode pulls
+      // initiator→ADAPTER (erc20TransferFrom on the adapter), permit2 mode needs the token
+      // approved to the canonical Permit2. Only readable where the adapter is configured.
+      let allowances: Record<string, unknown> | undefined;
+      if (dep.corkAdapter) {
+        const alw = (token: `0x${string}`, spender: `0x${string}`) =>
+          client.readContract({ address: token, abi: erc20Abi, functionName: "allowance", args: [filters.account!, spender], ...blockOpt });
+        const roles = [
+          ["collateral", tokens.collateral],
+          ["reference", tokens.reference],
+          ["cst", tokens.cst],
+          ["cpt", tokens.cpt],
+        ] as const;
+        const entries = await Promise.all(
+          roles.map(async ([role, token]) => {
+            const [toAdapter, toPermit2] = await Promise.all([alw(token, dep.corkAdapter!), alw(token, PERMIT2_ADDRESS)]);
+            return [role, { corkAdapter: toAdapter, permit2: toPermit2 }] as const;
+          }),
+        );
+        allowances = { spenders: { corkAdapter: dep.corkAdapter, permit2: PERMIT2_ADDRESS }, byToken: Object.fromEntries(entries) };
+      } else {
+        w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
+      }
+      return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: w, ...rpc, ctx });
     }
 
     // pool-whitelist (wlm presence checked above)
@@ -932,6 +956,9 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
 }
 
 const U160 = (1n << 160n) - 1n;
+
+/** Canonical Uniswap Permit2 (same address on every chain). */
+const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
 
 async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
@@ -1279,7 +1306,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
       }
       const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
-      const deadline = nowSecs + BigInt(input.deadlineSeconds);
+      // deadlineAt (absolute) pins the bundle bytes across retries [K2]; deadlineSeconds
+      // (relative, default) re-anchors to the clock on each call.
+      const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
       if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
         return unavailable(input.chainId, "phase_gated", `token-authority op '${input.action.type}' is not built in this iteration`, ctx);
       }
@@ -1316,6 +1345,16 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         const ZERO = "0x0000000000000000000000000000000000000000";
         if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
           return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
+        }
+        // Expiry pre-flight [§5.4 guards]: pre-expiry actions against an expired pool build fine
+        // but revert on-chain. Withdraw-family actions are the post-expiry path — never flagged.
+        const POST_EXPIRY_ACTIONS = new Set(["withdraw", "withdraw-other", "redeem"]);
+        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+        if (tokens.expiryTimestamp > 0n && tokens.expiryTimestamp <= nowSecs && !POST_EXPIRY_ACTIONS.has(input.action.type)) {
+          warnings.push({
+            code: "pool_expired",
+            message: `pool ${poolId} expired at ${tokens.expiryTimestamp} (now ${nowSecs}) — '${input.action.type}' is a pre-expiry action and this bundle would revert on-chain; the post-expiry paths are withdraw/withdraw-other/redeem`,
+          });
         }
         const plan = fundingPlan(input.action, tokens, corkAdapter, mode);
         funding = plan.legs;

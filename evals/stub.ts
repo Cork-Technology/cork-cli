@@ -46,6 +46,8 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return NOW - 604_800n;
     case "balanceOf":
       return 42_000_000_000_000_000_000n;
+    case "allowance":
+      return 0n;
     case "isWhitelisted":
       return false;
     default:

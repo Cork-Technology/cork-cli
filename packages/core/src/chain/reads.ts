@@ -32,6 +32,7 @@ export interface PoolTokensRead {
   reference: `0x${string}`;
   cst: `0x${string}`;
   cpt: `0x${string}`;
+  expiryTimestamp: bigint;
 }
 
 /** Light read of the four token addresses for a pool (market + shares), for funding-leg building. */
@@ -47,7 +48,7 @@ export async function resolvePoolTokens(
     client.readContract({ ...pm, functionName: "market", args: [poolId], ...blockArg }),
     client.readContract({ ...pm, functionName: "shares", args: [poolId], ...blockArg }),
   ]);
-  return { collateral: market.collateralAsset, reference: market.referenceAsset, cpt: shares[0], cst: shares[1] };
+  return { collateral: market.collateralAsset, reference: market.referenceAsset, cpt: shares[0], cst: shares[1], expiryTimestamp: market.expiryTimestamp };
 }
 
 /** Reads every field required for math parity, all at a single pinned block. */

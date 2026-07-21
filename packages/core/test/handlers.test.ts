@@ -442,3 +442,94 @@ describe("runTool: cork_prepare_phoenix", () => {
     ).rejects.toBeInstanceOf(ToolInputError);
   });
 });
+
+describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07-21)", () => {
+  const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
+  const depositInput = (id: string) => ({
+    chainId: 1,
+    account: "0xc0ffee0000000000000000000000000000000001",
+    clientRequestId: id,
+    fundingMode: "erc20-approve",
+    action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1000", receiver: "0xc0ffee0000000000000000000000000000000001", minCptAndCstSharesOut: "1" },
+  });
+  const mkClient = (expiry: bigint) =>
+    ({
+      readContract: async (args: { functionName: string; args?: unknown[] }) => {
+        switch (args.functionName) {
+          case "market":
+            return { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: expiry, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE };
+          case "shares":
+            return [SUSDE, SUSDE];
+          case "balanceOf":
+            return 5n;
+          case "allowance":
+            return 777n;
+          default:
+            throw new Error(`no stub for ${args.functionName}`);
+        }
+      },
+    }) as never;
+  const rpcCtx = (expiry: bigint) => ({
+    nowSeconds: NOW,
+    rpcUrl: "https://node.example/rpc",
+    resolveRpc: async (_c: unknown, url: string | undefined) => ({ url: url!, source: "explicit" as const, client: mkClient(expiry) }),
+  });
+
+  it("pre-expiry action against an EXPIRED pool builds WITH a pool_expired warning", async () => {
+    const env = await runTool("cork_prepare_phoenix", depositInput("exp-guard-0001"), rpcCtx(NOW - 1n));
+    expect(env.state).toBe("ok"); // still buildable — the caller decides; the warning teaches
+    const warn = env.warnings.find((w) => w.code === "pool_expired");
+    expect(warn?.message).toContain("would revert on-chain");
+    expect(warn?.message).toContain("withdraw");
+  });
+
+  it("future expiry → no warning; withdraw-family on an expired pool → no warning (post-expiry path)", async () => {
+    const fresh = await runTool("cork_prepare_phoenix", depositInput("exp-guard-0002"), rpcCtx(NOW + 10_000n));
+    expect(fresh.warnings.some((w) => w.code === "pool_expired")).toBe(false);
+
+    const withdraw = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: "0xc0ffee0000000000000000000000000000000001", clientRequestId: "exp-guard-0003", fundingMode: "erc20-approve", action: { type: "redeem", poolId: POOL, cptSharesIn: "1", owner: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407", receiver: "0xc0ffee0000000000000000000000000000000001", minReferenceAssetsOut: "0", minCollateralAssetsOut: "0" } },
+      rpcCtx(NOW - 1n),
+    );
+    expect(withdraw.state).toBe("ok");
+    expect(withdraw.warnings.some((w) => w.code === "pool_expired")).toBe(false);
+  });
+
+  it("account-state now reports funding allowances per token for BOTH spenders (adapter + Permit2)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "account-state", chainId: 1, pageSize: 25, format: "concise", filters: { poolId: POOL, account: "0xc0ffee0000000000000000000000000000000001" } },
+      { nowSeconds: NOW, resolveRpc: async () => ({ url: "https://stub/rpc", source: "explicit" as const, client: mkClient(NOW + 1n) }) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> } };
+    expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
+    expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "cpt", "cst", "reference"]);
+    expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777" });
+  });
+});
+
+describe("deadlineAt: byte-stable retries [K2 deadline-basis]", () => {
+  const base = (id: string, extra: Record<string, unknown> = {}) => ({
+    chainId: 1,
+    account: "0xc0ffee0000000000000000000000000000000001",
+    clientRequestId: id,
+    fundingMode: "pre-funded",
+    action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1000", receiver: "0xc0ffee0000000000000000000000000000000001", minCptAndCstSharesOut: "1" },
+    ...extra,
+  });
+
+  it("same id at DIFFERENT clocks: relative deadline drifts, absolute deadlineAt is byte-identical", async () => {
+    const t1 = { nowSeconds: NOW };
+    const t2 = { nowSeconds: NOW + 120n };
+    const rel1 = await runTool("cork_prepare_phoenix", base("k2-dl-0001"), t1);
+    const rel2 = await runTool("cork_prepare_phoenix", base("k2-dl-0001"), t2);
+    expect(rel1.provenance.digest).not.toBe(rel2.provenance.digest); // documented drift
+
+    const abs1 = await runTool("cork_prepare_phoenix", base("k2-dl-0001", { deadlineAt: String(NOW + 3600n) }), t1);
+    const abs2 = await runTool("cork_prepare_phoenix", base("k2-dl-0001", { deadlineAt: String(NOW + 3600n) }), t2);
+    expect(abs1.provenance.digest).toBe(abs2.provenance.digest); // byte-stable retry
+    expect((abs1.data as { deadline: string }).deadline).toBe(String(NOW + 3600n));
+  });
+});

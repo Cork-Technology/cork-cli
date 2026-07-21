@@ -236,6 +236,10 @@ export const PreparePhoenixInput = z.object({
     .enum(["permit2", "erc20-approve", "pre-funded"])
     .default("permit2"),
   deadlineSeconds: z.number().int().min(1).max(86400).default(1800),
+  // Absolute deadline override (unix seconds). deadlineSeconds re-anchors to the clock on every
+  // call, so a retry produces different bytes; pin deadlineAt to make same-id retries BYTE-STABLE
+  // [K2 §9 deadline-basis].
+  deadlineAt: Uint64Str.optional(),
   action: PhoenixAction,
   format: Format,
 });

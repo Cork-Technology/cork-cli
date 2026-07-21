@@ -1,0 +1,62 @@
+# CI for the offline-deterministic gates [RFC 011 §14]. Network-gated suites (fork-parity,
+# bundle-sim, rpc-live) self-skip without their env vars; the agent-eval runner (Layer B)
+# self-skips without an Anthropic key — wire ANTHROPIC_API_KEY as a repo secret to enable it.
+# Never put RPC endpoints in this file: CORK_TEST_RPC/CORK_RPC_URL are environment-only.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (tsc strict)
+        run: bun run typecheck
+
+      - name: Tests (offline gates — examples, teaching, maturity, surface drift, venue/rollover/hypersync stubs)
+        env:
+          # Deterministic: never fetch cork-defaults.json from GitHub in CI.
+          CORK_CONFIG_NO_FETCH: "1"
+        run: bun run test
+
+  # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
+  # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
+  agent-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+    # Only on main pushes — eval runs cost real tokens; PRs get Layer A.
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Run agent evals (self-skips without ANTHROPIC_API_KEY)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_GATE: "1"
+          EVAL_GATE_THRESHOLD: "0.8"
+        run: bun run eval

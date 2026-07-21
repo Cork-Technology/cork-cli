@@ -79,6 +79,7 @@ Warning codes you will encounter:
 | `receipt_not_found` | txHash unknown/pending at the RPC (a normal outcome, not a failure). |
 | `rpc_fallback` | Informational on `ok`: the default RPC was down, a chainlist public endpoint served the read. |
 | `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Informational on `ok` prepare results: why funding legs were omitted. |
+| `pool_expired` | Informational on `ok` prepare_phoenix results: a pre-expiry action (deposit/swap/…) against an expired pool — the bundle builds but would revert on-chain; withdraw/withdraw-other/redeem are the post-expiry paths. |
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
 | `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (HTTP status + message) / couldn't be reached (check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
@@ -104,6 +105,12 @@ and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
 `full-decentralized`. Some schema fields are accepted but
 reserved for later phases (`cork_query` `cursor`/`pageSize`, `cork_compute` `at.timestamp`,
 `cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
+
+Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineSeconds`, re-anchors
+to the clock, so a later retry produces different bytes); pass an absolute `deadlineAt` (unix
+seconds) to make same-`clientRequestId` retries **byte-identical**. `cork_query
+resource:"account-state"` returns balances AND funding allowances per pool token for both spenders
+(corkAdapter for `erc20-approve` mode, canonical Permit2 for `permit2` mode).
 
 ## RPC resolution (chain-backed tools work by default)
 
