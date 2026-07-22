@@ -32,7 +32,7 @@ describe("JSON Schema carries real constraints", () => {
   it("compute.params is a union of kinds", () => {
     const s = inputJsonSchema("cork_compute") as Record<string, unknown>;
     const params = (s.properties as Record<string, { anyOf?: unknown[]; oneOf?: unknown[] }>).params!;
-    expect((params.anyOf ?? params.oneOf)?.length).toBe(6);
+    expect((params.anyOf ?? params.oneOf)?.length).toBe(7);
   });
 });
 

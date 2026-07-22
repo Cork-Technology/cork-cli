@@ -105,11 +105,11 @@ export const REGISTRY = [
   }),
   def({
     name: "cork_prepare_market",
-    title: "Cork: build market deployment (gated)",
+    title: "Cork: build market-infrastructure tx",
     cliPath: ["prepare", "market"],
     phase: 4,
     description:
-      "Build unsigned market-deployment artifacts. STATUS: Phase 4, schema PROVISIONAL — MarketRegistry surface unverified [Q-REG].",
+      "Build an unsigned market-infrastructure tx. deploy-wrapper = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket).",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: PrepareMarketInput,
     output: Envelope,

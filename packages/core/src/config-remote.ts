@@ -49,11 +49,26 @@ const RolloverDeploymentSchema = z
   .strip();
 export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
 
+// MarketRegistry stack (market-registry-api): the permanent registry + oracle factory, and the
+// JIT CorkLimitOrderAdapter. The adapter address is VOLATILE by team guidance (redeploys under
+// a single deployer are expected; roles may be split) — consumers re-verify its on-chain
+// bindings + role grants at prepare time rather than trusting this record.
+const MarketRegistrySchema = z
+  .object({
+    registry: Address,
+    oracleFactory: Address.optional(),
+    adapter: Address.optional(),
+    controller: Address.optional(),
+  })
+  .strip();
+export type CorkMarketRegistry = z.infer<typeof MarketRegistrySchema>;
+
 const DefaultsSchema = z.object({
   schemaVersion: z.literal(1),
   updated: z.string(),
   deployments: z.record(z.string(), DeploymentSchema),
   lopAddresses: z.record(z.string(), Address),
+  marketRegistry: z.record(z.string(), MarketRegistrySchema).optional(),
   // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
   // Arbitrum "arbitrum-legacy" pre-launch pair, kept so its calibration pools stay readable
   // after the 2026-07-22 promotion of the announced deployment to primary).
@@ -220,4 +235,15 @@ export async function resolveRollover(
   const cfg = await resolveConfig(deps);
   const rollover = cfg.defaults.rollover?.[String(chainId)];
   return { rollover, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+}
+
+/** The MarketRegistry stack for a chain (registry/oracleFactory/adapter/controller), or
+ *  undefined where none is configured — currently Arbitrum only (Base pending owner check). */
+export async function resolveMarketRegistry(
+  chainId: number,
+  deps?: ConfigDeps,
+): Promise<{ marketRegistry: CorkMarketRegistry | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  const cfg = await resolveConfig(deps);
+  const marketRegistry = cfg.defaults.marketRegistry?.[String(chainId)];
+  return { marketRegistry, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
 }

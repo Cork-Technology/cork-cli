@@ -56,9 +56,12 @@ export const QueryInput = z.object({
       "fills",
       "account-state",
       "protocol-config",
+      "registry-assets",
+      "registry-oracle",
+      "registry-recipes",
     ])
     .describe(
-      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC)",
+      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; deployed/deployable/why-not); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%)",
     ),
   chainId: ChainId.optional(),
   mode: DataMode.optional(),
@@ -66,7 +69,7 @@ export const QueryInput = z.object({
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address, fillable, source. Unknown keys are a teachable error",
+      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address, fillable, source, collateralAsset+referenceAsset (registry-oracle — ORDER MATTERS, collateral first), mode (registry-recipes single lookup — exact case-sensitive string). Unknown keys are a teachable error",
     ),
   cursor: z.string().optional().describe("reserved for a later phase — accepted but not yet honored; omit"),
   pageSize: z.number().int().min(1).max(200).default(25).describe("reserved for a later phase — accepted but not yet honored"),
@@ -114,6 +117,15 @@ export const ComputeParams = z.discriminatedUnion("kind", [
       durationSeconds: z.number().int().min(0),
       tokenRiskStats: z.record(z.string(), z.unknown()).optional(),
     }).describe("indicative RFQ quote for a market-type bucket (phase-gated)"),
+  z.strictObject({
+      kind: z.literal("resolve-recipe"),
+      mode: z.string().min(1).describe("registry recipe mode — EXACT case-sensitive string (e.g. 'liquidity', 'fixed')"),
+      rate: UintStr.optional().describe("18-decimal rate to resolve against (1e18 = 1.0). Omit and pass collateralAsset+referenceAsset to use the pair's LIVE oracle rate instead"),
+      collateralAsset: Address.optional(),
+      referenceAsset: Address.optional(),
+    }).describe(
+      "resolve a MarketRegistry recipe's PERCENTAGE bands (1e18 = 1%) into ABSOLUTE rate constraints (1e18 = 1.0) — the exact math a JIT fill runs; bit-parity self-checked against the on-chain applyBands",
+    ),
 ]);
 export type ComputeParams = z.infer<typeof ComputeParams>;
 
@@ -288,8 +300,27 @@ export const OrdersAction = z.discriminatedUnion("type", [
     expirySeconds: z.number().int().min(1).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry)"),
     allowsPartialFills: z.boolean().default(true),
     usePermit2: z.boolean().default(false),
-    extension: Hex.optional().describe("1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check)"),
-  }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then cork_submit lop-order)"),
+    extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket, which BUILDS the extension"),
+    jitMarket: z
+      .strictObject({
+        collateralAsset: Address,
+        referenceAsset: Address,
+        expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future at creation"),
+        mode: z.string().min(1).describe("registry recipe mode, EXACT case-sensitive string (see cork_query registry-recipes)"),
+        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool"),
+        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
+        enableJitMint: z.boolean().default(false).describe("maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST)"),
+        permits: z
+          .array(z.strictObject({ token: Address, value: UintStr, deadline: UnixSeconds, v: z.number().int().min(0).max(255), r: Bytes32, s: Bytes32 }))
+          .max(8)
+          .optional()
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
+      })
+      .optional()
+      .describe(
+        "attach the Cork JIT adapter as the maker-side preInteraction hook: the fill derives the market from the registry recipe against the LIVE oracle rate, creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
+      ),
+  }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then cork_submit lop-order); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
   A("taker-fill", { orderHash: Bytes32, fillMakingAmount: TokenAmount.optional() })
     .describe("fill calldata against a resting order (phase-gated: needs the orderbook service)"),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
@@ -333,7 +364,8 @@ export const PrepareMarketInput = z.object({
   chainId: ChainId,
   clientRequestId: ClientRequestId,
   action: z.discriminatedUnion("type", [
-    A("deploy-wrapper", { collateralAsset: Address, referenceAsset: Address }),
+    A("deploy-wrapper", { collateralAsset: Address, referenceAsset: Address })
+      .describe("unsigned MarketRegistry.deploy(ca, ref) tx: create the pair's rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair just returns the recorded wrapper). Pair order matters: collateral first"),
   ]),
   format: Format,
 });

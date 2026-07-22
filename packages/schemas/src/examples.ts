@@ -35,6 +35,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
     { title: "Rollover premium floor (pure math, no RPC)", input: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } } },
     { title: "Worst-case impairment floor over 1 day", input: { params: { kind: "impairment-floor", poolId: DEMO_POOL_ID, horizonSeconds: 86400 } } },
+    { title: "Resolve a registry recipe's bands at a rate (Arbitrum; bands 1e18=1%, resolved 1e18=1.0)", input: { chainId: 42161, params: { kind: "resolve-recipe", mode: "liquidity", rate: "1000000000000000000" } } },
   ],
   cork_decode: [
     { title: "Decode a Bundler3 multicall to labeled Cork legs", input: { kind: "calldata", data: DEMO_MULTICALL } },
@@ -54,7 +55,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Signable rollover order (Arbitrum, ExactSettler, all-or-nothing)", input: { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "demo-roll-0001", action: { type: "rollover-intent", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", rolloverContract: DEMO_ACCOUNT, srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1795000000", fillDeadline: "1795604800" } } },
   ],
   cork_prepare_market: [
-    { title: "Deploy-wrapper artifact shape (gated: Q-REG)", input: { chainId: 1, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: SUSDE, referenceAsset: VBUSDC } } },
+    { title: "Unsigned oracle-deploy tx for a pair (registry.deploy — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc" } } },
   ],
   cork_track: [
     { title: "Digest-pin an artifact you were handed", input: { mode: "verify", subject: { kind: "artifact", artifact: { any: "json" } } } },
@@ -95,6 +96,9 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
       fills: { status: "activated", reason: "centralized (venue) or full-decentralized (HyperSync OrderFilled scan)" },
+      "registry-assets": { status: "activated", reason: "MarketRegistry chain views — Arbitrum One (42161)" },
+      "registry-oracle": { status: "activated", reason: "lookupWrapper + simulated deploy: deployed/deployable/why-not (42161)" },
+      "registry-recipes": { status: "activated", reason: "constraint recipe bands, 1e18 = 1% (42161)" },
     },
   },
   cork_compute: {
@@ -105,7 +109,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
       "dutch-auction-price": { status: "specified", reason: "phase_gated (1inch Fusion, Phase 3)" },
-      "rfq-quote": { status: "specified", reason: "phase_gated (market-registry-api, Phase 3+)" },
+      "rfq-quote": { status: "specified", reason: "phase_gated (pricing model TBD; the registry band math it needs is live as resolve-recipe)" },
+      "resolve-recipe": { status: "activated", reason: "registry applyBands — bit-parity self-checked against chain on every call (42161)" },
     },
   },
   cork_decode: {
@@ -135,7 +140,11 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "rollover-intent": { status: "activated", reason: "offline typed-data build; domain-separator parity proven vs both live Arbitrum settlers" },
     },
   },
-  cork_prepare_market: { status: "specified", reason: "phase_gated (Q-REG: MarketRegistry surface unverified, Phase 4)" },
+  cork_prepare_market: {
+    status: "activated",
+    reason: "Q-REG closed 2026-07-22: MarketRegistry verified on-chain (Arbitrum One); deploy-wrapper builds the permissionless idempotent registry.deploy(ca, ref) tx",
+    variants: { "deploy-wrapper": { status: "activated" } },
+  },
   cork_track: {
     status: "activated",
     variants: {

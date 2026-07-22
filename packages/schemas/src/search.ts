@@ -25,6 +25,9 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "fills", text: "fills executed trades trade history filled orders past swaps" },
     { variant: "limit-order-markets", text: "limit order markets trading pairs listed" },
     { variant: "protocol-config", text: "deployed contract addresses protocol config fees bounds" },
+    { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets" },
+    { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price feed exists" },
+    { variant: "registry-recipes", text: "recipes constraint bands risk presets modes liquidity fixed percentage" },
   ],
   cork_compute: [
     { variant: "cst-swap-rate", text: "swap rate cost quote price collateral out preview how much" },
@@ -33,6 +36,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "rollover-premium-floor", text: "rollover premium floor minimum guaranteed" },
     { variant: "impairment-floor", text: "impairment floor worst case horizon rate limited depeg loss" },
     { variant: "rfq-quote", text: "rfq request for quote market maker" },
+    { variant: "resolve-recipe", text: "resolve recipe bands constraints absolute rate applyBands percentage mode" },
   ],
   cork_decode: [
     { variant: "calldata", text: "decode calldata bytes hex explain transaction bundler3 multicall legs what does this do" },
@@ -55,11 +59,12 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   ],
   cork_prepare_orders: [
     { variant: "maker-order", text: "limit order maker sign typed data sell buy place resting" },
+    { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage" },
     { variant: "taker-fill", text: "fill take order taker execute against" },
     { variant: "cancel", text: "cancel invalidate order remove resting" },
     { variant: "rollover-intent", text: "rollover intent erc-7683 settler roll position next expiry" },
   ],
-  cork_prepare_market: [{ variant: "deploy-wrapper", text: "deploy market wrapper create new market registry" }],
+  cork_prepare_market: [{ variant: "deploy-wrapper", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent" }],
   cork_track: [
     { variant: "verify/marketRef", text: "verify pool market against chain rehash marketid check" },
     { variant: "verify/artifact", text: "digest pin artifact verify bundle handed" },

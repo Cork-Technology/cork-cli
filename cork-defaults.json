@@ -30,6 +30,14 @@
       }
     }
   },
+  "marketRegistry": {
+    "42161": {
+      "registry": "0xF674488bf4643e205ccd826951e8b0d29f77600A",
+      "oracleFactory": "0x0d81045225932C8B99a5DBD3cAe8d047b44D44A2",
+      "adapter": "0xea15BF1E5565181Ed8678CcFf39D797272858505",
+      "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172"
+    }
+  },
   "rollover": {
     "42161": {
       "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
