@@ -20,6 +20,16 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    // 2026-07-28 RC conformance (forward-compatible extras under 2025-11-25, where unknown
+    // result fields are legal): every result carries resultType (SEP-2322; "complete" = an
+    // ordinary result — this server never does MRTR input_required round-trips), and list
+    // results carry CacheableResult freshness hints (SEP-2549). The tool surface is compiled
+    // into the process (REGISTRY + static examples), identical for every caller, and changes
+    // only on redeploy — so a 1 h public TTL is honest and prompt-cache friendly. The registry
+    // array also fixes tools/list ordering, which the RC asks to be deterministic.
+    resultType: "complete",
+    ttlMs: 3_600_000,
+    cacheScope: "public",
     tools: REGISTRY.map((t) => ({
       name: t.name,
       // Display-only label (models see name/description/schema; title is client-UI plumbing).
@@ -44,6 +54,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
     try {
       const envelope = await runTool(name, args ?? {}, ctx);
       return {
+        resultType: "complete" as const,
         content: [{ type: "text" as const, text: JSON.stringify(envelope, null, 2) }],
         structuredContent: envelope as Record<string, unknown>,
         isError: envelope.state === "unavailable",
@@ -68,7 +79,11 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
         provenance: { source: "config" as const, chainId: 1 as const, fetchedAt: new Date().toISOString() },
         schemaVersion: SCHEMA_VERSION,
       };
+      // Still resultType "complete": SEP-1303 keeps validation failures IN-BAND (isError results
+      // an agent can self-correct from), and the reserved protocol-error band (-32020..-32099,
+      // RC error-code policy) stays untouched — this server never mints custom JSON-RPC codes.
       return {
+        resultType: "complete" as const,
         content: [{ type: "text" as const, text: message }],
         structuredContent: errorEnvelope as Record<string, unknown>,
         isError: true,

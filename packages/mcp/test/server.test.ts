@@ -100,3 +100,26 @@ describe("MCP server in-memory roundtrip", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("unknown_topic");
   });
+
+describe("2026-07-28 RC conformance (forward-compatible under 2025-11-25)", () => {
+  it("tools/list carries resultType complete + CacheableResult hints, in deterministic REGISTRY order", async () => {
+    const client = await connectedClient();
+    const first = (await client.listTools()) as Record<string, unknown> & { tools: Array<{ name: string }> };
+    expect(first.resultType).toBe("complete");
+    expect(first.ttlMs).toBe(3_600_000);
+    expect(first.cacheScope).toBe("public");
+    // Deterministic ordering (RC SHOULD; prompt-cache hits depend on it): two calls, same order.
+    const second = await client.listTools();
+    expect(second.tools.map((t) => t.name)).toEqual(first.tools.map((t) => t.name));
+  });
+
+  it("tools/call results carry resultType complete on success AND on in-band error paths", async () => {
+    const client = await connectedClient();
+    const ok = (await client.callTool({ name: "cork_capabilities", arguments: {} })) as Record<string, unknown>;
+    expect(ok.resultType).toBe("complete");
+    expect(ok.isError ?? false).toBe(false);
+    const bad = (await client.callTool({ name: "cork_query", arguments: { resource: "nope" } })) as Record<string, unknown>;
+    expect(bad.resultType).toBe("complete");
+    expect(bad.isError).toBe(true); // SEP-1303: in-band, never a protocol error / reserved code
+  });
+});

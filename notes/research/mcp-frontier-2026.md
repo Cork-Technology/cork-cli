@@ -124,3 +124,22 @@ schema-addressable. Harness: `/tmp/cork-pipeline/research/mcp26a/harness/ab/`.
 6. Deliberately NOT adopted: strict-mode schema stripping, `allowed_callers`/PTC, icons,
    multiplying inline examples, top-level strictObject (jsonschema.test.ts pins top-level
    leniency as a forward-compat decision).
+
+## 2026-07-28 RC Conformance Pass (done 2026-07-22)
+
+Verified against the live draft changelog (modelcontextprotocol.io/specification/draft/changelog):
+
+- **Done in code** (all forward-compatible extras under 2025-11-25, which permits unknown result
+  fields): `resultType:"complete"` on tools/list and both tools/call paths (SEP-2322 — required
+  on every result in the RC; this server never does MRTR `input_required`); `ttlMs:3600000` +
+  `cacheScope:"public"` CacheableResult hints on tools/list (SEP-2549 — the surface is compiled
+  in, identical for every caller, changes only on redeploy). Round-trip-tested through the real
+  SDK client (fields survive parsing).
+- **Already conformant, now pinned by test**: deterministic tools/list ordering (REGISTRY array);
+  SEP-1303 in-band teaching errors (isError results, never protocol errors); no custom JSON-RPC
+  codes anywhere, so the newly reserved −32020..−32099 band is untouched.
+- **Not actionable app-side** (SDK-level, RC not stable): removal of initialize/session
+  (SEP-2575 — our handlers are stateless already, migration is a no-op), `server/discover`,
+  per-request `_meta` identity, subscriptions/listen. Revisit when @modelcontextprotocol/sdk
+  ships an RC-supporting release.
+- **Deprecations**: Roots/Sampling/Logging — none used here.
