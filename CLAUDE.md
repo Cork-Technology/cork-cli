@@ -39,7 +39,7 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | Tool | Use when | Phase |
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
-| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`). Event-derived subset also in `full-decentralized` mode (HyperSync). | 1 |
+| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived subset also in `full-decentralized` mode (HyperSync). | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain). NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
@@ -92,6 +92,8 @@ Warning codes you will encounter:
 | `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (HTTP status + message) / couldn't be reached (check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
 | `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. |
+| `rfq_not_found` | `cork_query rfqs` with `filters.rfqId`: the id is unknown to the venue — a normal outcome for a never-posted or mistyped id. |
+| `asset_not_found` | `cork_query registry-assets` with `filters.address`: the address is not a registry-approved asset on that chain. |
 | `settler_mode_mismatch` | rollover-intent: the chosen settler's on-chain mode gate would make the order unfillable (ExactSettler rejects `allowPartialFills:true`; PartialSettler requires it). The message names the right settler. |
 | `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). |
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |

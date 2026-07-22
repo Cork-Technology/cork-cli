@@ -30,6 +30,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Read a pool's full live market state (demo pool, vnet)", input: { resource: "market", filters: { poolId: DEMO_POOL_ID } } },
     { title: "Token balances an account holds in a pool", input: { resource: "account-state", filters: { poolId: DEMO_POOL_ID, account: DEMO_ACCOUNT } } },
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
+    { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
   ],
   cork_compute: [
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
@@ -97,7 +98,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
       fills: { status: "activated", reason: "centralized (venue) or full-decentralized (HyperSync OrderFilled scan)" },
-      "registry-assets": { status: "activated", reason: "MarketRegistry chain views — Arbitrum One (42161)" },
+      "registry-assets": { status: "activated", reason: "MarketRegistry chain views — Arbitrum One (42161); filters.address for a single asset by natural key" },
+      rfqs: { status: "activated", reason: "venue-backed (centralized mode): GET /v1/rfqs discovery feed + single get via filters.rfqId; venue-only in every mode (RFQ requests/answers never bind and emit no events)" },
       "registry-oracle": { status: "activated", reason: "lookupWrapper + simulated deploy: deployed/deployable/why-not (42161)" },
       "registry-recipes": { status: "activated", reason: "constraint recipe bands, 1e18 = 1% (42161)" },
     },

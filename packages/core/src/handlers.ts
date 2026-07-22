@@ -8,6 +8,7 @@ import {
   buildTeaching,
   type ChainId,
   MATURITY,
+  nearestValue,
   searchTools,
   TOOL_EXAMPLES,
   type Teaching,
@@ -56,6 +57,7 @@ import {
   getRolloverOrders,
   getRolloverFills,
   getRfq,
+  getRfqs,
   postLopOrder,
   postRfq,
   postRfqAnswer,
@@ -414,13 +416,43 @@ interface QueryFilters {
   collateralAsset?: `0x${string}`;
   referenceAsset?: `0x${string}`;
   mode?: string;
+  rfqId?: string;
+  state?: "open" | "expired";
+  withAnswers?: boolean;
 }
+
+/** Every filter key parseQueryFilters understands — unknown keys are a teachable error, as advertised. */
+const KNOWN_FILTER_KEYS = [
+  "poolId",
+  "account",
+  "kind",
+  "side",
+  "status",
+  "orderDigest",
+  "orderHash",
+  "filler",
+  "address",
+  "fillable",
+  "source",
+  "collateralAsset",
+  "referenceAsset",
+  "mode",
+  "rfqId",
+  "state",
+  "withAnswers",
+] as const;
 
 function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilters {
   const out: QueryFilters = {};
   const fail = (key: string, message: string): never => {
     throw new ToolInputError("cork_query", [{ path: ["filters", key], message }]);
   };
+  for (const key of Object.keys(raw ?? {})) {
+    if (!(KNOWN_FILTER_KEYS as readonly string[]).includes(key)) {
+      const near = nearestValue(key, KNOWN_FILTER_KEYS);
+      fail(key, `unknown filter key${near ? ` — did you mean '${near}'?` : ""} (known: ${KNOWN_FILTER_KEYS.join(", ")})`);
+    }
+  }
   if (raw?.poolId !== undefined) {
     const r = MarketId.safeParse(raw.poolId);
     if (!r.success) fail("poolId", "not a valid 32-byte pool id");
@@ -470,11 +502,27 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
     }
   }
   if (raw?.mode !== undefined) out.mode = String(raw.mode);
+  // RFQ feed (venue ids are opaque but always rfq_-prefixed — same guard the venue itself applies).
+  if (raw?.rfqId !== undefined) {
+    const v = String(raw.rfqId);
+    if (!/^rfq_[0-9a-z]+$/.test(v)) fail("rfqId", "expected a venue RFQ id (rfq_ prefix, lowercase alphanumeric)");
+    else out.rfqId = v;
+  }
+  if (raw?.state !== undefined) {
+    const v = String(raw.state);
+    if (v !== "open" && v !== "expired") fail("state", "expected 'open' | 'expired'");
+    else out.state = v;
+  }
+  if (raw?.withAnswers !== undefined) {
+    if (typeof raw.withAnswers === "boolean") out.withAnswers = raw.withAnswers;
+    else if (raw.withAnswers === "true" || raw.withAnswers === "false") out.withAnswers = raw.withAnswers === "true";
+    else fail("withAnswers", "expected a boolean");
+  }
   return out;
 }
 
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
-const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows"]);
+const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows", "rfqs"]);
 
 /**
  * full-decentralized [C12]: the event-derived subset over HyperSync. Structural honesty:
@@ -485,7 +533,9 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
   const structural =
     input.resource === "orderbook" || input.resource === "limit-order-markets"
       ? `'${input.resource}' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)`
-      : input.resource === "flows" && kind === "orders"
+      : input.resource === "rfqs"
+        ? "'rfqs' cannot be served in full-decentralized mode: RFQ requests and answers are off-chain venue JSON that never binds and emits no events, by design — omit mode or use 'centralized'"
+        : input.resource === "flows" && kind === "orders"
         ? "flows kind='orders' cannot be served in full-decentralized mode: pre-commitment rollover orders emit no events; use kind='fills' or kind='contracts', or centralized mode for the order feed"
         : null;
   if (structural) return unavailable(chainId, "mode_unavailable", structural, ctx);
@@ -581,6 +631,21 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
         list = await getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}) });
       } else if (input.resource === "limit-order-markets") {
         list = await getLopMarkets(deps, chainId);
+      } else if (input.resource === "rfqs") {
+        // Single get by id, or the discovery feed (server default: state=open, newest first).
+        if (filters.rfqId) {
+          const row = await getRfq(deps, filters.rfqId);
+          if (!row) return unavailable(chainId, "rfq_not_found", `RFQ '${filters.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
+          list = { items: [row] };
+        } else {
+          list = await getRfqs(deps, {
+            chainId,
+            ...(filters.state ? { state: filters.state } : {}),
+            ...(filters.referenceAsset ? { referenceAsset: filters.referenceAsset.toLowerCase() } : {}),
+            ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
+            ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
+          });
+        }
       } else {
         // flows = the rollover venue; filters.kind picks the feed (orders default).
         const kind = filters.kind ?? "orders";
@@ -757,6 +822,12 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
   try {
     if (input.resource === "registry-assets") {
+      // filters.address → single lookup by natural key (the registry keys assets by addr+chainId).
+      if (filters.address) {
+        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address, BigInt(chainId)] });
+        if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a registry-approved asset on chainId ${chainId} — list them with cork_query resource:"registry-assets" (no filters)`, ctx);
+        return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
       return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }

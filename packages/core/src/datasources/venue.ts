@@ -177,6 +177,29 @@ export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number
   return asList(await getJson(deps, `/rollover/contracts${qs(p)}`), "rollover contracts");
 }
 
+export interface RfqListParams {
+  chainId?: number;
+  state?: "open" | "expired";
+  referenceAsset?: string;
+  requester?: string;
+  withAnswers?: boolean;
+}
+
+/**
+ * GET /v1/rfqs — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
+ * Server defaults: state=open, newest first, keyset-paged on rfq_id ({items, next_cursor}).
+ * with_answers=true embeds each RFQ's answers (newest first, venue-capped per row).
+ */
+export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueList> {
+  return asList(
+    await getJson(
+      deps,
+      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers })}`,
+    ),
+    "rfqs",
+  );
+}
+
 /** GET /v1/rfqs/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
 export async function getRfq(deps: VenueDeps, rfqId: string): Promise<Record<string, unknown> | null> {
   try {

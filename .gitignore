@@ -37,3 +37,6 @@ coverage/
 
 # live A/B eval transcripts (evals/live-ab)
 evals/live-ab/runs/
+
+# local Slack drafts (never commit)
+slack-drafts-*.md

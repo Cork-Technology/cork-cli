@@ -3,7 +3,7 @@
 // submit relays with [K3] recomputation (tampered payloads are NOT relayed), the venue POST
 // outcome map (201/200/400/409/429), and track reconcile via venue lifecycle rows.
 import { describe, expect, it } from "vitest";
-import { runTool, ORDER_DATA_TYPEHASH, type HandlerContext } from "@cork/core";
+import { runTool, ORDER_DATA_TYPEHASH, ToolInputError, type HandlerContext } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
 
 const NOW = 1_790_000_000n;
@@ -441,5 +441,93 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("order_not_found");
     expect(env.warnings[0]?.message).toContain("rfq_");
+  });
+});
+
+describe("cork_query rfqs (venue RFQ discovery feed)", () => {
+  it("list routes to /rfqs with snake_case params (state, requester, with_answers)", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { state: "open", account: "0xc0ffee0000000000000000000000000000000001", withAnswers: true }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.provenance.mode).toBe("centralized");
+    expect((env.data as { count: number }).count).toBe(1);
+    const url = seen[0]!.url;
+    expect(url).toContain("chain_id=42161");
+    expect(url).toContain("state=open");
+    expect(url).toContain("requester=0xc0ffee0000000000000000000000000000000001");
+    expect(url).toContain("with_answers=true");
+    // next_cursor:null (no more pages) must NOT surface as a nextCursor field.
+    expect("nextCursor" in (env.data as Record<string, unknown>)).toBe(false);
+  });
+
+  it("list surfaces the venue's keyset cursor when more pages exist", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } }]),
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { nextCursor?: unknown }).nextCursor).toBe("rfq_a");
+  });
+
+  it("filters.rfqId fetches one record with all answers; 404 → rfq_not_found (a normal outcome)", async () => {
+    const seen: Seen[] = [];
+    const hit = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs/rfq_abc123", body: { rfq_id: "rfq_abc123", state: "open", answers: [], answer_count: 0, truncated: false, request: {} } }], seen),
+    );
+    expect(hit.state).toBe("ok");
+    expect((hit.data as { items: Array<{ rfq_id: string }> }).items[0]!.rfq_id).toBe("rfq_abc123");
+    expect(seen[0]!.url).toContain("/rfqs/rfq_abc123");
+
+    const miss = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_missing" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs/rfq_missing", status: 404, body: { message: "Unknown rfq_id" } }]),
+    );
+    expect(miss.state).toBe("unavailable");
+    expect(miss.warnings[0]?.code).toBe("rfq_not_found");
+  });
+
+  it("malformed rfqId / state are teachable input errors (exit 2), not venue calls", async () => {
+    const seen: Seen[] = [];
+    await expect(
+      runTool("cork_query", { resource: "rfqs", filters: { rfqId: "ans_123" }, pageSize: 25, format: "concise" }, ctxWith([], seen)),
+    ).rejects.toBeInstanceOf(ToolInputError);
+    await expect(
+      runTool("cork_query", { resource: "rfqs", filters: { state: "closed" }, pageSize: 25, format: "concise" }, ctxWith([], seen)),
+    ).rejects.toBeInstanceOf(ToolInputError);
+    expect(seen.length).toBe(0);
+  });
+
+  it("rfqs is venue-only in EVERY mode: full-decentralized is a structural no, not a phase gap", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      ctxWith([]),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("mode_unavailable");
+    expect(env.warnings[0]?.message).toContain("emit");
+  });
+
+  it("unknown filter keys are a teachable error naming the near-miss (as the schema advertises)", async () => {
+    const err = await runTool(
+      "cork_query",
+      { resource: "rfqs", filters: { rfq_id: "rfq_abc123" }, pageSize: 25, format: "concise" },
+      ctxWith([]),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ToolInputError);
+    const issues = (err as ToolInputError).issues as Array<{ path: unknown[]; message: string }>;
+    expect(issues[0]!.path).toEqual(["filters", "rfq_id"]);
+    expect(issues[0]!.message).toContain("rfqId");
   });
 });

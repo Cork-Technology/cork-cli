@@ -180,6 +180,27 @@ describe("cork_query registry-* (chain views)", () => {
     expect(d.reason).toContain("EntryNotFound");
   });
 
+  it("registry-assets filters.address → single lookupAssetByAddress by natural key; miss → asset_not_found", async () => {
+    const ASSET = { assetAddress: CA, chainId: 42161n, symbol: "sUSDe" };
+    const hit = await runTool("cork_query", { chainId: 42161, resource: "registry-assets", filters: { address: CA } }, ctx((c) => {
+      if (c.functionName === "lookupAssetByAddress") {
+        expect(c.args).toEqual([CA, 42161n]);
+        return [true, ASSET];
+      }
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(hit.state).toBe("ok");
+    // The envelope JSON-safes bigints to decimal strings.
+    expect((hit.data as { items: unknown[] }).items).toEqual([{ ...ASSET, chainId: "42161" }]);
+
+    const miss = await runTool("cork_query", { chainId: 42161, resource: "registry-assets", filters: { address: REF } }, ctx((c) => {
+      if (c.functionName === "lookupAssetByAddress") return [false, ASSET];
+      throw new Error("unexpected");
+    }));
+    expect(miss.state).toBe("unavailable");
+    expect(miss.warnings[0]?.code).toBe("asset_not_found");
+  });
+
   it("no registry on mainnet → unknown_deployment naming 42161", async () => {
     const env = await runTool("cork_query", { chainId: 1, resource: "registry-recipes" }, { nowSeconds: 1n, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
