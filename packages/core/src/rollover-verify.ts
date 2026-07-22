@@ -67,11 +67,13 @@ export function venueChainConsistent(venueStatus: string, chain: ChainOrderStatu
 // ── Logs endpoint resolution ─────────────────────────────────────────────────
 
 /** Resolve a logs-capable JSON-RPC endpoint: explicit override → HyperRPC (token-gated).
- *  Returns null when nothing is configured — verification then honestly reports the gap. */
+ *  Returns null when nothing is configured — verification then honestly reports the gap.
+ *  HyperRPC and HyperSync are separate Envio products with separate per-product secrets:
+ *  the dedicated ENVIO_HYPERRPC_TOKEN wins here; ENVIO_API_TOKEN stays as shared fallback. */
 export function resolveLogsEndpoint(chainId: number, override?: string): string | null {
   if (override) return override;
   if (process.env.CORK_LOGS_RPC_URL) return process.env.CORK_LOGS_RPC_URL;
-  const token = process.env.ENVIO_API_TOKEN;
+  const token = process.env.ENVIO_HYPERRPC_TOKEN ?? process.env.ENVIO_API_TOKEN;
   if (token) return `https://${chainId}.rpc.hypersync.xyz/${token}`;
   return null;
 }

@@ -417,7 +417,9 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         : null;
   if (structural) return unavailable(chainId, "mode_unavailable", structural, ctx);
 
-  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, process.env.ENVIO_API_TOKEN);
+  // HyperSync and HyperRPC are different Envio products with DIFFERENT tokens; the dedicated
+  // var wins, ENVIO_API_TOKEN remains a shared fallback.
+  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, process.env.ENVIO_HYPERSYNC_TOKEN ?? process.env.ENVIO_API_TOKEN);
   if ("error" in load) return unavailable(chainId, "hypersync_unavailable", load.error, ctx);
   const hs = load.source;
 

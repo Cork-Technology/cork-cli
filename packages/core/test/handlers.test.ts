@@ -143,33 +143,34 @@ describe("chain-read failures map to envelopes (never raw exceptions)", () => {
   });
 });
 
-describe("partial deployments gate per capability (Arbitrum 42161)", () => {
-  it("pool-whitelist on 42161 → unknown_deployment (wlm not configured), before any RPC use", async () => {
+describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 still ungated)", () => {
+  it("pool-whitelist is configured on BOTH chains now → offline resolver yields requires_rpc, not unknown_deployment", async () => {
     const env = await runTool(
       "cork_query",
       { resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } },
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
-    // resolver returns null, but the wlm gate must fire FIRST with the more truthful reason
     const env42 = await runTool(
       "cork_query",
       { chainId: 42161, resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } },
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
-    expect(env.state).toBe("unavailable"); // mainnet has wlm → falls through to requires_rpc
+    expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
     expect(env42.state).toBe("unavailable");
-    expect(env42.warnings[0]?.code).toBe("unknown_deployment");
+    expect(env42.warnings[0]?.code).toBe("requires_rpc"); // wlm now configured — the gate no longer fires
   });
 
-  it("prepare_phoenix on 42161 → unknown_deployment (corkAdapter/bundler3 not configured)", async () => {
+  it("prepare_phoenix on 42161 builds a bundle against the announced tx-path contracts", async () => {
     const env = await runTool(
       "cork_prepare_phoenix",
-      { chainId: 42161, account: RCV, clientRequestId: "arb-0001", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+      { chainId: 42161, account: RCV, clientRequestId: "arb-0001", fundingMode: "pre-funded", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
       { nowSeconds: NOW },
     );
-    expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+    expect(env.state).toBe("ok");
+    const d = env.data as { bundler3: string; corkAdapter: string };
+    expect(d.bundler3).toBe("0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13");
+    expect(d.corkAdapter).toBe("0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed");
   });
 
   it("query on a chain with no deployment at all (8453) → unknown_deployment, not requires_rpc", async () => {

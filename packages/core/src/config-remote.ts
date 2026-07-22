@@ -55,7 +55,8 @@ const DefaultsSchema = z.object({
   deployments: z.record(z.string(), DeploymentSchema),
   lopAddresses: z.record(z.string(), Address),
   // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
-  // Arbitrum "arbitrum-staging" shadow deployment the 2026Q3 rollover campaign runs against).
+  // Arbitrum "arbitrum-legacy" pre-launch pair, kept so its calibration pools stay readable
+  // after the 2026-07-22 promotion of the announced deployment to primary).
   // Consumers must opt in by profile name; `deployments` stays the default read path.
   deploymentProfiles: z.record(z.string(), z.record(z.string(), DeploymentSchema)).optional(),
   rollover: z.record(z.string(), RolloverDeploymentSchema).optional(),

@@ -179,15 +179,23 @@ describe("resolveRollover", () => {
 });
 
 describe("deploymentProfiles in the bundled defaults", () => {
-  it("the arbitrum-staging profile carries the full tx-path contract set", async () => {
+  // 2026-07-22 promotion: the announced Arbitrum deployment (formerly the arbitrum-staging
+  // shadow) is now the primary; the pre-launch read-path pair survives as arbitrum-legacy
+  // (3 calibration pools live on the old PM, none API-listed — verified via HyperSync scan).
+  it("the primary 42161 deployment carries the full tx-path contract set (announced 2026-07-22, bindings verified on-chain)", async () => {
     const cfg = await resolveConfig();
-    const staging = cfg.defaults.deploymentProfiles?.["42161"]?.["arbitrum-staging"];
-    expect(staging).toMatchObject({
+    expect(cfg.defaults.deployments["42161"]).toMatchObject({
       poolManager: "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
-      corkAdapter: "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
-      bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+      corkAdapter: "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed", // CORK() = the PM above
+      bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13", // adapter BUNDLER3() = this
+      whitelistManager: "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A",
     });
-    // distinct from the production read-path deployment on the same chain
-    expect(cfg.defaults.deployments["42161"]?.poolManager).not.toBe(staging?.poolManager);
+  });
+  it("the arbitrum-legacy profile keeps the old read-path pair reachable", async () => {
+    const cfg = await resolveConfig();
+    const legacy = cfg.defaults.deploymentProfiles?.["42161"]?.["arbitrum-legacy"];
+    expect(legacy?.poolManager).toBe("0xc2De56fb1C7a85250ce69C37B4773767C77954AE");
+    // distinct from the primary deployment on the same chain
+    expect(cfg.defaults.deployments["42161"]?.poolManager).not.toBe(legacy?.poolManager);
   });
 });

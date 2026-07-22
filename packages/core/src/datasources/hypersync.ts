@@ -50,7 +50,7 @@ export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
 export async function loadHyperSync(chainId: number, token: string | undefined): Promise<HyperSyncLoad> {
   const url = HYPERSYNC_URLS[chainId];
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };
-  if (!token) return { error: "ENVIO_API_TOKEN is not set — HyperSync requires an API token (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
+  if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
   let mod: {
     HypersyncClient: { new(opts: { url: string; bearerToken: string }): unknown };
     LogField: Record<string, string>;

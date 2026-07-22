@@ -88,7 +88,7 @@ Warning codes you will encounter:
 | `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). |
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
-| `hypersync_unavailable` | full-decentralized mode: no ENVIO_API_TOKEN, unsupported chain, or the napi client can't load on this host. |
+| `hypersync_unavailable` | full-decentralized mode: no HyperSync token, unsupported chain, or the napi client can't load on this host. Envio env vars: `ENVIO_HYPERSYNC_TOKEN` (query API) and `ENVIO_HYPERRPC_TOKEN` (logs RPC) with `ENVIO_API_TOKEN` as shared fallback for both — tokens verified interchangeable across products in practice, so one shared token also works. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / ~100x divergence from the cited quote_ref (conflict, NOT relayed). |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed
@@ -130,11 +130,11 @@ resource:"protocol-config"`, `cork_compute kind:"rollover-premium-floor"`, `cork
 (`cork_prepare_phoenix` funding-leg token resolution still needs an *explicit* RPC — offline by default,
 so without one you get the bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`.)
 
-Per-chain deployment coverage (`config.ts DEPLOYMENTS`): chainId 1 is **full** (all 5 contracts;
-prepare + all reads). chainId 42161 is **partial, read-path only** — poolManager + constraintAdapter
-were empirically derived (API + debug_traceCall calibrated against mainnet) so market/account-state/
-compute/track reads work, but corkAdapter/bundler3/whitelistManager are unknown → prepare_phoenix and
-pool-whitelist return `unknown_deployment` there. A real mainnet pool for examples/tests:
+Per-chain deployment coverage: chainId 1 and chainId 42161 are both **full** (all 5 contracts;
+prepare + all reads). The 42161 set was announced 2026-07-22 and its bindings verified on-chain
+(adapter `CORK()` = poolManager, adapter `BUNDLER3()` = bundler3, both settlers'
+`CORK_POOL_MANAGER()` = poolManager). The pre-launch Arbitrum pair (old PM `0xc2De…54AE` with 3
+non-API-listed calibration pools) survives as `deploymentProfiles["42161"]["arbitrum-legacy"]`. A real mainnet pool for examples/tests:
 `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` (current list:
 `api-phoenix.cork.tech/v1/pools/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the vnet —
 querying it on chainId 1 without a vnet RPC yields `chain_read_failed`, by design.

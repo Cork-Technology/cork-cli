@@ -137,13 +137,20 @@ describe("helpers", () => {
   it("logs endpoint resolution: explicit override wins; HyperRPC URL shape from the token", () => {
     expect(resolveLogsEndpoint(42161, "https://x/rpc")).toBe("https://x/rpc");
     const prevToken = process.env.ENVIO_API_TOKEN;
+    const prevRpcToken = process.env.ENVIO_HYPERRPC_TOKEN;
     const prevUrl = process.env.CORK_LOGS_RPC_URL;
     delete process.env.CORK_LOGS_RPC_URL;
+    delete process.env.ENVIO_HYPERRPC_TOKEN;
     process.env.ENVIO_API_TOKEN = "tok123";
     expect(resolveLogsEndpoint(42161)).toBe("https://42161.rpc.hypersync.xyz/tok123");
+    // separate Envio products: the dedicated var outranks the shared fallback
+    process.env.ENVIO_HYPERRPC_TOKEN = "rpc456";
+    expect(resolveLogsEndpoint(42161)).toBe("https://42161.rpc.hypersync.xyz/rpc456");
+    delete process.env.ENVIO_HYPERRPC_TOKEN;
     delete process.env.ENVIO_API_TOKEN;
     expect(resolveLogsEndpoint(42161)).toBe(null);
     if (prevToken) process.env.ENVIO_API_TOKEN = prevToken;
+    if (prevRpcToken) process.env.ENVIO_HYPERRPC_TOKEN = prevRpcToken;
     if (prevUrl) process.env.CORK_LOGS_RPC_URL = prevUrl;
   });
   it("the event table covers the full settler lifecycle", () => {

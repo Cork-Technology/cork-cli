@@ -87,7 +87,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     variants: {
       market: { status: "activated" },
       "account-state": { status: "activated", reason: "balances + funding allowances (corkAdapter + Permit2 spenders)" },
-      "pool-whitelist": { status: "activated", reason: "chainId 42161: unknown_deployment (whitelistManager not configured)" },
+      "pool-whitelist": { status: "activated" },
       "protocol-config": { status: "activated" },
       markets: { status: "activated", reason: "centralized (venue /v1/pools) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },
       "whitelisted-addresses": { status: "specified", reason: "needs_indexer" },
@@ -120,7 +120,6 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   cork_capabilities: { status: "activated" },
   cork_prepare_phoenix: {
     status: "activated",
-    reason: "chainId 42161: unknown_deployment (tx-path contracts not configured)",
     variants: {
       "13 adapter actions (mint…unwind-exercise-other)": { status: "activated" },
       "authority-onboard": { status: "specified", reason: "phase_gated" },
