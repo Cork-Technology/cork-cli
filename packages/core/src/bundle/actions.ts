@@ -126,8 +126,11 @@ export interface CorkActionParamMap {
 
 /** Encode CorkAdapter action calldata (selector + abi.encode(params)). */
 export function encodeCorkAction<N extends CorkActionName>(name: N, params: CorkActionParamMap[N]): `0x${string}` {
-  // abitype infers a per-overload union for (functionName, args); our interfaces already match
-  // each struct's field order, so we erase the call-site parameter type (return stays Hex).
+  // abitype infers a per-overload union for (functionName, args) that cannot distribute over a
+  // generic N — even `as EncodeFunctionDataParameters<typeof corkAdapterAbi, N>` is rejected in
+  // both directions (verified against viem 2.55), so the call-site parameter type is erased.
+  // The pairing is enforced where it can be: CorkActionParamMap keys are CorkActionName, and
+  // fork-parity tests pin the encoded bytes against on-chain execution.
   return encodeFunctionData({ abi: corkAdapterAbi, functionName: name, args: [params] } as never);
 }
 

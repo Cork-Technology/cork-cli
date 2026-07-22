@@ -82,6 +82,15 @@ export interface FundingPlan {
   note?: string;
 }
 
+/**
+ * Config-driven field access: FUNDING_TABLE/BURN_TABLE field names are correlated with
+ * `action.type` by construction, which TS cannot prove across the union — the one narrow
+ * escape hatch, kept in a single place instead of scattered casts.
+ */
+function actionField(action: PhoenixAction, field: string): string | undefined {
+  return (action as unknown as Record<string, string | undefined>)[field];
+}
+
 /** Build the funding plan for an action (legs + an optional owner-managed note). */
 export function fundingPlan(
   action: PhoenixAction,
@@ -93,7 +102,7 @@ export function fundingPlan(
   const fn = mode === "permit2" ? "permit2TransferFrom" : "erc20TransferFrom";
   const build = (reqs: FundReq[]): Call[] =>
     reqs.map((req) => {
-      const raw = (action as unknown as Record<string, string>)[req.field];
+      const raw = actionField(action, req.field);
       if (raw === undefined) throw new Error(`funding: action ${action.type} missing field ${req.field}`);
       const data = encodeFunctionData({ abi: generalAdapterAbi, functionName: fn, args: [tokenFor(req.role, tokens), adapter, BigInt(raw)] });
       return call(adapter, data);
@@ -104,12 +113,12 @@ export function fundingPlan(
 
   const burnReqs = BURN_TABLE[action.type];
   if (burnReqs) {
-    const owner = (action as unknown as { owner?: `0x${string}` }).owner;
+    const owner = "owner" in action ? action.owner : undefined;
     if (owner && owner.toLowerCase() !== adapter.toLowerCase()) {
       return { legs: [], note: `owner (${owner}) is not the adapter; shares are burned from owner directly — ensure owner approved the pool manager for cPT/cST. No funding leg was built.` };
     }
     // owner == adapter: transfer shares in, unless a sentinel amount (uint256.max) is used.
-    const hasSentinel = burnReqs.some((r) => BigInt((action as unknown as Record<string, string>)[r.field] ?? "0") === MAX_UINT);
+    const hasSentinel = burnReqs.some((r) => BigInt(actionField(action, r.field) ?? "0") === MAX_UINT);
     if (hasSentinel) return { legs: [], note: "owner==adapter with a uint256.max sentinel amount; pre-fund the adapter's shares directly (amount is resolved on-chain). No funding leg was built." };
     return { legs: build(burnReqs) };
   }

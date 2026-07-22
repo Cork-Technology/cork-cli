@@ -999,7 +999,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           if (!cst) {
             try {
               const createData = buildCreatePoolCall(derived.market, jitParams.unwindSwapFeePercentage, jitParams.swapFeePercentage);
-              const simulated = await (client as unknown as { simulateCalls: (a: unknown) => Promise<{ results: Array<{ status: string; data: `0x${string}` }> }> }).simulateCalls({
+              const simulated = await client.simulateCalls({
                 account: mr.adapter,
                 calls: [
                   { to: boundController, data: createData },
@@ -1186,10 +1186,10 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
         ...(valueStr ? { value: BigInt(valueStr) } : {}),
         ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
       };
-      const res = await (resolved.client as unknown as { call: (c: unknown) => Promise<{ data?: `0x${string}` }> }).call(call);
+      const res = await resolved.client.call(call);
       let gas: bigint | undefined;
       try {
-        gas = await (resolved.client as unknown as { estimateGas: (c: unknown) => Promise<bigint> }).estimateGas(call);
+        gas = await resolved.client.estimateGas(call);
       } catch { /* estimate is best-effort garnish; the call already proved viability */ }
       return envelope({
         state: "ok",

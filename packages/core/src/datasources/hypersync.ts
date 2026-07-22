@@ -51,17 +51,25 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   const url = HYPERSYNC_URLS[chainId];
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };
   if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
-  let mod: {
-    HypersyncClient: { new(opts: { url: string; bearerToken: string }): unknown };
+  // Structural view of the napi module: HypersyncClient.new is a napi-rs STATIC factory
+  // method (a property named "new"), not a constructor. One cast at the import boundary —
+  // the module is untyped to us because it is an optional dep imported by bare name.
+  interface HyperSyncNapiModule {
+    HypersyncClient: {
+      new: (opts: { url: string; bearerToken: string }) => {
+        get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number }>;
+      };
+    };
     LogField: Record<string, string>;
-  };
+  }
+  let mod: HyperSyncNapiModule;
   try {
     const name = "@envio-dev/hypersync-client";
-    mod = (await import(name)) as never;
+    mod = (await import(name)) as HyperSyncNapiModule;
   } catch (err) {
     return { error: `the @envio-dev/hypersync-client native binding could not load on this host (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — see experiments/hypersync-spike/README.md for platform coverage` };
   }
-  const client = (mod.HypersyncClient as unknown as { new: (o: { url: string; bearerToken: string }) => { get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number }> } }).new({ url, bearerToken: token });
+  const client = mod.HypersyncClient.new({ url, bearerToken: token });
   const F = mod.LogField;
   return {
     source: {

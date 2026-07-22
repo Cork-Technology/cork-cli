@@ -103,18 +103,20 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 > - "What's the current cST swap rate for 1e18 collateral out of that pool?"
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
-Arbitrum (chainId 42161) reads work the same way — the read-path contracts are configured; bundle
-*building* on Arbitrum is still gated (`unknown_deployment`) until its CorkAdapter/Bundler3
-addresses are sourced.
+Arbitrum (chainId 42161) is a **full** deployment like mainnet (announced 2026-07-22, bindings
+verified on-chain): reads, bundle building, orders, and the MarketRegistry resources
+(registry-assets / registry-oracle / registry-recipes, plus `cork_prepare_market` oracle deploys)
+all work there.
 
-The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, order submission,
-RFQ open/answer) are served from `api-phoenix.cork.tech` and labeled `provenance.mode:
-"centralized"`; rollover orders are buildable offline (`prepare orders`, CorkSettler EIP-712) and
-reconciles are chain-verified against the settler's `orderStatus()` when an RPC resolves. A few
-variants are still honestly gated (state `unavailable` with a reason code) rather than fabricated —
-e.g. the whitelisted-addresses enumeration, taker-fill, and market deployment. Reading a pool that
-doesn't exist on the queried chain returns `unavailable` with `chain_read_failed` (not a crash).
-That's expected; it's not a broken install.
+The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, the RFQ discovery
+feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served from
+`api-phoenix.cork.tech` and labeled `provenance.mode: "centralized"`; rollover orders are buildable
+offline (`prepare orders`, CorkSettler EIP-712) and reconciles are chain-verified against the
+settler's `orderStatus()` when an RPC resolves. A few variants are still honestly gated (state
+`unavailable` with a reason code) rather than fabricated — the whitelisted-addresses enumeration,
+taker-fill, dutch-auction-price / rfq-quote pricing, and `cork_decode` order/event/receipt. Reading
+a pool that doesn't exist on the queried chain returns `unavailable` with `chain_read_failed` (not
+a crash). That's expected; it's not a broken install.
 
 ### CLI: `ch` (no MCP client needed)
 
@@ -228,25 +230,38 @@ Implemented + tested:
   deployed addresses via CREATE2 from prod.toml salt + Sourcify init-code hash).
 - **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1).
 - **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
-  (chain-backed, block-pinnable).
-- **cork_prepare_phoenix** — all 13 adapter actions; auto-built funding legs
-  (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn actions.
-  deposit / swap / unwind-swap / exercise bundles are proven to **execute** against the live vnet.
-- **cork_prepare_orders** — 1inch order maker-order EIP-712 typed data + cancel calldata; the order
-  hash is proven equal to on-chain `hashOrder`.
-- **cork_query** — market / account-state / protocol-config / pool-whitelist via chain reads.
-- **cork_track** — artifact digest reconcile + marketRef (MarketId re-hash) + txHash receipt.
+  (chain-backed, block-pinnable); resolve-recipe (MarketRegistry band resolution, bit-parity
+  self-checked against the chain view).
+- **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
+  legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
+  actions; expired-pool tripwire (`pool_expired`). deposit / swap / unwind-swap / exercise bundles
+  are proven to **execute** against the live vnet.
+- **cork_prepare_orders** — 1inch maker-order EIP-712 typed data (incl. extension orders and
+  JIT-market orders with adapter pre-flight checks) + cancel calldata, order hash proven equal to
+  on-chain `hashOrder`; rollover-intent ERC-7683 OrderData (CorkSettler domain, intent hash
+  recomputed locally, settler-mode gate checked).
+- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref)` oracle-wrapper txs
+  (permissionless, idempotent; Arbitrum). Q-REG closed 2026-07-22.
+- **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
+  spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
+  registry-recipes); venue-backed reads (markets, orderbook, fills, limit-order-markets, flows,
+  rfqs — incl. single-RFQ lookup via `filters.rfqId`); an event-derived subset (markets, fills,
+  flows) also serves `full-decentralized` mode over HyperSync.
+- **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run
+  on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt, orderHash /
+  submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer [K7]).
+- **cork_submit** — the one side-effecting tool: relays caller-signed/authored payloads to the venue
+  (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`), recomputing commitments before relay [K3].
 
-Honestly gated (`unavailable` with a reason, never faked): indexer/service resources of `cork_query`
-(orderbook/fills/flows), `cork_track` orderHash/submissionRef, `cork_prepare_orders` taker-fill /
-rollover-intent, `cork_compute` dutch-auction-price / rfq-quote, `cork_prepare_market` (Q-REG), and
-`cork_submit` — each pending its Phase 2–4 backend.
+Honestly gated (`unavailable` with a reason, never faked): `cork_query` whitelisted-addresses
+enumeration, `cork_prepare_orders` taker-fill, `cork_compute` dutch-auction-price (needs a live
+Fusion order) / rfq-quote (pricing-signal shape pending), and `cork_decode` order/event/receipt.
+Some schema fields are accepted but reserved for later phases (`cork_query` `cursor`/`pageSize`,
+`cork_compute` `at.timestamp`, `cork_prepare_phoenix` `account`).
 
-Known gaps, sequenced deliberately (tracked, not forgotten — see the graded findings in the
-2026-07-20 session notes): per-enum-value / per-union-branch descriptions inside the registered
-JSON schemas (RFC §5.4's table); prepare pre-flight guards (whitelist / pause / expiry checks),
-sweep legs, and a human summary on bundles (RFC §5.4); `account-state` classic + Permit2 allowances,
-nonce/invalidator, and Safe config (today it returns balances + token addresses only); the closed
-lifecycle-state projection for `cork_track` reconcile (RFC §10, Phase 3); and a CI workflow that
-actually runs the gates (typecheck, unit tests, surface-drift, evals) — the gates exist, the
-runner does not yet.
+Known gaps, sequenced deliberately (tracked, not forgotten): per-enum-value / per-union-branch
+descriptions inside the registered JSON schemas (RFC §5.4's table); remaining prepare pre-flight
+guards (whitelist / pause checks — expiry and JIT adapter-binding checks shipped), sweep legs, and
+a human summary on bundles (RFC §5.4); `account-state` nonce/invalidator and Safe config;
+venue-side pagination passthrough (`cursor`/`pageSize`) once the venue's cursor fix deploys; and
+distribution/packaging beyond the in-repo launchers.
