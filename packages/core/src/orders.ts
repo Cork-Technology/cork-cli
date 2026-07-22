@@ -141,3 +141,52 @@ const lopAbi = parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orde
 export function buildCancelOrder(makerTraits: bigint, orderHash: `0x${string}`): { to: null; data: `0x${string}` } {
   return { to: null, data: encodeFunctionData({ abi: lopAbi, functionName: "cancelOrder", args: [makerTraits, orderHash] }) };
 }
+
+// ── On-chain liveness of a resting order (cancel-flow UX) ────────────────────
+// LOP v4 tracks fills/cancels in one of two invalidators, selected by makerTraits
+// (MakerTraitsLib.useBitInvalidator = NO_PARTIAL_FILLS(bit 255) set OR ALLOW_MULTIPLE_FILLS
+// (bit 254) unset). Note our own buildMakerOrder sets allowMultipleFills:false, so Cork-built
+// orders always live in the BIT invalidator (slot = nonceOrEpoch >> 8, mask = 1 << (nonce & 0xff),
+// per OrderMixin.cancelOrder/bitsInvalidateForOrder). Foreign multiple-fill orders use the
+// remaining invalidator, where raw == 0 means never-touched (remainingInvalidatorForOrder REVERTS
+// there — read the RAW view) and otherwise remaining = ~raw (RemainingInvalidatorLib).
+export const lopInvalidatorAbi = parseAbi([
+  "function rawRemainingInvalidatorForOrder(address maker, bytes32 orderHash) view returns (uint256)",
+  "function bitInvalidatorForOrder(address maker, uint256 slot) view returns (uint256)",
+]);
+
+const NONCE_OR_EPOCH_OFFSET = 120n;
+const U256_MAX_ = (1n << 256n) - 1n;
+
+export type LopInvalidatorPlan =
+  | { mode: "bit"; slot: bigint; mask: bigint; nonceOrEpoch: bigint }
+  | { mode: "remaining" };
+
+/** Which invalidator view to read for an order, from its makerTraits (MakerTraitsLib layout). */
+export function lopInvalidatorPlan(makerTraits: bigint): LopInvalidatorPlan {
+  const allowPartial = (makerTraits & NO_PARTIAL_FILLS_FLAG) === 0n;
+  const allowMultiple = (makerTraits & ALLOW_MULTIPLE_FILLS_FLAG) !== 0n;
+  if (!allowPartial || !allowMultiple) {
+    const nonceOrEpoch = (makerTraits >> NONCE_OR_EPOCH_OFFSET) & U40;
+    return { mode: "bit", slot: nonceOrEpoch >> 8n, mask: 1n << (nonceOrEpoch & 0xffn), nonceOrEpoch };
+  }
+  return { mode: "remaining" };
+}
+
+export interface LopOnChainStatus {
+  status: "live-untouched" | "live-partially-filled" | "filled-or-cancelled";
+  /** Remaining making amount, when the invalidator encodes one (remaining mode, touched). */
+  remaining?: bigint;
+}
+
+/** Classify a rawRemainingInvalidatorForOrder read (remaining-invalidator orders). */
+export function classifyRemainingRaw(raw: bigint): LopOnChainStatus {
+  if (raw === 0n) return { status: "live-untouched" };
+  const remaining = U256_MAX_ ^ raw; // solidity `~value` on uint256
+  return remaining === 0n ? { status: "filled-or-cancelled" } : { status: "live-partially-filled", remaining };
+}
+
+/** Classify a bitInvalidatorForOrder read (bit-invalidator orders: filled OR cancelled sets the bit). */
+export function classifyBitInvalidator(slotValue: bigint, mask: bigint): LopOnChainStatus {
+  return (slotValue & mask) === 0n ? { status: "live-untouched" } : { status: "filled-or-cancelled" };
+}

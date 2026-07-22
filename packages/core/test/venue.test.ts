@@ -267,7 +267,10 @@ describe("cork_track reconcile via venue lifecycle", () => {
       ]),
     );
     expect(withFills.state).toBe("ok");
-    expect((withFills.data as { kind: string }).kind).toBe("lop-fills");
+    // 2026-07-22: the LOP surface reports the richer "lop-order" shape (fills + resting flag +
+    // optional on-chain invalidator leg — see lop-invalidator.test.ts for that leg's coverage).
+    expect((withFills.data as { kind: string }).kind).toBe("lop-order");
+    expect((withFills.data as { resting: boolean }).resting).toBe(false);
 
     const nowhere = await runTool(
       "cork_track",

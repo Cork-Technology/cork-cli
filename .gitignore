@@ -34,3 +34,6 @@ coverage/
 # OS
 .DS_Store
 .solidity-language-server/
+
+# live A/B eval transcripts (evals/live-ab)
+evals/live-ab/runs/

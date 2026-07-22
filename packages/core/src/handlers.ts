@@ -39,7 +39,7 @@ import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/re
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, LOP_ADDRESSES } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, classifyBitInvalidator, classifyRemainingRaw, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES } from "./orders.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
@@ -934,18 +934,90 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
             ctx,
           });
         }
-        const fills = await getLopFills(deps, { chainId, orderHash: ref.toLowerCase() });
-        if (fills.items.length > 0) {
+        // ── LOP surface: fills + resting-book row, then the on-chain invalidator leg [K7] ──
+        const hash = ref.toLowerCase();
+        const fills = await getLopFills(deps, { chainId, orderHash: hash });
+        // The orderbook endpoint has no orderHash filter — scan the (small) book client-side to
+        // recover the maker/makerTraits the invalidator views need.
+        let bookRow: Record<string, unknown> | undefined;
+        try {
+          const book = await getLopOrderbook(deps, { chainId });
+          bookRow = book.items.find((r) => {
+            const o = r as Record<string, unknown>;
+            const h = o.orderHash ?? o.order_hash ?? o.hash ?? (o.order as Record<string, unknown> | undefined)?.orderHash;
+            return typeof h === "string" && h.toLowerCase() === hash;
+          }) as Record<string, unknown> | undefined;
+        } catch {
+          // book scan is best-effort; fills/chain legs below still apply
+        }
+        if (fills.items.length > 0 || bookRow) {
+          const warnings: Array<{ code: string; message: string }> = [];
+          let chainVerification: Record<string, unknown> | undefined;
+          // maker + makerTraits from the book row (resting) or the first fill row (historical).
+          const src = (bookRow?.order as Record<string, unknown> | undefined) ?? bookRow ?? (fills.items[0] as Record<string, unknown> | undefined);
+          const maker = typeof src?.maker === "string" ? (src.maker as `0x${string}`) : undefined;
+          const traitsStr = src?.makerTraits ?? src?.maker_traits;
+          const lop = LOP_ADDRESSES[chainId];
+          const resolved = maker && lop ? await getRpc(ctx, chainId) : null;
+          if (maker && lop && resolved && traitsStr !== undefined) {
+            try {
+              const plan = lopInvalidatorPlan(BigInt(String(traitsStr)));
+              const onChain =
+                plan.mode === "bit"
+                  ? classifyBitInvalidator(
+                      (await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] })) as bigint,
+                      plan.mask,
+                    )
+                  : classifyRemainingRaw(
+                      (await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, hash as `0x${string}`] })) as bigint,
+                    );
+              chainVerification = {
+                leg: `LOP ${plan.mode}-invalidator (live RPC)`,
+                lop,
+                maker,
+                onChainStatus: onChain.status,
+                ...(onChain.remaining !== undefined ? { remainingMakingAmount: onChain.remaining } : {}),
+                cancellable: onChain.status !== "filled-or-cancelled",
+              };
+              // Chain outranks the venue: a book-listed order the chain says is dead is a conflict.
+              if (bookRow && onChain.status === "filled-or-cancelled") {
+                return envelope({
+                  state: "conflict",
+                  data: { kind: "lop-order", orderHash: hash, venueStatus: "resting (orderbook row present)", chainStatus: onChain.status, order: bookRow, fills: fills.items, chainVerification },
+                  chainId,
+                  source: "chain",
+                  warnings: [{ code: "status_mismatch", message: "the venue orderbook still lists this order but the LOP invalidator says it is filled or cancelled — chain outranks indexer [K7]; do not attempt a fill, and a cancel would revert" }],
+                  ctx,
+                });
+              }
+            } catch (err) {
+              warnings.push({ code: "chain_read_failed", message: `LOP invalidator read failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — result is venue-reported only` });
+            }
+          } else if (maker && lop && traitsStr !== undefined) {
+            warnings.push(venueNote);
+          } else if (!lop) {
+            warnings.push({ code: "no_lop", message: `no 1inch LOP deployment configured for chainId ${chainId} — invalidator leg skipped` });
+          } else {
+            warnings.push({ code: "venue_reported", message: "venue rows carry no maker/makerTraits for this order — the on-chain invalidator leg needs both; state is venue-reported only" });
+          }
           return envelope({
             state: "ok",
-            data: { kind: "lop-fills", orderHash: ref.toLowerCase(), count: fills.items.length, fills: fills.items },
+            data: {
+              kind: "lop-order",
+              orderHash: hash,
+              resting: Boolean(bookRow),
+              ...(bookRow ? { order: bookRow } : {}),
+              count: fills.items.length,
+              fills: fills.items,
+              ...(chainVerification ? { chainVerification } : {}),
+            },
             chainId,
-            source: "indexer",
-            warnings: [venueNote],
+            source: chainVerification ? "chain" : "indexer",
+            warnings,
             ctx,
           });
         }
-        return unavailable(chainId, "order_not_found", `no rollover order or LOP fills known to the venue for ${ref} on chainId ${chainId} (a normal outcome for an unposted/unfilled order)`, ctx);
+        return unavailable(chainId, "order_not_found", `no rollover order, LOP orderbook row, or LOP fills known to the venue for ${ref} on chainId ${chainId} (a normal outcome for an unposted/unfilled order)`, ctx);
       }
       return unavailable(chainId, "order_not_found", `submissionRef '${ref}' is not a 32-byte order digest — RFQ ids (rfq_/ans_) reconcile via cork_query once the RFQ read surface is wired`, ctx);
     } catch (err) {

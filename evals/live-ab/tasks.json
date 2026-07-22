@@ -1,0 +1,63 @@
+[
+  {
+    "id": "t1-markets-list",
+    "prompt": "Using the cork tools: list the Cork pools that exist on Ethereum mainnet (chainId 1) and report their poolIds. If the data source is unreachable, just report that.",
+    "expect_tool": "cork_query",
+    "targets": ["resource=markets"]
+  },
+  {
+    "id": "t2-postexpiry-reference-out",
+    "prompt": "Using the cork tools: pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet (chainId 1) has EXPIRED. I hold CPT shares and want to settle them for EXACTLY 100000000 units of the pool's REFERENCE asset (not the collateral). My account, owner and receiver are all 0xc0ffee0000000000000000000000000000000001. Use pre-funded mode and clientRequestId reg-eval-t2-0001. Build the unsigned bundle and tell me what I'd sign.",
+    "expect_tool": "cork_prepare_phoenix",
+    "targets": ["action.type=withdraw-other", "action.referenceAssetsOut=100000000"]
+  },
+  {
+    "id": "t3-deposit-decimals",
+    "prompt": "Using the cork tools: build an unsigned bundle depositing exactly 2.5 sUSDe (sUSDe has 18 decimals) into pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet. Account and receiver 0xc0ffee0000000000000000000000000000000001, accept any resulting share amount of at least 1 wei, pre-funded mode, clientRequestId reg-eval-t3-0001.",
+    "expect_tool": "cork_prepare_phoenix",
+    "targets": ["action.type=deposit", "action.collateralAssetsIn=2500000000000000000", "action.minCptAndCstSharesOut=1"]
+  },
+  {
+    "id": "t4-absolute-deadline",
+    "prompt": "Using the cork tools: build an unsigned swap bundle on mainnet taking exactly 1000000000000000000 of the collateral out of pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a (receiver/account 0xc0ffee0000000000000000000000000000000001, cap CST in at 2000000000000000000 and reference in at 2000000, pre-funded, clientRequestId reg-eval-t4-0001). CRITICAL: the bundle must stop being valid exactly at unix timestamp 1795000000 — and a retry later must produce byte-identical output.",
+    "expect_tool": "cork_prepare_phoenix",
+    "targets": ["action.type=swap", "deadlineAt=1795000000"]
+  },
+  {
+    "id": "t5-decentralized-fills",
+    "prompt": "Using the cork tools: WITHOUT touching the centralized venue API — using only on-chain event data — list executed limit-order fills on Ethereum mainnet. If that data path is not available in this environment, report exactly why.",
+    "expect_tool": "cork_query",
+    "targets": ["resource=fills", "mode=full-decentralized"]
+  },
+  {
+    "id": "t6-rollover-fills-filter",
+    "prompt": "Using the cork tools: show me the rollover FILLS (executed rollover legs, not open orders) on Arbitrum (chainId 42161). If the source is unreachable, report that.",
+    "expect_tool": "cork_query",
+    "targets": ["resource=flows", "filters.kind=fills"]
+  },
+  {
+    "id": "t7-swap-rate-live",
+    "prompt": "Using the cork tools: how much would it cost RIGHT NOW (in cST shares + reference assets) to take exactly 1000000000000000000 of the collateral out of mainnet pool 0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05? Report the numbers from the tool.",
+    "expect_tool": "cork_compute",
+    "targets": ["params.kind=cst-swap-rate", "params.collateralAssetsOut=1000000000000000000"]
+  },
+  {
+    "id": "t8-settler-mode-gate",
+    "prompt": "Using the cork tools: build a signable rollover intent on Arbitrum (chainId 42161) that ALLOWS PARTIAL FILLS, using settler 0x983270AE48545665Cee4D7EF61C65fF3fdC8222D, rolloverContract 0xc0ffee0000000000000000000000000000000001, srcPoolId 0x1111111111111111111111111111111111111111111111111111111111111111, dstPoolId 0x2222222222222222222222222222222222222222222222222222222222222222, srcCstToken 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, dstCstToken 0x53E82ABbb12638F09d9e624578ccB666217a765e, premiumToken 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, orderSize 250000000000000000000, minPremiumPerShare 12000000000000000, openDeadline 1795000000, fillDeadline 1795604800, account 0xc0ffee0000000000000000000000000000000001, clientRequestId reg-eval-t8-0001. If anything about this combination is wrong, explain it and fix it.",
+    "expect_tool": "cork_prepare_orders",
+    "targets": ["action.type=rollover-intent"],
+    "answer_regex": "(?i)(partial|exact).{0,80}settler|settler.{0,80}(partial|exact)"
+  },
+  {
+    "id": "t9-gated-variants",
+    "prompt": "Using the cork tools: which cork tool variants are currently gated or not yet activated? Answer from the tools themselves, not from guesses.",
+    "expect_tool": "cork_capabilities",
+    "targets": []
+  },
+  {
+    "id": "t10-premium-floor",
+    "prompt": "Using the cork tools: what is the guaranteed minimum premium for a rollover that produces 1000 destination cST (18-decimals token, so scale accordingly) at a minimum premium per share of 0.02 (also 18 decimals)? Pure math, no chain access needed.",
+    "expect_tool": "cork_compute",
+    "targets": ["params.kind=rollover-premium-floor", "params.dstCstProduced=1000000000000000000000", "params.minPremiumPerShare=20000000000000000"]
+  }
+]
