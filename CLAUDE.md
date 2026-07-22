@@ -44,7 +44,7 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
 | `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension orders) / cancel, and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
-| `cork_track` | Verify a resource against chain, simulate frozen bytes, or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
+| `cork_track` | Verify a resource against chain, simulate frozen prepared bytes (eth_call dry-run: wouldRevert + reason BEFORE signing), or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Unsigned MarketRegistry.deploy(ca, ref) tx (permissionless, idempotent oracle deploy; Arbitrum). Q-REG closed 2026-07-22. Markets themselves are created JIT by LOP fills — `cork_prepare_orders` maker-order + `jitMarket`. | 4 |
 | `cork_submit` | The **only** side-effecting tool: relays caller-signed/authored payloads to the venue — actions `rollover-order`, `lop-order`, `rfq-open`, `rfq-answer` (all off-chain POSTs). Commitments recomputed before relay [K3]; never signs [K1]. | 3 |
 
@@ -57,8 +57,8 @@ as `structuredContent`, and every tool advertises this envelope as its `outputSc
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
   retry the same call** and do not fabricate the answer — report the reason. Still-gated variants
-  (whitelisted-addresses, taker-fill, dutch-auction-price, rfq-quote, decode order/event/receipt,
-  track simulate) stay `unavailable` by design.
+  (whitelisted-addresses, taker-fill, dutch-auction-price, rfq-quote, decode
+  order/event/receipt) stay `unavailable` by design.
 - `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
   surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
@@ -72,7 +72,7 @@ Warning codes you will encounter:
 | `pool_not_found` | prepare_phoenix funding: `market(poolId)` returned a zeroed struct — the pool doesn't exist on that chain, so no funding legs are built. |
 | `invalid_input` / `internal_error` | MCP-only, in the error envelope when a call fails before/outside a handler (bad input, unexpected exception). CLI equivalents are exit 2 / exit 1. |
 | `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
-| `phase_gated` | Variant not implemented in this iteration (incl. `cork_submit`, `track mode:"simulate"`). |
+| `phase_gated` | Variant not implemented in this iteration. |
 | `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |
 | `mode_unavailable` | An explicitly requested data mode (`centralized`/`full-decentralized`) isn't wired yet — omit `mode` or use `lite-decentralized`. |
 | `unknown_topic` / `no_lop` | Capabilities topic not found / no 1inch LOP deployment for the chain. |
@@ -84,6 +84,7 @@ Warning codes you will encounter:
 | `rate_drift_notice` | Informational on JIT prepares: market identity follows the LIVE oracle rate; a drifted rate reverts the fill OrderNotForPool (deliberate staleness guard). |
 | `jit_side_mismatch` | JIT prepare: NEITHER order side is the derived pool's cST — the fill WILL revert; set maker/takerAsset to the predicted cST in the result. |
 | `roles_not_granted` / `adapter_binding_mismatch` | JIT adapter pre-flight: controller roles missing (signable but unfillable) / the volatile adapter address's on-chain bindings disagree with config (conflict — refresh cork-defaults.json). |
+| `would_revert` | Informational on `ok` simulate results: the frozen bytes revert at current state (reason included) — do not sign/broadcast as-is. |
 | `share_prediction_unavailable` | JIT prepare: eth_simulateV1 unsupported — predicted cST unknown; verify the order side + permit token yourself. |
 | `band_parity_mismatch` | On `conflict` (resolve-recipe): local applyBands port disagreed with the chain view — trust the chain, report the bug. |
 | `pool_expired` | Informational on `ok` prepare_phoenix results: a pre-expiry action (deposit/swap/…) against an expired pool — the bundle builds but would revert on-chain; withdraw/withdraw-other/redeem are the post-expiry paths. |

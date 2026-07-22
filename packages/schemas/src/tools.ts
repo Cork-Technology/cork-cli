@@ -389,7 +389,7 @@ export type TrackSubject = z.infer<typeof TrackSubject>;
 export const TrackInput = z.object({
   mode: z
     .enum(["verify", "simulate", "reconcile"])
-    .describe("verify=check a resource against deployed chain state; reconcile=resolve a receipt/order to a closed lifecycle state; simulate=dry-run frozen bytes (phase-gated)"),
+    .describe("verify=check a resource against deployed chain state; reconcile=resolve a receipt/order to a closed lifecycle state; simulate=eth_call dry-run of a FROZEN prepared artifact (subject kind 'artifact' with to/bundler3 + data/multicall + from/account) — answers wouldRevert BEFORE anyone signs"),
   subject: TrackSubject,
   expect: z.object({ artifactDigest: Bytes32 }).optional(),
   chainId: ChainId.optional(),

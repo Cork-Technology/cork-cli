@@ -61,6 +61,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Digest-pin an artifact you were handed", input: { mode: "verify", subject: { kind: "artifact", artifact: { any: "json" } } } },
     { title: "Verify a pool against chain (MarketId re-hash)", input: { mode: "verify", subject: { kind: "marketRef", poolId: DEMO_POOL_ID } } },
     { title: "Reconcile a tx receipt", input: { mode: "reconcile", subject: { kind: "txHash", txHash: "0x2222222222222222222222222222222222222222222222222222222222222222" } } },
+    { title: "Dry-run a prepared bundle before signing (wouldRevert + reason)", input: { mode: "simulate", subject: { kind: "artifact", artifact: { bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13", multicall: "0x374f435d", account: DEMO_ACCOUNT } }, chainId: 42161 } },
   ],
   cork_submit: [
     { title: "Relay a signed rollover order to the venue (intent hash + digest recomputed before relay)", input: { chainId: 42161, clientRequestId: "demo-submit-0001", action: { type: "rollover-order", order: { user: DEMO_ACCOUNT, settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", fillerHint: "0x0000000000000000000000000000000000000000", exclusiveFiller: "0x0000000000000000000000000000000000000000", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, rolloverContract: DEMO_ACCOUNT, originChainId: "42161", destinationChainId: "42161", openDeadline: "1795000000", fillDeadline: "1795604800", orderSalt: "8811723641", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", allowPartialFills: false, allowUnderfill: false, premiumPaymentMode: 0, rolloverIntentHash: "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84", rolloverParams: { srcCstToken: SUSDE, dstCstToken: VBUSDC, minCaReceived: "0", minSharesOut: "0", srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D" } }, intent: { rolloverContract: DEMO_ACCOUNT, deadline: "1795604800", nonce: "1", preRolloverHooks: [], midRolloverHooks: [], postRolloverHooks: [], premiumHooks: [] }, signature: "0x8f3b00000000000000000000000000000000000000000000000000000000001c" } } },
@@ -151,7 +152,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "verify/artifact": { status: "activated" },
       "verify/marketRef": { status: "activated" },
       "reconcile/txHash": { status: "activated" },
-      simulate: { status: "specified", reason: "phase_gated" },
+      "simulate/artifact": { status: "activated", reason: "eth_call dry-run of frozen bytes (wouldRevert + reason + gas estimate); other subject kinds have nothing executable" },
       "reconcile/orderHash": { status: "activated", reason: "venue lifecycle + [K7] chain verification: settler orderStatus() over RPC (automatic) and event history via HyperRPC (needs ENVIO_API_TOKEN)" },
       "reconcile/submissionRef": { status: "activated", reason: "same as reconcile/orderHash; 32-byte digests only" },
     },

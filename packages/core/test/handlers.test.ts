@@ -279,10 +279,10 @@ describe("input hardening + format semantics", () => {
     expect(cfgEnv.provenance.mode).toBeUndefined();
   });
 
-  it("track mode 'simulate' is honestly phase-gated (not silently treated as verify)", async () => {
+  it("track mode 'simulate' on a non-executable artifact teaches the shape (activated 2026-07-22; deep coverage in track-simulate.test.ts)", async () => {
     const env = await runTool("cork_track", { mode: "simulate", subject: { kind: "artifact", artifact: { a: 1 } }, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("phase_gated");
+    expect(env.warnings[0]?.code).toBe("missing_filter"); // no to/data in the artifact — never silently treated as verify
   });
 
   it("format 'full' adds provenance.rpc (endpoint tier + host) on chain-backed reads", async () => {

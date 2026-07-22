@@ -30,9 +30,8 @@ const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
   { tool: "cork_prepare_phoenix", key: "authority-revoke", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-02", action: { type: "authority-revoke", token: T, spender: S } } },
   // cork_prepare_orders — service-backed variants
   { tool: "cork_prepare_orders", key: "taker-fill", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-03", action: { type: "taker-fill", orderHash: H } } },
-  // cork_track — simulate + service-backed subjects
-  { tool: "cork_track", key: "simulate", input: { mode: "simulate", subject: { kind: "artifact", artifact: {} } } },
-  // cork_prepare_market activated 2026-07-22 (Q-REG closed) — no longer probed as gated.
+  // cork_track simulate/artifact activated 2026-07-22; cork_prepare_market activated 2026-07-22
+  // (Q-REG closed) — neither probed as gated any more.
 ];
 
 /** The reason string's leading token is the warning code the gated call must return. */

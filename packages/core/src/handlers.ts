@@ -1077,10 +1077,72 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
   const chainId = input.chainId ?? 1;
   const subj = input.subject;
 
-  // simulate (dry-running frozen bytes against a fork) is a distinct capability that is not
-  // implemented yet — gate it explicitly instead of silently behaving like verify [K1].
+  // simulate: dry-run FROZEN bytes via eth_call — executes nothing, signs nothing [K1]. Accepts
+  // the artifact shapes our own prepare tools emit (bundler3+multicall, to+calldata/data) plus a
+  // caller `from`/`account` (defaults to the artifact's own account field when present). A revert
+  // is a SUCCESSFUL simulation whose answer is "this would revert" — ok + wouldRevert, never a
+  // fabricated failure.
   if (input.mode === "simulate") {
-    return unavailable(chainId, "phase_gated", "track mode 'simulate' (dry-run of frozen bytes) is not implemented in this iteration; use mode 'verify' or 'reconcile'", ctx);
+    if (subj.kind !== "artifact") {
+      return unavailable(chainId, "phase_gated", `track simulate dry-runs a FROZEN artifact's bytes — pass subject kind 'artifact' with the prepared result (to/bundler3 + data/multicall + from/account); subject kind '${subj.kind}' has nothing executable to simulate`, ctx);
+    }
+    const a = subj.artifact;
+    const pick = (...keys: string[]): string | undefined => {
+      for (const k of keys) {
+        const v = a[k];
+        if (typeof v === "string" && v.startsWith("0x")) return v;
+      }
+      return undefined;
+    };
+    const to = pick("to", "bundler3");
+    const data = pick("data", "multicall", "calldata");
+    const from = pick("from", "account", "sender");
+    if (!to || !data) {
+      return unavailable(chainId, "missing_filter", "simulate needs the artifact's target and bytes: include `to` (or `bundler3`) and `data` (or `multicall`/`calldata`); optionally `from`/`account` for sender-dependent paths (funding pulls, roles)", ctx);
+    }
+    const resolved = await getRpc(ctx, chainId);
+    if (!resolved) return unavailable(chainId, "requires_rpc", `simulate needs an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
+    const rpc = rpcProvenance(input.format, resolved);
+    const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved)];
+    if (!from) warnings.push({ code: "manual_funding", message: "no `from`/`account` in the artifact — simulated without a sender, so sender-dependent legs (transferFrom funding, role gates) are NOT exercised; pass the account for a faithful dry-run" });
+    const valueStr = typeof a.value === "string" && /^[0-9]+$/.test(a.value) ? a.value : undefined;
+    try {
+      const call = {
+        to: to as `0x${string}`,
+        data: data as `0x${string}`,
+        ...(from ? { account: from as `0x${string}` } : {}),
+        ...(valueStr ? { value: BigInt(valueStr) } : {}),
+        ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
+      };
+      const res = await (resolved.client as unknown as { call: (c: unknown) => Promise<{ data?: `0x${string}` }> }).call(call);
+      let gas: bigint | undefined;
+      try {
+        gas = await (resolved.client as unknown as { estimateGas: (c: unknown) => Promise<bigint> }).estimateGas(call);
+      } catch { /* estimate is best-effort garnish; the call already proved viability */ }
+      return envelope({
+        state: "ok",
+        data: { mode: "simulate", wouldRevert: false, to, from: from ?? null, ...(res.data && res.data !== "0x" ? { returnData: res.data } : {}), ...(gas !== undefined ? { gasEstimate: gas } : {}), note: "eth_call dry-run at the current state — a later broadcast can still land differently (state/deadline drift)" },
+        chainId,
+        source: "chain",
+        warnings,
+        ...rpc,
+        ctx,
+      });
+    } catch (err) {
+      // Distinguish an execution REVERT (a real simulation answer) from a transport failure.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isTransportError(err)) return chainReadFailed(chainId, err, warnings, ctx, resolved);
+      const reason = msg.split("\n").find((l) => /revert|Error|Custom/i.test(l))?.trim() ?? msg.split("\n")[0];
+      return envelope({
+        state: "ok",
+        data: { mode: "simulate", wouldRevert: true, to, from: from ?? null, revertReason: reason },
+        chainId,
+        source: "chain",
+        warnings: [...warnings, { code: "would_revert", message: `the frozen bytes REVERT at the current state (${reason}) — do not sign/broadcast as-is; common causes: expired deadline, missing funding/allowance, pool state moved since prepare` }],
+        ...rpc,
+        ctx,
+      });
+    }
   }
 
   // artifact: recompute the content digest and reconcile against the caller's claim (pure).

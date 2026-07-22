@@ -88,7 +88,7 @@
     "name": "cork_track",
     "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7]. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
     "descriptionTokensApprox": 78,
-    "inputSchemaSha256": "bd0f8885feaff143a11e221a43e128b609882a3713d3e96fce0ad2e780476a24",
+    "inputSchemaSha256": "6c3c961a53dff7b6d9b618c2eb40dd1b7d8485522c66cd50d27708fab13c8bb5",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: verify & reconcile",
