@@ -4,17 +4,33 @@ Source of truth: `Cork-Technology/market-registry-api` @ `895748ca` (INTEGRATOR.
 contract sources) + live Arbitrum One state. Closes **Q-REG** (RFC 011 §15): the MarketRegistry
 surface is now verified and consumed.
 
-## The purpose model (why this exists — Zian's vertical)
+## The purpose model (why this exists — Zian's vertical, verified against org activity)
 
-**Governed market creation.** The MarketRegistry is an owner-curated approval record (assets,
-conversion feeds, constraint recipes; one curator Safe per chain, populated through an
-evidence-based onboarding pipeline in the same repo). The `CorkLimitOrderAdapter` is the
-**permissionless-but-bounded** creation entrypoint: a 1inch LOP v4 fill carrying the adapter hook
-derives a market from a curated recipe against the LIVE oracle rate, creates the pool if missing,
-and optionally JIT-mints the cST inside the fill. Agents "creating markets" can only ever create
-markets whose ingredients governance pre-approved. `rfcs/agent-rfq-venue-interface.md` supplies
-the upstream: RFQs negotiate a market as a *template referencing a recipe*, and the implied
-oracle address + MarketId must be computable before deployment — which `deriveJitMarket` does.
+**Let agents assemble Cork markets permissionlessly from governance-vetted ingredients.** Three
+layers, all Zian's (`ziankork`):
+
+1. **Curation** — an evidence-based onboarding pipeline (propose-asset → erc20-check/triage →
+   registry-sync via the curator Safe). Actively running: the three waArb* StataTokenV2 assets
+   were onboarded 2026-07-22, the same day the `AggregatorV2V3AdapterFactory` was deployed to
+   present their Aave `latestAnswer()` feeds as Chainlink V3 sources.
+2. **Discovery** — the read API, whose `llms.txt` is written FOR agents and defines the intended
+   agent workflow: list vetted assets (any asset can be CA or REF; pair is order-sensitive) →
+   oracle status for the pair (`deployed`/`deployable`/`reason`; not-deployable is a normal
+   answer; the predicted `wrapper` address is exact pre-deployment) → recipe bands (exact-string
+   modes; two scales 100x apart, companion key `bps` vs `decimal` tells you which; `raw` decimal
+   strings are authoritative — never floats) → resolve against a rate with the registry's own
+   directional rounding.
+3. **Execution** — the `CorkLimitOrderAdapter` (lineage: the Bond.credit/Zyf.ai hackathon
+   "market creator", incl. its fixed-rate ~24h-market concept — the live `fixed` recipe with
+   near-zero bands is that idea's recipe): a LOP v4 fill derives the market from the recipe
+   against the LIVE oracle rate, creates the pool if missing, JIT-mints inside the fill.
+
+`rfcs/agent-rfq-venue-interface.md` supplies the upstream: RFQs negotiate a market as a
+*template referencing a recipe*, with the implied oracle address + MarketId computable before
+deployment — which `deriveJitMarket` does. **Volatility note:** recipes and the asset set are
+being iterated live (recipes corrected 2026-07-22 13:18 UTC; repo and chain verified in sync at
+`liquidity`(99/100/100/100) + `fixed`(10/10/0/0)) — never hardcode modes, bands, or asset lists;
+this integration always reads them live.
 
 ## Empirical findings (all verified on-chain 2026-07-22)
 
