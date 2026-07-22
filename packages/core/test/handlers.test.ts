@@ -534,3 +534,34 @@ describe("deadlineAt: byte-stable retries [K2 deadline-basis]", () => {
     expect((abs1.data as { deadline: string }).deadline).toBe(String(NOW + 3600n));
   });
 });
+
+describe("filters contract: parser and schema description stay in lockstep", () => {
+  it("every key parseQueryFilters accepts is named in the filters describe (and the describe names no ghost keys)", async () => {
+    const { KNOWN_FILTER_KEYS } = await import("../src/handlers.ts");
+    const { QueryInput } = await import("@cork/schemas");
+    const describeText = QueryInput.shape.filters.description ?? "";
+    for (const key of KNOWN_FILTER_KEYS) {
+      expect(describeText, `filter key '${key}' is parseable but undocumented in the schema describe`).toContain(key);
+    }
+  });
+
+  it("an unknown filter key fails BEFORE any venue/chain call, with the known-key list", async () => {
+    const err = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 1, filters: { poolID: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
+      {
+        nowSeconds: 1n,
+        venueFetch: async () => {
+          throw new Error("must not be called");
+        },
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ToolInputError);
+    const issues = (err as InstanceType<typeof ToolInputError>).issues as Array<{ message: string }>;
+    expect(issues[0]!.message).toContain("poolId");
+    expect(issues[0]!.message).toContain("known:");
+  });
+});

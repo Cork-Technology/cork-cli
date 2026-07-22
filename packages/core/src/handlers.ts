@@ -421,8 +421,9 @@ interface QueryFilters {
   withAnswers?: boolean;
 }
 
-/** Every filter key parseQueryFilters understands — unknown keys are a teachable error, as advertised. */
-const KNOWN_FILTER_KEYS = [
+/** Every filter key parseQueryFilters understands — unknown keys are a teachable error, as advertised.
+ *  Exported for the completeness gate: each key must also appear in the schema's filters describe. */
+export const KNOWN_FILTER_KEYS = [
   "poolId",
   "account",
   "kind",

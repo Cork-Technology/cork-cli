@@ -531,3 +531,26 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     expect(issues[0]!.message).toContain("rfqId");
   });
 });
+
+describe("truncation honesty: venue paging signals pass through, never swallowed", () => {
+  it("hasMore:true + nextCursor on a venue list surface in the envelope verbatim", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc" }], nextCursor: "2026-07-21T10:53:18.832Z", hasMore: true } }]),
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { hasMore?: boolean; nextCursor?: unknown; count: number };
+    expect(d.hasMore).toBe(true);
+    expect(d.nextCursor).toBe("2026-07-21T10:53:18.832Z");
+  });
+
+  it("snake_case next_cursor (rfqs-style) is normalized to nextCursor", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "flows", chainId: 42161, filters: { kind: "fills" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rollover/fills", body: { items: [], next_cursor: "abc" } }]),
+    );
+    expect((env.data as { nextCursor?: unknown }).nextCursor).toBe("abc");
+  });
+});
