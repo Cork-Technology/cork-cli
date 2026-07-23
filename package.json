@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude '**/{fork-parity,bundle-sim,rpc-live}.test.ts'",
     "test:live": "vitest run packages/core/test/fork-parity.test.ts packages/core/test/bundle-sim.test.ts packages/core/test/rpc-live.test.ts",
+    "build": "node scripts/build-packages.mjs",
+    "verify:package": "node scripts/verify-package-layout.mjs",
     "eval": "bun evals/run.ts"
   },
   "devDependencies": {

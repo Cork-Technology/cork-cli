@@ -18,7 +18,7 @@ export interface CorkDeployment extends CorkAddresses {
 // Sourcify + CREATE2 (C10); chain 42161 read-path empirically derived 2026-07-17 (Cork API
 // poolManagerAddress + debug_traceCall calibration for the constraintAdapter; tx-path contracts
 // unknown → omitted, handlers gate per capability).
-import bundledDefaults from "../../../cork-defaults.json";
+import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 
 const bundledDeployments = bundledDefaults.deployments as Record<string, CorkDeployment>;
 

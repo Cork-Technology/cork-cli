@@ -19,7 +19,7 @@ import {
   zeroAddress,
 } from "viem";
 
-import bundledDefaults from "../../../cork-defaults.json";
+import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 
 /** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin).
  *  Sourced from the bundled cork-defaults.json — no address literals in source. */

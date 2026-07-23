@@ -1,2 +1,26 @@
-{ "name":"@cork/mcp","version":"0.0.1","private":true,"type":"module","main":"src/index.ts","exports":{".":"./src/index.ts"},"bin":{"cork-mcp":"src/bin.ts"},
-  "dependencies":{"@cork/core":"workspace:*","@cork/schemas":"workspace:*","@modelcontextprotocol/sdk":"^1.29.0","zod":"^4.0.0"} }
+{
+  "name": "@cork/mcp",
+  "version": "0.0.1",
+  "description": "Standard-input/output Model Context Protocol projection of the Cork helper core.",
+  "license": "UNLICENSED",
+  "private": false,
+  "type": "module",
+  "main": "./dist/packages/mcp/src/index.js",
+  "types": "./dist/packages/mcp/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/packages/mcp/src/index.d.ts",
+      "import": "./dist/packages/mcp/src/index.js"
+    }
+  },
+  "bin": { "cork-mcp": "./dist/packages/mcp/src/bin.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=22.0.0", "bun": ">=1.3.0" },
+  "publishConfig": { "access": "restricted", "provenance": true },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
+    "directory": "packages/mcp"
+  },
+  "dependencies": { "@cork/core": "workspace:*", "@cork/schemas": "workspace:*", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" }
+}

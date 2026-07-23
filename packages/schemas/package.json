@@ -1,9 +1,25 @@
 {
   "name": "@cork/schemas",
   "version": "0.0.1",
-  "private": true,
+  "description": "Zod source-of-truth schemas, registry, and examples for the Cork helper tools.",
+  "license": "UNLICENSED",
+  "private": false,
   "type": "module",
-  "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "main": "./dist/packages/schemas/src/index.js",
+  "types": "./dist/packages/schemas/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/packages/schemas/src/index.d.ts",
+      "import": "./dist/packages/schemas/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": { "node": ">=22.0.0", "bun": ">=1.3.0" },
+  "publishConfig": { "access": "restricted", "provenance": true },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
+    "directory": "packages/schemas"
+  },
   "dependencies": { "viem": "^2.21.0", "zod": "^4.0.0" }
 }

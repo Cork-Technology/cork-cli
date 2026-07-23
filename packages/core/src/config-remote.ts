@@ -17,7 +17,7 @@ import { Address } from "@cork/schemas";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import bundledDefaults from "../../../cork-defaults.json";
+import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 import type { CorkDeployment } from "./config.ts";
 
 /** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. */
