@@ -11,6 +11,7 @@ import {
   pad,
   parseAbi,
   parseSignature,
+  recoverAddress,
   signatureToCompactSignature,
   size,
   sliceHex,
@@ -172,6 +173,45 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const domain = lopDomain(a.chainId, a.lop);
   const orderHash = hashLopOrder(a.chainId, a.lop, order);
   return { order, domain, types: ORDER_TYPES, primaryType: "Order", orderHash, extension: hasExtension ? a.extension! : "0x" };
+}
+
+// ── Finalize a caller-signed maker order ─────────────────────────────────────
+// Signing happens out-of-process (an external signer). Finalize reconstructs the exact order,
+// re-derives its hash, checks the salt↔extension binding OrderLib enforces at fill, and recovers
+// the signer — proving the signature is the maker's over THIS order — WITHOUT ever signing [K1].
+export interface FinalizeMakerOrderArgs {
+  chainId: number;
+  lop: `0x${string}`;
+  order: LopOrder;
+  claimedOrderHash: `0x${string}`;
+  signature: `0x${string}`;
+  extension: `0x${string}`;
+}
+
+export interface FinalizedMakerOrder {
+  order: LopOrder;
+  orderHash: `0x${string}`;
+  signature: `0x${string}`;
+  extension: `0x${string}`;
+  recoveredSigner: `0x${string}`;
+}
+
+export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<FinalizedMakerOrder> {
+  const orderHash = hashLopOrder(a.chainId, a.lop, a.order);
+  if (orderHash.toLowerCase() !== a.claimedOrderHash.toLowerCase()) {
+    throw new Error(`reconstructed order hash ${orderHash} does not match the prepared orderHash ${a.claimedOrderHash}`);
+  }
+  if (a.extension !== "0x") {
+    // OrderLib requires the salt's low 160 bits == keccak256(extension)'s low 160 bits at fill.
+    const saltLow = a.order.salt & U160;
+    const extLow = BigInt(keccak256(a.extension)) & U160;
+    if (saltLow !== extLow) throw new Error("salt's low 160 bits are not bound to keccak256(extension) — this order would revert InvalidExtension at fill");
+  }
+  const recoveredSigner = await recoverAddress({ hash: orderHash, signature: a.signature });
+  if (!isAddressEqual(recoveredSigner, a.order.maker)) {
+    throw new Error(`signature recovers to ${recoveredSigner}, not the order maker ${a.order.maker}`);
+  }
+  return { order: a.order, orderHash, signature: a.signature, extension: a.extension, recoveredSigner };
 }
 
 const lopAbi = parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orderHash)"]);

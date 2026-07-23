@@ -291,6 +291,32 @@ export type PreparePhoenixInput = z.infer<typeof PreparePhoenixInput>;
 // ────────────────────────────────────────────────────────────────────────────
 // 5. cork_prepare_orders (R4, Phase 3)
 // ────────────────────────────────────────────────────────────────────────────
+const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
+
+// The exact `data` object cork_prepare_orders maker-order returns, handed back verbatim to
+// finalize-maker-order. Wire-serialized: message amounts/salt/traits are decimal strings.
+// z.object strips the extra fields (types, jit) the caller round-trips.
+const PreparedMakerOrderWire = z.object({
+  kind: z.literal("maker-order"),
+  lop: Address,
+  typedData: z.object({
+    domain: z.object({ chainId: ChainId, verifyingContract: Address }),
+    message: z.object({
+      salt: UintStr,
+      maker: Address,
+      receiver: Address,
+      makerAsset: Address,
+      takerAsset: Address,
+      makingAmount: TokenAmount,
+      takingAmount: TokenAmount,
+      makerTraits: UintStr,
+    }),
+  }),
+  orderHash: Bytes32,
+  extension: Hex.default("0x"),
+  clientRequestId: ClientRequestId,
+});
+
 export const OrdersAction = z.discriminatedUnion("type", [
   A("maker-order", {
     poolId: MarketId,
@@ -322,7 +348,19 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .describe(
         "attach the Cork JIT adapter as the maker-side preInteraction hook: the fill derives the market from the registry recipe against the LIVE oracle rate, creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
       ),
-  }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then cork_submit lop-order); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
+  }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then finalize-maker-order, then pass its submitInput verbatim to cork_submit); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
+  A("finalize-maker-order", {
+    prepared: PreparedMakerOrderWire.describe("the exact data object returned by cork_prepare_orders maker-order"),
+    signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]"),
+    listing: z.strictObject({
+      side: z.enum(["BUY", "SELL"]),
+      premium: z.number().describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction"),
+      expiry: z.number().int().nonnegative().describe("absolute unix seconds; 0 = no expiry"),
+      nonce: UintStr,
+      allowsPartialFills: z.boolean(),
+      quoteRef: QuoteRef.optional().describe("the RFQ answer option this order executes, if any"),
+    }),
+  }).describe("verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs [K1]"),
   A("taker-fill", {
     orderHash: Bytes32,
     fillMakingAmount: TokenAmount.optional().describe("making amount to receive; omit for the full remaining order"),
@@ -476,7 +514,6 @@ const LopOrderStructWire = z.strictObject({
   takingAmount: TokenAmount,
   makerTraits: UintStr,
 });
-const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
 
 export const SubmitAction = z.discriminatedUnion("type", [
   A("rollover-order", {

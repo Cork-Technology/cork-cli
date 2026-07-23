@@ -2,7 +2,7 @@
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
-import { keccak256, stringToHex } from "viem";
+import { isAddressEqual, keccak256, stringToHex } from "viem";
 import {
   Address,
   buildTeaching,
@@ -40,12 +40,12 @@ import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/re
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, poolManagerAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, hashLopOrder, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
 import { accessControlAbi, applyBandsLocal, buildCreatePoolCall, buildDeployOracleCall, buildJitExtension, buildSharesCall, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, type ConstraintBands, type PermitParams } from "./market-registry.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
-import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "./rollover-verify.ts";
+import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, ROLLOVER_FILL_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
 import {
   getLopFills,
@@ -964,6 +964,72 @@ async function handlePrepareMarket(input: { chainId: ChainId; clientRequestId: s
 async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
   const action = input.action;
+
+  if (action.type === "finalize-maker-order") {
+    const lop = LOP_ADDRESSES[chainId];
+    if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+    const p = action.prepared;
+    if (p.clientRequestId !== input.clientRequestId || p.typedData.domain.chainId !== chainId || !isAddressEqual(p.lop, lop) || !isAddressEqual(p.typedData.domain.verifyingContract, lop)) {
+      return envelope({
+        state: "conflict",
+        data: null,
+        chainId,
+        source: "config",
+        warnings: [{ code: "prepared_context_mismatch", message: "prepared order clientRequestId / chainId / verifying contract does not match this finalization request" }],
+        ctx,
+      });
+    }
+    const m = p.typedData.message;
+    try {
+      const finalized = await finalizeMakerOrder({
+        chainId,
+        lop,
+        order: { salt: BigInt(m.salt), maker: m.maker, receiver: m.receiver, makerAsset: m.makerAsset, takerAsset: m.takerAsset, makingAmount: BigInt(m.makingAmount), takingAmount: BigInt(m.takingAmount), makerTraits: BigInt(m.makerTraits) },
+        claimedOrderHash: p.orderHash,
+        signature: action.signature,
+        extension: p.extension,
+      });
+      const submitInput = {
+        chainId,
+        clientRequestId: input.clientRequestId,
+        action: {
+          type: "lop-order" as const,
+          order: { salt: finalized.order.salt.toString(), maker: finalized.order.maker, receiver: finalized.order.receiver, makerAsset: finalized.order.makerAsset, takerAsset: finalized.order.takerAsset, makingAmount: finalized.order.makingAmount.toString(), takingAmount: finalized.order.takingAmount.toString(), makerTraits: finalized.order.makerTraits.toString() },
+          signature: finalized.signature,
+          extension: finalized.extension,
+          side: action.listing.side,
+          premium: action.listing.premium,
+          expiry: action.listing.expiry,
+          nonce: action.listing.nonce,
+          allowsPartialFills: action.listing.allowsPartialFills,
+          makerAccountType: "EOA" as const,
+          makerPermit2: "0x" as const,
+          ...(action.listing.quoteRef ? { quoteRef: action.listing.quoteRef } : {}),
+        },
+        format: input.format,
+      };
+      // The gate-facing artifact is content-addressed so an independent policy gate can pin
+      // exactly what it admitted before submit.
+      const artifact = { kind: "signed-maker-order", orderHash: finalized.orderHash, recoveredSigner: finalized.recoveredSigner, signature: finalized.signature, extension: finalized.extension, submitInput };
+      return envelope({
+        state: "ok",
+        data: { ...artifact, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
+        chainId,
+        source: "config",
+        warnings: [{ code: "caller_signed_artifact", message: "signature verified and recovered, not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact" }],
+        ctx,
+      });
+    } catch (err) {
+      return envelope({
+        state: "conflict",
+        data: null,
+        chainId,
+        source: "config",
+        warnings: [{ code: "signature_or_reconstruction_mismatch", message: err instanceof Error ? err.message : "maker order finalization failed" }],
+        ctx,
+      });
+    }
+  }
 
   if (action.type === "maker-order") {
     const lop = LOP_ADDRESSES[chainId];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData, parseAbi, toFunctionSelector, zeroAddress } from "viem";
-import { buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { privateKeyToAccount } from "viem/accounts";
+import { buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
 
 const MAKER = "0x0000000000000000000000000000000000000abc" as const;
 const MAKER_ASSET = "0x0000000000000000000000000000000000000001" as const;
@@ -128,6 +129,37 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
 
   it("rejects a taking cap that overflows the 185-bit threshold field", () => {
     expect(() => buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 185n })).toThrow(/185-bit/);
+  });
+});
+
+describe("finalizeMakerOrder (recover the external signer; never sign)", () => {
+  const LOP = LOP_ADDRESSES[1]!;
+  const acct = privateKeyToAccount(`0x${"01".repeat(32)}`);
+  const order: LopOrder = { ...baseOrder, maker: acct.address };
+  const orderHash = hashLopOrder(1, LOP, order);
+
+  it("accepts a signature that recovers to the maker and echoes the recovered signer", async () => {
+    const signature = await acct.sign({ hash: orderHash });
+    const f = await finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: orderHash, signature, extension: "0x" });
+    expect(f.orderHash).toBe(orderHash);
+    expect(f.recoveredSigner).toBe(acct.address);
+  });
+
+  it("rejects a prepared orderHash that does not match the reconstruction", async () => {
+    const signature = await acct.sign({ hash: orderHash });
+    await expect(finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: `0x${"9".repeat(64)}`, signature, extension: "0x" })).rejects.toThrow(/does not match/);
+  });
+
+  it("rejects a signature that recovers to someone other than the maker", async () => {
+    const other = privateKeyToAccount(`0x${"02".repeat(32)}`);
+    const signature = await other.sign({ hash: orderHash });
+    await expect(finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: orderHash, signature, extension: "0x" })).rejects.toThrow(/not the order maker/);
+  });
+
+  it("rejects an extension whose keccak is not bound into the salt's low 160 bits", async () => {
+    // order.salt is not derived from any extension, so any non-empty extension fails the binding.
+    const signature = await acct.sign({ hash: orderHash });
+    await expect(finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: orderHash, signature, extension: `0x${"ab".repeat(20)}` })).rejects.toThrow(/InvalidExtension|bound/);
   });
 });
 

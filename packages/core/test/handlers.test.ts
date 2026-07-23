@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { zeroAddress } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   corkActionCall,
   encodeMulticall,
+  hashLopOrder,
+  LOP_ADDRESSES,
   runTool,
   ToolInputError,
   MAINNET_DEPLOYMENT,
+  type LopOrder,
   type SafeSwapParams,
 } from "@cork/core";
 
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
 const NOW = 1_800_000_000n; // deterministic clock
+const SUSDE = "0x9d39a5de30e57443bff2a8307a4256c8797a3497" as const;
+const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e" as const;
 
 describe("runTool: cork_capabilities", () => {
   it("lists all 9 tools with phase + cli", async () => {
@@ -363,6 +370,47 @@ describe("runTool: cork_prepare_orders", () => {
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("order_not_found");
+  });
+});
+
+describe("runTool: cork_prepare_orders finalize-maker-order", () => {
+  const LOP = LOP_ADDRESSES[1]!;
+  const acct = privateKeyToAccount(`0x${"03".repeat(32)}`);
+  const orderT: LopOrder = { salt: 5n, maker: acct.address, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: 1_000_000_000_000_000_000n, takingAmount: 1_000_000n, makerTraits: 0n };
+  const orderHash = hashLopOrder(1, LOP, orderT);
+  // The wire form the caller round-trips back (amounts as decimal strings).
+  const prepared = { kind: "maker-order", lop: LOP, typedData: { domain: { chainId: 1, verifyingContract: LOP }, message: { salt: "5", maker: acct.address, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" } }, orderHash, extension: "0x", clientRequestId: "final-int-01" };
+  const listing = { side: "SELL", premium: 4.1, expiry: 0, nonce: "0", allowsPartialFills: true };
+  const call = (over: Record<string, unknown>, crid = "final-int-01") =>
+    runTool("cork_prepare_orders", { chainId: 1, account: acct.address, clientRequestId: crid, action: { type: "finalize-maker-order", prepared, listing, ...over }, format: "concise" }, { nowSeconds: NOW });
+
+  it("verifies the signer and emits a verbatim cork_submit lop-order artifact (never signs)", async () => {
+    const signature = await acct.sign({ hash: orderHash });
+    const env = await call({ signature });
+    expect(env.state).toBe("ok");
+    const d = env.data as { recoveredSigner: string; callerSigned: boolean; helperSigned: boolean; signedArtifactDigest: string; submitInput: { action: { type: string; signature: string; premium: number } } };
+    expect(d.recoveredSigner).toBe(acct.address);
+    expect(d.callerSigned).toBe(true);
+    expect(d.helperSigned).toBe(false);
+    expect(d.signedArtifactDigest).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(d.submitInput.action.type).toBe("lop-order");
+    expect(d.submitInput.action.signature).toBe(signature);
+    expect(d.submitInput.action.premium).toBe(4.1);
+    expect(env.warnings[0]?.code).toBe("caller_signed_artifact");
+  });
+
+  it("a signature from the wrong key → conflict (recovered signer ≠ maker), never relayed", async () => {
+    const wrong = await privateKeyToAccount(`0x${"04".repeat(32)}`).sign({ hash: orderHash });
+    const env = await call({ signature: wrong });
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+  });
+
+  it("a clientRequestId that disagrees with the prepared order → prepared_context_mismatch", async () => {
+    const signature = await acct.sign({ hash: orderHash });
+    const env = await call({ signature }, "different-crid-99");
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("prepared_context_mismatch");
   });
 });
 
