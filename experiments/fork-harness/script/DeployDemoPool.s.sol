@@ -69,7 +69,7 @@ interface IDefaultCorkController {
 
 contract DeployDemoPool is Script {
     // Mainnet-fork constants (the vnet forks chainId 1; addresses match cork-defaults.json).
-    address constant CONTROLLER = 0x2225AFECccC0F52177369d309fCe4187B96bd5d6;
+    address constant CONTROLLER = 0x2225AFEcCCC0f52177369D309Fce4187B96bD5d6;
     address constant SUSDE = 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497; // collateral, 18 dec
     address constant VBUSDC = 0x53E82ABbb12638F09d9e624578ccB666217a765e; // reference, 6 dec
 

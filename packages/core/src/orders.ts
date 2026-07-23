@@ -2,7 +2,7 @@
 // Order struct, typehash, and domain verified against limit-order-protocol/contracts
 // (OrderLib._LIMIT_ORDER_TYPEHASH, LimitOrderProtocol EIP712("1inch Limit Order Protocol","4")).
 // The produced orderHash is proven equal to on-chain LOP.hashOrder(order) in the fork tests.
-import { encodeFunctionData, hashTypedData, keccak256, parseAbi, stringToHex, zeroAddress } from "viem";
+import { encodeFunctionData, hashTypedData, keccak256, parseAbi, sliceHex, stringToHex, zeroAddress } from "viem";
 
 import bundledDefaults from "../../../cork-defaults.json";
 
@@ -21,8 +21,26 @@ const DOMAIN_VERSION = "6";
 // MakerTraits bit layout (MakerTraitsLib.sol).
 const NO_PARTIAL_FILLS_FLAG = 1n << 255n;
 const ALLOW_MULTIPLE_FILLS_FLAG = 1n << 254n;
+const PRE_INTERACTION_CALL_FLAG = 1n << 252n;
+const POST_INTERACTION_CALL_FLAG = 1n << 251n;
 const HAS_EXTENSION_FLAG = 1n << 249n;
 const USE_PERMIT2_FLAG = 1n << 248n;
+
+// Interaction flags are NOT implied by HAS_EXTENSION: OrderMixin only invokes the pre-/post-
+// interaction embedded in the extension when the matching makerTraits bit is set. An extension
+// that carries a preInteraction (our JIT adapter hook) but omits PRE_INTERACTION_CALL_FLAG fills
+// as a no-op — the hook never runs, so no market is created (caught by the fork round-trip test).
+// Detect which interaction fields are non-empty from the ExtensionLib offset header (32 bytes of
+// eight uint32 cumulative END offsets; field i spans [offset[i-1], offset[i]); pre = field 6,
+// post = field 7) and set exactly the flags the extension needs.
+function extensionInteractionFlags(extension: `0x${string}`): bigint {
+  const offsets = BigInt(sliceHex(extension, 0, 32));
+  const off = (i: bigint) => (offsets >> (32n * i)) & 0xffffffffn;
+  let flags = 0n;
+  if (off(6n) > off(5n)) flags |= PRE_INTERACTION_CALL_FLAG;
+  if (off(7n) > off(6n)) flags |= POST_INTERACTION_CALL_FLAG;
+  return flags;
+}
 const U40 = (1n << 40n) - 1n;
 const U96 = (1n << 96n) - 1n;
 const U160 = (1n << 160n) - 1n;
@@ -112,7 +130,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const salt = hasExtension
     ? ((BigInt(keccak256(stringToHex(a.clientRequestId))) & U96) << 160n) | (BigInt(keccak256(a.extension!)) & U160)
     : BigInt(keccak256(stringToHex(a.clientRequestId))) & U160;
-  const makerTraits = buildMakerTraits({
+  let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
     allowMultipleFills: false,
     usePermit2: a.usePermit2 ?? false,
@@ -120,6 +138,8 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
     expiry: a.expiry ?? 0n,
     nonce: 0n,
   });
+  // An extension with a pre-/post-interaction only runs if its makerTraits flag is set.
+  if (hasExtension) makerTraits |= extensionInteractionFlags(a.extension!);
   const order: LopOrder = {
     salt,
     maker: a.maker,

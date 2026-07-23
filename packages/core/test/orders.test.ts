@@ -32,6 +32,32 @@ describe("buildMakerOrder", () => {
     expect(a.domain.name).toBe("1inch Aggregation Router");
     expect(a.domain.version).toBe("6");
   });
+
+  // Regression: a plain order must NOT carry any interaction flag; an order with a
+  // preInteraction extension MUST set PRE_INTERACTION_CALL_FLAG (bit 252) or the LOP
+  // fills it as a no-op and the JIT hook never runs (caught by the fork round-trip test).
+  const PRE_INTERACTION_CALL_FLAG = 1n << 252n;
+  const HAS_EXTENSION_FLAG = 1n << 249n;
+
+  it("plain order sets no interaction flag", () => {
+    const o = buildMakerOrder({ ...base, clientRequestId: "req-plain-0001" });
+    expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).toBe(0n);
+    expect(o.order.makerTraits & HAS_EXTENSION_FLAG).toBe(0n);
+    expect(o.extension).toBe("0x");
+  });
+
+  it("preInteraction extension sets HAS_EXTENSION + PRE_INTERACTION_CALL_FLAG", () => {
+    // A minimal ExtensionLib header whose only non-empty field is preInteractionData (field 6):
+    // eight uint32 END offsets, field 6 = 4 (a 4-byte payload), field 7 = 4 (post empty).
+    const end = 4n;
+    const offsets = (end << (32n * 6n)) | (end << (32n * 7n));
+    const extension = (`0x${offsets.toString(16).padStart(64, "0")}deadbeef`) as `0x${string}`;
+    const o = buildMakerOrder({ ...base, clientRequestId: "req-ext-0001", extension });
+    expect(o.order.makerTraits & HAS_EXTENSION_FLAG).not.toBe(0n);
+    expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).not.toBe(0n);
+    // salt low 160 bits are bound to keccak(extension); entropy in the top 96 bits.
+    expect(o.order.salt >= 1n << 160n).toBe(true);
+  });
 });
 
 describe("buildCancelOrder", () => {
