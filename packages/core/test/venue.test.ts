@@ -479,18 +479,26 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     expect(url).toContain("state=open");
     expect(url).toContain("requester=0xc0ffee0000000000000000000000000000000001");
     expect(url).toContain("with_answers=true");
-    // next_cursor:null (no more pages) must NOT surface as a nextCursor field.
-    expect("nextCursor" in (env.data as Record<string, unknown>)).toBe(false);
+    // next_cursor:null → the traversal completed; no resume cursor surfaces.
+    const pg = (env.data as { pagination: { complete: boolean; nextCursor?: string } }).pagination;
+    expect(pg.complete).toBe(true);
+    expect("nextCursor" in pg).toBe(false);
   });
 
-  it("list surfaces the venue's keyset cursor when more pages exist", async () => {
+  it("walks the venue's keyset cursor to exhaustion and aggregates pages", async () => {
     const env = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } }]),
+      ctxWith([
+        { match: "cursor=rfq_a", body: { items: [{ rfq_id: "rfq_b" }], next_cursor: null } },
+        { match: "/rfqs?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } },
+      ]),
     );
     expect(env.state).toBe("ok");
-    expect((env.data as { nextCursor?: unknown }).nextCursor).toBe("rfq_a");
+    const d = env.data as { count: number; pagination: { complete: boolean; pagesFetched: number } };
+    expect(d.count).toBe(2); // page 1 (rfq_a) + page 2 (rfq_b)
+    expect(d.pagination.complete).toBe(true);
+    expect(d.pagination.pagesFetched).toBe(2);
   });
 
   it("filters.rfqId fetches one record with all answers; 404 → rfq_not_found (a normal outcome)", async () => {
@@ -551,25 +559,64 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
   });
 });
 
-describe("truncation honesty: venue paging signals pass through, never swallowed", () => {
-  it("hasMore:true + nextCursor on a venue list surface in the envelope verbatim", async () => {
+describe("pagination completeness: bounded traversal, never silent truncation", () => {
+  type Pg = { complete: boolean; pagesFetched: number; reason?: string; nextCursor?: string };
+  const pgOf = (env: { data: unknown }) => (env.data as { pagination: Pg }).pagination;
+
+  it("maxPages bound → state ok with a pagination_incomplete warning and a resume cursor (never faked as complete)", async () => {
+    // Dynamic venue: every page hands back a fresh cursor, so the set is unbounded and the walk
+    // stops at the hard page bound rather than looping or truncating silently.
+    let n = 0;
+    const ctx: HandlerContext = {
+      nowSeconds: NOW,
+      venueFetch: async () => {
+        n += 1;
+        return new Response(JSON.stringify({ items: [{ i: n }], next_cursor: `c${n}` }), { status: 200 });
+      },
+    };
+    const env = await runTool("cork_query", { resource: "markets", chainId: 42161, pageSize: 5, maxPages: 3, format: "concise" }, ctx);
+    expect(env.state).toBe("ok");
+    const pg = pgOf(env);
+    expect(pg.complete).toBe(false);
+    expect(pg.pagesFetched).toBe(3);
+    expect(pg.reason).toBe("max_pages");
+    expect(pg.nextCursor).toBe("c3");
+    expect(env.warnings[0]?.code).toBe("pagination_incomplete");
+    expect((env.data as { count: number }).count).toBe(3);
+  });
+
+  it("a venue that repeats a cursor is a CONFLICT (the venue contradicts itself), not a silent stop", async () => {
     const env = await runTool(
       "cork_query",
       { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc" }], nextCursor: "2026-07-21T10:53:18.832Z", hasMore: true } }]),
+      ctxWith([{ match: "/pools", body: { items: [{ x: 1 }], next_cursor: "loop" } }]),
     );
-    expect(env.state).toBe("ok");
-    const d = env.data as { hasMore?: boolean; nextCursor?: unknown; count: number };
-    expect(d.hasMore).toBe(true);
-    expect(d.nextCursor).toBe("2026-07-21T10:53:18.832Z");
+    expect(env.state).toBe("conflict");
+    expect(pgOf(env).reason).toBe("cursor_repeated");
+    expect(env.warnings[0]?.code).toBe("pagination_incomplete");
   });
 
-  it("snake_case next_cursor (rfqs-style) is normalized to nextCursor", async () => {
+  it("a bare-array response has unprovable completeness → incomplete (metadata_absent), disclosed not hidden", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 42161, filters: { kind: "fills" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rollover/fills", body: { items: [], next_cursor: "abc" } }]),
+      { resource: "fills", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/limit-orders/fills", body: [{ orderHash: "0x1" }] }]),
     );
-    expect((env.data as { nextCursor?: unknown }).nextCursor).toBe("abc");
+    expect(env.state).toBe("ok");
+    const pg = pgOf(env);
+    expect(pg.complete).toBe(false);
+    expect(pg.reason).toBe("metadata_absent");
+    expect(env.warnings[0]?.code).toBe("pagination_incomplete");
+  });
+
+  it("hasMore:false on the first page → complete in one page, no warning", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc" }], hasMore: false } }]),
+    );
+    expect(env.state).toBe("ok");
+    expect(pgOf(env).complete).toBe(true);
+    expect(env.warnings).toEqual([]);
   });
 });

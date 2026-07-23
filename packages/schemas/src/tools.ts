@@ -72,8 +72,9 @@ export const QueryInput = z.object({
     .describe(
       "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle — ORDER MATTERS, collateral first), mode (registry-recipes single lookup — exact case-sensitive string), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers). Unknown keys are a teachable error",
     ),
-  cursor: z.string().optional().describe("reserved for a later phase — accepted but not yet honored; omit"),
-  pageSize: z.number().int().min(1).max(200).default(25).describe("reserved for a later phase — accepted but not yet honored"),
+  cursor: z.string().optional().describe("opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"),
+  pageSize: z.number().int().min(1).max(200).default(25).describe("items requested per venue page during traversal"),
+  maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on pages walked in one venue traversal; hitting it returns state=ok with a pagination_incomplete warning and a nextCursor to resume"),
   format: Format,
 });
 export type QueryInput = z.infer<typeof QueryInput>;

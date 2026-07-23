@@ -66,6 +66,7 @@ import {
   VenueHttpError,
   VenueUnreachable,
   type VenueDeps,
+  type VenueList,
   type VenuePostResult,
 } from "./datasources/venue.ts";
 import { lopDomain } from "./orders.ts";
@@ -606,6 +607,40 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
   }
 }
 
+// Why a venue list read can stop short of exhaustive. A repeated cursor is the venue
+// contradicting itself (pointing back at a page already seen) — a genuine conflict; the
+// rest are honest partial reads.
+type IncompleteReason = "metadata_absent" | "cursor_absent" | "cursor_repeated" | "max_pages";
+
+// Discriminated so an incomplete traversal can never masquerade as complete.
+type PageTraversal =
+  | { complete: true; items: Array<Record<string, unknown>>; pagesFetched: number }
+  | { complete: false; items: Array<Record<string, unknown>>; pagesFetched: number; reason: IncompleteReason; nextCursor?: string };
+
+/** Walk an opaque venue cursor to exhaustion under a hard page bound — never silently truncating. */
+async function collectVenuePages(
+  opts: { cursor?: string; pageSize: number; maxPages: number },
+  fetchPage: (cursor: string | undefined) => Promise<VenueList>,
+): Promise<PageTraversal> {
+  const items: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  let cursor = opts.cursor;
+  for (let page = 1; page <= opts.maxPages; page += 1) {
+    if (cursor !== undefined) {
+      if (seen.has(cursor)) return { complete: false, items, pagesFetched: page - 1, reason: "cursor_repeated", nextCursor: cursor };
+      seen.add(cursor);
+    }
+    const res = await fetchPage(cursor);
+    items.push(...res.items);
+    if (!res.paginationKnown) return { complete: false, items, pagesFetched: page, reason: "metadata_absent" };
+    const next = typeof res.nextCursor === "string" && res.nextCursor.length > 0 ? res.nextCursor : undefined;
+    if (!(res.hasMore ?? next !== undefined)) return { complete: true, items, pagesFetched: page };
+    if (next === undefined) return { complete: false, items, pagesFetched: page, reason: "cursor_absent" };
+    cursor = next;
+  }
+  return { complete: false, items, pagesFetched: opts.maxPages, reason: "max_pages", ...(cursor !== undefined ? { nextCursor: cursor } : {}) };
+}
+
 async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const filters = parseQueryFilters(input.filters);
@@ -621,31 +656,36 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
       return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (markets, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
+    const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), pageSize: input.pageSize, maxPages: input.maxPages };
     try {
-      let list: import("./datasources/venue.ts").VenueList;
+      let traversal: PageTraversal;
       if (input.resource === "markets") {
-        list = await getPools(deps, chainId);
-        if (filters.poolId) list = { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) };
+        traversal = await collectVenuePages(paging, async (cursor) => {
+          const list = await getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize });
+          return filters.poolId ? { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) } : list;
+        });
       } else if (input.resource === "orderbook") {
-        list = await getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}) });
+        traversal = await collectVenuePages(paging, (cursor) => getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "fills") {
-        list = await getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}) });
+        traversal = await collectVenuePages(paging, (cursor) => getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "limit-order-markets") {
-        list = await getLopMarkets(deps, chainId);
+        traversal = await collectVenuePages(paging, (cursor) => getLopMarkets(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "rfqs") {
         // Single get by id, or the discovery feed (server default: state=open, newest first).
         if (filters.rfqId) {
           const row = await getRfq(deps, filters.rfqId);
           if (!row) return unavailable(chainId, "rfq_not_found", `RFQ '${filters.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
-          list = { items: [row] };
+          traversal = { complete: true, items: [row], pagesFetched: 1 };
         } else {
-          list = await getRfqs(deps, {
+          traversal = await collectVenuePages(paging, (cursor) => getRfqs(deps, {
             chainId,
             ...(filters.state ? { state: filters.state } : {}),
             ...(filters.referenceAsset ? { referenceAsset: filters.referenceAsset.toLowerCase() } : {}),
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
             ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
-          });
+            ...(cursor ? { cursor } : {}),
+            limit: input.pageSize,
+          }));
         }
       } else {
         // flows = the rollover venue; filters.kind picks the feed (orders default).
@@ -654,29 +694,40 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
           if (filters.orderDigest) {
             const row = await getRolloverOrder(deps, filters.orderDigest);
             if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
-            list = { items: [row] };
+            traversal = { complete: true, items: [row], pagesFetched: 1 };
           } else {
-            list = await getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}) });
+            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
           }
         } else if (kind === "fills") {
-          list = await getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}) });
+          traversal = await collectVenuePages(paging, (cursor) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         } else {
-          list = await getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}) });
+          traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         }
       }
       return envelope({
-        state: "ok",
+        // A merely-partial read is honest evidence (state ok + warning); only a self-contradicting
+        // venue cursor (repeated) is a conflict.
+        state: !traversal.complete && traversal.reason === "cursor_repeated" ? "conflict" : "ok",
         data: {
           resource: input.resource,
           ...(input.resource === "flows" ? { kind: filters.kind ?? "orders" } : {}),
-          count: list.items.length,
-          items: list.items,
-          ...(list.hasMore !== undefined ? { hasMore: list.hasMore } : {}),
-          ...(list.nextCursor != null ? { nextCursor: list.nextCursor } : {}),
+          count: traversal.items.length,
+          items: traversal.items,
+          pagination: {
+            complete: traversal.complete,
+            pagesFetched: traversal.pagesFetched,
+            pageSize: input.pageSize,
+            maxPages: input.maxPages,
+            ...(!traversal.complete ? { reason: traversal.reason } : {}),
+            ...(!traversal.complete && traversal.nextCursor ? { nextCursor: traversal.nextCursor } : {}),
+          },
           ...(input.format === "full" ? { venue: venueBaseUrl(ctx.venueUrl) } : {}),
         },
         chainId,
         source: "indexer",
+        warnings: traversal.complete
+          ? []
+          : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }],
         ctx,
       });
     } catch (err) {

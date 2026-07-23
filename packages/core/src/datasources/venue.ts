@@ -42,6 +42,14 @@ export interface VenueList {
   items: Array<Record<string, unknown>>;
   nextCursor?: unknown;
   hasMore?: boolean;
+  /** False only for a legacy bare-array response, whose completeness cannot be proven. */
+  paginationKnown: boolean;
+}
+
+/** Cursor + page-size passthrough for a paged venue read (both optional; the venue ignores what it doesn't support). */
+export interface PageParams {
+  cursor?: string;
+  limit?: number;
 }
 
 export interface VenuePostResult {
@@ -100,14 +108,15 @@ export class VenueHttpError extends Error {
 function asList(raw: unknown, what: string): VenueList {
   const parsed = ListResponse.safeParse(raw);
   if (!parsed.success) {
-    // Some endpoints may return a bare array.
-    if (Array.isArray(raw)) return { items: z.array(Row).parse(raw) };
+    // A bare array carries no pagination metadata — completeness is unprovable.
+    if (Array.isArray(raw)) return { items: z.array(Row).parse(raw), paginationKnown: false };
     throw new VenueUnreachable(`venue ${what} response did not match the expected list shape`);
   }
   const p = parsed.data;
   return {
     items: p.items,
     nextCursor: p.nextCursor ?? p.next_cursor,
+    paginationKnown: true,
     ...(p.hasMore !== undefined ? { hasMore: p.hasMore } : {}),
   };
 }
@@ -115,11 +124,11 @@ function asList(raw: unknown, what: string): VenueList {
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /** GET /v1/pools — indexed Phoenix pools (new markets appear within seconds of MarketCreated). */
-export async function getPools(deps: VenueDeps, chainId: number): Promise<VenueList> {
-  return asList(await getJson(deps, `/pools${qs({ chainId })}`), "pools");
+export async function getPools(deps: VenueDeps, chainId: number, page: PageParams = {}): Promise<VenueList> {
+  return asList(await getJson(deps, `/pools${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "pools");
 }
 
-export interface LopBookParams {
+export interface LopBookParams extends PageParams {
   chainId: number;
   poolId?: string;
   side?: string;
@@ -128,20 +137,20 @@ export interface LopBookParams {
 
 /** GET /v1/limit-orders/orderbook — resting orders (each row carries the full signed order). */
 export async function getLopOrderbook(deps: VenueDeps, p: LopBookParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status })}`), "orderbook");
+  return asList(await getJson(deps, `/limit-orders/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, cursor: p.cursor, limit: p.limit })}`), "orderbook");
 }
 
 /** GET /v1/limit-orders/fills. */
-export async function getLopFills(deps: VenueDeps, p: { chainId: number; orderHash?: string }): Promise<VenueList> {
+export async function getLopFills(deps: VenueDeps, p: { chainId: number; orderHash?: string; cursor?: string; limit?: number }): Promise<VenueList> {
   return asList(await getJson(deps, `/limit-orders/fills${qs(p)}`), "fills");
 }
 
 /** GET /v1/limit-orders/markets — enumerable cPT/cST markets. */
-export async function getLopMarkets(deps: VenueDeps, chainId: number): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/markets${qs({ chainId })}`), "limit-order-markets");
+export async function getLopMarkets(deps: VenueDeps, chainId: number, page: PageParams = {}): Promise<VenueList> {
+  return asList(await getJson(deps, `/limit-orders/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "limit-order-markets");
 }
 
-export interface RolloverOrdersParams {
+export interface RolloverOrdersParams extends PageParams {
   chainId: number;
   user?: string;
   poolId?: string;
@@ -153,7 +162,7 @@ export interface RolloverOrdersParams {
 
 /** GET /v1/rollover/orders — the rollover order feed (solver feed with fillable=true). */
 export async function getRolloverOrders(deps: VenueDeps, p: RolloverOrdersParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source })}`), "rollover orders");
+  return asList(await getJson(deps, `/rollover/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
 }
 
 /** GET /v1/rollover/orders/{orderDigest} — one order fully resolved ({order, fills, slots}). */
@@ -168,16 +177,16 @@ export async function getRolloverOrder(deps: VenueDeps, orderDigest: string): Pr
 }
 
 /** GET /v1/rollover/fills — indexed rollover fill legs (ROLLOVER/PREMIUM/RECLAIM/REFUND). */
-export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; orderDigest?: string; filler?: string }): Promise<VenueList> {
+export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; orderDigest?: string; filler?: string; cursor?: string; limit?: number }): Promise<VenueList> {
   return asList(await getJson(deps, `/rollover/fills${qs(p)}`), "rollover fills");
 }
 
 /** GET /v1/rollover/contracts — per-user rollover clones (setup gate: "does my clone exist?"). */
-export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string }): Promise<VenueList> {
+export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string; cursor?: string; limit?: number }): Promise<VenueList> {
   return asList(await getJson(deps, `/rollover/contracts${qs(p)}`), "rollover contracts");
 }
 
-export interface RfqListParams {
+export interface RfqListParams extends PageParams {
   chainId?: number;
   state?: "open" | "expired";
   referenceAsset?: string;
@@ -194,7 +203,7 @@ export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueL
   return asList(
     await getJson(
       deps,
-      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers })}`,
+      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );
