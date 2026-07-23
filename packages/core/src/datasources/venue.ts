@@ -5,6 +5,7 @@
 // key fields typed, extra fields passed through, because the venue's own zod schemas are the
 // authoritative contract and it may add fields).
 import { z } from "zod";
+import type { LopOrder } from "../orders.ts";
 
 export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech/v1";
 
@@ -218,6 +219,95 @@ export async function getRfq(deps: VenueDeps, rfqId: string): Promise<Record<str
     if (err instanceof VenueHttpError && err.status === 404) return null;
     throw err;
   }
+}
+
+// ── Untrusted signed-order parsing ──────────────────────────────────────────
+// A venue orderbook row carries a full signed LOP order. It is UNTRUSTED: fields may be nested
+// under `.order`, keyed camelCase or snake_case, and must be shape-validated before we re-hash
+// and verify locally [K3]. A zod pipeline (normalize → validate → transform) does this on the
+// same footing as the rest of the venue surface — no bespoke throwing validators.
+const HexAddress = z.string().regex(/^0x[0-9a-fA-F]{40}$/u, "expected a 20-byte address");
+const HexBytes = z.string().regex(/^0x([0-9a-fA-F]{2})*$/u, "expected 0x-prefixed bytes");
+const Uint = z.string().regex(/^(0|[1-9][0-9]*)$/u, "expected a base-10 uint");
+
+export interface SignedLopOrder {
+  order: LopOrder;
+  signature: `0x${string}`;
+  extension: `0x${string}`;
+  makerAccountType: "EOA" | "ERC1271";
+  /** The venue's own claimed order hash, when present (cross-checked against the local re-hash). */
+  venueOrderHash?: `0x${string}`;
+}
+
+const SignedLopOrderRow = z
+  .preprocess((raw) => {
+    const row = (raw ?? {}) as Record<string, unknown>;
+    const nested = row.order && typeof row.order === "object" && !Array.isArray(row.order) ? (row.order as Record<string, unknown>) : {};
+    const pick = (...keys: string[]): unknown => {
+      for (const k of keys) {
+        const v = nested[k] ?? row[k];
+        if (v !== undefined) return v;
+      }
+      return undefined;
+    };
+    return {
+      salt: pick("salt"),
+      maker: pick("maker"),
+      receiver: pick("receiver"),
+      makerAsset: pick("makerAsset", "maker_asset"),
+      takerAsset: pick("takerAsset", "taker_asset"),
+      makingAmount: pick("makingAmount", "making_amount"),
+      takingAmount: pick("takingAmount", "taking_amount"),
+      makerTraits: pick("makerTraits", "maker_traits"),
+      signature: pick("signature"),
+      extension: pick("extension") ?? "0x",
+      makerAccountType: pick("makerAccountType", "maker_account_type") ?? "EOA",
+      orderHash: pick("orderHash", "order_hash"),
+    };
+  }, z.object({
+    salt: Uint,
+    maker: HexAddress,
+    receiver: HexAddress,
+    makerAsset: HexAddress,
+    takerAsset: HexAddress,
+    makingAmount: Uint,
+    takingAmount: Uint,
+    makerTraits: Uint,
+    signature: HexBytes,
+    extension: z.union([z.literal(""), HexBytes]),
+    makerAccountType: z.string(),
+    orderHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/u).optional(),
+  }))
+  .transform((v, ctx): SignedLopOrder => {
+    const kind = v.makerAccountType.toUpperCase().replace(/[-_]/gu, "");
+    const makerAccountType = kind === "EOA" ? "EOA" : kind === "ERC1271" || kind === "EIP1271" ? "ERC1271" : null;
+    if (makerAccountType === null) {
+      ctx.addIssue({ code: "custom", message: `unsupported makerAccountType '${v.makerAccountType}'` });
+      return z.NEVER;
+    }
+    return {
+      order: {
+        salt: BigInt(v.salt),
+        maker: v.maker as `0x${string}`,
+        receiver: v.receiver as `0x${string}`,
+        makerAsset: v.makerAsset as `0x${string}`,
+        takerAsset: v.takerAsset as `0x${string}`,
+        makingAmount: BigInt(v.makingAmount),
+        takingAmount: BigInt(v.takingAmount),
+        makerTraits: BigInt(v.makerTraits),
+      },
+      signature: v.signature as `0x${string}`,
+      extension: (v.extension === "" ? "0x" : v.extension) as `0x${string}`,
+      makerAccountType,
+      ...(v.orderHash ? { venueOrderHash: v.orderHash as `0x${string}` } : {}),
+    };
+  });
+
+/** Validate + normalize an untrusted venue orderbook row into a signed LOP order (Result, never throws). */
+export function parseSignedLopOrder(row: unknown): { ok: true; value: SignedLopOrder } | { ok: false; error: string } {
+  const parsed = SignedLopOrderRow.safeParse(row);
+  if (parsed.success) return { ok: true, value: parsed.data };
+  return { ok: false, error: parsed.error.issues.map((i) => `${i.path.join(".") || "order"}: ${i.message}`).join("; ") };
 }
 
 // ── Writes (relays of caller-authored/signed payloads [K1]) ─────────────────

@@ -323,8 +323,13 @@ export const OrdersAction = z.discriminatedUnion("type", [
         "attach the Cork JIT adapter as the maker-side preInteraction hook: the fill derives the market from the registry recipe against the LIVE oracle rate, creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
       ),
   }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then cork_submit lop-order); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
-  A("taker-fill", { orderHash: Bytes32, fillMakingAmount: TokenAmount.optional() })
-    .describe("fill calldata against a resting order (phase-gated: needs the orderbook service)"),
+  A("taker-fill", {
+    orderHash: Bytes32,
+    fillMakingAmount: TokenAmount.optional().describe("making amount to receive; omit for the full remaining order"),
+    maximumTakingAmount: TokenAmount.optional().describe("hard cap on taking amount paid (slippage guard); omit to use the exact rounded-up signed ratio"),
+    receiver: Address.optional().describe("recipient of the maker asset; defaults to account"),
+    maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"),
+  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver args layout when needed — never signs or broadcasts"),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
     .describe("on-chain cancel calldata for a resting LOP order you made"),
   A("rollover-intent", {

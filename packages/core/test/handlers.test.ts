@@ -355,14 +355,14 @@ describe("runTool: cork_prepare_orders", () => {
     expect(env.state).toBe("ok");
     expect((env.data as { calldata: string }).calldata.startsWith("0x")).toBe(true);
   });
-  it("taker-fill / rollover-intent are honestly service-gated", async () => {
+  it("taker-fill is wired (not gated): an empty COMPLETE book yields order_not_found, not needs_service", async () => {
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 1, account: RCV, clientRequestId: "ord-00000003", action: { type: "taker-fill", orderHash: `0x${"3".repeat(64)}` }, format: "concise" },
-      { nowSeconds: NOW },
+      { nowSeconds: NOW, venueFetch: async () => new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 }) },
     );
     expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("needs_service");
+    expect(env.warnings[0]?.code).toBe("order_not_found");
   });
 });
 

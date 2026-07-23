@@ -3,7 +3,8 @@
 // submit relays with [K3] recomputation (tampered payloads are NOT relayed), the venue POST
 // outcome map (201/200/400/409/429), and track reconcile via venue lifecycle rows.
 import { describe, expect, it } from "vitest";
-import { runTool, ORDER_DATA_TYPEHASH, ToolInputError, type HandlerContext } from "@cork/core";
+import { zeroAddress } from "viem";
+import { runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
 
 const NOW = 1_790_000_000n;
@@ -618,5 +619,96 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     expect(env.state).toBe("ok");
     expect(pgOf(env).complete).toBe(true);
     expect(env.warnings).toEqual([]);
+  });
+});
+
+describe("parseSignedLopOrder (untrusted venue row → validated signed order)", () => {
+  const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
+  const A = "0x00000000000000000000000000000000000000a1";
+  const B = "0x00000000000000000000000000000000000000b2";
+
+  it("normalizes a nested, snake_cased row and maps EIP1271 → ERC1271", () => {
+    const row = {
+      order: { salt: "5", maker: A, receiver: zeroAddress, maker_asset: A, taker_asset: B, making_amount: "100", taking_amount: "200", maker_traits: "0" },
+      signature: SIG,
+      extension: "",
+      maker_account_type: "eip-1271",
+      order_hash: `0x${"cd".repeat(32)}`,
+    };
+    const r = parseSignedLopOrder(row);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.order.makerAsset.toLowerCase()).toBe(A);
+      expect(r.value.order.makingAmount).toBe(100n);
+      expect(r.value.extension).toBe("0x"); // "" normalized
+      expect(r.value.makerAccountType).toBe("ERC1271");
+      expect(r.value.venueOrderHash).toBe(`0x${"cd".repeat(32)}`);
+    }
+  });
+
+  it("returns a Result error (never throws) on a malformed address", () => {
+    const r = parseSignedLopOrder({ salt: "1", maker: "not-an-address", receiver: zeroAddress, makerAsset: A, takerAsset: B, makingAmount: "1", takingAmount: "1", makerTraits: "0", signature: SIG });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/maker/);
+  });
+
+  it("rejects an unsupported makerAccountType", () => {
+    const r = parseSignedLopOrder({ salt: "1", maker: A, receiver: zeroAddress, makerAsset: A, takerAsset: B, makingAmount: "1", takingAmount: "1", makerTraits: "0", signature: SIG, makerAccountType: "MULTISIG" });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + unsigned fill)", () => {
+  const LOP = LOP_ADDRESSES[42161]!;
+  const MAKER = "0x00000000000000000000000000000000000000a1";
+  const SUSDE = "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2";
+  const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e";
+  const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
+  const orderT: LopOrder = { salt: 7n, maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: 100n, takingAmount: 200n, makerTraits: 0n };
+  const orderWire = { salt: "7", maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "100", takingAmount: "200", makerTraits: "0" };
+  const hash = hashLopOrder(42161, LOP, orderT);
+  const bookRow = { orderHash: hash, order: orderWire, signature: SIG, extension: "0x" };
+  const fill = (routes: Parameters<typeof ctxWith>[0], orderHash = hash) =>
+    runTool("cork_prepare_orders", { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" }, ctxWith(routes));
+
+  it("finds the resting order, re-hashes it, and returns unsigned canonical fill calldata", async () => {
+    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]);
+    expect(env.state).toBe("ok");
+    const d = env.data as { kind: string; to: string; from: string; orderHash: string; calldata: string; fillFunction: string };
+    expect(d.kind).toBe("taker-fill");
+    expect(d.to.toLowerCase()).toBe(LOP.toLowerCase());
+    expect(d.from).toBe("0x00000000000000000000000000000000000000dd");
+    expect(d.orderHash).toBe(hash);
+    expect(d.fillFunction).toBe("fillOrder");
+    expect(d.calldata.slice(0, 10)).toBe("0x9fda64bd"); // uint256-tuple selector
+    expect(env.warnings.some((w) => w.code === "unsigned_artifact")).toBe(true);
+  });
+
+  it("a row that does not hash to the requested order → conflict digest_mismatch (no fill bytes)", async () => {
+    // Claim the requested hash but carry an order that hashes elsewhere (different salt).
+    const liar = { orderHash: hash, order: { ...orderWire, salt: "9999" }, signature: SIG, extension: "0x" };
+    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [liar], hasMore: false } }]);
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+  });
+
+  it("order absent from a COMPLETE book → order_not_found (a normal outcome)", async () => {
+    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [], hasMore: false } }]);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("order_not_found");
+  });
+
+  it("order absent from an INCOMPLETE book → conflict, never a false not-found", async () => {
+    // Bare array = unprovable completeness (metadata_absent).
+    const env = await fill([{ match: "/limit-orders/orderbook", body: [] }]);
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("pagination_incomplete");
+  });
+
+  it("malformed signed row → invalid_service_response (honest, not a crash)", async () => {
+    const bad = { orderHash: hash, order: { ...orderWire, maker: "nope" }, signature: SIG, extension: "0x" };
+    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [bad], hasMore: false } }]);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_service_response");
   });
 });

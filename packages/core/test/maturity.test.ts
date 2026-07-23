@@ -12,7 +12,6 @@ const NOW = 1_800_000_000n;
 const A = "0xc0ffee0000000000000000000000000000000001";
 const T = "0x9d39a5de30e57443bff2a8307a4256c8797a3497"; // sUSDe (lowercase = no checksum claimed)
 const S = "0xccccccccccccbad6f772a511b337d9ccc9570407"; // corkAdapter
-const H = `0x${"22".repeat(32)}`;
 
 /** One probe per MATURITY entry with status "specified"; key = `${tool}:${variantKey|*}`. */
 const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
@@ -28,10 +27,9 @@ const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
   // cork_prepare_phoenix — authority ops
   { tool: "cork_prepare_phoenix", key: "authority-onboard", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-01", action: { type: "authority-onboard", token: T, spender: S } } },
   { tool: "cork_prepare_phoenix", key: "authority-revoke", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-02", action: { type: "authority-revoke", token: T, spender: S } } },
-  // cork_prepare_orders — service-backed variants
-  { tool: "cork_prepare_orders", key: "taker-fill", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-03", action: { type: "taker-fill", orderHash: H } } },
-  // cork_track simulate/artifact activated 2026-07-22; cork_prepare_market activated 2026-07-22
-  // (Q-REG closed) — neither probed as gated any more.
+  // cork_prepare_orders taker-fill activated (venue orderbook lookup + local re-hash + unsigned
+  // fill calldata); cork_track simulate/artifact activated 2026-07-22; cork_prepare_market
+  // activated 2026-07-22 (Q-REG closed) — none probed as gated any more.
 ];
 
 /** The reason string's leading token is the warning code the gated call must return. */

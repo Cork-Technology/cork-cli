@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { toFunctionSelector } from "viem";
-import { buildCancelOrder, buildMakerOrder, buildMakerTraits, LOP_ADDRESSES } from "@cork/core";
+import { decodeFunctionData, parseAbi, toFunctionSelector, zeroAddress } from "viem";
+import { buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, LOP_ADDRESSES, type LopOrder } from "@cork/core";
 
 const MAKER = "0x0000000000000000000000000000000000000abc" as const;
 const MAKER_ASSET = "0x0000000000000000000000000000000000000001" as const;
 const TAKER_ASSET = "0x0000000000000000000000000000000000000002" as const;
+const TAKER = "0x00000000000000000000000000000000000000dd" as const;
+// A syntactically valid 65-byte (r,s,v) secp256k1 signature; s is small so vs keeps yParity=0.
+const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b` as const;
+const baseOrder: LopOrder = { salt: 7n, maker: MAKER, receiver: zeroAddress, makerAsset: MAKER_ASSET, takerAsset: TAKER_ASSET, makingAmount: 100n, takingAmount: 200n, makerTraits: 0n };
 
 describe("buildMakerTraits bit layout (MakerTraitsLib)", () => {
   it("sets NO_PARTIAL_FILLS only when partial fills disallowed", () => {
@@ -75,6 +79,55 @@ describe("buildMakerOrder", () => {
     expect(o.order.makerTraits & HAS_EXTENSION_FLAG).not.toBe(0n);
     expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).not.toBe(0n);
     expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).not.toBe(0n);
+  });
+});
+
+describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
+  const UINT8 = "(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)";
+
+  it("plain order (no extension) → fillOrder with selector 0x9fda64bd", () => {
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
+    expect(fill.functionName).toBe("fillOrder");
+    // The selector is the uint256-tuple form, NOT the address-tuple form (which the router rejects).
+    expect(fill.calldata.slice(0, 10)).toBe("0x9fda64bd");
+    expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillOrder(${UINT8},bytes32,bytes32,uint256,uint256)`));
+  });
+
+  it("extension order → fillOrderArgs with selector 0xf497df75, extension carried in args", () => {
+    const extension = `0x${"ab".repeat(20)}` as const; // 20-byte payload
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, extension });
+    expect(fill.functionName).toBe("fillOrderArgs");
+    expect(fill.calldata.slice(0, 10)).toBe("0xf497df75");
+    expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillOrderArgs(${UINT8},bytes32,bytes32,uint256,uint256,bytes)`));
+    // The args tail is exactly the extension, and takerTraits encodes its length at bit offset 224.
+    const { args } = decodeFunctionData({ abi: parseAbi([`function fillOrderArgs(${UINT8} o, bytes32 r, bytes32 vs, uint256 a, uint256 t, bytes args)`]), data: fill.calldata });
+    expect(args[5]).toBe(extension);
+    expect((BigInt(fill.takerTraits) >> 224n) & 0xffffffn).toBe(20n);
+  });
+
+  it("packs MAKER_AMOUNT flag (bit 255) and the exact taking-amount cap by default", () => {
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
+    const traits = BigInt(fill.takerTraits);
+    expect(traits & (1n << 255n)).toBe(1n << 255n);
+    expect(traits & ((1n << 185n) - 1n)).toBe(200n); // full-fill taking amount
+    expect(fill.requiredTakingAmount).toBe("200");
+  });
+
+  it("partial fill rounds the taking cap UP (taker never underpays the maker)", () => {
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, fillMakingAmount: 33n });
+    // ceil(33 * 200 / 100) = ceil(66) = 66
+    expect(fill.requiredTakingAmount).toBe("66");
+  });
+
+  it("ERC1271 maker → fillContractOrderArgs (signature bytes, not r/vs)", () => {
+    const extension = `0x${"cd".repeat(4)}` as const;
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, makerAccountType: "ERC1271", taker: TAKER, extension });
+    expect(fill.functionName).toBe("fillContractOrderArgs");
+    expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillContractOrderArgs(${UINT8},bytes,uint256,uint256,bytes)`));
+  });
+
+  it("rejects a taking cap that overflows the 185-bit threshold field", () => {
+    expect(() => buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 185n })).toThrow(/185-bit/);
   });
 });
 

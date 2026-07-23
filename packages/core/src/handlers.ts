@@ -40,7 +40,7 @@ import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/re
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, poolManagerAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, classifyBitInvalidator, classifyRemainingRaw, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, hashLopOrder, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
 import { accessControlAbi, applyBandsLocal, buildCreatePoolCall, buildDeployOracleCall, buildJitExtension, buildSharesCall, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, type ConstraintBands, type PermitParams } from "./market-registry.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
@@ -58,6 +58,7 @@ import {
   getRolloverFills,
   getRfq,
   getRfqs,
+  parseSignedLopOrder,
   postLopOrder,
   postRfq,
   postRfqAnswer,
@@ -1192,8 +1193,96 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
     });
   }
 
-  // taker-fill needs the resting order from the orderbook, which is not wired in this iteration.
-  return unavailable(chainId, "needs_service", `prepare_orders '${action.type}' requires the orderbook service not wired in this iteration`, ctx);
+  if (action.type === "taker-fill") {
+    const lop = LOP_ADDRESSES[chainId];
+    if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+    const deps = venueDepsOf(ctx);
+    const wanted = action.orderHash.toLowerCase();
+    try {
+      // Locate the resting order in the venue book under a hard page bound; an exhausted bound
+      // fails closed (no false "not found") rather than truncating silently.
+      const book = await collectVenuePages(
+        { pageSize: 100, maxPages: action.maxPages },
+        (cursor) => getLopOrderbook(deps, { chainId, limit: 100, ...(cursor ? { cursor } : {}) }),
+      );
+      const row = book.items.find((item) => {
+        const nested = item.order && typeof item.order === "object" && !Array.isArray(item.order) ? (item.order as Record<string, unknown>) : item;
+        const h = nested.orderHash ?? nested.order_hash ?? item.orderHash ?? item.order_hash;
+        return typeof h === "string" && h.toLowerCase() === wanted;
+      });
+      if (!row) {
+        if (!book.complete) {
+          return envelope({
+            state: "conflict",
+            data: { requestedOrderHash: action.orderHash, pagesFetched: book.pagesFetched, reason: book.reason, ...(book.nextCursor ? { nextCursor: book.nextCursor } : {}) },
+            chainId,
+            source: "service",
+            warnings: [{ code: "pagination_incomplete", message: `the orderbook search was incomplete (${book.reason}); no absence claim or fill bytes were produced` }],
+            ctx,
+          });
+        }
+        return unavailable(chainId, "order_not_found", `no resting venue order found for ${action.orderHash} on chainId ${chainId}`, ctx);
+      }
+      const parsed = parseSignedLopOrder(row);
+      if (!parsed.ok) return unavailable(chainId, "invalid_service_response", `venue returned a malformed signed order — ${parsed.error}`, ctx);
+      const signed = parsed.value;
+      // [K3] re-hash the venue's order locally; a row that does not hash to the requested order
+      // (or disagrees with the venue's own claimed hash) yields NO fill bytes.
+      const localOrderHash = hashLopOrder(chainId, lop, signed.order);
+      if (localOrderHash.toLowerCase() !== wanted || (signed.venueOrderHash !== undefined && signed.venueOrderHash.toLowerCase() !== localOrderHash.toLowerCase())) {
+        return envelope({
+          state: "conflict",
+          data: { requestedOrderHash: action.orderHash, localOrderHash, venueOrderHash: signed.venueOrderHash ?? null },
+          chainId,
+          source: "service",
+          warnings: [{ code: "digest_mismatch", message: "the venue row does not hash to the requested order — no fill bytes were built" }],
+          ctx,
+        });
+      }
+      let fill: TakerFillResult;
+      try {
+        fill = buildTakerFill({
+          order: signed.order,
+          signature: signed.signature,
+          makerAccountType: signed.makerAccountType,
+          taker: input.account,
+          extension: signed.extension,
+          ...(action.receiver ? { receiver: action.receiver } : {}),
+          ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+          ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
+        });
+      } catch (err) {
+        return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "the resting order cannot be filled by this variant", ctx);
+      }
+      return envelope({
+        state: "ok",
+        data: {
+          kind: "taker-fill",
+          to: lop,
+          calldata: fill.calldata,
+          value: "0",
+          from: input.account,
+          orderHash: localOrderHash,
+          makerAsset: signed.order.makerAsset,
+          takerAsset: signed.order.takerAsset,
+          fillFunction: fill.functionName,
+          requiredMakingAmount: fill.requiredMakingAmount,
+          requiredTakingAmount: fill.requiredTakingAmount,
+          takerTraits: fill.takerTraits,
+          simulationRequired: true,
+          clientRequestId: input.clientRequestId,
+        },
+        chainId,
+        source: "service",
+        warnings: [{ code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }],
+        ctx,
+      });
+    } catch (err) {
+      return venueFailed(chainId, err, ctx);
+    }
+  }
+
+  return unavailable(chainId, "phase_gated", `prepare_orders '${(action as { type: string }).type}' is not implemented`, ctx);
 }
 
 async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Envelope> {
