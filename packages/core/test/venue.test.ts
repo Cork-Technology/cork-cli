@@ -620,6 +620,17 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     expect(pgOf(env).complete).toBe(true);
     expect(env.warnings).toEqual([]);
   });
+
+  it("hasMore:true but no cursor to continue → incomplete (cursor_absent), disclosed not hidden", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xa" }], hasMore: true } }]),
+    );
+    expect(env.state).toBe("ok");
+    expect(pgOf(env).reason).toBe("cursor_absent");
+    expect(env.warnings[0]?.code).toBe("pagination_incomplete");
+  });
 });
 
 describe("parseSignedLopOrder (untrusted venue row → validated signed order)", () => {

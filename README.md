@@ -114,7 +114,8 @@ feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served 
 offline (`prepare orders`, CorkSettler EIP-712) and reconciles are chain-verified against the
 settler's `orderStatus()` when an RPC resolves. A few variants are still honestly gated (state
 `unavailable` with a reason code) rather than fabricated — the whitelisted-addresses enumeration,
-taker-fill, dutch-auction-price / rfq-quote pricing, and `cork_decode` order/event/receipt. Reading
+dutch-auction-price / rfq-quote pricing, and `cork_decode` order/event/receipt (`cork_prepare_orders`
+taker-fill and finalize-maker-order are activated). Reading
 a pool that doesn't exist on the queried chain returns `unavailable` with `chain_read_failed` (not
 a crash). That's expected; it's not a broken install.
 
@@ -254,14 +255,15 @@ Implemented + tested:
   (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`), recomputing commitments before relay [K3].
 
 Honestly gated (`unavailable` with a reason, never faked): `cork_query` whitelisted-addresses
-enumeration, `cork_prepare_orders` taker-fill, `cork_compute` dutch-auction-price (needs a live
-Fusion order) / rfq-quote (pricing-signal shape pending), and `cork_decode` order/event/receipt.
-Some schema fields are accepted but reserved for later phases (`cork_query` `cursor`/`pageSize`,
-`cork_compute` `at.timestamp`, `cork_prepare_phoenix` `account`).
+enumeration, `cork_compute` dutch-auction-price (needs a live Fusion order) / rfq-quote
+(pricing-signal shape pending), and `cork_decode` order/event/receipt. (`cork_prepare_orders`
+taker-fill and finalize-maker-order are activated — orderbook lookup + local re-hash, and
+external-signer recovery, respectively.) Some schema fields are accepted but reserved for later
+phases (`cork_compute` `at.timestamp`, `cork_prepare_phoenix` `account`).
 
 Known gaps, sequenced deliberately (tracked, not forgotten): per-enum-value / per-union-branch
 descriptions inside the registered JSON schemas (RFC §5.4's table); remaining prepare pre-flight
 guards (whitelist / pause checks — expiry and JIT adapter-binding checks shipped), sweep legs, and
-a human summary on bundles (RFC §5.4); `account-state` nonce/invalidator and Safe config;
-venue-side pagination passthrough (`cursor`/`pageSize`) once the venue's cursor fix deploys; and
-distribution/packaging beyond the in-repo launchers.
+a human summary on bundles (RFC §5.4); and `account-state` nonce/invalidator and Safe config.
+(Bounded venue pagination — `cursor`/`pageSize`/`maxPages`, `data.pagination`, `pagination_incomplete`
+— shipped, as did compiled-`dist` packaging for `@cork/mcp` via `bun run build`.)
