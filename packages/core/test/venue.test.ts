@@ -116,6 +116,25 @@ describe("cork_query venue-backed resources", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("venue_unreachable");
   });
+
+  it("rfqs by id: a known id returns the record; an unknown id is rfq_not_found, never fabricated", async () => {
+    const found = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs/rfq_abc", body: { rfq_id: "rfq_abc", state: "open" } }]),
+    );
+    expect(found.state).toBe("ok");
+    expect((found.data as { items: unknown[] }).items).toHaveLength(1);
+
+    // No stub route for the id -> the stub answers 404 -> getRfq returns null -> honest gap.
+    const missing = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_missing" }, pageSize: 25, format: "concise" },
+      ctxWith([]),
+    );
+    expect(missing.state).toBe("unavailable");
+    expect(missing.warnings[0]?.code).toBe("rfq_not_found");
+  });
 });
 
 describe("cork_submit relays [K1] with local recomputation [K3]", () => {
