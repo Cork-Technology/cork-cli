@@ -40,6 +40,10 @@ describe("mulDiv / ceilDiv (OZ Math parity)", () => {
     expect(ceilDiv(10n, 3n)).toBe(4n);
     expect(ceilDiv(9n, 3n)).toBe(3n);
   });
+  it("throws on a zero divisor", () => {
+    expect(() => mulDiv(1n, 1n, 0n)).toThrow("mulDiv: division by zero");
+    expect(() => ceilDiv(1n, 0n)).toThrow("ceilDiv: division by zero");
+  });
 });
 
 describe("computeT (golden vectors from Foundry computeT.t.sol)", () => {
@@ -92,6 +96,9 @@ describe("calculateGrossAmountWithTimeDecayFee (Foundry minimumFee vector)", () 
     expect(fee).toBe(1n);
     expect(assetIn).toBe(101n);
   });
+  it("zero amount short-circuits to zero fee and zero assetIn", () => {
+    expect(calculateGrossAmountWithTimeDecayFee(1000n, 2000n, 1500n, 0n, ether("5"))).toEqual({ fee: 0n, assetIn: 0n });
+  });
 });
 
 describe("percentage / gross / swap-rate math (formula-exact)", () => {
@@ -132,5 +139,9 @@ describe("decimal normalization (TransferHelper parity)", () => {
   it("normalizeDecimalsCeil reducing rounds up", () => {
     expect(normalizeDecimalsCeil(1_500_001n, 8, 6)).toBe(15_001n); // /100 ceil
     expect(normalizeDecimals(1_500_001n, 8, 6)).toBe(15_000n); // floor
+  });
+  it("normalizeDecimalsCeil increasing just scales up (no rounding, equals floor variant)", () => {
+    expect(normalizeDecimalsCeil(15_001n, 6, 8)).toBe(1_500_100n); // *100, exact
+    expect(normalizeDecimalsCeil(15_001n, 6, 8)).toBe(normalizeDecimals(15_001n, 6, 8));
   });
 });

@@ -16,6 +16,10 @@ describe("buildMakerTraits bit layout (MakerTraitsLib)", () => {
     expect(t & (1n << 248n)).toBe(1n << 248n);
     expect((t >> 80n) & ((1n << 40n) - 1n)).toBe(1893456000n);
   });
+  it("sets ALLOW_MULTIPLE_FILLS only when multiple fills allowed", () => {
+    expect(buildMakerTraits({ allowPartialFills: true, allowMultipleFills: false, usePermit2: false, expiry: 0n, nonce: 0n }) & (1n << 254n)).toBe(0n);
+    expect(buildMakerTraits({ allowPartialFills: true, allowMultipleFills: true, usePermit2: false, expiry: 0n, nonce: 0n }) & (1n << 254n)).toBe(1n << 254n);
+  });
 });
 
 describe("buildMakerOrder", () => {
@@ -37,6 +41,7 @@ describe("buildMakerOrder", () => {
   // preInteraction extension MUST set PRE_INTERACTION_CALL_FLAG (bit 252) or the LOP
   // fills it as a no-op and the JIT hook never runs (caught by the fork round-trip test).
   const PRE_INTERACTION_CALL_FLAG = 1n << 252n;
+  const POST_INTERACTION_CALL_FLAG = 1n << 251n;
   const HAS_EXTENSION_FLAG = 1n << 249n;
 
   it("plain order sets no interaction flag", () => {
@@ -55,8 +60,21 @@ describe("buildMakerOrder", () => {
     const o = buildMakerOrder({ ...base, clientRequestId: "req-ext-0001", extension });
     expect(o.order.makerTraits & HAS_EXTENSION_FLAG).not.toBe(0n);
     expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).not.toBe(0n);
+    // A pre-only extension must NOT set the post flag (field 7 empty).
+    expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).toBe(0n);
     // salt low 160 bits are bound to keccak(extension); entropy in the top 96 bits.
     expect(o.order.salt >= 1n << 160n).toBe(true);
+  });
+
+  it("extension with both pre- and post-interaction sets both interaction flags", () => {
+    // Header offsets: field 6 (pre) ends at 4, field 7 (post) ends at 8 -> each field is a
+    // non-empty 4-byte span. extensionInteractionFlags must set PRE and POST both.
+    const offsets = (4n << (32n * 6n)) | (8n << (32n * 7n));
+    const extension = (`0x${offsets.toString(16).padStart(64, "0")}deadbeefcafebabe`) as `0x${string}`;
+    const o = buildMakerOrder({ ...base, clientRequestId: "req-ext-0002", extension });
+    expect(o.order.makerTraits & HAS_EXTENSION_FLAG).not.toBe(0n);
+    expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).not.toBe(0n);
+    expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).not.toBe(0n);
   });
 });
 

@@ -46,9 +46,6 @@ describe("previewSwap", () => {
       fee: 5025126n,
     });
   });
-  it("zero in -> zero out", () => {
-    expect(previewSwap(0n, swapCtx(18, 18))).toEqual({ cstSharesIn: 0n, referenceAssetsIn: 0n, fee: 0n });
-  });
 });
 
 describe("previewExercise / previewExerciseOther", () => {
@@ -92,5 +89,32 @@ describe("previewUnwindExercise / previewUnwindExerciseOther", () => {
       fee: 1206031n,
       cstSharesOut: 240000000000000000000n,
     });
+  });
+});
+
+// Every preview short-circuits a zero request to an all-zero result, mirroring the on-chain
+// `if (amount == 0) return 0` guards in PoolLib — the shared contract, pinned across the family.
+describe("zero request short-circuits to all-zero", () => {
+  const s = swapCtx(18, 18);
+  const u = unwindCtx(18, 18);
+  // Return-type union keeps Object.values typed as bigint[] (the preview interfaces have no
+  // index signature, so a Record<string, bigint> annotation would not accept them).
+  type ZeroPreview =
+    | ReturnType<typeof previewSwap>
+    | ReturnType<typeof previewExercise>
+    | ReturnType<typeof previewExerciseOther>
+    | ReturnType<typeof previewUnwindSwap>
+    | ReturnType<typeof previewUnwindExercise>
+    | ReturnType<typeof previewUnwindExerciseOther>;
+  const cases: Array<[string, ZeroPreview]> = [
+    ["previewSwap", previewSwap(0n, s)],
+    ["previewExercise", previewExercise(0n, s)],
+    ["previewExerciseOther", previewExerciseOther(0n, s)],
+    ["previewUnwindSwap", previewUnwindSwap(0n, u)],
+    ["previewUnwindExercise", previewUnwindExercise(0n, u)],
+    ["previewUnwindExerciseOther", previewUnwindExerciseOther(0n, u)],
+  ];
+  it.each(cases)("%s returns every field as 0n", (_name, result) => {
+    for (const v of Object.values(result)) expect(v).toBe(0n);
   });
 });

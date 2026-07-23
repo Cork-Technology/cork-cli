@@ -7,6 +7,10 @@ import {
   chainStatusName,
   venueChainConsistent,
   resolveLogsEndpoint,
+  fetchDigestLogs,
+  labelLogs,
+  LogsRangeLimited,
+  verificationDigest,
   SETTLER_EVENTS,
   type HandlerContext,
 } from "@cork/core";
@@ -126,8 +130,9 @@ describe("event-history leg (HyperRPC-shaped logs endpoint)", () => {
 });
 
 describe("helpers", () => {
-  it("status names follow RolloverTypes.OrderStatus enum order", () => {
+  it("status names follow RolloverTypes.OrderStatus enum order; out-of-range falls back to None", () => {
     expect([0, 1, 2, 3, 4, 5].map(chainStatusName)).toEqual(["None", "Opened", "Settled", "Expired", "Cancelled", "Closing"]);
+    expect(chainStatusName(99)).toBe("None"); // unknown enum value never crashes
   });
   it("venue sub-states (PARTIALLY_FILLED/AWAITING_PREMIUM) map to chain Opened", () => {
     expect(venueChainConsistent("PARTIALLY_FILLED", "Opened")).toBe(true);
@@ -157,6 +162,70 @@ describe("helpers", () => {
     expect(new Set(Object.values(SETTLER_EVENTS))).toEqual(
       new Set(["OrderSettled", "OrderExpired", "OrderCancelled", "OrderClosing", "RolloverLegFilled", "PremiumLegFilled", "SrcCstRefunded", "DefaulterResidualReclaimed", "DefaulterResidualReclaimedWithSubFiller", "FillerSettled"]),
     );
+  });
+  it("verificationDigest is deterministic and content-addressed", () => {
+    const a = verificationDigest({ x: 1, y: "z" });
+    expect(a).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(verificationDigest({ x: 1, y: "z" })).toBe(a);
+    expect(verificationDigest({ x: 2, y: "z" })).not.toBe(a);
+  });
+});
+
+describe("fetchDigestLogs — the two failure modes are distinguished (never conflated)", () => {
+  const common = {
+    url: "https://stub-logs/rpc",
+    addresses: [EXACT as `0x${string}`],
+    digest: DIGEST as `0x${string}`,
+    fromBlock: 485_000_000,
+  };
+  const jsonResp = (body: unknown) => async () => new Response(JSON.stringify(body), { status: 200 });
+
+  it("returns the result array on success", async () => {
+    const logs = await fetchDigestLogs({ ...common, fetchImpl: jsonResp({ jsonrpc: "2.0", id: 1, result: [] }) });
+    expect(logs).toEqual([]);
+  });
+  it("range/archive refusals become LogsRangeLimited (a distinct, honest outcome)", async () => {
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: jsonResp({ error: { message: "block range too large" } }) }),
+    ).rejects.toBeInstanceOf(LogsRangeLimited);
+  });
+  it("any other endpoint error surfaces as a generic logs error", async () => {
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: jsonResp({ error: { message: "boom" } }) }),
+    ).rejects.toThrow("logs endpoint error: boom");
+  });
+  it("a transport rejection is reported as unreachable, not as an endpoint error", async () => {
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: async () => { throw new Error("ECONNREFUSED"); } }),
+    ).rejects.toThrow("logs endpoint unreachable");
+  });
+  it("a non-Error transport rejection is still reported (stringified)", async () => {
+    await expect(
+      // throwing a non-Error exercises the String(err) branch of the catch
+      fetchDigestLogs({ ...common, fetchImpl: async () => { throw "socket hang up"; } }),
+    ).rejects.toThrow("logs endpoint unreachable: socket hang up");
+  });
+  it("an error response with no message falls back to the HTTP status", async () => {
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: async () => new Response("not json", { status: 503 }) }),
+    ).rejects.toThrow("logs endpoint error: HTTP 503");
+  });
+});
+
+describe("labelLogs", () => {
+  it("labels known settler events and tags unknown topic0s honestly", () => {
+    const known = toEventSelector("OrderSettled(bytes32)");
+    const labeled = labelLogs([
+      { address: EXACT, topics: [known, DIGEST], data: "0x", blockNumber: "0x1de5b3a0", transactionHash: `0x${"ab".repeat(32)}`, logIndex: "0x0" },
+      { address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0x", blockNumber: "0x1de5b3a1", transactionHash: `0x${"cd".repeat(32)}`, logIndex: "0x1" },
+    ]);
+    expect(labeled[0]?.event).toBe("OrderSettled");
+    expect(labeled[0]?.blockNumber).toBe(0x1de5b3a0);
+    expect(labeled[1]?.event).toBe("unknown (topic0 0xdededede…)");
+  });
+  it("does not throw on a log with no topics", () => {
+    const labeled = labelLogs([{ address: EXACT, topics: [], data: "0x", blockNumber: "0x0", transactionHash: "0x", logIndex: "0x0" }]);
+    expect(labeled[0]?.event).toMatch(/^unknown/);
   });
 });
 

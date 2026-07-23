@@ -58,10 +58,26 @@ describe("calculateRate — single-step golden vectors (elapsed=0)", () => {
     expect(r.rate).toBe(CFG.rateMin);
     expect(r.remainingCredits).toBe(0n);
   });
+  it("C' credits let the move overshoot rateMin, so the hard clamp (not capping) pins it", () => {
+    // Mirror of D': incoming -0.5 fully consumed -> pre-clamp rate 0.5e18, below rateMin 0.9e18,
+    // so the `rate < rateMin` clamp fires (distinct from C's credit-cap landing exactly on rateMin).
+    const r = calculateRate(base({ newRate: 5n * (WAD / 10n), rateChangeCapacityMax: WAD, remainingCredits: WAD }));
+    expect(r.rate).toBe(CFG.rateMin);
+    expect(r.remainingCredits).toBe(WAD - WAD / 10n); // creditsCapped(1.0) - actualChange(0.1)
+    expect(r.updated).toBe(true);
+  });
   it("D oracle above rateMax clamps to rateMax, remaining 0", () => {
     const r = calculateRate(base({ newRate: (12n * WAD) / 10n }));
     expect(r.rate).toBe(CFG.rateMax);
     expect(r.remainingCredits).toBe(0n);
+  });
+  it("D' credits let the move overshoot rateMax, so the hard clamp (not capping) pins it", () => {
+    // Generous capacity + credits: incoming 0.5 is fully consumed -> pre-clamp rate 1.5e18,
+    // above rateMax 1.1e18, so the `rate > rateMax` clamp fires (distinct from D's credit-cap).
+    const r = calculateRate(base({ newRate: 15n * (WAD / 10n), rateChangeCapacityMax: WAD, remainingCredits: WAD }));
+    expect(r.rate).toBe(CFG.rateMax);
+    expect(r.remainingCredits).toBe(WAD - WAD / 10n); // creditsCapped(1.0) - actualChange(0.1)
+    expect(r.updated).toBe(true);
   });
   it("E downward within limit: 0.9995e18", () => {
     const r = calculateRate(base({ newRate: 9995n * (WAD / 10000n) }));
@@ -154,8 +170,10 @@ describe("impairmentFloor — committed-descent (verified <= brute-force adversa
     expect(r.clampedAtMin).toBe(false);
   });
 
-  it("large horizon clamps to rateMin, maxRef = 2e18", () => {
-    const r = impairmentFloor({ market: fMarket, state: fState, horizonSeconds: 400n * DAY, tEval: 1n });
+  it("very long horizon pins the floor at rateMin (descent exceeds the last rate), maxRef = 2e18", () => {
+    // 2000 days of refill > lastAdjustedRate (0.8e18), so floorFromLast bottoms at 0 and the
+    // worst case is rateMin regardless — the extreme-horizon invariant.
+    const r = impairmentFloor({ market: fMarket, state: fState, horizonSeconds: 2000n * DAY, tEval: 1n });
     expect(r.worstRate).toBe(F.rateMin);
     expect(r.maxReferencePerCst).toBe(2000000000000000000n);
     expect(r.clampedAtMin).toBe(true);
