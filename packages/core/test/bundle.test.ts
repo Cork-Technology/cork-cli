@@ -96,6 +96,12 @@ describe("recursive decode round-trips", () => {
     if (legs[0]?.kind === "unknown") expect(legs[0].selector).toBe("0xdeadbeef");
   });
 
+  it("rejects calldata that is not a Bundler3 multicall (never decodes garbage as a bundle)", () => {
+    expect(() => decodeBundle("0xdeadbeef")).toThrow(/not a Bundler3 multicall/);
+    // A well-formed cork action alone (no multicall envelope) is still not a bundle.
+    expect(() => decodeBundle(SWAP_CALLDATA)).toThrow(/not a Bundler3 multicall/);
+  });
+
   it("decodes a realistic funding-leg + cork-action bundle (not 'unknown')", async () => {
     const { encodeFunctionData } = await import("viem");
     const { bundlerLegAbi } = await import("@cork/core");

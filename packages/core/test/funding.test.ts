@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toFunctionSelector } from "viem";
-import { fundingPlan, generalAdapterAbi, type PoolTokens } from "@cork/core";
+import { canAutoFund, fundingLegs, fundingPlan, generalAdapterAbi, isBurnAction, type PoolTokens } from "@cork/core";
 import type { PhoenixAction } from "@cork/schemas";
 
 const ADP = "0xccccccccccccbad6f772a511b337d9ccc9570407" as const;
@@ -64,5 +64,27 @@ describe("fundingPlan: share-burn actions", () => {
     const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve");
     expect(legs).toHaveLength(0);
     expect(note).toMatch(/sentinel/i);
+  });
+});
+
+describe("fundingPlan: guards and predicates", () => {
+  it("throws when a fundable action is missing its amount field (never funds 0 silently)", () => {
+    const action = { type: "deposit", poolId: POOL, receiver: RCV } as unknown as PhoenixAction;
+    expect(() => fundingPlan(action, tokens, ADP, "erc20-approve")).toThrow(/missing field collateralAssetsIn/);
+  });
+  it("fundingLegs is exactly fundingPlan().legs", () => {
+    const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
+    expect(fundingLegs(action, tokens, ADP, "permit2")).toEqual(fundingPlan(action, tokens, ADP, "permit2").legs);
+  });
+  it("classifies fundable vs burn actions", () => {
+    expect(canAutoFund("deposit")).toBe(true);
+    expect(canAutoFund("redeem")).toBe(true);
+    expect(isBurnAction("redeem")).toBe(true);
+    expect(isBurnAction("deposit")).toBe(false);
+  });
+  it("an unrecognized action type funds nothing — never guesses a token move", () => {
+    const action = { type: "not-an-action", poolId: POOL } as unknown as PhoenixAction;
+    expect(canAutoFund(action.type)).toBe(false);
+    expect(fundingPlan(action, tokens, ADP, "erc20-approve").legs).toHaveLength(0);
   });
 });
