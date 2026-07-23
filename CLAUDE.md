@@ -39,11 +39,11 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | Tool | Use when | Phase |
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
-| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived subset also in `full-decentralized` mode (HyperSync). | 1 |
+| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived subset also in `full-decentralized` mode (HyperSync). Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain). NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
-| `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension orders) / cancel, and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
+| `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension/JIT orders) / cancel; **finalize-maker-order** (recover the external signer, reconstruct exact bytes, emit a verbatim `cork_submit` artifact — never signs); **taker-fill** (fetch + locally re-hash a resting venue order, emit canonical uint256-tuple fill calldata, unsigned); and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
 | `cork_track` | Verify a resource against chain, simulate frozen prepared bytes (eth_call dry-run: wouldRevert + reason BEFORE signing), or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Unsigned MarketRegistry.deploy(ca, ref) tx (permissionless, idempotent oracle deploy; Arbitrum). Q-REG closed 2026-07-22. Markets themselves are created JIT by LOP fills — `cork_prepare_orders` maker-order + `jitMarket`. | 4 |
 | `cork_submit` | The **only** side-effecting tool: relays caller-signed/authored payloads to the venue — actions `rollover-order`, `lop-order`, `rfq-open`, `rfq-answer` (all off-chain POSTs). Commitments recomputed before relay [K3]; never signs [K1]. | 3 |
@@ -57,8 +57,9 @@ as `structuredContent`, and every tool advertises this envelope as its `outputSc
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
   retry the same call** and do not fabricate the answer — report the reason. Still-gated variants
-  (whitelisted-addresses, taker-fill, dutch-auction-price, rfq-quote, decode
-  order/event/receipt) stay `unavailable` by design.
+  (whitelisted-addresses, dutch-auction-price, rfq-quote, decode order/event/receipt) stay
+  `unavailable` by design. (`cork_prepare_orders` taker-fill and finalize-maker-order are now
+  activated — see the tool table.)
 - `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
   surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
@@ -91,7 +92,12 @@ Warning codes you will encounter:
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
 | `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (HTTP status + message) / couldn't be reached (check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
-| `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. |
+| `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. Also `cork_prepare_orders` taker-fill when the orderHash is absent from a COMPLETE orderbook traversal. |
+| `pagination_incomplete` | A venue list traversal did not exhaust the set (`reason`: `metadata_absent`/`cursor_absent`/`max_pages`) — on `ok` it's honest partial evidence with a `nextCursor` to resume; on `conflict` it's `cursor_repeated` (the venue contradicted itself). taker-fill returns it (conflict) rather than a false "not found" when the book search was incomplete. |
+| `unsigned_artifact` | Informational on `ok` taker-fill: unsigned fill calldata only — simulate (`cork_track` simulate) and set the taker-asset allowance before signing/broadcasting. |
+| `caller_signed_artifact` | Informational on `ok` finalize-maker-order: the signature was recovered/verified, not created [K1]; pass `submitInput` verbatim to `cork_submit` after your policy gate admits the `signedArtifactDigest`. |
+| `signature_or_reconstruction_mismatch` / `prepared_context_mismatch` | On `conflict` (finalize-maker-order): the signature doesn't recover to the order maker / the reconstruction doesn't match the prepared hash / salt↔extension unbound — OR the prepared clientRequestId·chainId·verifyingContract disagrees with the request. Not relayable. |
+| `invalid_service_response` | taker-fill: the venue row for the requested order failed shape validation (malformed signed order) — no fill bytes built. |
 | `rfq_not_found` | `cork_query rfqs` with `filters.rfqId`: the id is unknown to the venue — a normal outcome for a never-posted or mistyped id. |
 | `asset_not_found` | `cork_query registry-assets` with `filters.address`: the address is not a registry-approved asset on that chain. |
 | `settler_mode_mismatch` | rollover-intent: the chosen settler's on-chain mode gate would make the order unfillable (ExactSettler rejects `allowPartialFills:true`; PartialSettler requires it). The message names the right settler. |
@@ -112,8 +118,8 @@ result states its data mode: `provenance.mode = "lite-decentralized"` (RPC chain
 explicitly, never silently substituted: venue-only resources reject decentralized modes (resting
 orders/RFQs emit no events — structural, not a phase gap), chain resources reject `centralized`,
 and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
-`full-decentralized`. Some schema fields are accepted but
-reserved for later phases (`cork_query` `cursor`/`pageSize`, `cork_compute` `at.timestamp`,
+`full-decentralized`. `cork_query` `cursor`/`pageSize`/`maxPages` are now honored (bounded venue
+traversal). Some schema fields remain accepted-but-reserved (`cork_compute` `at.timestamp`,
 `cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
 
 Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineSeconds`, re-anchors
