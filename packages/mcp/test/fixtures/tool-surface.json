@@ -3,7 +3,7 @@
     "name": "cork_query",
     "description": "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
     "descriptionTokensApprox": 127,
-    "inputSchemaSha256": "5440199dad08e95c6fdc3812ffbdd48e5025256b2c32aa08ffd7e1e2b236472e",
+    "inputSchemaSha256": "f472dc8d3c5fc2bc95189629f68b97c3d97724fdd3db47885354ee9fbadb0908",
     "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
     "annotations": {
       "title": "Cork: read state",

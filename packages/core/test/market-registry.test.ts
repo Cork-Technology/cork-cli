@@ -170,22 +170,24 @@ describe("cork_query registry-* (chain views)", () => {
     expect(env.warnings[0]?.message).toContain("liquidity, fixed");
   });
 
-  it("registry-oracle: deployed pair → wrapper; undeployed-but-deployable → predicted wrapper", async () => {
+  it("registry-oracle: deployed pair → oracle.address; undeployed-but-deployable → predicted address", async () => {
     const deployed = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
       if (c.functionName === "lookupWrapper") return ORACLE;
       throw new Error("unexpected");
     }));
-    expect((deployed.data as { deployed: boolean; wrapper: string }).deployed).toBe(true);
+    const dep = (deployed.data as { oracle: { address: string; deployed: boolean } }).oracle;
+    expect(dep.deployed).toBe(true);
+    expect(dep.address).toBe(ORACLE);
 
     const deployable = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
       if (c.functionName === "lookupWrapper") return "0x0000000000000000000000000000000000000000";
       if (c.functionName === "simulate:deploy") return ORACLE;
       throw new Error("unexpected");
     }));
-    const d = deployable.data as { deployed: boolean; deployable: boolean; predictedWrapper: string };
+    const d = (deployable.data as { oracle: { address: string; deployed: boolean; deployable: boolean } }).oracle;
     expect(d.deployed).toBe(false);
     expect(d.deployable).toBe(true);
-    expect(d.predictedWrapper).toBe(ORACLE);
+    expect(d.address).toBe(ORACLE);
   });
 
   it("registry-oracle: a non-deployable pair is an OK answer with the reason, not an error", async () => {
@@ -195,8 +197,9 @@ describe("cork_query registry-* (chain views)", () => {
       throw new Error("unexpected");
     }));
     expect(env.state).toBe("ok");
-    const d = env.data as { deployable: boolean; reason: string };
+    const d = (env.data as { oracle: { address: string | null; deployable: boolean; reason: string } }).oracle;
     expect(d.deployable).toBe(false);
+    expect(d.address).toBeNull();
     expect(d.reason).toContain("EntryNotFound");
   });
 
@@ -259,8 +262,10 @@ describe("cork_query market-predict (registry+adapter derivation of a not-yet-ex
     expect(env.warnings[0]?.code).toBe("missing_filter");
   });
 
-  it("ca === ref is an invalid-input teaching error", async () => {
-    await expect(runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", mode: "liquidity" } }, ctx(() => 0))).rejects.toThrow(/invalid input/);
+  it("ca === ref is a domain-rule envelope (invalid_pair), not a throw", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", mode: "liquidity" } }, ctx(() => 0));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_pair");
   });
 
   it("unknown mode → recipe_not_found naming the real modes", async () => {
@@ -302,13 +307,13 @@ describe("cork_query market-predict (registry+adapter derivation of a not-yet-ex
       () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(GT.cpt) + sharesWord(GT.cst) }] }),
     ));
     expect(env.state).toBe("ok");
-    const d = env.data as { oracle: { deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { cst: string; cpt: string; source: string } };
+    const d = env.data as { oracle: { deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { corkSwapToken: string; corkPrincipalToken: string; source: string } };
     expect(d.oracle.deployed).toBe(true);
     expect(BigInt(d.oracle.rate)).toBe(GT.rate);
     expect(d.market.poolId).toBe(GT.poolId); // end-to-end parity with the live endpoint
     expect(d.market.exists).toBe(false);
-    expect(d.shares.cst.toLowerCase()).toBe(GT.cst);
-    expect(d.shares.cpt.toLowerCase()).toBe(GT.cpt);
+    expect(d.shares.corkSwapToken.toLowerCase()).toBe(GT.cst);
+    expect(d.shares.corkPrincipalToken.toLowerCase()).toBe(GT.cpt);
     expect(d.shares.source).toBe("simulated");
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(true);
   });
@@ -427,10 +432,11 @@ describe("cork_prepare_market deploy-wrapper (unsigned registry.deploy tx)", () 
       }),
     });
     expect(env.state).toBe("ok");
-    const d = env.data as { to: string; calldata: string; alreadyDeployed: boolean };
+    const d = env.data as { to: string; calldata: string; oracle: { address: string; deployed: boolean } };
     expect(d.calldata).toBe(buildDeployOracleCall(CA, REF));
     expect(d.calldata).toBe(encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [CA, REF] }));
-    expect(d.alreadyDeployed).toBe(true);
+    expect(d.oracle.deployed).toBe(true);
+    expect(d.oracle.address).toBe(ORACLE);
     expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
   });
 
@@ -472,9 +478,11 @@ describe("cork_prepare_orders maker-order + jitMarket", () => {
     await expect(runTool("cork_prepare_orders", { ...base, action: { ...jitAction, extension: "0xdeadbeef" } }, { nowSeconds: 1n })).rejects.toThrow(/invalid input/);
   });
 
-  it("fee above 5e18 (5%) is a teaching error, not a signable dud", async () => {
+  it("fee above 5e18 (5%) is a domain-rule envelope (invalid_order_terms), not a throw", async () => {
     const bad = { ...jitAction, jitMarket: { ...jitAction.jitMarket, swapFeePercentage: "6000000000000000000" } };
-    await expect(runTool("cork_prepare_orders", { ...base, action: bad }, { nowSeconds: 1n })).rejects.toThrow(/invalid input/);
+    const env = await runTool("cork_prepare_orders", { ...base, action: bad }, { nowSeconds: 1n });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
   });
 
   it("no adapter configured on mainnet → unknown_deployment naming 42161", async () => {

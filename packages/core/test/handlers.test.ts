@@ -554,7 +554,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     expect(env.state).toBe("ok");
     const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> } };
     expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
-    expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "cpt", "cst", "reference"]);
+    expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
     expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777" });
   });
 });

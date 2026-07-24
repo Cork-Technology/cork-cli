@@ -128,7 +128,7 @@ export function decodeMarketRows(logs: HyperSyncLog[]): Array<Record<string, unk
   return logs.flatMap((l) => {
     try {
       const d = decodeEventLog({ abi: marketCreatedAbi, topics: strictTopics(l), data: l.data as Hex });
-      return [{ poolId: d.args.id, referenceAsset: d.args.referenceAsset, collateralAsset: d.args.collateralAsset, expiry: d.args.expiry.toString(), rateOracle: d.args.rateOracle, principalToken: d.args.principalToken, swapToken: d.args.swapToken, poolManager: l.address, ...meta(l) }];
+      return [{ poolId: d.args.id, referenceAsset: d.args.referenceAsset, collateralAsset: d.args.collateralAsset, expiry: d.args.expiry.toString(), rateOracle: d.args.rateOracle, corkPrincipalToken: d.args.principalToken, corkSwapToken: d.args.swapToken, poolManager: l.address, ...meta(l) }];
     } catch {
       return [];
     }

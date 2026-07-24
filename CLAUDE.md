@@ -102,14 +102,26 @@ Warning codes you will encounter:
 | `rfq_not_found` | `cork_query rfqs` with `filters.rfqId`: the id is unknown to the venue — a normal outcome for a never-posted or mistyped id. |
 | `asset_not_found` | `cork_query registry-assets` with `filters.address`: the address is not a registry-approved asset on that chain. |
 | `settler_mode_mismatch` | rollover-intent: the chosen settler's on-chain mode gate would make the order unfillable (ExactSettler rejects `allowPartialFills:true`; PartialSettler requires it). The message names the right settler. |
-| `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). |
+| `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). `invalid_order_terms` also covers a JIT maker-order fee above the 5% cap (a well-formed value that breaks a protocol rule → returned as an envelope, exit 3, not thrown). |
+| `invalid_pair` | On `unavailable` (`cork_query market-predict`): collateralAsset and referenceAsset are equal — a market is a pair of distinct assets. A domain-rule violation returned as an envelope (exit 3), not a thrown schema error. |
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
 | `hypersync_unavailable` | full-decentralized mode: no HyperSync token, unsupported chain, or the napi client can't load on this host. Envio env vars: `ENVIO_HYPERSYNC_TOKEN` (query API) and `ENVIO_HYPERRPC_TOKEN` (logs RPC) with `ENVIO_API_TOKEN` as shared fallback for both — tokens verified interchangeable across products in practice, so one shared token also works. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / ~100x divergence from the cited quote_ref (conflict, NOT relayed). |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed
-`filters.*`) · `3` unavailable · `4` conflict · `1` unexpected error.
+`filters.*`) · `3` unavailable · `4` conflict · `1` unexpected error. Validation split: only
+unparseable/format faults throw (exit 2); a well-formed input that breaks a domain rule (equal
+ca/ref, a fee over the 5% cap, incoherent order terms) returns an `unavailable` envelope (exit 3).
+
+Field-naming conventions, uniform across every read: the two share tokens are always
+`corkSwapToken` (cST) and `corkPrincipalToken` (cPT) everywhere; the pair's rate-oracle wrapper is
+reported under one nested `oracle` object (`.address`/`.deployed`/`.deployable`, plus `.rate` on
+market-predict) by `registry-oracle`, `market-predict`, and `cork_prepare_market` alike — the Market
+struct's `rateOracle` field is that same contract; `cork_query` always echoes `resource`; every
+chain-backed read includes `chainId` in `data` next to its on-chain values (also in
+`provenance.chainId`). Provenance is single-chain for now; a per-chain map is planned for later
+cross-chain reads.
 
 Every tool's input takes an optional `format`: `"concise"` (default) or `"full"`. `"full"` adds
 `provenance.rpc = { source: explicit|default|chainlist, host }` on chain-backed reads. Every backed

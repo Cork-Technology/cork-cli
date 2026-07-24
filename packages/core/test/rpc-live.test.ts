@@ -52,7 +52,7 @@ describe.skipIf(!LIVE)("cork_query market-predict — live parity vs the market-
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");
-    const od = ours.data as { oracle: { address: string; deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { cst: string; cpt: string } | null };
+    const od = ours.data as { oracle: { address: string; deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { corkSwapToken: string; corkPrincipalToken: string } | null };
     expect(od.oracle.deployed).toBe(true);
     expect(od.market.poolId).toMatch(/^0x[0-9a-f]{64}$/);
 
@@ -69,8 +69,8 @@ describe.skipIf(!LIVE)("cork_query market-predict — live parity vs the market-
       expect(od.market.poolId).toBe(api.market.pool_id);
       expect(od.market.exists).toBe(api.market.exists);
       if (od.shares && api.shares) {
-        expect(od.shares.cst.toLowerCase()).toBe(api.shares.shares_token.toLowerCase());
-        expect(od.shares.cpt.toLowerCase()).toBe(api.shares.principal_token.toLowerCase());
+        expect(od.shares.corkSwapToken.toLowerCase()).toBe(api.shares.shares_token.toLowerCase());
+        expect(od.shares.corkPrincipalToken.toLowerCase()).toBe(api.shares.principal_token.toLowerCase());
       }
     }
   }, 90_000);

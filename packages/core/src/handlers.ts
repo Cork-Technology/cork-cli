@@ -2,7 +2,7 @@
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
-import { isAddressEqual, keccak256, stringToHex } from "viem";
+import { hashTypedData, isAddressEqual, keccak256, stringToHex } from "viem";
 import {
   Address,
   buildTeaching,
@@ -40,7 +40,7 @@ import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/re
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
 import { accessControlAbi, applyBandsLocal, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, predictShares, type ConstraintBands, type PermitParams, type PredictSharesResult } from "./market-registry.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
@@ -70,8 +70,6 @@ import {
   type VenueList,
   type VenuePostResult,
 } from "./datasources/venue.ts";
-import { lopDomain } from "./orders.ts";
-import { hashTypedData } from "viem";
 
 export class ToolInputError extends Error {
   constructor(
@@ -296,7 +294,7 @@ function buildPhoenixCall(
     case "unwind-exercise-other":
       return corkActionCall(adapter, "safeUnwindExerciseOther", { poolId: p.poolId, referenceAssetsOut: b(p.referenceAssetsOut), receiver: p.receiver, minCstSharesOut: b(p.minCstSharesOut), maxCollateralAssetsIn: b(p.maxCollateralAssetsIn), deadline });
     default:
-      throw new Error(`phoenix action not buildable in phase 1: ${(p as { type: string }).type}`);
+      throw new Error(`unknown phoenix action type: ${(p as { type: string }).type}`);
   }
 }
 
@@ -763,7 +761,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
   // protocol-config is pure config (no RPC needed).
   if (input.resource === "protocol-config") {
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
-    return envelope({ state: "ok", data: { chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", warnings: depWarn, ctx });
+    return envelope({ state: "ok", data: { resource: input.resource, chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", warnings: depWarn, ctx });
   }
 
   const chainResources = new Set(["market", "account-state", "pool-whitelist"]);
@@ -791,6 +789,8 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
       return envelope({
         state: "ok",
         data: {
+          resource: input.resource,
+          chainId,
           poolId: s.poolId,
           market: s.market,
           constraintState: s.constraintState,
@@ -800,8 +800,8 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
           unwindSwapFeePercentage: s.unwindSwapFeePercentage,
           collateralDecimals: s.collateralDecimals,
           referenceDecimals: s.referenceDecimals,
-          cstToken: s.cstToken,
-          cptToken: s.cptToken,
+          corkSwapToken: s.cstToken, // cST
+          corkPrincipalToken: s.cptToken, // cPT
           issuedAt: s.issuedAt,
         },
         chainId,
@@ -819,7 +819,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
       const blockOpt = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
       const bal = (token: `0x${string}`) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });
-      const [collateral, reference, cst, cpt] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
+      const [collateral, reference, corkSwapToken, corkPrincipalToken] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
       // Allowances that gate the funding UX [funding.ts]: erc20-approve mode pulls
       // initiator→ADAPTER (erc20TransferFrom on the adapter), permit2 mode needs the token
       // approved to the canonical Permit2. Only readable where the adapter is configured.
@@ -830,8 +830,8 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
         const roles = [
           ["collateral", tokens.collateral],
           ["reference", tokens.reference],
-          ["cst", tokens.cst],
-          ["cpt", tokens.cpt],
+          ["corkSwapToken", tokens.cst], // cST
+          ["corkPrincipalToken", tokens.cpt], // cPT
         ] as const;
         const entries = await Promise.all(
           roles.map(async ([role, token]) => {
@@ -843,7 +843,8 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
       } else {
         w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
       }
-      return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, balances: { collateral, reference, cst, cpt }, tokens, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+      const tokensOut = { collateral: tokens.collateral, reference: tokens.reference, corkSwapToken: tokens.cst, corkPrincipalToken: tokens.cpt, expiryTimestamp: tokens.expiryTimestamp };
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, tokens: tokensOut, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: w, ...rpc, ctx });
     }
 
     // pool-whitelist (wlm presence checked above)
@@ -855,7 +856,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
       args: [filters.poolId, filters.account],
       ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
     });
-    return envelope({ state: "ok", data: { poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+    return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
   } catch (err) {
     return chainReadFailed(chainId, err, w, ctx, resolved);
   }
@@ -891,10 +892,10 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
       if (filters.address) {
         const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address, BigInt(chainId)] });
         if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a registry-approved asset on chainId ${chainId} — list them with cork_query resource:"registry-assets" (no filters)`, ctx);
-        return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
-      return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     if (input.resource === "registry-recipes") {
       if (filters.mode !== undefined) {
@@ -903,10 +904,10 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
           const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
           return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' is not in the registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
         }
-        return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
-      return envelope({ state: "ok", data: { resource: input.resource, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     // registry-oracle: lookupWrapper, and when absent a SIMULATED deploy tells the truth about
     // deployability (the same probe the read API batches) — a non-deployable pair is a normal
@@ -914,16 +915,20 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
     if (!filters.collateralAsset || !filters.referenceAsset) {
       return unavailable(chainId, "missing_filter", "registry-oracle requires filters.collateralAsset AND filters.referenceAsset (order matters: collateral first — the reverse pair is a different oracle)", ctx);
     }
+    // The rate-oracle wrapper is surfaced under a single `oracle:{address,deployed,deployable,reason?}`
+    // shape shared with cork_query market-predict + cork_prepare_market, so `oracle.address` is one
+    // reusable path across those tools. `address` is the live wrapper when deployed, the predicted
+    // wrapper when only deployable, and null when the pair can't get an oracle.
     const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset] });
     if (wrapper !== "0x0000000000000000000000000000000000000000") {
-      return envelope({ state: "ok", data: { resource: input.resource, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, deployed: true, deployable: true, wrapper }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: wrapper, deployed: true, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     try {
       const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset] });
-      return envelope({ state: "ok", data: { resource: input.resource, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, deployed: false, deployable: true, predictedWrapper: sim.result, note: "no oracle yet; registry.deploy(ca, ref) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx" }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: sim.result, deployed: false, deployable: true }, note: "no oracle yet; registry.deploy(ca, ref) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx" }, chainId, source: "chain", warnings, ...rpc, ctx });
     } catch (err) {
       const reason = err instanceof Error ? (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0]) : String(err);
-      return envelope({ state: "ok", data: { resource: input.resource, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, deployed: false, deployable: false, reason: reason?.trim(), note: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill for it would revert" }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: null, deployed: false, deployable: false, reason: reason?.trim() }, note: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill for it would revert" }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
   } catch (err) {
     return chainReadFailed(chainId, err, warnings, ctx, resolved);
@@ -942,7 +947,9 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
     return unavailable(chainId, "missing_filter", "market-predict requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.mode (exact case-sensitive recipe mode)", ctx);
   }
   if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
-    throw new ToolInputError("cork_query", [{ path: ["filters", "referenceAsset"], message: "collateralAsset and referenceAsset must differ — a market is a pair of distinct assets" }]);
+    // Well-formed inputs that violate a domain rule → envelope (exit 3), not a throw — same class
+    // as rollover's invalid_order_terms. Only unparseable/format faults throw (exit 2).
+    return unavailable(chainId, "invalid_pair", "collateralAsset and referenceAsset must differ — a market is a pair of distinct assets", ctx);
   }
   const r = await getRegistry(ctx, chainId);
   if (r.gate) return r.gate;
@@ -996,9 +1003,9 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
         resource: input.resource,
         chainId,
         input: inputEcho,
-        oracle: { address: oracle, deployed: true, rate: rate.toString() },
+        oracle: { address: oracle, deployed: true, deployable: true, rate: rate.toString() },
         market: { poolId: derived.poolId, exists: shares.exists, scale: "resolved constraints are ABSOLUTE rates, 1e18 = 1.0", resolved: derived.resolved },
-        shares: shares.cst || shares.cpt ? { cst: shares.cst ?? null, cpt: shares.cpt ?? null, source: shares.status } : null,
+        shares: shares.cst || shares.cpt ? { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } : null,
       },
       chainId,
       source: "chain",
@@ -1032,11 +1039,12 @@ async function handlePrepareMarket(input: { chainId: ChainId; clientRequestId: s
       const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
       const wrapper = await resolved.client.readContract({ ...reg, functionName: "lookupWrapper", args: [a.collateralAsset, a.referenceAsset] });
       if (wrapper !== "0x0000000000000000000000000000000000000000") {
-        status = { alreadyDeployed: true, wrapper };
+        // Same oracle:{address,deployed} shape as cork_query registry-oracle / market-predict.
+        status = { oracle: { address: wrapper, deployed: true } };
         warnings.push({ code: "oracle_already_deployed", message: `this pair's rate oracle already exists at ${wrapper} — the tx is a safe no-op (deploy is idempotent and returns the recorded address)` });
       } else {
         const sim = await resolved.client.simulateContract({ ...reg, functionName: "deploy", args: [a.collateralAsset, a.referenceAsset] });
-        status = { alreadyDeployed: false, predictedWrapper: sim.result };
+        status = { oracle: { address: sim.result, deployed: false } };
       }
     } catch (err) {
       warnings.push({ code: "oracle_not_deployable", message: `the deploy simulation reverted (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — typically an unregistered asset or missing conversion feed; sending this tx would revert. Check cork_query registry-assets / registry-oracle` });
@@ -1153,7 +1161,10 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         enableJitMint: jm.enableJitMint,
       };
       if (jitParams.swapFeePercentage > 5n * 10n ** 18n || jitParams.unwindSwapFeePercentage > 5n * 10n ** 18n) {
-        throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket"], message: "fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation" }]);
+        // Well-formed uint that breaks the protocol's 5% fee cap → domain-rule envelope (exit 3),
+        // not a format throw. (extension+jitMarket mutual-exclusion above stays a throw: that's a
+        // malformed request SHAPE, not a value-domain rule.)
+        return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
       }
       const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
       extension = buildJitExtension(mr.adapter, encodeJitExtraData(jitParams, permits));
@@ -1217,7 +1228,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
             warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1 unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
           }
           if (cst) {
-            jitData = { ...jitData, predictedCst: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
+            jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
             const cstLc = cst.toLowerCase();
             if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
               warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
