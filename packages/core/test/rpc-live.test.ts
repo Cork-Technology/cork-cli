@@ -2,7 +2,9 @@
 // CI stays offline/deterministic. Proves end-to-end: the committed default resolves and answers, and
 // a chain with NO committed default (Base 8453) falls back to a real chainlist public RPC.
 import { describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveRpc, runTool } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
@@ -27,8 +29,20 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
   }, 15_000);
 
   it("persists an on-disk cache", async () => {
-    await resolveRpc(1, undefined);
-    expect(existsSync(process.env.CORK_RPC_CACHE_FILE!)).toBe(true);
+    // Self-contained: point the resolver at a fresh temp cache file (the test previously assumed
+    // the runner exported CORK_RPC_CACHE_FILE, so existsSync(undefined) always read false).
+    const cacheFile = join(tmpdir(), `cork-rpc-cache-${process.pid}-${Date.now()}.json`);
+    const prev = process.env.CORK_RPC_CACHE_FILE;
+    process.env.CORK_RPC_CACHE_FILE = cacheFile;
+    try {
+      rmSync(cacheFile, { force: true });
+      await resolveRpc(1, undefined);
+      expect(existsSync(cacheFile)).toBe(true);
+    } finally {
+      rmSync(cacheFile, { force: true });
+      if (prev === undefined) delete process.env.CORK_RPC_CACHE_FILE;
+      else process.env.CORK_RPC_CACHE_FILE = prev;
+    }
   }, 30_000);
 });
 

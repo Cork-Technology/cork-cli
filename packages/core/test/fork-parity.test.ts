@@ -168,8 +168,9 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
 
     const acct = await runTool("cork_query", { resource: "account-state", pageSize: 25, format: "concise", filters: { poolId: POOL, account: DEV } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
     expect(acct.state).toBe("ok");
-    const bals = (acct.data as { balances: { cst: string; cpt: string } }).balances;
-    expect(BigInt(bals.cst) >= 0n && BigInt(bals.cpt) >= 0n).toBe(true); // DEV holds shares from setup
+    // Field names follow the corkSwapToken/corkPrincipalToken convention (naming pass 2026-07-24).
+    const bals = (acct.data as { balances: { corkSwapToken: string; corkPrincipalToken: string } }).balances;
+    expect(BigInt(bals.corkSwapToken) >= 0n && BigInt(bals.corkPrincipalToken) >= 0n).toBe(true); // DEV holds shares from setup
 
     const wl = await runTool("cork_query", { resource: "pool-whitelist", pageSize: 25, format: "concise", filters: { poolId: POOL, account: DEV } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
     expect(wl.state).toBe("ok");
