@@ -38,13 +38,17 @@ export const MarketId = Bytes32.describe(
 const U256_MAX = (1n << 256n) - 1n;
 const U64_MAX = (1n << 64n) - 1n;
 
+// NB: zod 4 still runs refinements when an earlier check (the digits regex) failed, so every
+// BigInt(v) refine below re-guards on the regex — otherwise a non-digit input would THROW
+// SyntaxError inside safeParse (an internal error) instead of returning teachable issues.
+
 /** Unsigned integer as a decimal string (bigint on the wire; wire-typed boundary). Bounded to
  *  uint256 — anything larger would explode deep in ABI encoding as an internal error instead of
  *  failing here as teachable invalid input. */
 export const UintStr = z
   .string()
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
-  .refine((v) => BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
+  .refine((v) => !/^[0-9]+$/.test(v) || BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
   .describe("unsigned integer, decimal string")
   .meta({ id: "UintStr" });
 
@@ -55,7 +59,7 @@ export const UintStr = z
 export const TokenAmount = z
   .string()
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
-  .refine((v) => BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
+  .refine((v) => !/^[0-9]+$/.test(v) || BigInt(v) <= U256_MAX, "exceeds uint256 (max 2^256-1)")
   .describe(
     "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
   )
@@ -66,17 +70,27 @@ export const TokenAmount = z
 export const Uint64Str = z
   .string()
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
-  .refine((v) => BigInt(v) <= U64_MAX, "exceeds uint64 (max 18446744073709551615) — this OrderData field is a uint64 on the wire")
+  .refine((v) => !/^[0-9]+$/.test(v) || BigInt(v) <= U64_MAX, "exceeds uint64 (max 18446744073709551615) — this OrderData field is a uint64 on the wire")
   .describe("unsigned 64-bit integer, decimal string")
   .meta({ id: "Uint64Str" });
 
+/** Latest plausible unix-seconds timestamp accepted on any absolute-time field: 4102444800 =
+ *  2100-01-01T00:00:00Z. Anything above is near-certainly a MILLISECOND value pasted where
+ *  seconds belong (Date.now() is ms) — the measured top agent unit-mistake class — and a
+ *  wrapped/immortal deadline is the one failure mode nothing downstream catches. */
+export const UNIX_SECONDS_MAX = 4102444800n;
+
 /** Absolute unix timestamp in seconds — uint64 wire shape with the time semantics taught inline
- *  (deadlines/expiries here are wall-clock absolute, never relative durations). */
+ *  (deadlines/expiries here are wall-clock absolute, never relative durations), plus a
+ *  plausibility bound that rejects millisecond-scale values with teaching. */
 export const UnixSeconds = z
   .string()
   .regex(/^[0-9]+$/, "expected non-negative decimal integer string")
-  .refine((v) => BigInt(v) <= U64_MAX, "exceeds uint64 — expected an absolute unix timestamp in seconds")
-  .describe("absolute unix timestamp in SECONDS (not ms), decimal string — a wall-clock moment, not a relative duration")
+  .refine(
+    (v) => !/^[0-9]+$/.test(v) || BigInt(v) <= UNIX_SECONDS_MAX,
+    "timestamp is beyond year 2100 — this looks like MILLISECONDS (JavaScript Date.now() is ms); divide by 1000: unix SECONDS are expected on every absolute-time field",
+  )
+  .describe("absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration")
   .meta({ id: "UnixSeconds" });
 
 export const ChainId = z

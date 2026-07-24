@@ -68,6 +68,30 @@ interface ZodIssueLike {
   options?: ReadonlyArray<unknown>;
 }
 
+/** The discriminator that selects a tool VARIANT, read defensively from any input shape:
+ *  action.type (prepare/submit), params.kind (compute), resource (query), kind (decode),
+ *  subject.kind (track). */
+function variantOf(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  const sub = (v: unknown, k: string): string | undefined =>
+    v && typeof v === "object" && typeof (v as Record<string, unknown>)[k] === "string" ? ((v as Record<string, unknown>)[k] as string) : undefined;
+  return sub(o.action, "type") ?? sub(o.params, "kind") ?? (typeof o.resource === "string" ? o.resource : undefined) ?? sub(o.subject, "kind") ?? (typeof o.kind === "string" ? o.kind : undefined);
+}
+
+/** Corrected example for THIS failing variant when one exists — copying the tool's first example
+ *  regardless of variant silently changed the caller's action/resource, teaching the wrong move. */
+function pickExample(tool: ToolName, rawInput: unknown): ToolExample | undefined {
+  const examples = TOOL_EXAMPLES[tool];
+  if (!examples?.length) return undefined;
+  const want = variantOf(rawInput);
+  if (want !== undefined) {
+    const match = examples.find((e) => variantOf(e.input) === want);
+    if (match) return match;
+  }
+  return examples[0];
+}
+
 /** Build the teaching payload from raw zod issues (defensive: tolerates any issue shape). */
 export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unknown): Teaching {
   const list = Array.isArray(rawIssues) ? (rawIssues as ZodIssueLike[]) : [];
@@ -94,7 +118,7 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
   });
 
   const paths = [...new Set(issues.map((i) => i.path).filter(Boolean))];
-  const example = TOOL_EXAMPLES[tool]?.[0];
+  const example = pickExample(tool, rawInput);
   return {
     summary: `invalid input for ${tool}${paths.length ? ` (fields: ${paths.join(", ")})` : ""}`,
     issues,

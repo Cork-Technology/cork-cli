@@ -240,6 +240,24 @@ export function reportEndpointFailure(chainId: number, url: string, cfg: RpcConf
   deps.saveState(st);
 }
 
+/** An explicitly configured RPC that answers eth_chainId with the WRONG chain (F21): every read
+ *  through it would be wrong-chain data stamped with the requested chainId. */
+export class RpcChainMismatchError extends Error {
+  constructor(url: string, expected: number, got: number) {
+    super(`explicit RPC endpoint (${hostOf(url)}) reports chainId ${got}, but chainId ${expected} was requested — every read through it would be wrong-chain data wearing the requested chain's label. Fix CORK_RPC_URL/--rpc-url, or pass the chainId that endpoint actually serves`);
+    this.name = "RpcChainMismatchError";
+  }
+}
+
+// eth_chainId verification results for explicit endpoints, memoized per process (one probe per
+// endpoint, not per call). The default/chainlist paths already verify inside their probes.
+const explicitVerified = new Map<string, number>();
+
+/** Test hook: forget explicit-endpoint verification results. */
+export function resetExplicitVerification(): void {
+  explicitVerified.clear();
+}
+
 /**
  * Resolve a working PublicClient for `chainId`. Returns null when no RPC can be resolved
  * (chain not eligible for fallback and no default/explicit URL, or every endpoint is down).
@@ -250,8 +268,22 @@ export async function resolveRpc(
   cfg: RpcConfig = DEFAULT_CONFIG,
   deps: RpcDeps = realDeps(),
 ): Promise<ResolvedRpc | null> {
-  // 1. explicit URL wins verbatim — no probing, no fallback.
-  if (explicitUrl) return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
+  // 1. explicit URL wins — no fallback, but its chainId IS verified (F21): the hand-configured
+  //    path was the only one skipping the check every automatic path performs. An endpoint that
+  //    doesn't answer the probe is still used verbatim (your config, your call — reads will fail
+  //    loudly on their own); an endpoint that answers with the WRONG chain is refused.
+  if (explicitUrl) {
+    let known = explicitVerified.get(explicitUrl);
+    if (known === undefined) {
+      const r = await deps.probe(explicitUrl, cfg.probeTimeoutMs).catch(() => null);
+      if (r?.ok && r.chainId !== undefined) {
+        explicitVerified.set(explicitUrl, r.chainId);
+        known = r.chainId;
+      }
+    }
+    if (known !== undefined && known !== chainId) throw new RpcChainMismatchError(explicitUrl, chainId, known);
+    return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
+  }
 
   const st = deps.loadState();
   const now = deps.now();

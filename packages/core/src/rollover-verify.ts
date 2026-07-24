@@ -55,13 +55,16 @@ const CONSISTENT: Record<string, ChainOrderStatus[]> = {
   CLOSING: ["Closing"],
 };
 
-export function chainStatusName(v: number | bigint): ChainOrderStatus {
-  return ORDER_STATUS_NAMES[Number(v)] ?? "None";
+/** Enum value → name. An out-of-range value (a NEWER contract's enum, or a bad read) is reported
+ *  as `unknown(n)` — mapping it to "None" could fabricate a status_mismatch (venue OPENED vs
+ *  fake "None") or mask one (venue PENDING matching fake "None"). */
+export function chainStatusName(v: number | bigint): ChainOrderStatus | `unknown(${number})` {
+  return ORDER_STATUS_NAMES[Number(v)] ?? `unknown(${Number(v)})`;
 }
 
-export function venueChainConsistent(venueStatus: string, chain: ChainOrderStatus): boolean {
+export function venueChainConsistent(venueStatus: string, chain: string): boolean {
   const allowed = CONSISTENT[venueStatus.toUpperCase()];
-  return allowed ? allowed.includes(chain) : false;
+  return allowed ? (allowed as string[]).includes(chain) : false;
 }
 
 // ── Logs endpoint resolution ─────────────────────────────────────────────────
@@ -145,7 +148,8 @@ export interface LabeledLog {
   event: string;
   address: string;
   txHash: string;
-  blockNumber: number;
+  /** Decimal string — chain integers ride the wire as strings everywhere else (F10). */
+  blockNumber: string;
 }
 
 export function labelLogs(logs: RawLog[]): LabeledLog[] {
@@ -153,7 +157,7 @@ export function labelLogs(logs: RawLog[]): LabeledLog[] {
     event: SETTLER_EVENTS[l.topics[0] ?? ""] ?? `unknown (topic0 ${(l.topics[0] ?? "0x").slice(0, 10)}…)`,
     address: l.address,
     txHash: l.transactionHash,
-    blockNumber: Number(l.blockNumber),
+    blockNumber: BigInt(l.blockNumber).toString(),
   }));
 }
 

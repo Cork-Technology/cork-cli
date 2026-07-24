@@ -194,3 +194,23 @@ export const whitelistManagerAbi = [
 export const poolShareAbi = [
   { type: "function", name: "issuedAt", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ] as const;
+
+/** Uniswap Permit2 AllowanceTransfer view — the INTERNAL (user, token, spender) allowance the
+ *  permit2 funding leg actually consumes (distinct from the ERC-20 approval TO Permit2). */
+export const permit2AllowanceAbi = [
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "user", type: "address" },
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+      { name: "nonce", type: "uint48" },
+    ],
+  },
+] as const;

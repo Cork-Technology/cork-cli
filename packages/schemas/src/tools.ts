@@ -24,7 +24,7 @@ export const Provenance = z.object({
   block: UintStr.optional(),
   fetchedAt: z.string(),
   digest: Bytes32.optional(),
-  staleness: z.number().optional(),
+  staleness: z.number().int().nonnegative().optional().describe("age of the served data in SECONDS (reserved; currently never emitted)"),
   /** Which RPC endpoint served a chain read (format:"full" only): resolution tier + host. */
   rpc: z.object({ source: z.enum(["explicit", "default", "chainlist"]), host: z.string() }).optional(),
 });
@@ -80,6 +80,13 @@ export const QueryInput = z.object({
 });
 export type QueryInput = z.infer<typeof QueryInput>;
 
+// The rollover premium floor is a RATE, not an amount — describing it as a plain TokenAmount was
+// a measured footgun (F9): with a 6-decimals premium asset the correct value is 1e12x smaller
+// than the TokenAmount examples suggest. One shared $defs entry teaches this at every use site.
+const PremiumPerShareRate = TokenAmount.describe(
+  "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
+).meta({ id: "PremiumPerShareRate" });
+
 // ────────────────────────────────────────────────────────────────────────────
 // 2. cork_compute (R2) — closed per-kind params
 // ────────────────────────────────────────────────────────────────────────────
@@ -107,7 +114,7 @@ export const ComputeParams = z.discriminatedUnion("kind", [
   z.strictObject({
       kind: z.literal("rollover-premium-floor"),
       dstCstProduced: TokenAmount,
-      minPremiumPerShare: TokenAmount,
+      minPremiumPerShare: PremiumPerShareRate,
     }).describe("minimum premium a rollover order is guaranteed to earn — pure math, no RPC needed"),
   z.strictObject({
       kind: z.literal("impairment-floor"),
@@ -265,7 +272,7 @@ export type PhoenixAction = z.infer<typeof PhoenixAction>;
 
 export const PreparePhoenixInput = z.object({
   chainId: ChainId,
-  account: Address,
+  account: Address.describe("the initiating account (reserved: recorded but not yet consumed by bundle building — funding legs pull from Bundler3's initiator at execution time regardless)"),
   clientRequestId: ClientRequestId,
   fundingMode: z
     .enum(["permit2", "erc20-approve", "pre-funded"])
@@ -326,8 +333,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
     takerAsset: Address,
     makingAmount: TokenAmount,
     takingAmount: TokenAmount,
-    expirySeconds: z.number().int().min(1).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry)"),
-    allowsPartialFills: z.boolean().default(true),
+    expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"),
+    allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. Post several smaller orders to serve multiple takers"),
     usePermit2: z.boolean().default(false),
     extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket, which BUILDS the extension"),
     jitMarket: z
@@ -355,8 +362,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]"),
     listing: z.strictObject({
       side: z.enum(["BUY", "SELL"]),
-      premium: z.number().describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction"),
-      expiry: z.number().int().nonnegative().describe("absolute unix seconds; 0 = no expiry"),
+      premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000"),
+      expiry: z.number().int().nonnegative().max(4_102_444_800).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
       nonce: UintStr,
       allowsPartialFills: z.boolean(),
       quoteRef: QuoteRef.optional().describe("the RFQ answer option this order executes, if any"),
@@ -380,7 +387,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     dstCstToken: Address,
     premiumToken: Address,
     orderSize: TokenAmount,
-    minPremiumPerShare: TokenAmount,
+    minPremiumPerShare: PremiumPerShareRate,
     openDeadline: UnixSeconds,
     fillDeadline: UnixSeconds,
     minCaReceived: TokenAmount.optional(),
@@ -489,7 +496,7 @@ const RolloverOrderWire = z.strictObject({
   fillDeadline: UnixSeconds,
   orderSalt: Uint64Str,
   orderSize: TokenAmount,
-  minPremiumPerShare: TokenAmount,
+  minPremiumPerShare: PremiumPerShareRate,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
   premiumPaymentMode: z.union([z.literal(0), z.literal(1)]),
@@ -527,8 +534,8 @@ export const SubmitAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]"),
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
-    premium: z.number().describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires"),
-    expiry: z.number().int().nonnegative().describe("absolute unix seconds; 0 = no expiry"),
+    premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected"),
+    expiry: z.number().int().nonnegative().max(4_102_444_800).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
     nonce: UintStr,
     allowsPartialFills: z.boolean(),
     makerAccountType: z.enum(["EOA", "ERC1271"]).default("EOA"),
@@ -545,12 +552,12 @@ export const SubmitAction = z.discriminatedUnion("type", [
     modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1),
     packageIds: z.array(z.string()).min(1).max(8),
     expiryWindow: z.strictObject({
-      notBefore: z.number().int().describe("earliest acceptable pool expiry, absolute unix seconds"),
-      notAfter: z.number().int().describe("latest acceptable pool expiry, absolute unix seconds"),
+      notBefore: z.number().int().nonnegative().max(4_102_444_800).describe("earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"),
+      notAfter: z.number().int().nonnegative().max(4_102_444_800).describe("latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"),
     }),
     marketTemplate: z.record(z.string(), z.unknown()).optional(),
     notionalAssets: TokenAmount,
-    validUntil: z.number().int().describe("RFQ validity cutoff, absolute unix seconds"),
+    validUntil: z.number().int().nonnegative().max(4_102_444_800).describe("RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"),
     signature: Hex,
   }).describe("open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"),
   A("rfq-answer", {

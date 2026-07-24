@@ -4,7 +4,7 @@
     "description": "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
     "descriptionTokensApprox": 127,
     "inputSchemaSha256": "f472dc8d3c5fc2bc95189629f68b97c3d97724fdd3db47885354ee9fbadb0908",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: read state",
       "readOnlyHint": true,
@@ -16,8 +16,8 @@
     "name": "cork_compute",
     "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building. Example — How much cST + reference does 1 sUSDe out cost right now?: {\"params\":{\"kind\":\"cst-swap-rate\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsOut\":\"1000000000000000000\"}}",
     "descriptionTokensApprox": 105,
-    "inputSchemaSha256": "e3bbfa8c19563759f5f2f776ecf049f90347a8ca0404e6b85e31b14d60965c23",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "inputSchemaSha256": "28ffaa162ff0ffde90583ec355f16b790b05428f6df67935e9e02fdd7b576eee",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: deterministic math",
       "readOnlyHint": true,
@@ -29,7 +29,7 @@
     "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
     "descriptionTokensApprox": 327,
     "inputSchemaSha256": "c58011d28df567806546afde60ac7c57ffe796cb1ff704711dd50477333603c5",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: decode bytes",
       "readOnlyHint": true,
@@ -41,7 +41,7 @@
     "description": "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs; search → keyword to exact tool+variant+filled template. Progressive disclosure [C13]. Example — Find the right tool/variant for 'unwind': {\"search\":\"unwind\"}",
     "descriptionTokensApprox": 66,
     "inputSchemaSha256": "c02e17d1a374481ca28f5e67bece767701f6793d7449cf3af9c041d75380f31c",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: manual & maturity map",
       "readOnlyHint": true,
@@ -52,8 +52,8 @@
     "name": "cork_prepare_phoenix",
     "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
     "descriptionTokensApprox": 222,
-    "inputSchemaSha256": "edc921f4b33ca775cb2e308b500e639be6f10abc96fa7977931f832a2e392859",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "inputSchemaSha256": "720aaa23969d9a08a8458e3478a6f0e8d043cc9cd08e4553f38c928c46c0f640",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: build unsigned Phoenix bundle",
       "readOnlyHint": true,
@@ -64,8 +64,8 @@
     "name": "cork_prepare_orders",
     "description": "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit. Example — Signable maker order: sell 1 sUSDe for 1 vbUSDC: {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-order-0001\",\"action\":{\"type\":\"maker-order\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"side\":\"SELL\",\"makerAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"takerAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"makingAmount\":\"1000000000000000000\",\"takingAmount\":\"1000000\",\"expirySeconds\":3600}}",
     "descriptionTokensApprox": 172,
-    "inputSchemaSha256": "23488a1dad0de812ffd0ea54aa6de01c2dae84ef2751fb7a48c94c52efc43c74",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "inputSchemaSha256": "4d908eac7f254d3aa2e26b933c8db3571b1cfd81dad1be869706bb6040759ba7",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: build signable order",
       "readOnlyHint": true,
@@ -77,7 +77,7 @@
     "description": "Build an unsigned market-infrastructure tx. deploy-wrapper = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-wrapper\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc\"}}",
     "descriptionTokensApprox": 170,
     "inputSchemaSha256": "ada406c9e90598bab952151429beb4036a8e248a13443e62c6d8f41b039da5bf",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: build market-infrastructure tx",
       "readOnlyHint": true,
@@ -89,7 +89,7 @@
     "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7]. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
     "descriptionTokensApprox": 78,
     "inputSchemaSha256": "6c3c961a53dff7b6d9b618c2eb40dd1b7d8485522c66cd50d27708fab13c8bb5",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: verify & reconcile",
       "readOnlyHint": true,
@@ -98,10 +98,10 @@
   },
   {
     "name": "cork_submit",
-    "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer. Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xc0ffee0000000000000000000000000000000001\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x8f3b00000000000000000000000000000000000000000000000000000000001c\"}}",
-    "descriptionTokensApprox": 496,
-    "inputSchemaSha256": "f5da3170d47f381252ed260ae44b5797aa89efb7193e11392e26e60a71bec490",
-    "outputSchemaSha256": "3acc574fd4ce0aa95a8229d40e741df2221fff780ceda24cc99f11710bf93ee8",
+    "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer. Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x97ccd3eb8faa84248754800ef050b1ee4ae6f2f073df6f5cf2b28c9bf6478e052af96f77cd1291a576bcdb77ba3bd1df363f4fc4e55624b353b1d99c34e795ea1b\"}}",
+    "descriptionTokensApprox": 513,
+    "inputSchemaSha256": "e411e756392f1879972819449bc13ef21d998f430a96700e7e5594d915b6fddf",
+    "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: relay signed payload to venue",
       "readOnlyHint": false,

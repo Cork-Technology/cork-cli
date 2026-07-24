@@ -2,7 +2,7 @@
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
 // `unavailable` with a reason rather than a fabricated result [K1/K3].
-import { hashTypedData, isAddressEqual, keccak256, stringToHex } from "viem";
+import { hashTypedData, isAddressEqual, keccak256, recoverAddress, stringToHex } from "viem";
 import {
   Address,
   buildTeaching,
@@ -26,6 +26,7 @@ import {
   REGISTRY,
   SCHEMA_VERSION,
   toolByName,
+  UnixSeconds,
   type PhoenixAction,
 } from "@cork/schemas";
 import { WAD, mulDiv } from "./math/fixed.ts";
@@ -37,8 +38,8 @@ import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
-import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
-import { erc20Abi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
+import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, RpcChainMismatchError, type ResolvedRpc } from "./chain/rpc.ts";
+import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
 import { accessControlAbi, applyBandsLocal, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, predictShares, type ConstraintBands, type PermitParams, type PredictSharesResult } from "./market-registry.ts";
@@ -114,9 +115,13 @@ function venueDepsOf(ctx: HandlerContext): VenueDeps {
   return { ...(ctx.venueFetch ? { fetch: ctx.venueFetch } : {}), ...(ctx.venueUrl ? { baseUrl: ctx.venueUrl } : {}) };
 }
 
-/** Map a venue read failure to an honest envelope (transport vs HTTP-rejection distinguished). */
+/** Map a venue read failure to an honest envelope (transport vs HTTP-rejection distinguished).
+ *  5xx is a SERVER fault (likely transient — retry) and must not read as a permanent rejection. */
 function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext): Envelope {
   if (err instanceof VenueHttpError) {
+    if (err.status >= 500) {
+      return unavailable(chainId, "venue_unreachable", `venue server error HTTP ${err.status}: ${err.message} — likely transient; retry (or check CORK_VENUE_URL)`, ctx);
+    }
     return unavailable(chainId, "venue_rejected", `venue returned HTTP ${err.status}: ${err.message}`, ctx);
   }
   if (err instanceof VenueUnreachable) {
@@ -125,9 +130,17 @@ function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext): Envel
   throw err;
 }
 
-/** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver). */
+/** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver).
+ *  A wrong-chain EXPLICIT endpoint (F21) surfaces as teachable invalid input, not a raw throw. */
 async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<ResolvedRpc | null> {
-  return (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
+  try {
+    return await (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
+  } catch (err) {
+    if (err instanceof RpcChainMismatchError) {
+      throw new ToolInputError("rpc-resolution", [{ path: ["rpcUrl"], message: err.message }]);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -182,6 +195,26 @@ function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ code: st
   });
 }
 
+/**
+ * Map a LOCAL computation failure (math/domain/encoding throw) to its own honest envelope [C11].
+ * Never routed through chainReadFailed: a local port/domain throw relabeled as "chain read
+ * failed — the pool probably doesn't exist" sends the caller chasing the wrong cause.
+ */
+function localComputeFailed(chainId: ChainId, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
+  const cause = err instanceof Error ? err.message.split("\n")[0]! : String(err);
+  return envelope({
+    state: "unavailable",
+    data: null,
+    chainId,
+    source: "chain",
+    warnings: [
+      { code: "invalid_state", message: `local computation failed (NOT a chain/RPC fault — the on-chain state or derived values violate a domain rule this port enforces): ${cause}` },
+      ...extra,
+    ],
+    ctx,
+  });
+}
+
 /** Recursively convert bigint → decimal string so envelopes are JSON-safe. */
 export function jsonSafe(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
@@ -194,6 +227,11 @@ export function jsonSafe(v: unknown): unknown {
 
 function nowIso(ctx: HandlerContext): string {
   const secs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+  // Guard the Number() conversion: an absurd caller-supplied clock would otherwise produce an
+  // Invalid Date whose toISOString() throws deep inside envelope construction.
+  if (secs < 0n || secs > 253402300799n) {
+    throw new Error(`ctx.nowSeconds ${secs} is outside the representable range (0..253402300799 unix SECONDS — is this a millisecond value?)`);
+  }
   return new Date(Number(secs) * 1000).toISOString();
 }
 
@@ -318,22 +356,53 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
     const rpc = rpcProvenance(input.format, resolved);
     const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
     const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
+    if (input.at?.timestamp !== undefined) {
+      // Accepted-but-reserved field (F12): validated, then ignored — say so instead of letting a
+      // caller believe their replay was timestamp-pinned.
+      w.push({ code: "reserved_field_ignored", message: "at.timestamp is accepted but NOT honored in this iteration — results are anchored to the block/clock; use at.block to pin chain reads" });
+    }
+    // [C11] Only the RPC read lives in the chain try/catch; the local math below produces its own
+    // envelope on a domain violation instead of masquerading as a chain failure.
+    let s: Awaited<ReturnType<typeof readPoolState>>;
     try {
-      const s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
+      s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
+    } catch (err) {
+      return chainReadFailed(chainId, err, w, ctx, resolved);
+    }
+    try {
       const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
+      const decimals = { collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals };
 
       if (p.kind === "cst-swap-rate") {
         const r = previewSwap(BigInt(p.collateralAssetsOut), { swapRate, swapFeePercentage: s.swapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals });
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+        // Unit disclosure (F7): this response mixes three decimal systems; label every field so
+        // an integration built on an 18/18 pool doesn't break by 10^12 on a 6-dec asset.
+        const scales = {
+          swapRate: "1e18 = 1.0 (WAD)",
+          cstSharesIn: "cST shares, always 18-decimals",
+          referenceAssetsIn: `native decimals of the reference asset (${s.referenceDecimals})`,
+          fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
+        };
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
       }
       if (p.kind === "unwind-rate") {
         const r = previewUnwindSwap(BigInt(p.collateralAssetsIn), { swapRate, unwindSwapFeePercentage: s.unwindSwapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals, issuedAt: s.issuedAt, expiryTimestamp: s.market.expiryTimestamp, nowTs: s.blockTimestamp });
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+        const scales = {
+          swapRate: "1e18 = 1.0 (WAD)",
+          cstSharesOut: "cST shares, always 18-decimals",
+          referenceAssetsOut: `native decimals of the reference asset (${s.referenceDecimals})`,
+          fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
+        };
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
       }
       const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
-      return envelope({ state: "ok", data: { kind: p.kind, ...floor }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+      const scales = { worstRate: "1e18 = 1.0 (WAD)", maxReferencePerCst: "reference WAD per 1e18 cST (null = unbounded: impairment can be total)", availableAtEval: "WAD descent budget" };
+      if (floor.maxReferencePerCst === null) {
+        w.push({ code: "invalid_state", message: "the worst-case rate collapses to ZERO over this horizon (rateMin is 0) — impairment can be total and the reference cost per cST is unbounded" });
+      }
+      return envelope({ state: "ok", data: { kind: p.kind, ...floor, scales }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
     } catch (err) {
-      return chainReadFailed(chainId, err, w, ctx, resolved);
+      return localComputeFailed(chainId, err, w, ctx);
     }
   }
 
@@ -366,7 +435,14 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
         if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — a JIT fill would revert RateUnavailable and the bands cannot be meaningfully resolved", ctx);
       }
       const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
-      const local = applyBandsLocal(bands, rate);
+      // [C11] the local band-resolution throw (e.g. a rateMin band above 100%) is a domain
+      // violation, not a chain fault — give it its own envelope.
+      let local: ReturnType<typeof applyBandsLocal>;
+      try {
+        local = applyBandsLocal(bands, rate);
+      } catch (err) {
+        return localComputeFailed(chainId, err, warnings, ctx);
+      }
       // Bit-parity self-check against the chain's own applyBands [K7-style: never serve math the
       // contract would disagree with].
       const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [p.mode, rate] });
@@ -505,11 +581,14 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
     }
   }
   if (raw?.mode !== undefined) out.mode = String(raw.mode);
-  // market-predict: expiry as a unix-seconds decimal string (part of the derived market identity).
+  // market-predict: expiry as a unix-seconds decimal string (part of the derived market
+  // identity) — routed through the shared UnixSeconds primitive so the ms-detector and
+  // plausibility bound ride this field too (T6a), instead of a bare digit regex that accepted
+  // year-58-billion values.
   if (raw?.expiry !== undefined) {
-    const v = String(raw.expiry);
-    if (!/^\d+$/.test(v)) fail("expiry", "expected a unix timestamp in seconds (a non-negative integer, decimal string)");
-    else out.expiry = BigInt(v);
+    const r = UnixSeconds.safeParse(String(raw.expiry));
+    if (!r.success) fail("expiry", r.error.issues[0]?.message ?? "expected a unix timestamp in SECONDS (decimal string)");
+    else out.expiry = BigInt(r.data);
   }
   // RFQ feed (venue ids are opaque but always rfq_-prefixed — same guard the venue itself applies).
   if (raw?.rfqId !== undefined) {
@@ -558,6 +637,14 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
   try {
     let items: Array<Record<string, unknown>>;
     let archiveHeight: number | undefined;
+    const hsWarnings: Array<{ code: string; message: string }> = [];
+    // Honest completeness (F15): a HyperSync scan that hits the page bound is partial EVIDENCE,
+    // never presented as the complete set — mirroring the venue path's pagination discipline.
+    const note = (r: { complete?: boolean; nextBlock?: number }) => {
+      if (r.complete === false) {
+        hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${r.nextBlock !== undefined ? ` (stopped at block ${r.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
+      }
+    };
     if (input.resource === "markets") {
       // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
       const cfg = await resolveConfig();
@@ -568,6 +655,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       if (pms.size === 0) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
       const r = await hs.queryLogs({ fromBlock: 0, address: [...pms], topics: [[MARKET_CREATED_TOPIC]] });
       archiveHeight = r.archiveHeight;
+      note(r);
       items = decodeMarketRows(r.logs);
       if (filters.poolId) items = items.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase());
     } else if (input.resource === "fills") {
@@ -575,8 +663,15 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
       const r = await hs.queryLogs({ fromBlock: 0, address: [lop], topics: [[LOP_FILLED_TOPIC]] });
       archiveHeight = r.archiveHeight;
+      note(r);
       items = decodeLopFillRows(r.logs);
       if (filters.orderHash) items = items.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase());
+      else {
+        // OrderFilled's orderHash is NOT an indexed topic, so this scan sees the ENTIRE 1inch
+        // LOP — a very high-volume address. Without an orderHash filter the rows are all of
+        // 1inch's fills, not Cork's; disclose instead of presenting them as Cork activity (F15).
+        hsWarnings.push({ code: "pagination_incomplete", message: "fills in full-decentralized mode scan the whole 1inch LOP (orderHash is not an indexed topic) — rows are NOT Cork-scoped; pass filters.orderHash to isolate one order, or use centralized mode for the Cork-only feed" });
+      }
     } else {
       // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
       const { rollover } = await resolveRollover(chainId);
@@ -586,11 +681,13 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         if (filters.orderDigest) topics.push([filters.orderDigest]);
         const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.exactSettler, rollover.partialSettler], topics });
         archiveHeight = r.archiveHeight;
+        note(r);
         items = decodeRolloverFillRows(r.logs);
         if (filters.filler) items = items.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase());
       } else {
         const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.factory], topics: [[CLONE_DEPLOYED_TOPIC]] });
         archiveHeight = r.archiveHeight;
+        note(r);
         items = decodeCloneRows(r.logs);
         if (filters.account) items = items.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
       }
@@ -607,6 +704,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       chainId,
       source: "chain",
       mode: "full-decentralized",
+      warnings: hsWarnings,
       ctx,
     });
   } catch (err) {
@@ -833,13 +931,32 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
           ["corkSwapToken", tokens.cst], // cST
           ["corkPrincipalToken", tokens.cpt], // cPT
         ] as const;
+        // permit2 funding needs TWO layers: the ERC-20 approval TO Permit2 (`permit2`) AND the
+        // Permit2-INTERNAL (user, token, spender=adapter) allowance with its uint48 expiry
+        // (`permit2Internal`) — reporting only the first let bundles look funded and still
+        // revert on a zero/expired internal allowance (F18). Internal read is best-effort
+        // (null where Permit2 isn't deployed on the chain).
+        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
         const entries = await Promise.all(
           roles.map(async ([role, token]) => {
-            const [toAdapter, toPermit2] = await Promise.all([alw(token, dep.corkAdapter!), alw(token, PERMIT2_ADDRESS)]);
-            return [role, { corkAdapter: toAdapter, permit2: toPermit2 }] as const;
+            const [toAdapter, toPermit2, p2] = await Promise.all([
+              alw(token, dep.corkAdapter!),
+              alw(token, PERMIT2_ADDRESS),
+              client
+                .readContract({ address: PERMIT2_ADDRESS, abi: permit2AllowanceAbi, functionName: "allowance", args: [filters.account!, token, dep.corkAdapter!], ...blockOpt })
+                .catch(() => null),
+            ]);
+            const permit2Internal = Array.isArray(p2) && p2.length >= 2
+              ? { amount: p2[0] as bigint, expiration: Number(p2[1]), expired: Number(p2[1]) !== 0 && BigInt(Number(p2[1])) <= nowSecs }
+              : null;
+            return [role, { corkAdapter: toAdapter, permit2: toPermit2, permit2Internal }] as const;
           }),
         );
-        allowances = { spenders: { corkAdapter: dep.corkAdapter, permit2: PERMIT2_ADDRESS }, byToken: Object.fromEntries(entries) };
+        allowances = {
+          spenders: { corkAdapter: dep.corkAdapter, permit2: PERMIT2_ADDRESS },
+          note: "permit2-mode funding requires BOTH the ERC-20 approval to Permit2 (permit2) AND an unexpired Permit2-internal allowance for spender=corkAdapter (permit2Internal)",
+          byToken: Object.fromEntries(entries),
+        };
       } else {
         w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
       }
@@ -895,6 +1012,9 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} assets but this read returns the first ${page.length} — items are partial evidence` });
+      }
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     if (input.resource === "registry-recipes") {
@@ -907,6 +1027,9 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} recipes but this read returns the first ${page.length} — items (and the modes list) are partial evidence; a mode absent here may still exist` });
+      }
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     // registry-oracle: lookupWrapper, and when absent a SIMULATED deploy tells the truth about
@@ -983,7 +1106,14 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
     if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate (RateUnavailable) — the market cannot be derived", ctx);
     // Resolved bands + pool id, computed locally then parity-checked against on-chain applyBands.
     const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
-    const derived = deriveJitMarket({ params: { collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, mode }, oracle, rate, bands });
+    // [C11] local derivation throws (band domain rules, ABI encoding bounds) get their own
+    // envelope instead of the misleading chain_read_failed guidance.
+    let derived: ReturnType<typeof deriveJitMarket>;
+    try {
+      derived = deriveJitMarket({ params: { collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, mode }, oracle, rate, bands });
+    } catch (err) {
+      return localComputeFailed(chainId, err, warnings, ctx);
+    }
     const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [mode, rate] });
     if (onChain.rateMin !== derived.resolved.rateMin || onChain.rateMax !== derived.resolved.rateMax || onChain.rateChangePerDayMax !== derived.resolved.rateChangePerDayMax || onChain.rateChangeCapacityMax !== derived.resolved.rateChangeCapacityMax) {
       return envelope({ state: "conflict", data: { resource: input.resource, chainId, input: inputEcho, poolId: derived.poolId, local: derived.resolved, onChain }, chainId, source: "chain", warnings: [...warnings, { code: "band_parity_mismatch", message: "the local applyBands port disagreed with the on-chain view — trust the chain; do not use this prediction" }], ...rpc, ctx });
@@ -997,6 +1127,14 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
     const extra: Array<{ code: string; message: string }> = [];
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1 unsupported, or the adapter lacks POOL_CREATOR_ROLE / config missing) — the pool id, oracle, and bands above are still valid" });
     if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so pool id and cST/cPT are derived from TODAY's oracle rate and drift stepwise until the pool is created; once it exists they are pinned (INTEGRATOR.md)" });
+    // T6: a prediction can be internally consistent yet describe an UNCREATABLE market — say so.
+    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    if (!shares.exists && expiry <= nowSecs) {
+      extra.push({ code: "would_revert", message: `expiry ${expiry} is not in the future (now ${nowSecs}) — createNewPool requires a future expiry, so a JIT fill for this market would revert; the identity below is for a market that cannot be created` });
+    }
+    if (derived.resolved.rateMin <= 0n || derived.resolved.rateMin >= derived.resolved.rateMax) {
+      extra.push({ code: "would_revert", message: `the resolved constraints violate createNewPool's requirements (needs 0 < rateMin < rateMax; resolved rateMin=${derived.resolved.rateMin}, rateMax=${derived.resolved.rateMax}) — a JIT fill for this recipe/rate would revert InvalidParams` });
+    }
     return envelope({
       state: "ok",
       data: {
@@ -1166,6 +1304,16 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         // malformed request SHAPE, not a value-domain rule.)
         return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
       }
+      // Expiry sanity (F1): the chain checks only `expiry > block.timestamp` with NO upper bound,
+      // and a filled order mints the pool irreversibly — so mirror the lower bound here and flag
+      // implausibly long tenors (the schema's UnixSeconds bound already rejects ms-scale values).
+      if (jitParams.expiryTimestamp <= nowSecs) {
+        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${jitParams.expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
+      }
+      const FIVE_YEARS = 5n * 31_557_600n;
+      if (jitParams.expiryTimestamp > nowSecs + FIVE_YEARS) {
+        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${jitParams.expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
+      }
       const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
       extension = buildJitExtension(mr.adapter, encodeJitExtraData(jitParams, permits));
       jitData = { adapter: mr.adapter, hook: "preInteraction (maker-side)", enableJitMint: jm.enableJitMint };
@@ -1240,20 +1388,27 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
       }
     }
 
-    const built = buildMakerOrder({
-      chainId,
-      lop,
-      maker: input.account,
-      makerAsset: action.makerAsset,
-      takerAsset: action.takerAsset,
-      makingAmount: BigInt(action.makingAmount),
-      takingAmount: BigInt(action.takingAmount),
-      clientRequestId: input.clientRequestId,
-      ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
-      allowPartialFills: action.allowsPartialFills,
-      usePermit2: action.usePermit2,
-      ...(extension !== undefined ? { extension } : {}),
-    });
+    let built: ReturnType<typeof buildMakerOrder>;
+    try {
+      built = buildMakerOrder({
+        chainId,
+        lop,
+        maker: input.account,
+        makerAsset: action.makerAsset,
+        takerAsset: action.takerAsset,
+        makingAmount: BigInt(action.makingAmount),
+        takingAmount: BigInt(action.takingAmount),
+        clientRequestId: input.clientRequestId,
+        ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
+        allowPartialFills: action.allowsPartialFills,
+        usePermit2: action.usePermit2,
+        ...(extension !== undefined ? { extension } : {}),
+      });
+    } catch (err) {
+      // Well-formed values that violate an order-construction domain rule (malformed extension
+      // shape, a trait slot overflow) → envelope, not an internal error.
+      return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "maker order construction failed", ctx);
+    }
     return envelope({
       state: "ok",
       data: {
@@ -1399,6 +1554,11 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           warnings: [{ code: "digest_mismatch", message: "the venue row does not hash to the requested order — no fill bytes were built" }],
           ctx,
         });
+      }
+      // A zero makingAmount is a malformed VENUE row (nothing fillable), not a caller mistake —
+      // attribute it correctly instead of surfacing a divisor error as invalid_order_terms.
+      if (signed.order.makingAmount === 0n) {
+        return unavailable(chainId, "invalid_service_response", `venue returned a resting order with makingAmount 0 for ${action.orderHash} — a malformed row; no fill bytes were built`, ctx);
       }
       let fill: TakerFillResult;
       try {
@@ -1675,19 +1835,24 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
         }
         // ── LOP surface: fills + resting-book row, then the on-chain invalidator leg [K7] ──
         const hash = ref.toLowerCase();
-        const fills = await getLopFills(deps, { chainId, orderHash: hash });
-        // The orderbook endpoint has no orderHash filter — scan the (small) book client-side to
+        // Bounded traversals (F19): a single-page scan could falsely report "no fills" /
+        // "not resting" / "not found" for anything beyond page 1.
+        const fillsScan = await collectVenuePages({ pageSize: 100, maxPages: 10 }, (cursor) => getLopFills(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
+        const fills = { items: fillsScan.items };
+        // The orderbook endpoint has no orderHash filter — walk the book client-side to
         // recover the maker/makerTraits the invalidator views need.
         let bookRow: Record<string, unknown> | undefined;
+        let bookComplete = true;
         try {
-          const book = await getLopOrderbook(deps, { chainId });
+          const book = await collectVenuePages({ pageSize: 100, maxPages: 10 }, (cursor) => getLopOrderbook(deps, { chainId, ...(cursor ? { cursor } : {}), limit: 100 }));
+          bookComplete = book.complete;
           bookRow = book.items.find((r) => {
             const o = r as Record<string, unknown>;
             const h = o.orderHash ?? o.order_hash ?? o.hash ?? (o.order as Record<string, unknown> | undefined)?.orderHash;
             return typeof h === "string" && h.toLowerCase() === hash;
           }) as Record<string, unknown> | undefined;
         } catch {
-          // book scan is best-effort; fills/chain legs below still apply
+          bookComplete = false; // book scan is best-effort; fills/chain legs below still apply
         }
         if (fills.items.length > 0 || bookRow) {
           const warnings: Array<{ code: string; message: string }> = [];
@@ -1739,12 +1904,16 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
           } else {
             warnings.push({ code: "venue_reported", message: "venue rows carry no maker/makerTraits for this order — the on-chain invalidator leg needs both; state is venue-reported only" });
           }
+          if (!bookRow && !bookComplete) {
+            warnings.push({ code: "pagination_incomplete", message: "the orderbook walk did not exhaust the book — `resting` is UNKNOWN, not false; the fills below are still valid evidence" });
+          }
           return envelope({
             state: "ok",
             data: {
               kind: "lop-order",
               orderHash: hash,
-              resting: Boolean(bookRow),
+              // An incomplete book walk that found nothing cannot honestly claim "not resting".
+              resting: bookRow ? true : bookComplete ? false : null,
               ...(bookRow ? { order: bookRow } : {}),
               count: fills.items.length,
               fills: fills.items,
@@ -1753,6 +1922,17 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
             chainId,
             source: chainVerification ? "chain" : "indexer",
             warnings,
+            ctx,
+          });
+        }
+        if (!fillsScan.complete || !bookComplete) {
+          // Neither surface found it, but at least one scan stopped short — no absence claim.
+          return envelope({
+            state: "conflict",
+            data: { requestedRef: ref, fillsScanComplete: fillsScan.complete, orderbookScanComplete: bookComplete },
+            chainId,
+            source: "service",
+            warnings: [{ code: "pagination_incomplete", message: "the venue scans were incomplete, so 'not found' cannot be honestly claimed — retry, narrow the search, or raise maxPages" }],
             ctx,
           });
         }
@@ -1769,6 +1949,30 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
 }
 
 const U160 = (1n << 160n) - 1n;
+const U40 = (1n << 40n) - 1n;
+const LOP_NO_PARTIAL_FILLS_FLAG = 1n << 255n;
+
+/**
+ * Parse a decimal string (plain or scientific notation) into an EXACT 1e18-scaled bigint, or
+ * null when it is not a finite decimal / not representable at 18 fractional digits. Scale
+ * tripwires must compare integers, never floats: IEEE-754 breaks exact-threshold semantics
+ * right at the boundaries the tripwires exist to police [C6].
+ */
+export function decimalToScaled(s: string): bigint | null {
+  const m = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(s.trim());
+  if (!m) return null;
+  const sign = m[1] === "-" ? -1n : 1n;
+  const frac = m[3] ?? "";
+  const digits = BigInt(m[2]! + frac);
+  const pow = BigInt(m[4] ?? "0") - BigInt(frac.length) + 18n;
+  if (pow >= 0n) {
+    if (pow > 96n) return null; // absurd magnitude — treat as unparsable rather than compute 10^huge
+    return sign * digits * 10n ** pow;
+  }
+  const div = 10n ** -pow;
+  if (digits % div !== 0n) return null; // finer than 1e-18 — not exactly representable
+  return (sign * digits) / div;
+}
 
 /** Canonical Uniswap Permit2 (same address on every chain). */
 const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
@@ -1794,6 +1998,10 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
     if (res.httpStatus === 404 || res.httpStatus === 410 || res.httpStatus === 422) {
       return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg}${res.httpStatus === 422 ? " (permanent for this RFQ — do not retry)" : ""}`, ctx);
     }
+    if (res.httpStatus >= 500) {
+      // A server-side failure is not a rejection of the payload — mark it retryable.
+      return unavailable(chainId, "venue_unreachable", `venue server error ${res.httpStatus}: ${msg} — likely transient; retry with the SAME clientRequestId [K2]`, ctx);
+    }
     return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg}`, ctx);
   };
 
@@ -1803,6 +2011,27 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
       // Single-chain protocol: the routing fields must match the target chain (venue rejects too).
       if (o.originChainId !== String(chainId) || o.destinationChainId !== String(chainId)) {
         return unavailable(chainId, "invalid_order_terms", `originChainId/destinationChainId must equal chainId ${chainId} (single-chain rollover)`, ctx);
+      }
+      // [F14] Re-run the settler/deadline checks the prepare path enforces — a submit-only caller
+      // must not be able to relay an order the prepare path would have refused to build.
+      {
+        const { rollover } = await resolveRollover(chainId);
+        if (rollover) {
+          const settlerLc = o.settler.toLowerCase();
+          const kind = settlerLc === rollover.exactSettler.toLowerCase() ? "EXACT" : settlerLc === rollover.partialSettler.toLowerCase() ? "PARTIAL" : undefined;
+          if (kind === "EXACT" && o.allowPartialFills) {
+            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — this signed order is unfillable; re-sign against the PartialSettler ${rollover.partialSettler} or with allowPartialFills:false`, ctx);
+          }
+          if (kind === "PARTIAL" && !o.allowPartialFills) {
+            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — this signed order is unfillable; re-sign against the ExactSettler ${rollover.exactSettler} or with allowPartialFills:true`, ctx);
+          }
+        }
+        const openDeadline = BigInt(o.openDeadline);
+        const fillDeadline = BigInt(o.fillDeadline);
+        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+        if (BigInt(o.orderSize) === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
+        if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
+        if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
       }
       if (o.rolloverParams.settler.toLowerCase() !== o.settler.toLowerCase() || o.rolloverParams.srcCstToken.toLowerCase() !== o.srcCstToken.toLowerCase() || o.rolloverParams.dstCstToken.toLowerCase() !== o.dstCstToken.toLowerCase()) {
         return unavailable(chainId, "invalid_order_terms", "rolloverParams (settler/srcCstToken/dstCstToken) must mirror OrderData exactly — the venue rejects mismatches", ctx);
@@ -1866,6 +2095,30 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         },
       };
       const localDigest = computeOrderDigest(chainId, orderStruct);
+      // [F14/K3] Recover the signature against the locally recomputed EIP-712 digest: a garbage-
+      // or foreign-signed order must not relay (it would rest at the venue but never fill).
+      try {
+        const recovered = await recoverAddress({ hash: localDigest, signature: action.signature });
+        if (!isAddressEqual(recovered, o.user)) {
+          return envelope({
+            state: "conflict",
+            data: { orderDigest: localDigest, recoveredSigner: recovered, orderUser: o.user },
+            chainId,
+            source: "config",
+            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature recovers to ${recovered}, not order.user ${o.user} — NOT relayed; the order would rest at the venue but could never settle` }],
+            ctx,
+          });
+        }
+      } catch (err) {
+        return envelope({
+          state: "conflict",
+          data: { orderDigest: localDigest },
+          chainId,
+          source: "config",
+          warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order digest (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — NOT relayed` }],
+          ctx,
+        });
+      }
       const res = await postRolloverOrder(deps, {
         chainId,
         order: o,
@@ -1920,6 +2173,55 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         primaryType: "Order",
         message: orderMsg,
       });
+      // [F3/K3] Derive the listing fields from the SIGNED makerTraits instead of trusting the
+      // caller's duplicates: the venue book must never advertise an expiry / partial-fill policy /
+      // nonce that contradicts what the signature enforces at fill.
+      {
+        const traits = orderMsg.makerTraits;
+        const traitsExpiry = (traits >> 80n) & U40; // 0 = no expiry
+        const traitsNonce = (traits >> 120n) & U40;
+        const traitsAllowsPartial = (traits & LOP_NO_PARTIAL_FILLS_FLAG) === 0n;
+        const mismatches: string[] = [];
+        if (BigInt(action.expiry) !== traitsExpiry) mismatches.push(`expiry: listing says ${action.expiry}, the signed makerTraits encode ${traitsExpiry}`);
+        if (BigInt(action.nonce) !== traitsNonce) mismatches.push(`nonce: listing says ${action.nonce}, the signed makerTraits encode ${traitsNonce}`);
+        if (action.allowsPartialFills !== traitsAllowsPartial) mismatches.push(`allowsPartialFills: listing says ${action.allowsPartialFills}, the signed makerTraits say ${traitsAllowsPartial}`);
+        if (mismatches.length > 0) {
+          return envelope({
+            state: "conflict",
+            data: { orderHash, listing: { expiry: action.expiry, nonce: action.nonce, allowsPartialFills: action.allowsPartialFills }, fromMakerTraits: { expiry: traitsExpiry, nonce: traitsNonce, allowsPartialFills: traitsAllowsPartial } },
+            chainId,
+            source: "config",
+            warnings: [{ code: "listing_traits_mismatch", message: `listing fields contradict the signed order's makerTraits (${mismatches.join("; ")}) — NOT relayed; takers acting on the listing would build fills that revert` }],
+            ctx,
+          });
+        }
+      }
+      // [F3/K3] For an EOA maker, prove the signature is the maker's over THIS order before
+      // relaying (ERC-1271 contract signatures cannot be checked locally; the venue/chain do).
+      if (action.makerAccountType !== "ERC1271") {
+        try {
+          const recovered = await recoverAddress({ hash: orderHash, signature: action.signature });
+          if (!isAddressEqual(recovered, orderMsg.maker)) {
+            return envelope({
+              state: "conflict",
+              data: { orderHash, recoveredSigner: recovered, orderMaker: orderMsg.maker },
+              chainId,
+              source: "config",
+              warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature recovers to ${recovered}, not the order maker ${orderMsg.maker} — NOT relayed; this order could rest on the book but never fill` }],
+              ctx,
+            });
+          }
+        } catch (err) {
+          return envelope({
+            state: "conflict",
+            data: { orderHash },
+            chainId,
+            source: "config",
+            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order hash (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — NOT relayed` }],
+            ctx,
+          });
+        }
+      }
       // Numbers-contract tripwires (RFQ doc §2.1): the book `premium` is a PERCENT number
       // (4.1 = 4.1%), RFQ premiums are FRACTION strings ("0.041"). A sub-0.1% premium is the
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
@@ -1930,6 +2232,8 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
       }
       // quote_ref pre-flight [K3-style]: verify the cited option exists and the premium does not
       // contradict it (~100x divergence = a scale mistake the venue would reject at POST).
+      // The comparison is EXACT integer arithmetic over the decimal strings — the earlier float
+      // version let an exactly-100x divergence through (410 / (0.041*100) = 99.99999999999999).
       if (action.quoteRef) {
         const rfq = await getRfq(deps, action.quoteRef.rfqId);
         if (!rfq) return unavailable(chainId, "invalid_order_terms", `quote_ref cites unknown RFQ '${action.quoteRef.rfqId}'`, ctx);
@@ -1937,20 +2241,33 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         const answer = answers.find((a) => String(a.answer_id) === action.quoteRef!.answerId);
         const option = answer?.answer?.options?.find((o) => String(o.option_id) === action.quoteRef!.optionId);
         if (!option) return unavailable(chainId, "invalid_order_terms", `quote_ref option '${action.quoteRef.optionId}' not found in answer '${action.quoteRef.answerId}' of RFQ '${action.quoteRef.rfqId}'`, ctx);
-        const fraction = Number(option.premium_annualized);
-        if (Number.isFinite(fraction) && fraction > 0) {
-          const expectedPercent = fraction * 100;
-          const ratio = action.premium / expectedPercent;
-          if (ratio >= 100 || ratio <= 0.01) {
-            return envelope({
-              state: "conflict",
-              data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
-              chainId,
-              source: "service",
-              warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ~${ratio >= 100 ? Math.round(ratio) : `1/${Math.round(1 / ratio)}`}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — a scale mistake; NOT relayed (the venue rejects the same way)` }],
-              ctx,
-            });
-          }
+        const fractionScaled = option.premium_annualized === undefined ? null : decimalToScaled(String(option.premium_annualized));
+        if (fractionScaled === null || fractionScaled <= 0n) {
+          // A cited quote whose premium cannot be read means the cross-check CANNOT run — that is
+          // a conflict, not a silent skip (the silent skip was exactly the guard's blind spot).
+          return envelope({
+            state: "conflict",
+            data: { quoteRef: action.quoteRef, citedOptionPremiumAnnualized: option.premium_annualized ?? null },
+            chainId,
+            source: "service",
+            warnings: [{ code: "quote_ref_unverifiable", message: `the cited RFQ option has no parsable positive premium_annualized (got ${JSON.stringify(option.premium_annualized)}) — the premium scale cross-check cannot run; NOT relayed. Cite a valid option or drop quoteRef` }],
+            ctx,
+          });
+        }
+        const declaredScaled = decimalToScaled(String(action.premium));
+        const expectedPercentScaled = fractionScaled * 100n; // fraction -> percent
+        // Exact thresholds: declared >= 100x expected, or declared <= expected/100.
+        if (declaredScaled !== null && (declaredScaled >= expectedPercentScaled * 100n || declaredScaled * 100n <= expectedPercentScaled)) {
+          const expectedPercent = Number(option.premium_annualized) * 100;
+          const high = declaredScaled >= expectedPercentScaled * 100n;
+          return envelope({
+            state: "conflict",
+            data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
+            chainId,
+            source: "service",
+            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=100" : "<=1/100"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — a scale mistake; NOT relayed (the venue rejects the same way)` }],
+            ctx,
+          });
         }
       }
       // Extension commitment pre-flight: what would revert InvalidExtension at fill is caught here.
@@ -1994,6 +2311,18 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
     }
 
     if (action.type === "rfq-open") {
+      // [F6] Mirror the sibling rollover-intent validation: an inverted or already-past window
+      // was previously relayed untouched and failed (or half-worked) only at the venue.
+      const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+      if (action.expiryWindow.notBefore > action.expiryWindow.notAfter) {
+        return unavailable(chainId, "invalid_order_terms", `expiryWindow is inverted: notBefore (${action.expiryWindow.notBefore}) is after notAfter (${action.expiryWindow.notAfter})`, ctx);
+      }
+      if (BigInt(action.expiryWindow.notAfter) <= nowSecs) {
+        return unavailable(chainId, "invalid_order_terms", `expiryWindow.notAfter (${action.expiryWindow.notAfter}) is not in the future (now ${nowSecs}) — no pool expiry could ever satisfy this window`, ctx);
+      }
+      if (BigInt(action.validUntil) <= nowSecs) {
+        return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
+      }
       const res = await postRfq(deps, {
         schema_version: "1",
         request_id: input.clientRequestId,
@@ -2017,7 +2346,10 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
     if (action.status === "quoted") {
       for (const [i, o] of (action.options ?? []).entries()) {
         const p = o.premium_annualized;
-        if (p !== undefined && (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p) || Number(p) >= 0.5)) {
+        // The < 0.5 cap is decided ON THE STRING (first fractional digit >= 5), never via
+        // Number(): a 17-digit "0.49999999999999999" rounds to exactly 0.5 in IEEE-754 and was
+        // falsely rejected by the float form of this check [C6].
+        if (p !== undefined && (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p) || /^0\.[5-9]/.test(p))) {
           return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)}; percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface`, ctx);
         }
       }
@@ -2105,7 +2437,13 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       if (typeof input.data !== "string") {
         throw new ToolInputError(name, "calldata decode requires a hex string");
       }
-      const legs = decodeBundle(input.data as `0x${string}`);
+      let legs;
+      try {
+        legs = decodeBundle(input.data as `0x${string}`);
+      } catch (err) {
+        // Malformed top-level bytes are invalid INPUT (exit 2, teachable) — not an internal error.
+        throw new ToolInputError(name, [{ path: ["data"], message: err instanceof Error ? err.message : "calldata does not decode as a Bundler3 multicall" }]);
+      }
       return envelope({ state: "ok", data: { kind: "calldata", legs }, chainId, source: "config", ctx });
     }
     case "cork_compute":
@@ -2127,11 +2465,37 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       }
       const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
       const warnings: Array<{ code: string; message: string }> = [...depWarn];
+      // deadlineAt is validated for FORMAT only by the schema; a past moment builds fine and can
+      // only revert on-chain — disclose it (the sibling deadlineSeconds is bounded-future) [F19].
+      if (input.deadlineAt !== undefined && deadline <= nowSecs) {
+        warnings.push({ code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — the bundle would revert its deadline check on-chain; pin a future absolute deadline for byte-stable retries` });
+      }
       let funding: Call[] = [];
       const mode = input.fundingMode as FundingMode;
 
       if (mode === "pre-funded") {
-        // caller guarantees tokens already sit in the adapter — nothing to fund.
+        // Caller guarantees tokens already sit in the adapter — nothing to fund. But when an
+        // explicit RPC is configured, run the same pool-existence/expiry pre-flight the funded
+        // path gets [F19]: 'pre-funded' must not silently skip guards the sibling mode enforces.
+        const poolId = (input.action as { poolId?: `0x${string}` }).poolId;
+        if (ctx.rpcUrl && poolId) {
+          const resolved = await getRpc(ctx, input.chainId);
+          if (resolved) {
+            try {
+              const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
+              const ZERO = "0x0000000000000000000000000000000000000000";
+              if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
+                return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
+              }
+              const POST_EXPIRY = new Set(["withdraw", "withdraw-other", "redeem"]);
+              if (tokens.expiryTimestamp > 0n && tokens.expiryTimestamp <= nowSecs && !POST_EXPIRY.has(input.action.type)) {
+                warnings.push({ code: "pool_expired", message: `pool ${poolId} expired at ${tokens.expiryTimestamp} (now ${nowSecs}) — '${input.action.type}' is a pre-expiry action and this bundle would revert on-chain; the post-expiry paths are withdraw/withdraw-other/redeem` });
+              }
+            } catch {
+              // best-effort — pre-funded byte-building stays offline-capable by design
+            }
+          }
+        }
       } else if (!canAutoFund(input.action.type)) {
         warnings.push({ code: "manual_funding", message: `'${input.action.type}' has no auto-funding model in this iteration; fund the adapter manually or use fundingMode 'pre-funded'.` });
       } else if (!ctx.rpcUrl) {

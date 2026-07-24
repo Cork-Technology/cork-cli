@@ -343,12 +343,26 @@ describe("input bounds are teachable invalid input, never internal errors (regre
     }
   });
 
-  it("exact uint64/uint256 maxima are ACCEPTED (boundary, not off-by-one)", async () => {
+  it("exact boundary values are ACCEPTED (uint256 amount max; UnixSeconds plausibility max)", async () => {
+    // UnixSeconds fields are now bounded to 4102444800 (2100-01-01) by the ms-detector refine —
+    // the boundary itself must pass, one above must fail with the milliseconds teaching.
+    const UNIX_MAX = 4102444800n;
     const env = await runTool(
       "cork_prepare_orders",
-      { ...base, action: { ...base.action, orderSize: String(U256_MAX), openDeadline: String(U64_MAX - 1n), fillDeadline: String(U64_MAX) } },
+      { ...base, action: { ...base.action, orderSize: String(U256_MAX), openDeadline: String(UNIX_MAX - 1n), fillDeadline: String(UNIX_MAX) } },
       ctx,
     );
     expect(env.state).toBe("ok");
+  });
+
+  it("a millisecond-scale deadline (Date.now() pasted as seconds) is teachable invalid input", async () => {
+    try {
+      await runTool("cork_prepare_orders", { ...base, action: { ...base.action, fillDeadline: "1753363200000" } }, ctx);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      const err = e as { name: string; issues: unknown };
+      expect(err.name).toBe("ToolInputError");
+      expect(JSON.stringify(err.issues)).toContain("MILLISECONDS");
+    }
   });
 });

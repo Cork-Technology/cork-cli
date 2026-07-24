@@ -69,4 +69,18 @@ describe("ch CLI", () => {
     expect(r.code).toBe(EXIT.ok);
     expect(JSON.parse(r.stdout).data.premiumFloor).toBe("20000000000000000000");
   });
+
+  it("F22: an unsafe integer literal in --json is rejected instead of silently losing precision", async () => {
+    const r = await runCli(
+      ["compute", "--json", '{"params": {"kind": "impairment-floor", "poolId": "0x' + "ab".repeat(32) + '", "horizonSeconds": 2500000000000000001}}'],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("lose precision");
+  });
+
+  it("excess positional arguments error instead of being silently ignored", async () => {
+    const r = await runCli(["capabilities", "stray-arg"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+  });
 });

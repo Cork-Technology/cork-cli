@@ -36,10 +36,16 @@ export interface HyperSyncLogsQuery {
   topics?: Array<string[] | null>;
 }
 
-/** Narrow client-agnostic surface — the napi client adapts to it; tests inject a fake. */
+/** Narrow client-agnostic surface — the napi client adapts to it; tests inject a fake.
+ *  `complete` is false when the scan stopped before the archive height (page cap) — omitting it
+ *  means complete, so simple injected fakes stay valid. `nextBlock` is the resume point. */
 export interface HyperSyncSource {
-  queryLogs(q: HyperSyncLogsQuery): Promise<{ logs: HyperSyncLog[]; archiveHeight?: number }>;
+  queryLogs(q: HyperSyncLogsQuery): Promise<{ logs: HyperSyncLog[]; archiveHeight?: number; complete?: boolean; nextBlock?: number }>;
 }
+
+/** Hard bound on HyperSync pages walked per query — mirrors the venue-path bounded traversal;
+ *  hitting it yields an HONEST partial (complete:false + nextBlock), never silent truncation. */
+export const HYPERSYNC_MAX_PAGES = 20;
 
 export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
 
@@ -57,7 +63,7 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   interface HyperSyncNapiModule {
     HypersyncClient: {
       new: (opts: { url: string; bearerToken: string }) => {
-        get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number }>;
+        get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
       };
     };
     LogField: Record<string, string>;
@@ -73,22 +79,38 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   const F = mod.LogField;
   return {
     source: {
+      // HyperSync answers are PAGED: each response carries `nextBlock`, the resume point. The
+      // previous implementation issued ONE call and dropped nextBlock — silently truncating any
+      // scan larger than a page with no way to even detect it (F15). Loop to the archive height
+      // under a hard page bound, and report honest completeness when the bound is hit.
       async queryLogs(q) {
-        const res = await client.get({
-          fromBlock: q.fromBlock,
-          logs: [{ ...(q.address ? { address: q.address } : {}), ...(q.topics ? { topics: q.topics } : {}) }],
-          fieldSelection: { log: [F.Address, F.Topic0, F.Topic1, F.Topic2, F.Topic3, F.Data, F.BlockNumber, F.TransactionHash] },
-        });
-        return {
-          logs: res.data.logs.map((l) => ({
-            address: String(l.address),
-            topics: [l.topic0, l.topic1, l.topic2, l.topic3].map((t) => (t == null ? null : String(t))),
-            data: String(l.data ?? "0x"),
-            blockNumber: Number(l.blockNumber ?? 0),
-            transactionHash: String(l.transactionHash ?? "0x"),
-          })),
-          ...(res.archiveHeight !== undefined ? { archiveHeight: res.archiveHeight } : {}),
-        };
+        const logs: HyperSyncLog[] = [];
+        let fromBlock = q.fromBlock;
+        let archiveHeight: number | undefined;
+        for (let page = 0; page < HYPERSYNC_MAX_PAGES; page += 1) {
+          const res = await client.get({
+            fromBlock,
+            logs: [{ ...(q.address ? { address: q.address } : {}), ...(q.topics ? { topics: q.topics } : {}) }],
+            fieldSelection: { log: [F.Address, F.Topic0, F.Topic1, F.Topic2, F.Topic3, F.Data, F.BlockNumber, F.TransactionHash] },
+          });
+          logs.push(
+            ...res.data.logs.map((l) => ({
+              address: String(l.address),
+              topics: [l.topic0, l.topic1, l.topic2, l.topic3].map((t) => (t == null ? null : String(t))),
+              data: String(l.data ?? "0x"),
+              blockNumber: Number(l.blockNumber ?? 0),
+              transactionHash: String(l.transactionHash ?? "0x"),
+            })),
+          );
+          if (res.archiveHeight !== undefined) archiveHeight = res.archiveHeight;
+          const next = res.nextBlock;
+          // Done when the server stops advancing or the resume point passes the archive height.
+          if (next === undefined || next <= fromBlock || (archiveHeight !== undefined && next > archiveHeight)) {
+            return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: true };
+          }
+          fromBlock = next;
+        }
+        return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: false, nextBlock: fromBlock };
       },
     },
   };
@@ -121,7 +143,8 @@ function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
 }
 
 function meta(l: HyperSyncLog) {
-  return { blockNumber: l.blockNumber, txHash: l.transactionHash, emitter: l.address };
+  // blockNumber rides as a decimal string — chain integers are strings on the wire (F10).
+  return { blockNumber: String(l.blockNumber), txHash: l.transactionHash, emitter: l.address };
 }
 
 export function decodeMarketRows(logs: HyperSyncLog[]): Array<Record<string, unknown>> {

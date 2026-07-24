@@ -4,10 +4,65 @@
 // outcome map (201/200/400/409/429), and track reconcile via venue lifecycle rows.
 import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
-import { runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder } from "@cork/core";
+import { privateKeyToAccount } from "viem/accounts";
+import { computeOrderDigest, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
 
 const NOW = 1_790_000_000n;
+
+// cork_submit now RECOVERS signatures against the recomputed commitments [K3/F3/F14], so relay
+// fixtures must be genuinely signed. Anvil dev key #0 — public knowledge, test-only.
+const SIGNER = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
+
+type LopOrderWire = Record<string, string>;
+const toLopOrder = (o: LopOrderWire): LopOrder => ({
+  salt: BigInt(o.salt!),
+  maker: o.maker as `0x${string}`,
+  receiver: o.receiver as `0x${string}`,
+  makerAsset: o.makerAsset as `0x${string}`,
+  takerAsset: o.takerAsset as `0x${string}`,
+  makingAmount: BigInt(o.makingAmount!),
+  takingAmount: BigInt(o.takingAmount!),
+  makerTraits: BigInt(o.makerTraits!),
+});
+const signLop = (chainId: number, o: LopOrderWire) =>
+  SIGNER.sign({ hash: hashLopOrder(chainId, LOP_ADDRESSES[chainId]!, toLopOrder(o)) });
+
+/** Wire rollover order (decimal strings) → the typed struct, re-signed by SIGNER. */
+const signRollover = (chainId: number, o: Record<string, unknown>) => {
+  const p = o.rolloverParams as Record<string, string>;
+  const struct: OrderDataStruct = {
+    user: o.user as `0x${string}`,
+    settler: o.settler as `0x${string}`,
+    fillerHint: o.fillerHint as `0x${string}`,
+    exclusiveFiller: o.exclusiveFiller as `0x${string}`,
+    srcCstToken: o.srcCstToken as `0x${string}`,
+    dstCstToken: o.dstCstToken as `0x${string}`,
+    premiumToken: o.premiumToken as `0x${string}`,
+    rolloverContract: o.rolloverContract as `0x${string}`,
+    originChainId: BigInt(o.originChainId as string),
+    destinationChainId: BigInt(o.destinationChainId as string),
+    openDeadline: BigInt(o.openDeadline as string),
+    fillDeadline: BigInt(o.fillDeadline as string),
+    orderSalt: BigInt(o.orderSalt as string),
+    orderSize: BigInt(o.orderSize as string),
+    minPremiumPerShare: BigInt(o.minPremiumPerShare as string),
+    allowPartialFills: o.allowPartialFills as boolean,
+    allowUnderfill: o.allowUnderfill as boolean,
+    premiumPaymentMode: o.premiumPaymentMode as 0 | 1,
+    rolloverIntentHash: o.rolloverIntentHash as `0x${string}`,
+    rolloverParams: {
+      srcCstToken: p.srcCstToken as `0x${string}`,
+      dstCstToken: p.dstCstToken as `0x${string}`,
+      minCaReceived: BigInt(p.minCaReceived!),
+      minSharesOut: BigInt(p.minSharesOut!),
+      srcPoolId: p.srcPoolId as `0x${string}`,
+      dstPoolId: p.dstPoolId as `0x${string}`,
+      settler: p.settler as `0x${string}`,
+    },
+  };
+  return SIGNER.sign({ hash: computeOrderDigest(chainId, struct) });
+};
 
 interface Seen {
   url: string;
@@ -218,16 +273,17 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
 
   it("lop-order: recomputes the orderHash locally and catches extension/salt mismatch", async () => {
     const seen: Seen[] = [];
+    const order = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
     const base = {
       chainId: 1,
       clientRequestId: "test-lop-0001",
       action: {
         type: "lop-order",
-        order: { salt: "123", maker: "0xc0ffee0000000000000000000000000000000001", receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" },
-        signature: `0x${"11".repeat(65)}`,
+        order,
+        signature: await signLop(1, order),
         side: "SELL",
         premium: 3.6,
-        expiry: 1795000000,
+        expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
         nonce: "0",
         allowsPartialFills: true,
       },
@@ -260,6 +316,106 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
   });
 });
 
+describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithmetic tripwires (F5) + rfq-open validation (F6)", () => {
+  const order = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
+  const lop = async (over: Record<string, unknown> = {}) => ({
+    chainId: 1,
+    clientRequestId: "test-fh-0001",
+    action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premium: 4.1, expiry: 0, nonce: "0", allowsPartialFills: true, ...over },
+  });
+
+  it("F3: listing fields contradicting the signed makerTraits → conflict listing_traits_mismatch, NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool("cork_submit", await lop({ expiry: 1795000000 }), ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("listing_traits_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+
+    const partialLie = await runTool("cork_submit", await lop({ allowsPartialFills: false }), ctxWith([{ match: "/limit-orders", status: 201, body: {} }]));
+    expect(partialLie.state).toBe("conflict");
+    expect(partialLie.warnings[0]?.code).toBe("listing_traits_mismatch");
+  });
+
+  it("F3: a signature that does not recover to the maker → conflict, NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const base = await lop();
+    const forged = { ...base, action: { ...base.action, order: { ...order, maker: "0xc0ffee0000000000000000000000000000000001" } } };
+    const env = await runTool("cork_submit", forged, ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("F14: a rollover order whose signature does not recover to order.user → conflict, NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const tampered = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: { orderSize: string } } };
+    tampered.action.order.orderSize = "999"; // digest changes → the example's real signature no longer matches
+    const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("F14: submit re-runs the settler-mode gate the prepare path enforces", async () => {
+    const seen: Seen[] = [];
+    const flipped = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: Record<string, unknown> } };
+    flipped.action.order.allowPartialFills = true; // example settler is the ExactSettler
+    const env = await runTool("cork_submit", flipped, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("settler_mode_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("F5: an EXACTLY-100x premium divergence is blocked (the float ratio rounded to 99.99999999999999)", async () => {
+    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.041" }] } }] };
+    const env = await runTool(
+      "cork_submit",
+      await lop({ premium: 410, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
+  });
+
+  it("F5: a cited option with no parsable premium is a conflict, not a silent skip", async () => {
+    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
+    const env = await runTool(
+      "cork_submit",
+      await lop({ quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("quote_ref_unverifiable");
+  });
+
+  it("F5: the rfq-answer 0.5 cap is decided on the string — a 17-digit just-under value passes, 0.5 fails", async () => {
+    const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
+    const justUnder = await runTool("cork_submit", answer("0.49999999999999999"), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
+    expect(justUnder.state).toBe("ok"); // Number("0.49999999999999999") === 0.5 falsely rejected this before
+    const atCap = await runTool("cork_submit", answer("0.5"), ctxWith([]));
+    expect(atCap.state).toBe("unavailable");
+    expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
+  });
+
+  it("F6: rfq-open validates the window and validUntil like its rollover sibling", async () => {
+    const seen: Seen[] = [];
+    const base = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
+    const inverted = JSON.parse(JSON.stringify(base));
+    (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
+    (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notAfter = 1795000000;
+    const r1 = await runTool("cork_submit", inverted, ctxWith([{ match: "/rfqs", status: 201, body: {} }], seen));
+    expect(r1.state).toBe("unavailable");
+    expect(r1.warnings[0]?.message).toContain("inverted");
+
+    const expired = JSON.parse(JSON.stringify(base));
+    (expired.action as { validUntil: number }).validUntil = Number(NOW) - 10;
+    const r2 = await runTool("cork_submit", expired, ctxWith([{ match: "/rfqs", status: 201, body: {} }], seen));
+    expect(r2.state).toBe("unavailable");
+    expect(r2.warnings[0]?.message).toContain("validUntil");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+});
+
 describe("cork_track reconcile via venue lifecycle", () => {
   const digest = `0x${"3".repeat(64)}`;
 
@@ -284,6 +440,7 @@ describe("cork_track reconcile via venue lifecycle", () => {
       ctxWith([
         { match: `/rollover/orders/${digest}`, status: 404, body: { message: "not found" } },
         { match: "/limit-orders/fills", body: { items: [{ txHash: "0xaa" }] } },
+        { match: "/limit-orders/orderbook", body: { items: [] } },
       ]),
     );
     expect(withFills.state).toBe("ok");
@@ -298,6 +455,7 @@ describe("cork_track reconcile via venue lifecycle", () => {
       ctxWith([
         { match: `/rollover/orders/${digest}`, status: 404, body: { message: "not found" } },
         { match: "/limit-orders/fills", body: { items: [] } },
+        { match: "/limit-orders/orderbook", body: { items: [] } },
       ]),
     );
     expect(nowhere.state).toBe("unavailable");
@@ -306,22 +464,24 @@ describe("cork_track reconcile via venue lifecycle", () => {
 });
 
 describe("R4: numbers-contract tripwires + quote_ref cross-check + extension orders", () => {
-  const lopBase = {
+  const lopOrder = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
+  const lopBaseP = (async () => ({
     chainId: 1,
     clientRequestId: "test-lop-r4-01",
     action: {
       type: "lop-order",
-      order: { salt: "123", maker: "0xc0ffee0000000000000000000000000000000001", receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" },
-      signature: `0x${"11".repeat(65)}`,
+      order: lopOrder,
+      signature: await signLop(1, lopOrder),
       side: "SELL",
       premium: 0.036, // a fraction pasted into the percent field
-      expiry: 1795000000,
+      expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
       nonce: "0",
       allowsPartialFills: true,
     },
-  };
+  }))();
 
   it("sub-0.1% premium → premium_scale_suspect warning (relayed, matching venue leniency)", async () => {
+    const lopBase = await lopBaseP;
     const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]));
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "premium_scale_suspect")).toBe(true);
@@ -329,6 +489,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
 
   it("quote_ref citing a diverging premium → conflict premium_scale_mismatch, NOT relayed", async () => {
     const seen: Seen[] = [];
+    const lopBase = await lopBaseP;
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
@@ -342,6 +503,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
   });
 
   it("quote_ref with a consistent premium relays cleanly", async () => {
+    const lopBase = await lopBaseP;
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
@@ -363,7 +525,9 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
   });
 
   it("prepare maker-order with extension binds salt low-160 to keccak(extension) + sets the flag", async () => {
-    const ext = "0xdeadbeefcafe";
+    // Structurally valid v4 extension: 32-byte offsets header (all fields empty) + customData.
+    // (A bare "0xdeadbeefcafe" is now rejected — no offsets header means it would misparse at fill.)
+    const ext = `0x${"00".repeat(32)}deadbeefcafe` as const;
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 1, account: "0xc0ffee0000000000000000000000000000000001", clientRequestId: "test-ext-0001", action: { type: "maker-order", poolId: `0x${"ab".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", extension: ext } },
@@ -412,6 +576,8 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
       postRolloverHooks: [],
       premiumHooks: [],
     });
+    // The intent hash changed, so the order digest changed — re-sign the mutated order.
+    (example.action as unknown as { signature: string }).signature = await signRollover(42161, example.action.order);
     const seen: Seen[] = [];
     const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("ok");
@@ -431,9 +597,10 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
 
   it("quote_ref citing an unknown RFQ → invalid_order_terms, NOT relayed", async () => {
     const seen: Seen[] = [];
+    const order = { salt: "1", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", makerTraits: "0" };
     const env = await runTool(
       "cork_submit",
-      { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order: { salt: "1", maker: "0xc0ffee0000000000000000000000000000000001", receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", makerTraits: "0" }, signature: "0x00", side: "SELL", premium: 3.6, expiry: 1, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
+      { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premium: 3.6, expiry: 0, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
       ctxWith([{ match: "/rfqs/rfq_missing", status: 404, body: { message: "not found" } }], seen),
     );
     expect(env.state).toBe("unavailable");
@@ -448,7 +615,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
       { nowSeconds: NOW, venueFetch: async () => new Response(null, { status: 503 }) },
     );
     expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("venue_rejected");
+    expect(env.warnings[0]?.code).toBe("venue_unreachable"); // 5xx = server fault, retryable
     expect(env.warnings[0]?.message).toContain("503");
   });
 

@@ -85,8 +85,10 @@ export function previewAdjustedRate(args: {
 export interface ImpairmentFloor {
   /** Worst reachable swapRate at the horizon (WAD). */
   worstRate: bigint;
-  /** Max REF paid per 1e18 cST at that rate = ceil(1e18 / worstRate) (WAD). */
-  maxReferencePerCst: bigint;
+  /** Max REF paid per 1e18 cST at that rate = ceil(1e18 / worstRate) (WAD). NULL exactly when
+   *  worstRate is 0 (rateMin = 0 and full descent): impairment can be total and the ref-per-cST
+   *  cost is unbounded — a meaningful answer, not a division-by-zero crash. */
+  maxReferencePerCst: bigint | null;
   /** Whether the floor is pinned at rateMin over the horizon. */
   clampedAtMin: boolean;
   /** Descent budget available at tEval after refilling the stored bucket to now. */
@@ -117,7 +119,9 @@ export function impairmentFloor(args: {
 
   const floorFromLast = s.lastAdjustedRate > descent ? s.lastAdjustedRate - descent : 0n;
   const worstRate = max(m.rateMin, floorFromLast);
-  const maxReferencePerCst = mulDiv(WAD, WAD, worstRate, "ceil");
+  // worstRate can be 0 only when rateMin = 0 (createNewPool enforces rateMin > 0, but recipe/
+  // library callers can construct it): the honest answer is "impairment can be total".
+  const maxReferencePerCst = worstRate === 0n ? null : mulDiv(WAD, WAD, worstRate, "ceil");
   return {
     worstRate,
     maxReferencePerCst,

@@ -511,7 +511,8 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
           case "balanceOf":
             return 5n;
           case "allowance":
-            return 777n;
+            // 2-arg = ERC-20 allowance (uint256); 3-arg = Permit2-internal (amount, expiration, nonce).
+            return (args.args?.length ?? 0) === 3 ? [777n, 0, 0] : 777n;
           default:
             throw new Error(`no stub for ${args.functionName}`);
         }
@@ -554,7 +555,9 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> } };
     expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
     expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
-    expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777" });
+    // permit2Internal is the Permit2-INTERNAL (user, token, spender=adapter) allowance the
+    // permit2 funding leg actually consumes (F18); expiration 0 = no permit granted yet.
+    expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777", permit2Internal: { amount: "777", expiration: 0, expired: false } });
   });
 });
 

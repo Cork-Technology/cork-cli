@@ -1,7 +1,9 @@
 // Property-based revert-parity + invariant harness over @cork/core numeric ports.
 // Reference semantics = Solidity 0.8.30 checked arithmetic + OZ Math.mulDiv (reverts on d==0
-// and on uint256 overflow). We model that reference here and assert the TS port either MATCHES
-// or we record the exact divergence class. Run: bun test core.test.ts
+// and on uint256 overflow). Originally this harness DOCUMENTED the divergences (third-pass
+// investigation, 2026-07-24); after the hardening pass the ports enforce the Solidity revert
+// domain, so it now asserts FULL revert-parity — a regression here means a guard was removed.
+// Run: bun test core.proptest.ts
 import fc from "fast-check";
 import { expect, test } from "bun:test";
 
@@ -46,24 +48,18 @@ function attempt<T>(fn: () => T): { ok: true; v: T } | { ok: false; e: Error } {
 // =============================================================================
 // P1: mulDiv — floor/ceil correctness, and overflow revert-parity gap
 // =============================================================================
-test("P1 mulDiv floor/ceil matches reference on in-range; TS never reverts on overflow", () => {
-  const gaps: string[] = [];
+test("P1 mulDiv floor/ceil matches reference EXACTLY, including the revert domain", () => {
   fc.assert(fc.property(uint(256), uint(256), uint(256), fc.constantFrom<Rnd>("floor", "ceil"),
     (x, y, d) => {
       const rnd: Rnd = (x + y) % 2n === 0n ? "floor" : "ceil";
       const sol = attempt(() => solMulDiv(x, y, d, rnd));
       const ts = attempt(() => fixed.mulDiv(x, y, d, rnd));
       if (sol.ok && ts.ok) { expect(ts.v).toBe(sol.v); return; }
-      if (!sol.ok && !ts.ok) return; // both revert (d==0)
-      if (sol.ok && !ts.ok) throw new Error(`TS reverts where Sol ok: ${x},${y},${d}`);
-      // sol reverts, TS ok  => divergence
-      if (!sol.ok && ts.ok) {
-        const reason = (sol.e as Revert).message;
-        if (reason === "overflow" && gaps.length < 3) gaps.push(`overflow@${x},${y},${d}=>${ts.v}`);
-      }
+      // Full revert-parity: the port throws exactly where the reference reverts.
+      expect(ts.ok).toBe(sol.ok);
     }), { numRuns: 20000 });
-  // Record whether the overflow gap is reachable via random uint256 (it is, rarely)
-  console.log("P1 overflow-gap samples:", gaps);
+  // Explicit overflow vector (was: silently returned a >uint256 quotient).
+  expect(attempt(() => fixed.mulDiv(U256, U256, 1n)).ok).toBe(false);
 });
 
 // =============================================================================
@@ -76,15 +72,10 @@ test("P2 ceilDiv == ceil(a/b) for a,b>=0; b==0 throws", () => {
     expect(fixed.ceilDiv(a, b)).toBe(want);
   }), { numRuns: 5000 });
 });
-test("P2b ceilDiv negative-a breaks the ceil postcondition (documented port gap)", () => {
-  // Solidity uint256 can't hold negatives; TS accepts them with truncation-toward-zero.
-  // Demonstrate the postcondition ceilDiv(a,b)*b >= a can fail for a<0.
-  const a = -5n, b = 3n;
-  const got = fixed.ceilDiv(a, b); // (a-1)/b+1 = (-6)/3+1 = -2+1 = -1 ; but ceil(-5/3) = -1 ok here
-  // find a real violation: ceil(-1/3) should be 0, port: (-2)/3+1 = 0+1 = 1  (WRONG, > correct)
-  const got2 = fixed.ceilDiv(-1n, 3n);
-  console.log("P2b ceilDiv(-5,3)=", got.toString(), " ceilDiv(-1,3)=", got2.toString(), "(math ceil=0)");
-  expect(got2).not.toBe(0n); // confirms the port diverges from true ceil for negative numerators
+test("P2b ceilDiv rejects negative operands (was: (a-1)/b+1 overshot true ceil for a<0)", () => {
+  expect(attempt(() => fixed.ceilDiv(-5n, 3n)).ok).toBe(false);
+  expect(attempt(() => fixed.ceilDiv(-1n, 3n)).ok).toBe(false);
+  expect(attempt(() => fixed.ceilDiv(1n, -3n)).ok).toBe(false);
 });
 
 // =============================================================================
@@ -124,23 +115,16 @@ test("P4 computeT in [0,WAD] on valid domain (start<=current, start<end)", () =>
     expect(t >= 0n && t <= WAD).toBe(true);
   }), { numRuns: 10000 });
 });
-test("P4b computeT(current<start) escapes [0,WAD] where Solidity reverts (F8 confirm + generalize)", () => {
-  const gaps: string[] = [];
+test("P4b computeT(current<start) now THROWS where Solidity underflow-reverts (revert-parity)", () => {
   fc.assert(fc.property(uint(40), fc.bigInt(1n, 1_000_000n), uint(40), (start, back, dEnd) => {
     if (back > start) return; // keep current >= 0
     const current = start - back; // current < start
     const end = start + dEnd + 1n;
-    // Solidity: current-start underflows => revert
-    const t = mh.computeT(start, end, current);
-    if (t > WAD && gaps.length < 3) gaps.push(`t=${t} start=${start} end=${end} cur=${current}`);
+    expect(attempt(() => mh.computeT(start, end, current)).ok).toBe(false);
   }), { numRuns: 5000 });
-  console.log("P4b computeT>WAD samples (Sol would revert):", gaps);
-  expect(gaps.length).toBeGreaterThan(0);
 });
-test("P4c computeT(end<start) — TS returns a value; Solidity reverts on end-start underflow", () => {
-  const r = attempt(() => mh.computeT(100n, 50n, 100n)); // end<start
-  console.log("P4c computeT(100,50,100)=", r.ok ? r.v.toString() : `throw:${(r as any).e.message}`);
-  // Sol: totalDuration = end-start underflows -> revert. Record TS behavior.
+test("P4c computeT(end<start) throws like the Solidity end-start underflow", () => {
+  expect(attempt(() => mh.computeT(100n, 50n, 100n)).ok).toBe(false);
 });
 
 // =============================================================================
@@ -158,37 +142,28 @@ test("P5 calculateTimeDecayFee: on valid domain fee <= ceil(amount*baseFee/100e1
     expect(fee <= feeAtFull).toBe(true);
   }), { numRuns: 8000 });
 });
-test("P5b calculateTimeDecayFee(current<start) inflates fee ABOVE base (F8 B2, generalized)", () => {
-  // t = 1.1e18 > WAD => feeFactor = ceil(base*1.1) > base => fee% > base%
+test("P5b calculateTimeDecayFee(current<start) now throws (was: 5.5% fee from a 5% base)", () => {
   const base = 5n * WAD; // 5%
-  const feeInflated = mh.calculateTimeDecayFee(1000n, 2000n, 900n, 10n ** 18n, base); // current<start
-  const feeNormal = mh.calculateTimeDecayFee(1000n, 2000n, 1000n, 10n ** 18n, base); // at start
-  console.log("P5b inflated fee=", feeInflated.toString(), " base-fee=", feeNormal.toString());
-  expect(feeInflated > feeNormal).toBe(true);
+  expect(attempt(() => mh.calculateTimeDecayFee(1000n, 2000n, 900n, 10n ** 18n, base)).ok).toBe(false);
+  // At-start baseline still computes.
+  expect(mh.calculateTimeDecayFee(1000n, 2000n, 1000n, 10n ** 18n, base) > 0n).toBe(true);
 });
 
 // =============================================================================
 // P6: fee>=100% denominators — negative denominator SILENT garbage (new sharpening of F8)
 // =============================================================================
-test("P6 calculateGrossAmountBeforeFee: fee==100% throws, fee>100% returns NEGATIVE silently", () => {
-  // Solidity: 100e18 - feeRate underflows (revert) for feeRate>100e18; div0 for ==100e18.
+test("P6 calculateGrossAmountBeforeFee: fee >= 100% throws with a domain message (was: silent NEGATIVE)", () => {
   const desired = 1000n * WAD;
-  const atEq = attempt(() => mh.calculateGrossAmountBeforeFee(desired, PCT)); // feeRate==100e18 -> d=0
-  const over = attempt(() => mh.calculateGrossAmountBeforeFee(desired, PCT + WAD)); // 101% -> d<0
-  console.log("P6 fee==100%:", atEq.ok ? `ok:${atEq.v}` : `throw:${(atEq as any).e.message}`);
-  console.log("P6 fee==101%:", over.ok ? `ok:${over.v}` : `throw:${(over as any).e.message}`);
-  expect(atEq.ok).toBe(false);            // div by zero throw
-  expect(over.ok).toBe(true);             // NO throw
-  expect((over as any).v < 0n).toBe(true); // silent negative gross amount
+  const atEq = attempt(() => mh.calculateGrossAmountBeforeFee(desired, PCT)); // feeRate==100e18
+  const over = attempt(() => mh.calculateGrossAmountBeforeFee(desired, PCT + WAD)); // 101%
+  expect(atEq.ok).toBe(false);
+  expect(over.ok).toBe(false);
+  expect(String((over as any).e.message)).toContain(">= 100%");
 });
-test("P6b calculateGrossAmountWithTimeDecayFee: feeFactor>100% yields negative denom silently", () => {
-  // Reachable if baseFeePercentage is large AND t is large (or t>WAD via P5b domain break).
-  // Directly: base huge so feeFactor = ceil(base*t/1e18) > 100e18 at t~WAD.
+test("P6b calculateGrossAmountWithTimeDecayFee: feeFactor >= 100% throws (was: silent negative)", () => {
   const start = 1000n, end = 2000n, current = 1001n; // t ~ WAD
   const bigBase = 200n * WAD; // 200% base fee
-  const r = attempt(() => mh.calculateGrossAmountWithTimeDecayFee(start, end, current, 1000n * WAD, bigBase));
-  console.log("P6b bigBase result:", r.ok ? `fee=${(r as any).v.fee} assetIn=${(r as any).v.assetIn}` : `throw:${(r as any).e.message}`);
-  if (r.ok) { const v = (r as any).v; if (v.assetIn < 0n || v.fee < 0n) console.log("P6b -> NEGATIVE silently"); }
+  expect(attempt(() => mh.calculateGrossAmountWithTimeDecayFee(start, end, current, 1000n * WAD, bigBase)).ok).toBe(false);
 });
 
 // =============================================================================
@@ -251,12 +226,12 @@ test("P8 impairmentFloor: worstRate in [rateMin, lastAdjustedRate]; longer horiz
       }
     }), { numRuns: 8000 });
 });
-test("P8b impairmentFloor throws div-by-zero exactly when worstRate collapses to 0 (rateMin=0, full descent)", () => {
+test("P8b impairmentFloor at worstRate==0 returns the honest answer (maxReferencePerCst null = unbounded)", () => {
   const market: any = { rateMin: 0n, rateMax: 10n ** 19n, rateChangePerDayMax: 10n ** 30n, rateChangeCapacityMax: 10n ** 30n };
   const state: any = { lastAdjustedRate: WAD, remainingCredits: 10n ** 30n, lastAdjustmentTimestamp: 0n };
-  const r = attempt(() => constraint.impairmentFloor({ market, state, horizonSeconds: 86400n, tEval: 0n }));
-  console.log("P8b worstRate->0:", r.ok ? `ok worstRate=${(r as any).v.worstRate} maxRefPerCst=${(r as any).v.maxReferencePerCst}` : `THROW:${(r as any).e.message}`);
-  expect(r.ok).toBe(false); // division by zero throw => internal_error exit 1 in handler
+  const v = constraint.impairmentFloor({ market, state, horizonSeconds: 86400n, tEval: 0n });
+  expect(v.worstRate).toBe(0n);
+  expect(v.maxReferencePerCst).toBe(null);
 });
 
 // =============================================================================

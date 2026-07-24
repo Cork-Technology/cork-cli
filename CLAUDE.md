@@ -91,13 +91,13 @@ Warning codes you will encounter:
 | `band_parity_mismatch` | On `conflict` (resolve-recipe): local applyBands port disagreed with the chain view — trust the chain, report the bug. |
 | `pool_expired` | Informational on `ok` prepare_phoenix results: a pre-expiry action (deposit/swap/…) against an expired pool — the bundle builds but would revert on-chain; withdraw/withdraw-other/redeem are the post-expiry paths. |
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
-| `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (HTTP status + message) / couldn't be reached (check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
+| `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (4xx; HTTP status + message) / couldn't be reached OR answered 5xx (transient — retry; check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
 | `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. Also `cork_prepare_orders` taker-fill when the orderHash is absent from a COMPLETE orderbook traversal. |
-| `pagination_incomplete` | A venue list traversal did not exhaust the set (`reason`: `metadata_absent`/`cursor_absent`/`max_pages`) — on `ok` it's honest partial evidence with a `nextCursor` to resume; on `conflict` it's `cursor_repeated` (the venue contradicted itself). taker-fill returns it (conflict) rather than a false "not found" when the book search was incomplete. |
+| `pagination_incomplete` | A bounded traversal did not exhaust the set — venue lists (`reason`: `metadata_absent`/`cursor_absent`/`max_pages`, with a `nextCursor` to resume), HyperSync scans that hit the page bound, registry getAssets/getRecipes truncation, and track-reconcile book/fills walks. On `ok` it's honest partial evidence; on `conflict` it's `cursor_repeated` (venue self-contradiction) or an incomplete search that would otherwise claim "not found" (taker-fill, reconcile). |
 | `unsigned_artifact` | Informational on `ok` taker-fill: unsigned fill calldata only — simulate (`cork_track` simulate) and set the taker-asset allowance before signing/broadcasting. |
 | `caller_signed_artifact` | Informational on `ok` finalize-maker-order: the signature was recovered/verified, not created [K1]; pass `submitInput` verbatim to `cork_submit` after your policy gate admits the `signedArtifactDigest`. |
-| `signature_or_reconstruction_mismatch` / `prepared_context_mismatch` | On `conflict` (finalize-maker-order): the signature doesn't recover to the order maker / the reconstruction doesn't match the prepared hash / salt↔extension unbound — OR the prepared clientRequestId·chainId·verifyingContract disagrees with the request. Not relayable. |
+| `signature_or_reconstruction_mismatch` / `prepared_context_mismatch` | On `conflict`: the signature doesn't recover to the order's maker/user against the locally recomputed hash — raised by finalize-maker-order AND by `cork_submit` lop-order (EOA makers) and rollover-order, which now recover every signature before relaying [K3] / the reconstruction doesn't match the prepared hash / salt↔extension unbound — OR the prepared clientRequestId·chainId·verifyingContract disagrees with the request. Not relayable. |
 | `invalid_service_response` | taker-fill: the venue row for the requested order failed shape validation (malformed signed order) — no fill bytes built. |
 | `rfq_not_found` | `cork_query rfqs` with `filters.rfqId`: the id is unknown to the venue — a normal outcome for a never-posted or mistyped id. |
 | `asset_not_found` | `cork_query registry-assets` with `filters.address`: the address is not a registry-approved asset on that chain. |
@@ -107,12 +107,26 @@ Warning codes you will encounter:
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
 | `hypersync_unavailable` | full-decentralized mode: no HyperSync token, unsupported chain, or the napi client can't load on this host. Envio env vars: `ENVIO_HYPERSYNC_TOKEN` (query API) and `ENVIO_HYPERRPC_TOKEN` (logs RPC) with `ENVIO_API_TOKEN` as shared fallback for both — tokens verified interchangeable across products in practice, so one shared token also works. |
-| `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / ~100x divergence from the cited quote_ref (conflict, NOT relayed). |
+| `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / >=100x divergence from the cited quote_ref, decided in EXACT integer arithmetic (conflict, NOT relayed). |
+| `quote_ref_unverifiable` | On `conflict` (`cork_submit lop-order`): the cited RFQ option has no parsable positive premium, so the scale cross-check cannot run — NOT relayed (cite a valid option or drop quoteRef). |
+| `listing_traits_mismatch` | On `conflict` (`cork_submit lop-order`): the venue-listing fields (expiry/nonce/allowsPartialFills) contradict what the SIGNED makerTraits encode — derived from the signature, never trusted [K3]; NOT relayed. |
+| `invalid_state` | A LOCAL computation/domain failure (C11), distinct from `chain_read_failed`: the on-chain state or derived values violate a domain rule the port enforces (e.g. a 100% rateMin band). Also informational on `ok` impairment-floor when the worst rate collapses to 0 (maxReferencePerCst null = unbounded). |
+| `reserved_field_ignored` | Informational on `ok`: an accepted-but-reserved field (`cork_compute at.timestamp`) was validated and then ignored — results are NOT pinned by it. |
+| `expiry_far_future` | Informational on JIT maker-order prepares: `jitMarket.expiryTimestamp` is >5 years out — the chain enforces NO upper bound and cPT principal stays locked until expiry; double-check intent. |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed
 `filters.*`) · `3` unavailable · `4` conflict · `1` unexpected error. Validation split: only
 unparseable/format faults throw (exit 2); a well-formed input that breaks a domain rule (equal
 ca/ref, a fee over the 5% cap, incoherent order terms) returns an `unavailable` envelope (exit 3).
+
+Money/rate outputs are unit-labeled: `cork_compute` cst-swap-rate/unwind-rate/impairment-floor
+responses carry a `scales` block plus `collateralDecimals`/`referenceDecimals` (mirroring
+resolve-recipe's convention) — read the labels, don't assume 18 decimals. Envelope
+`provenance.digest` / `signedArtifactDigest` are OPAQUE content tags (keccak over key-order-
+sensitive JSON): compare only digests produced by this tool; don't recompute them from
+re-serialized JSON. Absolute-timestamp inputs (`UnixSeconds` fields and market-predict
+`filters.expiry`) are bounded to year 2100 — a `Date.now()` milliseconds paste is rejected with
+teaching instead of creating a far-future deadline.
 
 Field-naming conventions, uniform across every read: the two share tokens are always
 `corkSwapToken` (cST) and `corkPrincipalToken` (cPT) everywhere; the pair's rate-oracle wrapper is
@@ -139,11 +153,16 @@ Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineS
 to the clock, so a later retry produces different bytes); pass an absolute `deadlineAt` (unix
 seconds) to make same-`clientRequestId` retries **byte-identical**. `cork_query
 resource:"account-state"` returns balances AND funding allowances per pool token for both spenders
-(corkAdapter for `erc20-approve` mode, canonical Permit2 for `permit2` mode).
+(corkAdapter for `erc20-approve` mode, canonical Permit2 for `permit2` mode) — plus
+`permit2Internal` (amount + uint48 expiration), the Permit2-INTERNAL (user, token, spender=adapter)
+allowance the permit2 funding leg actually consumes: both layers must be in place or the bundle
+reverts.
 
 ## RPC resolution (chain-backed tools work by default)
 
-Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`, used verbatim)
+Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`; its
+`eth_chainId` is verified once per process — an endpoint answering with the WRONG chain is refused
+as teachable invalid input; an unreachable one is still used verbatim)
 → **built-in default** (committed endpoints for mainnet + Arbitrum, retried with backoff behind a
 per-endpoint circuit breaker) → **chainlist.org fallback** (public chains 1/42161/8453/11155111:
 fetch candidates just-in-time, latency-probe, verify chainId, pick fastest). Chosen endpoint + breaker

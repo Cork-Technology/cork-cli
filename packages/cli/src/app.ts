@@ -8,6 +8,24 @@ import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
+/**
+ * JSON.parse that REFUSES silent integer precision loss: a numeric-field literal like
+ * 2500000000000000001 becomes 2500000000000000000 in a plain parse BEFORE any schema sees it.
+ * Uses the ES2024 reviver `context.source` (raw literal text, supported by Bun/JSC) to detect
+ * an integer literal that no longer round-trips; falls back to a plain parse on engines
+ * without source access. Amount-class fields are strings and unaffected.
+ */
+export function parseJsonPrecise(text: string): unknown {
+  return JSON.parse(text, function reviver(_key: string, value: unknown, context?: { source?: string }) {
+    if (typeof value === "number" && context && typeof context.source === "string" && /^-?\d+$/.test(context.source) && !Number.isSafeInteger(value)) {
+      throw new Error(
+        `integer ${context.source} exceeds JavaScript's safe integer range and would silently lose precision in JSON parsing — pass this value as a decimal STRING (the schema's string-typed fields take arbitrary precision)`,
+      );
+    }
+    return value;
+  } as Parameters<typeof JSON.parse>[1]);
+}
+
 export interface CliResult {
   code: number;
   stdout: string;
@@ -54,6 +72,9 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
     parent
       .command(leafName(tool))
       .description(`[phase ${tool.phase}] ${tool.description}`)
+      // commander v12 silently ignores extra positional args by default — a typo like
+      // `ch query market <poolId>` (input belongs in --json) must error, not half-run.
+      .allowExcessArguments(false)
       .option("--json <json>", "structured tool input as a JSON string")
       .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
       .option("--explain", "print the tool's contract (description + JSON schema) and exit")
@@ -65,7 +86,7 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
         let input: unknown = {};
         if (opts.json) {
           try {
-            input = JSON.parse(opts.json);
+            input = parseJsonPrecise(opts.json);
           } catch (e) {
             err += `${JSON.stringify({ error: { code: "invalid_json", tool: tool.name, message: `invalid --json: ${(e as Error).message}` } })}\n`;
             code = EXIT.invalid;

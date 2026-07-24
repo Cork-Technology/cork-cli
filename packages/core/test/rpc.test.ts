@@ -8,6 +8,7 @@ import {
   filterChainlistRpcs,
   isTransportError,
   reportEndpointFailure,
+  resetExplicitVerification,
   resolveRpc,
   type ProbeResult,
   type RpcConfig,
@@ -61,12 +62,26 @@ const okOn = (urls: string[], chainId = 1, latency: Record<string, number> = {})
   (url: string): ProbeResult => (urls.includes(url) ? { ok: true, chainId, latencyMs: latency[url] ?? 20 } : { ok: false, latencyMs: 999 });
 
 describe("resolveRpc precedence", () => {
-  it("explicit URL wins verbatim and is never probed", async () => {
+  it("explicit URL wins with no fallback; unreachable endpoints are still used verbatim (chainId probe is best-effort)", async () => {
+    resetExplicitVerification();
     const h = harness({ probe: () => ({ ok: false, latencyMs: 999 }) });
     const r = await resolveRpc(1, "https://my.explicit.rpc", CFG, h.deps);
     expect(r?.source).toBe("explicit");
     expect(r?.url).toBe("https://my.explicit.rpc");
-    expect(h.calls.probe).toHaveLength(0);
+    // F21: exactly one eth_chainId verification probe — no fallback probing beyond it.
+    expect(h.calls.probe).toHaveLength(1);
+  });
+
+  it("explicit URL answering with the WRONG chainId is refused (F21), and the verdict is memoized", async () => {
+    resetExplicitVerification();
+    const h = harness({ probe: () => ({ ok: true, chainId: 42161, latencyMs: 5 }) });
+    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
+    // Memoized: a second resolution re-uses the verdict without another probe.
+    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
+    expect(h.calls.probe).toHaveLength(1);
+    // The SAME endpoint serves the chain it actually reports.
+    const ok = await resolveRpc(42161, "https://wrong.chain.rpc", CFG, h.deps);
+    expect(ok?.source).toBe("explicit");
   });
 
   it("uses the committed default when it probes healthy, and caches the choice", async () => {

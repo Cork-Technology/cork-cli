@@ -60,6 +60,25 @@ const U40 = (1n << 40n) - 1n;
 const U96 = (1n << 96n) - 1n;
 const U160 = (1n << 160n) - 1n;
 
+/** Structural sanity of caller-supplied extension bytes: a malformed extension signs fine and
+ *  only fails (or silently misparses) at fill, so refuse to bind a salt to one here. */
+function validateExtensionShape(extension: `0x${string}`): void {
+  const bytes = size(extension);
+  if (bytes < 32) {
+    throw new Error(`extension is ${bytes} byte(s) — a 1inch v4 extension starts with a 32-byte offsets header; a malformed extension would sign fine and then revert or misparse at fill`);
+  }
+  const offsets = BigInt(sliceHex(extension, 0, 32));
+  let prev = 0n;
+  for (let i = 0n; i < 8n; i += 1n) {
+    const o = (offsets >> (32n * i)) & 0xffffffffn;
+    if (o < prev) throw new Error(`extension offsets header is not monotonically non-decreasing at field ${i} — malformed 1inch v4 extension`);
+    prev = o;
+  }
+  if (prev > BigInt(bytes - 32)) {
+    throw new Error(`extension offsets header claims ${prev} bytes of fields but only ${bytes - 32} follow the header — truncated 1inch v4 extension`);
+  }
+}
+
 export interface MakerTraitsParts {
   allowPartialFills: boolean;
   allowMultipleFills: boolean;
@@ -70,13 +89,22 @@ export interface MakerTraitsParts {
 }
 
 export function buildMakerTraits(p: MakerTraitsParts): bigint {
+  // Range-check BEFORE packing: the expiry/nonce slots are 40 bits wide, and `& U40` would
+  // silently wrap an oversized value (a max-safe-integer expiry wraps into the PAST — a signed
+  // order that is permanently unfillable with no error anywhere).
+  if (p.expiry < 0n || p.expiry > U40) {
+    throw new Error(`makerTraits expiry ${p.expiry} does not fit the 40-bit trait slot (max ${U40}, year ~36812) — an oversized value would silently wrap, most likely into an already-expired order. Note expiry here is ABSOLUTE unix seconds`);
+  }
+  if (p.nonce < 0n || p.nonce > U40) {
+    throw new Error(`makerTraits nonce ${p.nonce} does not fit the 40-bit trait slot (max ${U40})`);
+  }
   let t = 0n;
   if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;
   if (p.allowMultipleFills) t |= ALLOW_MULTIPLE_FILLS_FLAG;
   if (p.usePermit2) t |= USE_PERMIT2_FLAG;
   if (p.hasExtension) t |= HAS_EXTENSION_FLAG;
-  t |= (p.expiry & U40) << 80n;
-  t |= (p.nonce & U40) << 120n;
+  t |= p.expiry << 80n;
+  t |= p.nonce << 120n;
   return t; // low 80 bits (allowed sender) = 0 => any taker
 }
 
@@ -144,6 +172,7 @@ export interface MakerOrderResult {
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const hasExtension = a.extension !== undefined && a.extension !== "0x";
+  if (hasExtension) validateExtensionShape(a.extension!);
   // Deterministic salt from the idempotency key. Plain order: low 160 bits of keccak(id).
   // Extension order: low 160 bits MUST be keccak(extension)'s low 160 (OrderLib fill check);
   // the idempotency-derived entropy moves to the free top 96 bits.
@@ -270,9 +299,22 @@ export interface TakerFillResult {
   requiredTakingAmount: string;
 }
 
-/** Build unsigned 1inch v6 taker-fill calldata for a resting maker order. Executes nothing. */
+/** Build unsigned 1inch v6 taker-fill calldata for a resting maker order. Executes nothing.
+ *  Amounts are DERIVED-AND-CLAMPED against the signed order itself: an over-ask does not
+ *  inflate the reported amounts (10x-wrong slippage caps), and a partial fill of a signed
+ *  all-or-nothing order is refused here instead of reverting on-chain. */
 export function buildTakerFill(a: TakerFillArgs): TakerFillResult {
+  if (a.order.makingAmount === 0n) {
+    throw new Error("buildTakerFill: the resting order's makingAmount is 0 — a malformed order row; nothing can be filled");
+  }
   const making = a.fillMakingAmount ?? a.order.makingAmount;
+  if (making === 0n) throw new Error("buildTakerFill: fillMakingAmount must be positive");
+  if (making > a.order.makingAmount) {
+    throw new Error(`buildTakerFill: fillMakingAmount ${making} exceeds the order's signed makingAmount ${a.order.makingAmount} — 1inch would clamp the fill on-chain, so the reported amounts and the taking-amount slippage cap would both be wrong; pass at most the order's makingAmount (or omit for a full fill)`);
+  }
+  if (making < a.order.makingAmount && (a.order.makerTraits & NO_PARTIAL_FILLS_FLAG) !== 0n) {
+    throw new Error(`buildTakerFill: this order's makerTraits set NO_PARTIAL_FILLS — a partial fill of ${making}/${a.order.makingAmount} would revert on-chain; fill the full makingAmount or skip the order`);
+  }
   // Exact taking for a full fill; ceil(making * takingAmount / makingAmount) for a partial.
   const requiredTaking =
     making === a.order.makingAmount

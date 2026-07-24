@@ -72,11 +72,15 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       // Even the failure path honors the advertised outputSchema: a minimal error envelope as
       // structuredContent, with the teaching payload (issues/remediation/corrected example) as its
       // data so the agent's next call can succeed without a doc lookup [v2 §5.4].
+      // provenance.chainId echoes the REQUESTED chain when one was passed — a hardcoded 1 misled
+      // clients that branch on it (F20).
+      const requestedChain = (args as { chainId?: unknown } | undefined)?.chainId;
+      const chainId = typeof requestedChain === "number" && [1, 42161, 8453, 11155111, 49222].includes(requestedChain) ? (requestedChain as 1) : (1 as const);
       const errorEnvelope = {
         state: "unavailable" as const,
         data: teaching ?? null,
         warnings: [{ code: invalid ? "invalid_input" : "internal_error", message }],
-        provenance: { source: "config" as const, chainId: 1 as const, fetchedAt: new Date().toISOString() },
+        provenance: { source: "config" as const, chainId, fetchedAt: new Date().toISOString() },
         schemaVersion: SCHEMA_VERSION,
       };
       // Still resultType "complete": SEP-1303 keeps validation failures IN-BAND (isError results

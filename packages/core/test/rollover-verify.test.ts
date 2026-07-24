@@ -127,9 +127,12 @@ describe("event-history leg (HyperRPC-shaped logs endpoint)", () => {
 });
 
 describe("helpers", () => {
-  it("status names follow RolloverTypes.OrderStatus enum order; out-of-range falls back to None", () => {
+  it("status names follow RolloverTypes.OrderStatus enum order; out-of-range is reported honestly", () => {
     expect([0, 1, 2, 3, 4, 5].map(chainStatusName)).toEqual(["None", "Opened", "Settled", "Expired", "Cancelled", "Closing"]);
-    expect(chainStatusName(99)).toBe("None"); // unknown enum value never crashes
+    // An unknown enum value must never masquerade as "None": that could fabricate a
+    // status_mismatch (venue OPENED vs fake None) or mask one (venue PENDING matching fake None).
+    expect(chainStatusName(99)).toBe("unknown(99)");
+    expect(venueChainConsistent("PENDING", chainStatusName(99))).toBe(false);
   });
   it("venue sub-states (PARTIALLY_FILLED/AWAITING_PREMIUM) map to chain Opened", () => {
     expect(venueChainConsistent("PARTIALLY_FILLED", "Opened")).toBe(true);
@@ -217,7 +220,7 @@ describe("labelLogs", () => {
       { address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0x", blockNumber: "0x1de5b3a1", transactionHash: `0x${"cd".repeat(32)}`, logIndex: "0x1" },
     ]);
     expect(labeled[0]?.event).toBe("OrderSettled");
-    expect(labeled[0]?.blockNumber).toBe(0x1de5b3a0);
+    expect(labeled[0]?.blockNumber).toBe(String(0x1de5b3a0)); // chain integers ride as strings (F10)
     expect(labeled[1]?.event).toBe("unknown (topic0 0xdededede…)");
   });
   it("does not throw on a log with no topics", () => {

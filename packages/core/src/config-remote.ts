@@ -90,11 +90,15 @@ export interface ResolvedConfig {
 /** Outcome of one remote attempt: content, or "the file is not published there" (404/410). */
 export type RemoteFetchResult = { kind: "ok"; data: unknown } | { kind: "absent" };
 
-/** On-disk cache entry: a successful fetch (`defaults`) or a recent negative outcome (`failure`). */
+/** On-disk cache entry: a successful fetch (`defaults`) or a recent negative outcome (`failure`).
+ *  `failedAt` marks a refresh attempt that failed TRANSIENTLY while good `defaults` were already
+ *  stored — the good copy is kept (never overwritten by a failure marker, F16) and served stale
+ *  until the failure back-off elapses. */
 export interface StoredCache {
   fetchedAt: number;
   defaults?: unknown;
   failure?: "absent" | "error";
+  failedAt?: number;
 }
 
 export interface ConfigDeps {
@@ -146,6 +150,12 @@ export function realConfigDeps(): ConfigDeps {
   };
 }
 
+export const STALE_CACHE_WARNING = {
+  code: "config_fetch_failed",
+  message:
+    "could not refresh cork-defaults.json from GitHub — serving the last successfully fetched copy (may be up to a refresh cycle stale); will retry after the failure back-off",
+} as const;
+
 export const FETCH_FAILED_WARNING = {
   code: "config_fetch_failed",
   message:
@@ -187,12 +197,27 @@ export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promis
   };
 
   const cached = deps.loadCache();
-  if (cached && now - cached.fetchedAt < (cached.failure ? FAILURE_TTL_MS : TTL_MS)) {
-    if (cached.failure) return remember(fromFailure(cached.failure), FAILURE_TTL_MS);
+  // Parse any stored GOOD defaults up front: they are the fallback of record for transient
+  // refresh failures (F16 — a 10-minute network blip must never roll addresses back to the
+  // bundled copy when a fresher fetched copy is on disk).
+  let staleGood: CorkDefaults | null = null;
+  if (cached?.defaults !== undefined) {
     try {
-      return remember({ defaults: parseDefaults(cached.defaults), source: "cache" }, TTL_MS);
+      staleGood = parseDefaults(cached.defaults);
     } catch {
-      /* corrupt cache — fall through to a fresh fetch */
+      /* corrupt cache — treat as absent */
+    }
+  }
+  if (cached && staleGood === null && cached.failure && now - cached.fetchedAt < FAILURE_TTL_MS) {
+    return remember(fromFailure(cached.failure), FAILURE_TTL_MS);
+  }
+  if (cached && staleGood !== null) {
+    if (now - cached.fetchedAt < TTL_MS) {
+      return remember({ defaults: staleGood, source: "cache" }, TTL_MS);
+    }
+    // Expired, but a refresh failed recently: keep serving the last GOOD copy during the back-off.
+    if (cached.failedAt !== undefined && now - cached.failedAt < FAILURE_TTL_MS) {
+      return remember({ defaults: staleGood, source: "cache", warning: STALE_CACHE_WARNING }, FAILURE_TTL_MS);
     }
   }
 
@@ -207,6 +232,12 @@ export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promis
     failure = "absent";
   } catch {
     failure = "error";
+  }
+  if (failure === "error" && staleGood !== null && cached) {
+    // Transient failure with a good copy on disk: keep the good copy (mark the failed attempt),
+    // serve it stale with a warning. Never overwrite fetched-good defaults with a failure marker.
+    deps.saveCache({ ...cached, failedAt: now });
+    return remember({ defaults: staleGood, source: "cache", warning: STALE_CACHE_WARNING }, FAILURE_TTL_MS);
   }
   deps.saveCache({ fetchedAt: now, failure });
   return remember(fromFailure(failure), FAILURE_TTL_MS);
