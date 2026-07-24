@@ -958,7 +958,7 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
   const rpc = rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
   const ca = filters.collateralAsset, ref = filters.referenceAsset, mode = filters.mode, expiry = filters.expiry;
-  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry: expiry.toString(), mode };
+  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, mode }; // envelope's jsonSafe stringifies the bigint
   try {
     // Recipe bands — an unknown mode would revert the fill with EntryNotFound.
     const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });
@@ -1003,7 +1003,7 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
         resource: input.resource,
         chainId,
         input: inputEcho,
-        oracle: { address: oracle, deployed: true, deployable: true, rate: rate.toString() },
+        oracle: { address: oracle, deployed: true, deployable: true, rate },
         market: { poolId: derived.poolId, exists: shares.exists, scale: "resolved constraints are ABSOLUTE rates, 1e18 = 1.0", resolved: derived.resolved },
         shares: shares.cst || shares.cpt ? { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } : null,
       },

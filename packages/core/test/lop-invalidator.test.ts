@@ -13,6 +13,7 @@ import {
   runTool,
   type HandlerContext,
 } from "@cork/core";
+import { stubResolved } from "./helpers.ts";
 
 const U256_MAX = (1n << 256n) - 1n;
 const HASH = `0x${"7".repeat(64)}`;
@@ -84,7 +85,7 @@ function stubCtx(args: {
     resolveRpc:
       args.chainRead === undefined
         ? async () => null
-        : async () => ({ url: "https://stub/rpc", source: "explicit" as const, client: { readContract: async () => args.chainRead } as never }),
+        : async () => stubResolved({ readContract: async () => args.chainRead }),
   };
 }
 

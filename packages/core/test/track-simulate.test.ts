@@ -2,6 +2,7 @@
 // A revert is a successful simulation whose answer is wouldRevert:true, never a fabricated error.
 import { describe, expect, it } from "vitest";
 import { runTool, type HandlerContext } from "@cork/core";
+import { stubResolved } from "./helpers.ts";
 
 const TO = "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13";
 const ACCT = "0xc0ffee0000000000000000000000000000000001";
@@ -9,10 +10,8 @@ const ACCT = "0xc0ffee0000000000000000000000000000000001";
 function ctx(behavior: { callOk?: `0x${string}`; callThrow?: Error; gas?: bigint }): HandlerContext {
   return {
     nowSeconds: 1_790_000_000n,
-    resolveRpc: async () => ({
-      url: "https://stub/rpc",
-      source: "explicit" as const,
-      client: {
+    resolveRpc: async () =>
+      stubResolved({
         call: async () => {
           if (behavior.callThrow) throw behavior.callThrow;
           return { data: behavior.callOk };
@@ -21,8 +20,7 @@ function ctx(behavior: { callOk?: `0x${string}`; callThrow?: Error; gas?: bigint
           if (behavior.gas === undefined) throw new Error("estimate unsupported");
           return behavior.gas;
         },
-      } as never,
-    }),
+      }),
   };
 }
 

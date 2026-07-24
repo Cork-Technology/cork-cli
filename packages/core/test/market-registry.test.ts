@@ -19,6 +19,7 @@ import {
   type ConstraintBands,
   type HandlerContext,
 } from "@cork/core";
+import { stubRpc, type StubCall } from "./helpers.ts";
 
 const WAD = 10n ** 18n;
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
@@ -129,23 +130,12 @@ describe("deriveJitMarket: the fill-time derivation, computable before deploymen
 });
 
 // ── handler paths (offline; injected RPC stub answering registry views) ─────
-type Call = { functionName: string; args?: readonly unknown[]; address: string };
-function stubRpc(handler: (c: Call) => unknown): NonNullable<HandlerContext["resolveRpc"]> {
-  return async () => ({
-    url: "https://stub/rpc",
-    source: "explicit" as const,
-    client: {
-      readContract: async (c: Call) => handler(c),
-      simulateContract: async (c: Call) => ({ result: handler({ ...c, functionName: `simulate:${c.functionName}` }) }),
-    } as never,
-  });
-}
-
+// stubRpc / StubCall are the shared offline resolver (see test/helpers.ts).
 const LIQ = { mode: "liquidity", rateMin: 99n * WAD, rateMax: 100n * WAD, rateChangePerDayMax: 100n * WAD, rateChangeCapacityMax: 100n * WAD };
 const ORACLE = "0x00000000000000000000000000000000000000fe";
 
 describe("cork_query registry-* (chain views)", () => {
-  const ctx = (handler: (c: Call) => unknown): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(handler) });
+  const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(handler) });
 
   it("registry-recipes lists modes with the two-scales note", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes" }, ctx((c) => {
@@ -233,17 +223,9 @@ describe("cork_query registry-* (chain views)", () => {
 });
 
 describe("cork_query market-predict (registry+adapter derivation of a not-yet-existing market)", () => {
-  const ctx = (handler: (c: Call) => unknown, simulateCalls?: (a: { account: string; calls: { to: string; data: string }[] }) => unknown): HandlerContext => ({
+  const ctx = (handler: (c: StubCall) => unknown, simulateCalls?: (a: { account: string; calls: { to: string; data: string }[] }) => unknown): HandlerContext => ({
     nowSeconds: 1_790_000_000n,
-    resolveRpc: async () => ({
-      url: "https://stub/rpc",
-      source: "explicit" as const,
-      client: {
-        readContract: async (c: Call) => handler(c),
-        simulateContract: async (c: Call) => ({ result: handler({ ...c, functionName: `simulate:${c.functionName}` }) }),
-        simulateCalls: async (a: never) => (simulateCalls ? simulateCalls(a) : { results: [] }),
-      } as never,
-    }),
+    resolveRpc: stubRpc(handler, { simulateCalls }),
   });
   // Live-captured ground truth (see deriveJitMarket parity test above).
   const GT = {

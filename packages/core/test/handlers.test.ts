@@ -12,6 +12,7 @@ import {
   type LopOrder,
   type SafeSwapParams,
 } from "@cork/core";
+import { stubResolved } from "./helpers.ts";
 
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
@@ -103,18 +104,19 @@ describe("runTool: cork_query", () => {
 });
 
 // A resolver stub whose client fails on first use — drives the chain_read_failed path offline.
-const throwingResolver = async () => ({
-  url: "https://stub.invalid/rpc",
-  source: "default" as const,
-  client: {
-    getBlockNumber: async () => {
-      throw Object.assign(new Error("execution reverted\nlong viem detail"), { shortMessage: "The contract function \"swapRate\" reverted." });
+const throwingResolver = async () =>
+  stubResolved(
+    {
+      getBlockNumber: async () => {
+        throw Object.assign(new Error("execution reverted\nlong viem detail"), { shortMessage: "The contract function \"swapRate\" reverted." });
+      },
+      readContract: async () => {
+        throw new Error("should not reach");
+      },
     },
-    readContract: async () => {
-      throw new Error("should not reach");
-    },
-  } as never,
-});
+    "default",
+    "https://stub.invalid/rpc",
+  );
 
 describe("chain-read failures map to envelopes (never raw exceptions)", () => {
   it("compute cst-swap-rate: revert → unavailable + chain_read_failed", async () => {
