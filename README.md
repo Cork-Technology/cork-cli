@@ -105,8 +105,9 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 
 Arbitrum (chainId 42161) is a **full** deployment like mainnet (announced 2026-07-22, bindings
 verified on-chain): reads, bundle building, orders, and the MarketRegistry resources
-(registry-assets / registry-oracle / registry-recipes, plus `cork_prepare_market` oracle deploys)
-all work there.
+(registry-assets / registry-oracle / registry-recipes / market-predict, plus `cork_prepare_market`
+oracle deploys) all work there. `market-predict` derives the market a JIT LOP fill would create —
+predicted oracle, pool id, resolved bands, and cST/cPT tokens — before anything is deployed or signed.
 
 The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, the RFQ discovery
 feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served from
@@ -245,7 +246,8 @@ Implemented + tested:
   (permissionless, idempotent; Arbitrum). Q-REG closed 2026-07-22.
 - **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
   spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
-  registry-recipes); venue-backed reads (markets, orderbook, fills, limit-order-markets, flows,
+  registry-recipes / market-predict — predict a market's oracle, pool id, bands, and cST/cPT before
+  it exists); venue-backed reads (markets, orderbook, fills, limit-order-markets, flows,
   rfqs — incl. single-RFQ lookup via `filters.rfqId`); an event-derived subset (markets, fills,
   flows) also serves `full-decentralized` mode over HyperSync.
 - **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run

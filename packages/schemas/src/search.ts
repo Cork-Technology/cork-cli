@@ -28,6 +28,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets" },
     { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price feed exists" },
     { variant: "registry-recipes", text: "recipes constraint bands risk presets modes liquidity fixed percentage" },
+    { variant: "market-predict", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate bands preview what pool would a fill create addresses" },
     { variant: "rfqs", text: "rfq request for quote list open requests answers underwriter discovery feed poll" },
   ],
   cork_compute: [

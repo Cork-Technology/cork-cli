@@ -59,10 +59,11 @@ export const QueryInput = z.object({
       "registry-assets",
       "registry-oracle",
       "registry-recipes",
+      "market-predict",
       "rfqs",
     ])
     .describe(
-      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; deployed/deployable/why-not); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers)",
+      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; deployed/deployable/why-not); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%); market-predict=derive a market BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+mode): predicted rate oracle+live rate, pool id, resolved bands, cST/cPT tokens, and whether the pool already exists — the same derivation a JIT LOP fill runs (Arbitrum One); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers)",
     ),
   chainId: ChainId.optional(),
   mode: DataMode.optional(),
@@ -70,7 +71,7 @@ export const QueryInput = z.object({
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle — ORDER MATTERS, collateral first), mode (registry-recipes single lookup — exact case-sensitive string), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers). Unknown keys are a teachable error",
+      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & market-predict — ORDER MATTERS, collateral first), mode (registry-recipes/market-predict — exact case-sensitive string), expiry (market-predict — market expiry as unix seconds, decimal string), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers). Unknown keys are a teachable error",
     ),
   cursor: z.string().optional().describe("opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"),
   pageSize: z.number().int().min(1).max(200).default(25).describe("items requested per venue page during traversal"),

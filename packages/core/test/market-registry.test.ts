@@ -106,6 +106,26 @@ describe("deriveJitMarket: the fill-time derivation, computable before deploymen
     expect(a.poolId).not.toBe(c.poolId);
     expect(a.market.rateOracle).toBe(ACCT);
   });
+
+  // Ground truth captured 2026-07-24 from the live market-registry-api:
+  //   GET zian-b.feat.cork.tech/v1/42161/market/predict?collateralAsset=sUSDe&referenceAsset=waArbUSDCn
+  //       &expiry=1900000000&mode=liquidity  (pool did not exist; oracle deployed, live rate).
+  // Locks our LOCAL derivation (applyBandsLocal + computeMarketId) to the on-chain adapter's result
+  // wei-for-wei — if the struct layout or band math ever drifts, this fails.
+  it("reproduces the live API pool_id + resolved bands bit-for-bit (liquidity, real Arbitrum pair)", () => {
+    const gt = {
+      oracle: "0x2ba2103a37c4cff9dbb96e6f74513923d960d757" as `0x${string}`,
+      rate: 806233879660299371n,
+      // liquidity percentage bands (raw 1e18 = 1%): min 99% (→ floor at 1% of rate),
+      // max 100% (→ ceiling at 2× rate), per-day 100%, capacity 100%.
+      bands: { mode: "liquidity", rateMin: 99n * WAD, rateMax: 100n * WAD, rateChangePerDayMax: 100n * WAD, rateChangeCapacityMax: 100n * WAD } as ConstraintBands,
+      poolId: "0xda9325fad061bbcaa92fdec93d81398ca31ad1494c16ac658b9cc67079078c75",
+      resolved: { rateMin: 8062338796602994n, rateMax: 1612467759320598742n, rateChangePerDayMax: 806233879660299371n, rateChangeCapacityMax: 806233879660299371n },
+    };
+    const d = deriveJitMarket({ params: { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1900000000n, mode: "liquidity" }, oracle: gt.oracle, rate: gt.rate, bands: gt.bands });
+    expect(d.poolId).toBe(gt.poolId);
+    expect(d.resolved).toEqual(gt.resolved);
+  });
 });
 
 // ── handler paths (offline; injected RPC stub answering registry views) ─────
@@ -203,6 +223,145 @@ describe("cork_query registry-* (chain views)", () => {
 
   it("no registry on mainnet → unknown_deployment naming 42161", async () => {
     const env = await runTool("cork_query", { chainId: 1, resource: "registry-recipes" }, { nowSeconds: 1n, resolveRpc: async () => null });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+    expect(env.warnings[0]?.message).toContain("42161");
+  });
+});
+
+describe("cork_query market-predict (registry+adapter derivation of a not-yet-existing market)", () => {
+  const ctx = (handler: (c: Call) => unknown, simulateCalls?: (a: { account: string; calls: { to: string; data: string }[] }) => unknown): HandlerContext => ({
+    nowSeconds: 1_790_000_000n,
+    resolveRpc: async () => ({
+      url: "https://stub/rpc",
+      source: "explicit" as const,
+      client: {
+        readContract: async (c: Call) => handler(c),
+        simulateContract: async (c: Call) => ({ result: handler({ ...c, functionName: `simulate:${c.functionName}` }) }),
+        simulateCalls: async (a: never) => (simulateCalls ? simulateCalls(a) : { results: [] }),
+      } as never,
+    }),
+  });
+  // Live-captured ground truth (see deriveJitMarket parity test above).
+  const GT = {
+    rate: 806233879660299371n,
+    poolId: "0xda9325fad061bbcaa92fdec93d81398ca31ad1494c16ac658b9cc67079078c75",
+    cst: "0x5d16b802b397dffced2468f63b936a835dc8bf10",
+    cpt: "0x77db0b6c1d956865c2b3217f90be1a394ba08f4c",
+    bands: { mode: "liquidity", rateMin: 99n * WAD, rateMax: 100n * WAD, rateChangePerDayMax: 100n * WAD, rateChangeCapacityMax: 100n * WAD },
+  };
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const sharesWord = (a: string) => "000000000000000000000000" + a.replace(/^0x/, "").toLowerCase();
+
+  it("missing any of ca/ref/expiry/mode → missing_filter (no chain call)", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, mode: "liquidity" } }, ctx(() => { throw new Error("must not read chain"); }));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("missing_filter");
+  });
+
+  it("ca === ref is an invalid-input teaching error", async () => {
+    await expect(runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", mode: "liquidity" } }, ctx(() => 0))).rejects.toThrow(/invalid input/);
+  });
+
+  it("unknown mode → recipe_not_found naming the real modes", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "Liquidity" } }, ctx((c) => {
+      if (c.functionName === "lookupRecipe") return [false, GT.bands];
+      if (c.functionName === "getRecipes") return [[GT.bands], ["liquidity", "fixed"], 2n];
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("recipe_not_found");
+    expect(env.warnings[0]?.message).toContain("liquidity, fixed");
+  });
+
+  it("deployable-but-not-deployed oracle → ok, oracle-only, market/shares null, oracle_not_deployed", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
+      if (c.functionName === "lookupRecipe") return [true, GT.bands];
+      if (c.functionName === "lookupWrapper") return ZERO;
+      if (c.functionName === "simulate:deploy") return "0x00000000000000000000000000000000000000fe";
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("ok");
+    const d = env.data as { oracle: { deployed: boolean; deployable: boolean }; market: unknown; shares: unknown };
+    expect(d.oracle.deployed).toBe(false);
+    expect(d.oracle.deployable).toBe(true);
+    expect(d.market).toBeNull();
+    expect(env.warnings.some((w) => w.code === "oracle_not_deployed")).toBe(true);
+  });
+
+  it("full prediction (deployed oracle, pool NOT created): local pool_id matches the live API, cST/cPT simulated, rate_drift_notice", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx(
+      (c) => {
+        if (c.functionName === "lookupRecipe") return [true, GT.bands];
+        if (c.functionName === "lookupWrapper") return "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+        if (c.functionName === "rate") return GT.rate;
+        if (c.functionName === "applyBands") return applyBandsLocal(GT.bands, GT.rate); // chain agrees
+        if (c.functionName === "shares") return [ZERO, ZERO]; // pool does not exist yet
+        throw new Error(`unexpected ${c.functionName}`);
+      },
+      () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(GT.cpt) + sharesWord(GT.cst) }] }),
+    ));
+    expect(env.state).toBe("ok");
+    const d = env.data as { oracle: { deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { cst: string; cpt: string; source: string } };
+    expect(d.oracle.deployed).toBe(true);
+    expect(BigInt(d.oracle.rate)).toBe(GT.rate);
+    expect(d.market.poolId).toBe(GT.poolId); // end-to-end parity with the live endpoint
+    expect(d.market.exists).toBe(false);
+    expect(d.shares.cst.toLowerCase()).toBe(GT.cst);
+    expect(d.shares.cpt.toLowerCase()).toBe(GT.cpt);
+    expect(d.shares.source).toBe("simulated");
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(true);
+  });
+
+  it("existing pool → pinned cST/cPT read straight from poolManager, no drift notice", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
+      if (c.functionName === "lookupRecipe") return [true, GT.bands];
+      if (c.functionName === "lookupWrapper") return "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+      if (c.functionName === "rate") return GT.rate;
+      if (c.functionName === "applyBands") return applyBandsLocal(GT.bands, GT.rate);
+      if (c.functionName === "shares") return [GT.cpt, GT.cst]; // pool exists → pinned
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("ok");
+    const d = env.data as { market: { exists: boolean }; shares: { source: string } };
+    expect(d.market.exists).toBe(true);
+    expect(d.shares.source).toBe("read");
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
+  });
+
+  it("share prediction gap is disclosed but pool_id/oracle/bands still returned (more capable than a 503)", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx(
+      (c) => {
+        if (c.functionName === "lookupRecipe") return [true, GT.bands];
+        if (c.functionName === "lookupWrapper") return "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+        if (c.functionName === "rate") return GT.rate;
+        if (c.functionName === "applyBands") return applyBandsLocal(GT.bands, GT.rate);
+        if (c.functionName === "shares") return [ZERO, ZERO];
+        throw new Error(`unexpected ${c.functionName}`);
+      },
+      () => { throw new Error("eth_simulateV1 not supported"); },
+    ));
+    expect(env.state).toBe("ok");
+    const d = env.data as { market: { poolId: string }; shares: unknown };
+    expect(d.market.poolId).toBe(GT.poolId);
+    expect(d.shares).toBeNull();
+    expect(env.warnings.some((w) => w.code === "share_prediction_unavailable")).toBe(true);
+  });
+
+  it("a disagreeing chain applyBands → CONFLICT band_parity_mismatch (never serve unverified identity)", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
+      if (c.functionName === "lookupRecipe") return [true, GT.bands];
+      if (c.functionName === "lookupWrapper") return "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+      if (c.functionName === "rate") return GT.rate;
+      if (c.functionName === "applyBands") return { ...applyBandsLocal(GT.bands, GT.rate), rateMax: 1n }; // tampered
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("band_parity_mismatch");
+  });
+
+  it("no registry on mainnet → unknown_deployment naming 42161", async () => {
+    const env = await runTool("cork_query", { chainId: 1, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, { nowSeconds: 1n, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("unknown_deployment");
     expect(env.warnings[0]?.message).toContain("42161");

@@ -3,7 +3,7 @@
 // a chain with NO committed default (Base 8453) falls back to a real chainlist public RPC.
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { resolveRpc } from "@cork/core";
+import { resolveRpc, runTool } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -30,4 +30,48 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
     await resolveRpc(1, undefined);
     expect(existsSync(process.env.CORK_RPC_CACHE_FILE!)).toBe(true);
   }, 30_000);
+});
+
+// End-to-end parity: our chain-native market-predict (built-in Arbitrum RPC) vs the live
+// market-registry read API. The API comparison is best-effort — if the sandbox is unreachable we
+// still assert our own derivation is coherent, but do not fail the run on the external dependency.
+interface ApiPredict {
+  oracle: { address: string; deployed: boolean; rate: string | null };
+  market: { pool_id: string; exists: boolean } | null;
+  shares: { shares_token: string; principal_token: string } | null;
+}
+describe.skipIf(!LIVE)("cork_query market-predict — live parity vs the market-registry read API", () => {
+  const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
+  const REF = "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc"; // waArbUSDCn
+  const API = process.env.CORK_MARKET_API ?? "https://zian-b.feat.cork.tech";
+
+  it("matches the API oracle (always) + pool_id & cST/cPT (when both saw the same rate step)", async () => {
+    const ours = await runTool(
+      "cork_query",
+      { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" }, format: "concise" },
+      { nowSeconds: 1_790_000_000n },
+    );
+    expect(ours.state).toBe("ok");
+    const od = ours.data as { oracle: { address: string; deployed: boolean; rate: string }; market: { poolId: string; exists: boolean }; shares: { cst: string; cpt: string } | null };
+    expect(od.oracle.deployed).toBe(true);
+    expect(od.market.poolId).toMatch(/^0x[0-9a-f]{64}$/);
+
+    let api: ApiPredict | undefined;
+    try {
+      const res = await fetch(`${API}/v1/42161/market/predict?collateralAsset=${CA.toLowerCase()}&referenceAsset=${REF.toLowerCase()}&expiry=1900000000&mode=liquidity`);
+      if (res.ok) api = (await res.json()) as ApiPredict;
+    } catch { /* sandbox down — keep the self-consistency assertions above, skip the cross-check */ }
+    if (!api) return;
+
+    expect(od.oracle.address.toLowerCase()).toBe(api.oracle.address.toLowerCase());
+    // pool_id / shares are rate-conditioned; only identical when both calls landed on the same rate.
+    if (od.oracle.rate === api.oracle.rate && api.market) {
+      expect(od.market.poolId).toBe(api.market.pool_id);
+      expect(od.market.exists).toBe(api.market.exists);
+      if (od.shares && api.shares) {
+        expect(od.shares.cst.toLowerCase()).toBe(api.shares.shares_token.toLowerCase());
+        expect(od.shares.cpt.toLowerCase()).toBe(api.shares.principal_token.toLowerCase());
+      }
+    }
+  }, 90_000);
 });

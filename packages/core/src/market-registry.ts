@@ -7,8 +7,11 @@
 // market from the registry recipe against the LIVE oracle rate, creates the pool if missing,
 // and (maker-side, gated by enableJitMint) mints the cST just in time.
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
+import type { PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import type { Market } from "./types.ts";
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 // ── ABIs (verified against Sourcify-published ABIs / INTEGRATOR.md) ──────────
 export const marketRegistryAbi = parseAbi([
@@ -217,6 +220,70 @@ const sharesAbi = parseAbi(["function shares(bytes32 poolId) view returns (addre
 /** poolManager.shares(poolId) calldata, for the second leg of the prediction simulation. */
 export function buildSharesCall(poolId: `0x${string}`): `0x${string}` {
   return encodeFunctionData({ abi: sharesAbi, functionName: "shares", args: [poolId] });
+}
+
+/** The pool's two share tokens as the chain would produce them for `poolId`.
+ *  - `read`: the pool already exists — the addresses are PINNED (read straight from poolManager).
+ *  - `simulated`: the pool does not exist — created in-memory via eth_simulateV1 (from the adapter,
+ *    which holds POOL_CREATOR_ROLE) then read back; rate-conditioned, unpinned until real creation.
+ *  - `unavailable`: the RPC lacks eth_simulateV1 or the simulation reverted — cST/cPT unknown.
+ *  cST/cPT are deployed via plain `new PoolShare(...)` (nonce CREATE, NOT CREATE2 — see
+ *  SharesFactory.sol), so there is no off-chain address derivation: simulation is the only predictor.
+ *  Fees are NOT part of market identity, so any fee values yield the same tokens; callers that only
+ *  want the tokens can pass 0. */
+export interface PredictSharesResult {
+  cst?: `0x${string}` | undefined;
+  cpt?: `0x${string}` | undefined;
+  exists: boolean;
+  status: "read" | "simulated" | "unavailable";
+}
+
+export async function predictShares(
+  client: PublicClient,
+  args: {
+    adapter: `0x${string}`;
+    controller: `0x${string}`;
+    poolManager: `0x${string}`;
+    market: Market;
+    poolId: `0x${string}`;
+    unwindSwapFeePercentage?: bigint;
+    swapFeePercentage?: bigint;
+  },
+): Promise<PredictSharesResult> {
+  // 1. Direct read — a non-zero swapToken means the pool exists; both addresses are pinned.
+  try {
+    const [principalToken, swapToken] = (await client.readContract({
+      address: args.poolManager,
+      abi: sharesAbi,
+      functionName: "shares",
+      args: [args.poolId],
+    })) as readonly [`0x${string}`, `0x${string}`];
+    if (swapToken !== ZERO_ADDRESS) {
+      return { cst: getAddress(swapToken), cpt: principalToken === ZERO_ADDRESS ? undefined : getAddress(principalToken), exists: true, status: "read" };
+    }
+  } catch {
+    /* pool does not exist yet — fall through to simulation */
+  }
+  // 2. Simulate the creation the fill would perform, then read shares(poolId) in the same call.
+  try {
+    const createData = buildCreatePoolCall(args.market, args.unwindSwapFeePercentage ?? 0n, args.swapFeePercentage ?? 0n);
+    const simulated = await client.simulateCalls({
+      account: args.adapter,
+      calls: [
+        { to: args.controller, data: createData },
+        { to: args.poolManager, data: buildSharesCall(args.poolId) },
+      ],
+    });
+    const last = simulated.results[1];
+    if (last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {
+      const cpt = getAddress(`0x${last.data.slice(2 + 24, 2 + 64)}`);
+      const cst = getAddress(`0x${last.data.slice(2 + 64 + 24, 2 + 128)}`);
+      return { cst, cpt, exists: false, status: "simulated" };
+    }
+  } catch {
+    /* eth_simulateV1 unsupported or the simulation reverted */
+  }
+  return { exists: false, status: "unavailable" };
 }
 
 // ── JIT lifecycle events (adapter source, frozen signatures) ─────────────────

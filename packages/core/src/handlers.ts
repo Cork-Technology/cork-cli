@@ -38,10 +38,10 @@ import { decodeBundle } from "./bundle/decode.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, type ResolvedRpc } from "./chain/rpc.ts";
-import { erc20Abi, poolManagerAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
+import { erc20Abi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
-import { accessControlAbi, applyBandsLocal, buildCreatePoolCall, buildDeployOracleCall, buildJitExtension, buildSharesCall, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, type ConstraintBands, type PermitParams } from "./market-registry.ts";
+import { accessControlAbi, applyBandsLocal, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, predictShares, type ConstraintBands, type PermitParams, type PredictSharesResult } from "./market-registry.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
@@ -418,6 +418,7 @@ interface QueryFilters {
   collateralAsset?: `0x${string}`;
   referenceAsset?: `0x${string}`;
   mode?: string;
+  expiry?: bigint;
   rfqId?: string;
   state?: "open" | "expired";
   withAnswers?: boolean;
@@ -440,6 +441,7 @@ export const KNOWN_FILTER_KEYS = [
   "collateralAsset",
   "referenceAsset",
   "mode",
+  "expiry",
   "rfqId",
   "state",
   "withAnswers",
@@ -505,6 +507,12 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
     }
   }
   if (raw?.mode !== undefined) out.mode = String(raw.mode);
+  // market-predict: expiry as a unix-seconds decimal string (part of the derived market identity).
+  if (raw?.expiry !== undefined) {
+    const v = String(raw.expiry);
+    if (!/^\d+$/.test(v)) fail("expiry", "expected a unix timestamp in seconds (a non-negative integer, decimal string)");
+    else out.expiry = BigInt(v);
+  }
   // RFQ feed (venue ids are opaque but always rfq_-prefixed — same guard the venue itself applies).
   if (raw?.rfqId !== undefined) {
     const v = String(raw.rfqId);
@@ -746,6 +754,10 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
   if (input.resource === "registry-assets" || input.resource === "registry-oracle" || input.resource === "registry-recipes") {
     return handleQueryRegistry(input, filters, chainId, ctx);
   }
+  // market-predict — the registry+adapter derivation of a market that may not exist yet.
+  if (input.resource === "market-predict") {
+    return handleQueryMarketPredict(input, filters, chainId, ctx);
+  }
   const { dep, depWarn } = await getDep(ctx, chainId);
 
   // protocol-config is pure config (no RPC needed).
@@ -913,6 +925,87 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
       const reason = err instanceof Error ? (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0]) : String(err);
       return envelope({ state: "ok", data: { resource: input.resource, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, deployed: false, deployable: false, reason: reason?.trim(), note: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill for it would revert" }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
+  } catch (err) {
+    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+  }
+}
+
+/** market-predict: derive the market a JIT LOP fill would produce for (collateralAsset,
+ *  referenceAsset, expiry, mode) BEFORE it exists — predicted rate oracle (+ live rate), pool id,
+ *  resolved constraint bands, cST/cPT tokens, and whether the pool already exists. It composes the
+ *  registry views + our verified computeMarketId + an eth_simulateV1 share prediction — the same
+ *  derivation the adapter runs at fill time. Chain-native (no dependency on the read API); the pool
+ *  id is computed LOCALLY, so it is returned even when the RPC lacks eth_simulateV1 (only cST/cPT
+ *  need it — where the HTTP endpoint would 503). */
+async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+  if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || filters.mode === undefined) {
+    return unavailable(chainId, "missing_filter", "market-predict requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.mode (exact case-sensitive recipe mode)", ctx);
+  }
+  if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
+    throw new ToolInputError("cork_query", [{ path: ["filters", "referenceAsset"], message: "collateralAsset and referenceAsset must differ — a market is a pair of distinct assets" }]);
+  }
+  const r = await getRegistry(ctx, chainId);
+  if (r.gate) return r.gate;
+  const { mr, resolved, warnings } = r;
+  const client = resolved.client;
+  const rpc = rpcProvenance(input.format, resolved);
+  const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
+  const ca = filters.collateralAsset, ref = filters.referenceAsset, mode = filters.mode, expiry = filters.expiry;
+  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry: expiry.toString(), mode };
+  try {
+    // Recipe bands — an unknown mode would revert the fill with EntryNotFound.
+    const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });
+    if (!found) {
+      const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      return unavailable(chainId, "recipe_not_found", `recipe mode '${mode}' is not in the registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
+    }
+    // Oracle: an existing wrapper, or the address a permissionless deploy would produce.
+    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [ca, ref] });
+    if (wrapper === "0x0000000000000000000000000000000000000000") {
+      try {
+        const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [ca, ref] });
+        // Deployable but not deployed: without a live rate the pool id/tokens cannot be derived.
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, oracle: { address: sim.result, deployed: false, deployable: true }, market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployed", message: `the pair's rate oracle is deployable but not yet deployed (predicted address ${sim.result}) — without a live rate the pool id and cST/cPT can't be derived. Deploy it first (cork_prepare_market deploy-wrapper), then re-run` }], ...rpc, ctx });
+      } catch (err) {
+        const reason = err instanceof Error ? (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0]) : String(err);
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, oracle: { address: null, deployed: false, deployable: false, reason: reason?.trim() }, market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployable", message: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill would revert; nothing further can be predicted" }], ...rpc, ctx });
+      }
+    }
+    const oracle = wrapper;
+    const rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
+    if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate (RateUnavailable) — the market cannot be derived", ctx);
+    // Resolved bands + pool id, computed locally then parity-checked against on-chain applyBands.
+    const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
+    const derived = deriveJitMarket({ params: { collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, mode }, oracle, rate, bands });
+    const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [mode, rate] });
+    if (onChain.rateMin !== derived.resolved.rateMin || onChain.rateMax !== derived.resolved.rateMax || onChain.rateChangePerDayMax !== derived.resolved.rateChangePerDayMax || onChain.rateChangeCapacityMax !== derived.resolved.rateChangeCapacityMax) {
+      return envelope({ state: "conflict", data: { resource: input.resource, chainId, input: inputEcho, poolId: derived.poolId, local: derived.resolved, onChain }, chainId, source: "chain", warnings: [...warnings, { code: "band_parity_mismatch", message: "the local applyBands port disagreed with the on-chain view — trust the chain; do not use this prediction" }], ...rpc, ctx });
+    }
+    // cST / cPT — pinned when the pool exists, else eth_simulateV1-predicted (poolId stands regardless).
+    const { dep } = await getDep(ctx, chainId);
+    let shares: PredictSharesResult = { exists: false, status: "unavailable" };
+    if (dep?.poolManager && mr.controller && mr.adapter) {
+      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId });
+    }
+    const extra: Array<{ code: string; message: string }> = [];
+    if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1 unsupported, or the adapter lacks POOL_CREATOR_ROLE / config missing) — the pool id, oracle, and bands above are still valid" });
+    if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so pool id and cST/cPT are derived from TODAY's oracle rate and drift stepwise until the pool is created; once it exists they are pinned (INTEGRATOR.md)" });
+    return envelope({
+      state: "ok",
+      data: {
+        resource: input.resource,
+        chainId,
+        input: inputEcho,
+        oracle: { address: oracle, deployed: true, rate: rate.toString() },
+        market: { poolId: derived.poolId, exists: shares.exists, scale: "resolved constraints are ABSOLUTE rates, 1e18 = 1.0", resolved: derived.resolved },
+        shares: shares.cst || shares.cpt ? { cst: shares.cst ?? null, cpt: shares.cpt ?? null, source: shares.status } : null,
+      },
+      chainId,
+      source: "chain",
+      warnings: [...warnings, ...extra],
+      ...rpc,
+      ctx,
+    });
   } catch (err) {
     return chainReadFailed(chainId, err, warnings, ctx, resolved);
   }
@@ -1108,29 +1201,20 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
 
           // Predicted cST: direct read when the pool exists; otherwise simulate the creation
           // (eth_simulateV1, from the adapter which holds POOL_CREATOR) and read shares(poolId).
-          let cst: `0x${string}` | undefined;
+          // Same derivation the market-predict read exposes — see predictShares().
           const { dep: jitDep } = await getDep(ctx, chainId);
-          try {
-            const shares = await client.readContract({ address: jitDep!.poolManager, abi: poolManagerAbi, functionName: "shares", args: [derived.poolId] });
-            if (shares[1] !== "0x0000000000000000000000000000000000000000") cst = shares[1];
-          } catch { /* pool does not exist yet — fall through to simulation */ }
-          if (!cst) {
-            try {
-              const createData = buildCreatePoolCall(derived.market, jitParams.unwindSwapFeePercentage, jitParams.swapFeePercentage);
-              const simulated = await client.simulateCalls({
-                account: mr.adapter,
-                calls: [
-                  { to: boundController, data: createData },
-                  { to: jitDep!.poolManager, data: buildSharesCall(derived.poolId) },
-                ],
-              });
-              const last = simulated.results[1];
-              if (last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {
-                cst = (`0x${last.data.slice(2 + 64 + 24, 2 + 128)}`) as `0x${string}`;
-              }
-            } catch {
-              warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1 unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
-            }
+          const pred = await predictShares(client, {
+            adapter: mr.adapter,
+            controller: boundController,
+            poolManager: jitDep!.poolManager,
+            market: derived.market,
+            poolId: derived.poolId,
+            unwindSwapFeePercentage: jitParams.unwindSwapFeePercentage,
+            swapFeePercentage: jitParams.swapFeePercentage,
+          });
+          const cst = pred.cst;
+          if (pred.status === "unavailable") {
+            warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1 unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
           }
           if (cst) {
             jitData = { ...jitData, predictedCst: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };

@@ -31,6 +31,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Token balances an account holds in a pool", input: { resource: "account-state", filters: { poolId: DEMO_POOL_ID, account: DEMO_ACCOUNT } } },
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
     { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
+    { title: "Predict a market before it exists: pool id + cST/cPT + oracle for a pair (Arbitrum)", input: { resource: "market-predict", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc", expiry: "1900000000", mode: "liquidity" } } },
   ],
   cork_compute: [
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
@@ -104,6 +105,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       rfqs: { status: "activated", reason: "venue-backed (centralized mode): GET /v1/rfqs discovery feed + single get via filters.rfqId; venue-only in every mode (RFQ requests/answers never bind and emit no events)" },
       "registry-oracle": { status: "activated", reason: "lookupWrapper + simulated deploy: deployed/deployable/why-not (42161)" },
       "registry-recipes": { status: "activated", reason: "constraint recipe bands, 1e18 = 1% (42161)" },
+      "market-predict": { status: "activated", reason: "MarketRegistry+adapter derivation (42161): predicted oracle+live rate, LOCAL pool id (computeMarketId), parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence — the same derivation a JIT LOP fill runs, before anything is deployed or signed" },
     },
   },
   cork_compute: {
