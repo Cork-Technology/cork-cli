@@ -142,6 +142,16 @@ describe("decode fidelity", () => {
     expect(rows.length).toBe(1);
     expect(rows[0]!.expiry).toBe("1798761600");
   });
+
+  it("decentralized market rows use the shared corkSwapToken/corkPrincipalToken names (NOT raw swap/principal)", () => {
+    const row = decodeMarketRows([marketLog()])[0]!;
+    // marketLog() encodes (…, principalToken=CPT, swapToken=CST); the row must map them to the
+    // surface vocabulary, not pass the raw event field names through (which inverted the label).
+    expect((row.corkSwapToken as string).toLowerCase()).toBe(CST); // cST == swapToken
+    expect((row.corkPrincipalToken as string).toLowerCase()).toBe(CPT); // cPT == principalToken
+    expect(row).not.toHaveProperty("swapToken");
+    expect(row).not.toHaveProperty("principalToken");
+  });
 });
 
 describe("full-decentralized fills paths (previously untested decode surfaces)", () => {
