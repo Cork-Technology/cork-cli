@@ -14,6 +14,7 @@ import {
   SETTLER_EVENTS,
   type HandlerContext,
 } from "@cork/core";
+import { stubResolved } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 const DIGEST = `0x${"4".repeat(64)}`;
@@ -42,11 +43,7 @@ function stubCtx(args: {
     resolveRpc:
       args.chainStatus === undefined
         ? async () => null
-        : async () => ({
-            url: "https://stub/rpc",
-            source: "explicit" as const,
-            client: { readContract: async () => args.chainStatus } as never,
-          }),
+        : async () => stubResolved({ readContract: async () => args.chainStatus }),
   };
   if (args.logs !== undefined || args.logsError) {
     ctx.logsUrl = "https://stub-logs/rpc";

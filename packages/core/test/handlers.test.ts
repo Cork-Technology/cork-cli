@@ -207,15 +207,16 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0001"), {
       nowSeconds: NOW,
       rpcUrl: "https://secret-node.example/SECRETTOKEN",
-      resolveRpc: async (_c, url) => ({
-        url: url!,
-        source: "explicit" as const,
-        client: {
-          readContract: async () => {
-            throw Object.assign(new Error("fetch failed\nURL: https://secret-node.example/SECRETTOKEN"), { name: "HttpRequestError", shortMessage: "HTTP request failed." });
+      resolveRpc: async (_c, url) =>
+        stubResolved(
+          {
+            readContract: async () => {
+              throw Object.assign(new Error("fetch failed\nURL: https://secret-node.example/SECRETTOKEN"), { name: "HttpRequestError", shortMessage: "HTTP request failed." });
+            },
           },
-        } as never,
-      }),
+          "explicit",
+          url!,
+        ),
     });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("chain_read_failed");
@@ -227,17 +228,18 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0002"), {
       nowSeconds: NOW,
       rpcUrl: "https://node.example/rpc",
-      resolveRpc: async (_c, url) => ({
-        url: url!,
-        source: "explicit" as const,
-        client: {
-          // resolvePoolTokens does market() + shares(); a nonexistent pool returns zeroed values
-          readContract: async (args: { functionName: string }) =>
-            args.functionName === "market"
-              ? { collateralAsset: ZERO, referenceAsset: ZERO, expiryTimestamp: 0n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: ZERO }
-              : [ZERO, ZERO],
-        } as never,
-      }),
+      resolveRpc: async (_c, url) =>
+        stubResolved(
+          {
+            // resolvePoolTokens does market() + shares(); a nonexistent pool returns zeroed values
+            readContract: async (args: { functionName: string }) =>
+              args.functionName === "market"
+                ? { collateralAsset: ZERO, referenceAsset: ZERO, expiryTimestamp: 0n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: ZERO }
+                : [ZERO, ZERO],
+          },
+          "explicit",
+          url!,
+        ),
     });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("pool_not_found");
@@ -247,16 +249,17 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     const env = await runTool("cork_prepare_phoenix", depositInput("fund-guard-0003"), {
       nowSeconds: NOW,
       rpcUrl: "https://node.example/rpc",
-      resolveRpc: async (_c, url) => ({
-        url: url!,
-        source: "explicit" as const,
-        client: {
-          readContract: async (args: { functionName: string }) =>
-            args.functionName === "market"
-              ? { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: 1n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE }
-              : [SUSDE, SUSDE],
-        } as never,
-      }),
+      resolveRpc: async (_c, url) =>
+        stubResolved(
+          {
+            readContract: async (args: { functionName: string }) =>
+              args.functionName === "market"
+                ? { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: 1n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE }
+                : [SUSDE, SUSDE],
+          },
+          "explicit",
+          url!,
+        ),
     });
     expect(env.state).toBe("ok");
     expect((env.data as { fundingLegs: number }).fundingLegs).toBe(1);
@@ -281,7 +284,7 @@ describe("input hardening + format semantics", () => {
     // chain-backed envelopes state their mode (lite-decentralized), config ones stay unlabeled
     const chainEnv = await runTool("cork_track", { mode: "reconcile", subject: { kind: "txHash", txHash: `0x${"a".repeat(64)}` }, format: "concise" }, {
       nowSeconds: NOW,
-      resolveRpc: async () => ({ url: "https://x.example/rpc", source: "default" as const, client: { getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }) } as never }),
+      resolveRpc: async () => stubResolved({ getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }) }, "default", "https://x.example/rpc"),
     });
     expect(chainEnv.provenance.mode).toBe("lite-decentralized");
     const cfgEnv = await runTool("cork_query", { resource: "protocol-config", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
@@ -295,13 +298,7 @@ describe("input hardening + format semantics", () => {
   });
 
   it("format 'full' adds provenance.rpc (endpoint tier + host) on chain-backed reads", async () => {
-    const okResolver = async () => ({
-      url: "https://rpc.example.org/x",
-      source: "default" as const,
-      client: {
-        getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }),
-      } as never,
-    });
+    const okResolver = async () => stubResolved({ getTransactionReceipt: async () => ({ status: "success", blockNumber: 5n, gasUsed: 21000n, logs: [] }) }, "default", "https://rpc.example.org/x");
     const full = await runTool("cork_track", { mode: "reconcile", subject: { kind: "txHash", txHash: `0x${"a".repeat(64)}` }, format: "full" }, { nowSeconds: NOW, resolveRpc: okResolver });
     expect(full.state).toBe("ok");
     expect(full.provenance.rpc).toEqual({ source: "default", host: "rpc.example.org" });
@@ -523,7 +520,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
   const rpcCtx = (expiry: bigint) => ({
     nowSeconds: NOW,
     rpcUrl: "https://node.example/rpc",
-    resolveRpc: async (_c: unknown, url: string | undefined) => ({ url: url!, source: "explicit" as const, client: mkClient(expiry) }),
+    resolveRpc: async (_c: unknown, url: string | undefined) => stubResolved(mkClient(expiry), "explicit", url!),
   });
 
   it("pre-expiry action against an EXPIRED pool builds WITH a pool_expired warning", async () => {
@@ -551,7 +548,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     const env = await runTool(
       "cork_query",
       { resource: "account-state", chainId: 1, pageSize: 25, format: "concise", filters: { poolId: POOL, account: "0xc0ffee0000000000000000000000000000000001" } },
-      { nowSeconds: NOW, resolveRpc: async () => ({ url: "https://stub/rpc", source: "explicit" as const, client: mkClient(NOW + 1n) }) },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(mkClient(NOW + 1n)) },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> } };
