@@ -123,4 +123,28 @@ describe("recursive decode round-trips", () => {
       expect(legs[0].args[2]).toBe(10n * 10n ** 18n);
     }
   });
+
+  it("caps nested-bundle recursion at MAX_DEPTH: no stack blow-up, degrades to unknown+note, hides nothing", () => {
+    // Adversarial calldata: a cork action wrapped in far more than MAX_DEPTH multicall envelopes.
+    // The decoder must not recurse without bound (a stack overflow would hide EVERY leg) — it
+    // degrades the too-deep nested bundle to `unknown` with the raw bytes and a depth-cap note.
+    let data = encodeMulticall([corkActionCall(ADP, "safeDeposit", depositParams)]);
+    for (let i = 0; i < 24; i++) data = encodeMulticall([call(ADP, data)]);
+
+    let node: ReturnType<typeof decodeBundle>[number] | undefined;
+    expect(() => {
+      node = decodeBundle(data)[0]; // must NOT throw (RangeError: Maximum call stack size)
+    }).not.toThrow();
+
+    let bundleLevels = 0;
+    while (node?.kind === "bundle") {
+      bundleLevels += 1;
+      node = node.legs[0];
+    }
+    expect(bundleLevels).toBe(16); // MAX_DEPTH — decoded in full up to the cap
+    expect(node?.kind).toBe("unknown");
+    expect((node as { note?: string }).note).toMatch(/depth cap/);
+    // the raw bytes are preserved (recoverable), not dropped
+    expect((node as { data?: string }).data?.startsWith("0x")).toBe(true);
+  });
 });

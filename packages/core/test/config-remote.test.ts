@@ -199,3 +199,47 @@ describe("deploymentProfiles in the bundled defaults", () => {
     expect(cfg.defaults.deployments["42161"]?.poolManager).not.toBe(legacy?.poolManager);
   });
 });
+
+describe("F16: a transient refresh failure never rolls addresses back to the bundled copy", () => {
+  const OLD = 900_000_000_000; // fetchedAt far in the past so the good copy is TTL-expired
+  const NOW = 1_000_000_000_000;
+
+  it("keeps the last GOOD fetched defaults, serves them stale with a warning, and marks failedAt (no failure marker overwrite)", async () => {
+    liftNoFetch();
+    const d = deps({ remote: new Error("ECONNRESET"), cache: { fetchedAt: OLD, defaults: REMOTE_OK }, now: NOW });
+    const r = await resolveConfig(d);
+    // served the fetched-good copy, NOT the bundled fallback
+    expect(r.source).toBe("cache");
+    expect(r.warning?.code).toBe("config_fetch_failed");
+    expect(r.defaults.deployments["8453"]).toBeDefined(); // 8453 exists ONLY in REMOTE_OK, not bundled
+    // the good defaults survive on disk; only a failedAt back-off marker is added
+    expect(d.saved).toHaveLength(1);
+    expect(d.saved[0]?.defaults).toBeDefined();
+    expect(d.saved[0]?.failure).toBeUndefined();
+    expect(d.saved[0]?.failedAt).toBe(NOW);
+    expect(d.fetches()).toBe(1); // it did attempt the refresh
+  });
+
+  it("during the failure back-off, serves the stale good copy WITHOUT re-fetching", async () => {
+    liftNoFetch();
+    // good defaults on disk, TTL-expired, with a recent failedAt inside the 10-min back-off window
+    const d = deps({
+      remote: new Error("must not be called during back-off"),
+      cache: { fetchedAt: OLD, defaults: REMOTE_OK, failedAt: NOW - 60_000 }, // 1 min ago < 10 min
+      now: NOW,
+    });
+    const r = await resolveConfig(d);
+    expect(r.source).toBe("cache");
+    expect(r.warning?.code).toBe("config_fetch_failed");
+    expect(r.defaults.deployments["8453"]).toBeDefined();
+    expect(d.fetches()).toBe(0); // back-off honored — no network attempt
+  });
+
+  it("corrupt cached defaults do NOT block a fresh fetch (treated as absent)", async () => {
+    liftNoFetch();
+    const d = deps({ remote: REMOTE_OK, cache: { fetchedAt: OLD, defaults: { not: "valid defaults" } }, now: NOW });
+    const r = await resolveConfig(d);
+    expect(r.source).toBe("github"); // fell through to the (successful) fetch
+    expect(d.fetches()).toBe(1);
+  });
+});

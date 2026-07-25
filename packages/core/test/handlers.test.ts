@@ -459,6 +459,59 @@ describe("runTool: cork_compute", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
+
+  // A full readPoolState stub (single pinned block) so the chain-backed compute path is exercised
+  // OFFLINE for the two branches no live pool can reach: a rateMin-0 impairment collapse, and the
+  // accepted-but-reserved at.timestamp disclosure. Wei parity itself is covered by fork-parity.
+  const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
+  const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
+  const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
+  const W = 10n ** 18n;
+  const poolStateClient = (over: { rateMin?: bigint } = {}) => ({
+    getBlockNumber: async () => 100n,
+    getBlock: async () => ({ timestamp: NOW }),
+    readContract: async (c: { functionName: string }) => {
+      switch (c.functionName) {
+        case "market":
+          return { collateralAsset: SUSDE, referenceAsset: VBUSDC, expiryTimestamp: NOW + 1_000_000n, rateMin: over.rateMin ?? W / 2n, rateMax: W, rateChangePerDayMax: 10n ** 15n, rateChangeCapacityMax: W, rateOracle: ORACLE };
+        case "constraints":
+          return [8n * 10n ** 17n, 1n, W]; // lastAdjustedRate, lastAdjustmentTimestamp, remainingCredits
+        case "swapRate": return W;
+        case "swapFee": return 0n;
+        case "unwindSwapFee": return 0n;
+        case "shares": return [CPT, CST];
+        case "rate": return W;
+        case "decimals": return 18;
+        case "issuedAt": return NOW - 10_000n;
+        default: throw new Error(`unexpected readContract ${c.functionName}`);
+      }
+    },
+  });
+
+  it("impairment-floor with rateMin 0 → ok, an invalid_state warning, and null maxReferencePerCst", async () => {
+    const env = await runTool(
+      "cork_compute",
+      { params: { kind: "impairment-floor", poolId: POOL, horizonSeconds: 2_592_000 }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(poolStateClient({ rateMin: 0n }), "default") },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "invalid_state")).toBe(true);
+    expect((env.data as { maxReferencePerCst: string | null }).maxReferencePerCst).toBeNull();
+  });
+
+  it("cst-swap-rate labels units (scales + native decimals) and discloses at.timestamp as reserved-ignored", async () => {
+    const env = await runTool(
+      "cork_compute",
+      { params: { kind: "cst-swap-rate", poolId: POOL, collateralAssetsOut: "1000000000000000000" }, at: { timestamp: "1790000000" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(poolStateClient(), "default") },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "reserved_field_ignored")).toBe(true);
+    const d = env.data as { scales: Record<string, string>; collateralDecimals: number; referenceDecimals: number };
+    expect(d.scales).toBeDefined();
+    expect(d.collateralDecimals).toBe(18);
+    expect(d.referenceDecimals).toBe(18);
+  });
 });
 
 describe("runTool: cork_prepare_phoenix", () => {

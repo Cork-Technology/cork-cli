@@ -81,6 +81,14 @@ describe("buildMakerOrder", () => {
     expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).not.toBe(0n);
     expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).not.toBe(0n);
   });
+
+  it("rejects an extension whose offsets header is NOT monotonically non-decreasing", () => {
+    // field 6 ends at 8 but field 7 ends at 4 (< 8): a decreasing cumulative offset is a malformed
+    // 1inch v4 extension that signs fine and only misparses/reverts at fill — refuse at bind time.
+    const offsets = (8n << (32n * 6n)) | (4n << (32n * 7n));
+    const extension = (`0x${offsets.toString(16).padStart(64, "0")}deadbeefcafebabe`) as `0x${string}`;
+    expect(() => buildMakerOrder({ ...base, clientRequestId: "req-ext-badmono", extension })).toThrow(/monotonically non-decreasing/);
+  });
 });
 
 describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {

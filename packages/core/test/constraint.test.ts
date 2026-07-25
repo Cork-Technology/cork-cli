@@ -193,4 +193,16 @@ describe("impairmentFloor — committed-descent (verified <= brute-force adversa
       expect(cf <= bf).toBe(true); // conservative-safe: floor never optimistic vs a real adversary
     }
   });
+
+  it("rateMin 0 + full descent → worstRate 0 and maxReferencePerCst NULL (unbounded, never a div-by-zero)", () => {
+    // createNewPool enforces rateMin > 0, but a recipe/library caller can construct rateMin = 0.
+    // When the reachable floor collapses to 0 the ref-per-cST cost is unbounded — the honest
+    // answer is `null`, not a thrown division-by-zero deep in the port.
+    const market = mkt({ rateMin: 0n, rateMax: WAD, rateChangePerDayMax: 10n ** 15n, rateChangeCapacityMax: WAD });
+    const state: ConstraintState = { lastAdjustedRate: 8n * 10n ** 17n, lastAdjustmentTimestamp: 1n, remainingCredits: WAD };
+    const r = impairmentFloor({ market, state, horizonSeconds: 2000n * DAY, tEval: 1n });
+    expect(r.worstRate).toBe(0n);
+    expect(r.maxReferencePerCst).toBeNull();
+    expect(r.clampedAtMin).toBe(true); // worstRate === rateMin === 0
+  });
 });

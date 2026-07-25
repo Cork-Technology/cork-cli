@@ -216,3 +216,44 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     expect(d.items[0]).toMatchObject({ orderHash: DIGEST, remainingAmount: "42", lop: LOP });
   });
 });
+
+describe("full-decentralized honesty: completeness + scoping disclosure (F15)", () => {
+  it("markets: a source reporting complete:false surfaces pagination_incomplete (partial evidence, not the full set)", async () => {
+    const partial: HyperSyncSource = {
+      async queryLogs() {
+        return { logs: [marketLog()], archiveHeight: 485_999_999, complete: false, nextBlock: 485_500_000 };
+      },
+    };
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: partial },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(true);
+    // decoded rows carry blockNumber as a decimal STRING (chain integers ride the wire as strings, F10)
+    const item = (env.data as { items: Array<Record<string, unknown>> }).items[0];
+    expect(typeof item?.blockNumber).toBe("string");
+    expect(item?.blockNumber).toBe("485000001");
+  });
+
+  it("a source that omits `complete` is treated as complete (no false pagination warning)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }) },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(false);
+  });
+
+  it("fills WITHOUT an orderHash filter warns the rows are the whole 1inch LOP, not Cork-scoped", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "fills", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({}) },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "pagination_incomplete" && /1inch LOP|Cork-scoped/i.test(w.message))).toBe(true);
+  });
+});
