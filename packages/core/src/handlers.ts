@@ -225,8 +225,14 @@ export function jsonSafe(v: unknown): unknown {
   return v;
 }
 
+/** Effective "now" in unix seconds: the caller-pinned clock (ctx.nowSeconds) or the wall clock.
+ *  The single source of the fallback so every time-check reads from the same clock. */
+function nowSecondsOf(ctx: HandlerContext): bigint {
+  return ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+}
+
 function nowIso(ctx: HandlerContext): string {
-  const secs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+  const secs = nowSecondsOf(ctx);
   // Guard the Number() conversion: an absurd caller-supplied clock would otherwise produce an
   // Invalid Date whose toISOString() throws deep inside envelope construction.
   if (secs < 0n || secs > 253402300799n) {
@@ -936,7 +942,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
         // (`permit2Internal`) — reporting only the first let bundles look funded and still
         // revert on a zero/expired internal allowance (F18). Internal read is best-effort
         // (null where Permit2 isn't deployed on the chain).
-        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+        const nowSecs = nowSecondsOf(ctx);
         const entries = await Promise.all(
           roles.map(async ([role, token]) => {
             const [toAdapter, toPermit2, p2] = await Promise.all([
@@ -1128,7 +1134,7 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1 unsupported, or the adapter lacks POOL_CREATOR_ROLE / config missing) — the pool id, oracle, and bands above are still valid" });
     if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so pool id and cST/cPT are derived from TODAY's oracle rate and drift stepwise until the pool is created; once it exists they are pinned (INTEGRATOR.md)" });
     // T6: a prediction can be internally consistent yet describe an UNCREATABLE market — say so.
-    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    const nowSecs = nowSecondsOf(ctx);
     if (!shares.exists && expiry <= nowSecs) {
       extra.push({ code: "would_revert", message: `expiry ${expiry} is not in the future (now ${nowSecs}) — createNewPool requires a future expiry, so a JIT fill for this market would revert; the identity below is for a market that cannot be created` });
     }
@@ -1273,7 +1279,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
   if (action.type === "maker-order") {
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
-    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    const nowSecs = nowSecondsOf(ctx);
 
     // ── optional JIT market block: build the adapter extension + best-effort pre-flights ──
     let extension = action.extension;
@@ -1459,7 +1465,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
     const openDeadline = BigInt(action.openDeadline);
     const fillDeadline = BigInt(action.fillDeadline);
     const orderSize = BigInt(action.orderSize);
-    const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+    const nowSecs = nowSecondsOf(ctx);
     if (orderSize === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
     if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
     if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
@@ -2028,7 +2034,7 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         }
         const openDeadline = BigInt(o.openDeadline);
         const fillDeadline = BigInt(o.fillDeadline);
-        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+        const nowSecs = nowSecondsOf(ctx);
         if (BigInt(o.orderSize) === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
         if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
         if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
@@ -2313,7 +2319,7 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
     if (action.type === "rfq-open") {
       // [F6] Mirror the sibling rollover-intent validation: an inverted or already-past window
       // was previously relayed untouched and failed (or half-worked) only at the venue.
-      const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+      const nowSecs = nowSecondsOf(ctx);
       if (action.expiryWindow.notBefore > action.expiryWindow.notAfter) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow is inverted: notBefore (${action.expiryWindow.notBefore}) is after notAfter (${action.expiryWindow.notAfter})`, ctx);
       }
@@ -2456,7 +2462,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       if (!corkAdapter || !bundler3) {
         return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
       }
-      const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+      const nowSecs = nowSecondsOf(ctx);
       // deadlineAt (absolute) pins the bundle bytes across retries [K2]; deadlineSeconds
       // (relative, default) re-anchors to the clock on each call.
       const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
@@ -2526,7 +2532,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         // Expiry pre-flight [§5.4 guards]: pre-expiry actions against an expired pool build fine
         // but revert on-chain. Withdraw-family actions are the post-expiry path — never flagged.
         const POST_EXPIRY_ACTIONS = new Set(["withdraw", "withdraw-other", "redeem"]);
-        const nowSecs = ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+        const nowSecs = nowSecondsOf(ctx);
         if (tokens.expiryTimestamp > 0n && tokens.expiryTimestamp <= nowSecs && !POST_EXPIRY_ACTIONS.has(input.action.type)) {
           warnings.push({
             code: "pool_expired",

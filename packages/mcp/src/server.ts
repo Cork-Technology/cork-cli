@@ -5,7 +5,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { descriptionExample, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
+import { ChainId, descriptionExample, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
 
 // All tools return the same envelope; advertise it once so clients can rely on structuredContent.
@@ -75,7 +75,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       // provenance.chainId echoes the REQUESTED chain when one was passed — a hardcoded 1 misled
       // clients that branch on it (F20).
       const requestedChain = (args as { chainId?: unknown } | undefined)?.chainId;
-      const chainId = typeof requestedChain === "number" && [1, 42161, 8453, 11155111, 49222].includes(requestedChain) ? (requestedChain as 1) : (1 as const);
+      const chainId = ChainId.safeParse(requestedChain).data ?? 1;
       const errorEnvelope = {
         state: "unavailable" as const,
         data: teaching ?? null,

@@ -12,6 +12,7 @@ import {
   Uint64Str,
   UintStr,
   UnixSeconds,
+  UNIX_SECONDS_MAX_NUMBER,
 } from "./primitives.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -363,7 +364,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     listing: z.strictObject({
       side: z.enum(["BUY", "SELL"]),
       premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000"),
-      expiry: z.number().int().nonnegative().max(4_102_444_800).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
+      expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
       nonce: UintStr,
       allowsPartialFills: z.boolean(),
       quoteRef: QuoteRef.optional().describe("the RFQ answer option this order executes, if any"),
@@ -535,7 +536,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
     premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected"),
-    expiry: z.number().int().nonnegative().max(4_102_444_800).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
+    expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
     nonce: UintStr,
     allowsPartialFills: z.boolean(),
     makerAccountType: z.enum(["EOA", "ERC1271"]).default("EOA"),
@@ -552,12 +553,12 @@ export const SubmitAction = z.discriminatedUnion("type", [
     modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1),
     packageIds: z.array(z.string()).min(1).max(8),
     expiryWindow: z.strictObject({
-      notBefore: z.number().int().nonnegative().max(4_102_444_800).describe("earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"),
-      notAfter: z.number().int().nonnegative().max(4_102_444_800).describe("latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"),
+      notBefore: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"),
+      notAfter: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"),
     }),
     marketTemplate: z.record(z.string(), z.unknown()).optional(),
     notionalAssets: TokenAmount,
-    validUntil: z.number().int().nonnegative().max(4_102_444_800).describe("RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"),
+    validUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"),
     signature: Hex,
   }).describe("open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"),
   A("rfq-answer", {

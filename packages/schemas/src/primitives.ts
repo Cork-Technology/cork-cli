@@ -80,6 +80,11 @@ export const Uint64Str = z
  *  wrapped/immortal deadline is the one failure mode nothing downstream catches. */
 export const UNIX_SECONDS_MAX = 4102444800n;
 
+/** The same year-2100 bound as a plain number, for absolute-time fields typed as JSON numbers
+ *  (RFQ windows, LOP listing expiry) rather than the decimal-string `UnixSeconds` primitive —
+ *  one source for the bound so string and number time fields can never drift apart. */
+export const UNIX_SECONDS_MAX_NUMBER = 4_102_444_800;
+
 /** Absolute unix timestamp in seconds — uint64 wire shape with the time semantics taught inline
  *  (deadlines/expiries here are wall-clock absolute, never relative durations), plus a
  *  plausibility bound that rejects millisecond-scale values with teaching. */
