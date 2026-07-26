@@ -10,17 +10,10 @@
 // experiments/hypersync-spike/README.md), and a host that cannot load it gets an honest
 // `hypersync_unavailable`, never a crash. Tests inject a fake source.
 import { decodeEventLog, parseAbi, toEventSelector } from "viem";
+import { hyperSyncUrl } from "./envio.ts";
 
 type Hex = `0x${string}`;
 type Address = `0x${string}`;
-
-/** Envio HyperSync endpoints per chain (token required since 2025-11-03). */
-export const HYPERSYNC_URLS: Record<number, string> = {
-  1: "https://eth.hypersync.xyz",
-  42161: "https://arbitrum.hypersync.xyz",
-  8453: "https://base.hypersync.xyz",
-  11155111: "https://sepolia.hypersync.xyz",
-};
 
 export interface HyperSyncLog {
   address: string;
@@ -47,6 +40,42 @@ export interface HyperSyncSource {
  *  hitting it yields an HONEST partial (complete:false + nextBlock), never silent truncation. */
 export const HYPERSYNC_MAX_PAGES = 20;
 
+/** One HyperSync response page: the logs it carried, the archive head (once known), and the
+ *  server's resume point (`nextBlock`). Omitting `nextBlock` means "no more pages". */
+export interface HyperSyncPage {
+  logs: HyperSyncLog[];
+  archiveHeight?: number;
+  nextBlock?: number;
+}
+
+/**
+ * Walk HyperSync pages from `fromBlock`, accumulating logs, under a hard page bound. Pure and
+ * transport-agnostic: `getPage(fromBlock)` fetches one page (the napi client in production, a fake
+ * in tests). Termination — any of: the server stops advancing (`nextBlock` absent, or not past the
+ * cursor), the resume point passes the archive height (we've read everything), or the page cap is
+ * hit (an HONEST `complete:false` + `nextBlock` to resume, never a silent truncation).
+ */
+export async function collectPagedLogs(
+  fromBlock: number,
+  getPage: (fromBlock: number) => Promise<HyperSyncPage>,
+  maxPages = HYPERSYNC_MAX_PAGES,
+): Promise<{ logs: HyperSyncLog[]; archiveHeight?: number; complete: boolean; nextBlock?: number }> {
+  const logs: HyperSyncLog[] = [];
+  let cursor = fromBlock;
+  let archiveHeight: number | undefined;
+  for (let page = 0; page < maxPages; page += 1) {
+    const res = await getPage(cursor);
+    logs.push(...res.logs);
+    if (res.archiveHeight !== undefined) archiveHeight = res.archiveHeight;
+    const next = res.nextBlock;
+    if (next === undefined || next <= cursor || (archiveHeight !== undefined && next > archiveHeight)) {
+      return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: true };
+    }
+    cursor = next;
+  }
+  return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: false, nextBlock: cursor };
+}
+
 export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
 
 /**
@@ -54,7 +83,7 @@ export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
  * unsupported chain, missing token, or an unloadable native binding on this host.
  */
 export async function loadHyperSync(chainId: number, token: string | undefined): Promise<HyperSyncLoad> {
-  const url = HYPERSYNC_URLS[chainId];
+  const url = hyperSyncUrl(chainId);
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };
   if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
   // Structural view of the napi module: HypersyncClient.new is a napi-rs STATIC factory
@@ -79,38 +108,28 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   const F = mod.LogField;
   return {
     source: {
-      // HyperSync answers are PAGED: each response carries `nextBlock`, the resume point. The
-      // previous implementation issued ONE call and dropped nextBlock — silently truncating any
-      // scan larger than a page with no way to even detect it (F15). Loop to the archive height
-      // under a hard page bound, and report honest completeness when the bound is hit.
+      // HyperSync answers are PAGED: each response carries `nextBlock`, the resume point. This
+      // closure is now JUST the transport (one napi page → a normalized HyperSyncPage); the
+      // page-walk, completeness, and page-cap honesty live in the pure collectPagedLogs (F15).
       async queryLogs(q) {
-        const logs: HyperSyncLog[] = [];
-        let fromBlock = q.fromBlock;
-        let archiveHeight: number | undefined;
-        for (let page = 0; page < HYPERSYNC_MAX_PAGES; page += 1) {
+        return collectPagedLogs(q.fromBlock, async (fromBlock) => {
           const res = await client.get({
             fromBlock,
             logs: [{ ...(q.address ? { address: q.address } : {}), ...(q.topics ? { topics: q.topics } : {}) }],
             fieldSelection: { log: [F.Address, F.Topic0, F.Topic1, F.Topic2, F.Topic3, F.Data, F.BlockNumber, F.TransactionHash] },
           });
-          logs.push(
-            ...res.data.logs.map((l) => ({
+          return {
+            logs: res.data.logs.map((l) => ({
               address: String(l.address),
               topics: [l.topic0, l.topic1, l.topic2, l.topic3].map((t) => (t == null ? null : String(t))),
               data: String(l.data ?? "0x"),
               blockNumber: Number(l.blockNumber ?? 0),
               transactionHash: String(l.transactionHash ?? "0x"),
             })),
-          );
-          if (res.archiveHeight !== undefined) archiveHeight = res.archiveHeight;
-          const next = res.nextBlock;
-          // Done when the server stops advancing or the resume point passes the archive height.
-          if (next === undefined || next <= fromBlock || (archiveHeight !== undefined && next > archiveHeight)) {
-            return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: true };
-          }
-          fromBlock = next;
-        }
-        return { logs, ...(archiveHeight !== undefined ? { archiveHeight } : {}), complete: false, nextBlock: fromBlock };
+            ...(res.archiveHeight !== undefined ? { archiveHeight: res.archiveHeight } : {}),
+            ...(res.nextBlock !== undefined ? { nextBlock: res.nextBlock } : {}),
+          };
+        });
       },
     },
   };

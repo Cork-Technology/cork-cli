@@ -48,6 +48,7 @@ import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMa
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, ROLLOVER_FILL_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
+import { envioToken } from "./datasources/envio.ts";
 import {
   getLopFills,
   getLopMarkets,
@@ -636,7 +637,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
 
   // HyperSync and HyperRPC are different Envio products with DIFFERENT tokens; the dedicated
   // var wins, ENVIO_API_TOKEN remains a shared fallback.
-  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, process.env.ENVIO_HYPERSYNC_TOKEN ?? process.env.ENVIO_API_TOKEN);
+  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, envioToken("hypersync"));
   if ("error" in load) return unavailable(chainId, "hypersync_unavailable", load.error, ctx);
   const hs = load.source;
 

@@ -1,15 +1,16 @@
 // [K7] chain-over-indexer verification for rollover orders, two independent legs:
 //   1. STATUS — `ISettler.orderStatus(orderDigest)` (public view @ 032d3e5a) via the regular
 //      resolved RPC: the authoritative CURRENT lifecycle status, readable with zero tokens.
-//   2. EVENT HISTORY — `eth_getLogs` over a logs-capable endpoint (HyperRPC preferred:
-//      https://{chainId}.rpc.hypersync.xyz/<ENVIO_API_TOKEN>; ordinary public RPCs refuse
-//      historical ranges). Every settler lifecycle event indexes the orderDigest as topic1,
-//      so one `topics=[null, digest]` scan from the seeding block returns the full history.
+//   2. EVENT HISTORY — `eth_getLogs` over a logs-capable endpoint (HyperRPC preferred; ordinary
+//      public RPCs refuse historical ranges). Every settler lifecycle event indexes the
+//      orderDigest as topic1, so one `topics=[null, digest]` scan from the seeding block returns
+//      the full history. Endpoint + token resolution lives in ./datasources/envio.ts.
 //
 // Event signatures are verbatim from rollover-private @ 032d3e5a (ISettler/IPartialSettler);
 // the ERC-7683 `Open` event's tuple layout is not reproduced here, so an Open log surfaces as
 // an unlabeled event rather than being guessed [K3-honest].
 import { keccak256, stringToHex, toEventSelector } from "viem";
+import { envioToken, hyperRpcUrl, redactEnvioUrl, redactUrlIn } from "./datasources/envio.ts";
 
 type Hex = `0x${string}`;
 type Address = `0x${string}`;
@@ -69,16 +70,16 @@ export function venueChainConsistent(venueStatus: string, chain: string): boolea
 
 // ── Logs endpoint resolution ─────────────────────────────────────────────────
 
-/** Resolve a logs-capable JSON-RPC endpoint: explicit override → HyperRPC (token-gated).
- *  Returns null when nothing is configured — verification then honestly reports the gap.
- *  HyperRPC and HyperSync are separate Envio products with separate per-product secrets:
- *  the dedicated ENVIO_HYPERRPC_TOKEN wins here; ENVIO_API_TOKEN stays as shared fallback. */
+/** Resolve a logs-capable JSON-RPC endpoint: explicit override → CORK_LOGS_RPC_URL → HyperRPC
+ *  (token-gated). Returns null when nothing is configured — verification then honestly reports the
+ *  gap. Token + URL resolution is delegated to ./datasources/envio.ts so the HyperRPC/HyperSync
+ *  auth rules live in exactly one place. The returned URL may carry a secret in its path; redact
+ *  it (redactEnvioUrl) before putting it in any message. */
 export function resolveLogsEndpoint(chainId: number, override?: string): string | null {
   if (override) return override;
   if (process.env.CORK_LOGS_RPC_URL) return process.env.CORK_LOGS_RPC_URL;
-  const token = process.env.ENVIO_HYPERRPC_TOKEN ?? process.env.ENVIO_API_TOKEN;
-  if (token) return `https://${chainId}.rpc.hypersync.xyz/${token}`;
-  return null;
+  const token = envioToken("hyperrpc");
+  return token ? hyperRpcUrl(chainId, token) : null;
 }
 
 export interface RawLog {
@@ -97,7 +98,9 @@ export class LogsRangeLimited extends Error {
   }
 }
 
-/** Fetch every log mentioning the digest as topic1 from the given addresses (fetch-injectable). */
+/** Fetch every log mentioning the digest as topic1 from the given addresses (fetch-injectable).
+ *  All error messages are token-safe: the endpoint URL may carry a HyperRPC token in its path, so
+ *  it is redacted (host-only) and scrubbed out of any transport error before being thrown. */
 export async function fetchDigestLogs(args: {
   url: string;
   addresses: Address[];
@@ -130,13 +133,14 @@ export async function fetchDigestLogs(args: {
       signal: ctrl.signal,
     });
   } catch (err) {
-    throw new Error(`logs endpoint unreachable: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+    const raw = err instanceof Error ? err.message.split("\n")[0]! : String(err);
+    throw new Error(`logs endpoint (${redactEnvioUrl(args.url)}) unreachable: ${redactUrlIn(raw, args.url)}`);
   } finally {
     clearTimeout(t);
   }
   const body = (await res.json().catch(() => null)) as { result?: RawLog[]; error?: { message?: string } } | null;
   if (!body || body.error || !Array.isArray(body.result)) {
-    const msg = body?.error?.message ?? `HTTP ${res.status}`;
+    const msg = redactUrlIn(body?.error?.message ?? `HTTP ${res.status}`, args.url);
     // Range-cap rejections (non-archive nodes, free tiers) are a distinct, honest outcome.
     if (/range|archive|10000|block/i.test(msg)) throw new LogsRangeLimited(msg);
     throw new Error(`logs endpoint error: ${msg}`);

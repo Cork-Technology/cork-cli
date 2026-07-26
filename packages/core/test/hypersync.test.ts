@@ -6,7 +6,11 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import {
   runTool,
+  collectPagedLogs,
   decodeMarketRows,
+  decodeCloneRows,
+  decodeLopFillRows,
+  decodeRolloverFillRows,
   loadHyperSync,
   MARKET_CREATED_TOPIC,
   CLONE_DEPLOYED_TOPIC,
@@ -255,5 +259,74 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "pagination_incomplete" && /1inch LOP|Cork-scoped/i.test(w.message))).toBe(true);
+  });
+});
+
+describe("collectPagedLogs — pure pagination walk (transport-agnostic)", () => {
+  const mkLog = (bn: number): HyperSyncLog => ({ address: "0x00", topics: ["0x00"], data: "0x", blockNumber: bn, transactionHash: "0x00" });
+
+  it("a single page with no nextBlock is complete and carries all its logs", async () => {
+    const r = await collectPagedLogs(0, async () => ({ logs: [mkLog(1)], archiveHeight: 100 }));
+    expect(r.complete).toBe(true);
+    expect(r.logs).toHaveLength(1);
+    expect(r.nextBlock).toBeUndefined();
+  });
+
+  it("accumulates across pages until the server stops advancing", async () => {
+    const pages = [
+      { logs: [mkLog(1)], nextBlock: 10, archiveHeight: 100 },
+      { logs: [mkLog(2)], nextBlock: 20, archiveHeight: 100 },
+      { logs: [mkLog(3)] }, // no nextBlock → done
+    ];
+    let i = 0;
+    const r = await collectPagedLogs(0, async () => pages[i++]!);
+    expect(r.complete).toBe(true);
+    expect(r.logs.map((l) => l.blockNumber)).toEqual([1, 2, 3]);
+  });
+
+  it("terminates (complete) when the resume point passes the archive height — everything read", async () => {
+    const r = await collectPagedLogs(0, async () => ({ logs: [mkLog(1)], nextBlock: 200, archiveHeight: 100 }));
+    expect(r.complete).toBe(true);
+    expect(r.nextBlock).toBeUndefined();
+  });
+
+  it("terminates (complete) when nextBlock does not advance — never an infinite loop", async () => {
+    const r = await collectPagedLogs(50, async () => ({ logs: [mkLog(1)], nextBlock: 50 }));
+    expect(r.complete).toBe(true);
+  });
+
+  it("hitting the page cap returns an HONEST partial: complete:false + a resume nextBlock", async () => {
+    let calls = 0;
+    const r = await collectPagedLogs(
+      0,
+      async (from) => {
+        calls += 1;
+        return { logs: [mkLog(from)], nextBlock: from + 1, archiveHeight: 1_000_000 };
+      },
+      3,
+    );
+    expect(calls).toBe(3); // bounded by maxPages, no runaway
+    expect(r.complete).toBe(false);
+    expect(r.nextBlock).toBe(3); // cursor after 3 advances: 0 → 1 → 2 → 3
+    expect(r.logs).toHaveLength(3);
+  });
+});
+
+describe("decode row helpers — direct, including the honest malformed-log skip", () => {
+  it("decodeMarketRows emits blockNumber as a string and cST/cPT under the canonical names", () => {
+    const rows = decodeMarketRows([marketLog()]);
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]!.poolId).toLowerCase()).toBe(POOL);
+    expect(String(rows[0]!.corkSwapToken).toLowerCase()).toBe(CST);
+    expect(String(rows[0]!.corkPrincipalToken).toLowerCase()).toBe(CPT);
+    expect(typeof rows[0]!.blockNumber).toBe("string");
+  });
+
+  it("a malformed log is SKIPPED (returns []), never throws — one bad log can't abort the batch", () => {
+    const bad: HyperSyncLog = { address: "0x00", topics: ["0xdeadbeef"], data: "0x", blockNumber: 1, transactionHash: "0x00" };
+    expect(decodeMarketRows([bad])).toEqual([]);
+    expect(decodeCloneRows([bad])).toEqual([]);
+    expect(decodeLopFillRows([bad])).toEqual([]);
+    expect(decodeRolloverFillRows([bad])).toEqual([]);
   });
 });

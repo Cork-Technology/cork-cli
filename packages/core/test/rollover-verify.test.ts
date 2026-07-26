@@ -194,16 +194,29 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
       fetchDigestLogs({ ...common, fetchImpl: jsonResp({ error: { message: "boom" } }) }),
     ).rejects.toThrow("logs endpoint error: boom");
   });
-  it("a transport rejection is reported as unreachable, not as an endpoint error", async () => {
+  it("a transport rejection is reported as unreachable (host redacted), not as an endpoint error", async () => {
     await expect(
       fetchDigestLogs({ ...common, fetchImpl: async () => { throw new Error("ECONNREFUSED"); } }),
-    ).rejects.toThrow("logs endpoint unreachable");
+    ).rejects.toThrow(/logs endpoint \(https:\/\/stub-logs\/<redacted>\) unreachable: ECONNREFUSED/);
   });
   it("a non-Error transport rejection is still reported (stringified)", async () => {
     await expect(
       // throwing a non-Error exercises the String(err) branch of the catch
       fetchDigestLogs({ ...common, fetchImpl: async () => { throw "socket hang up"; } }),
-    ).rejects.toThrow("logs endpoint unreachable: socket hang up");
+    ).rejects.toThrow(/unreachable: socket hang up/);
+  });
+  it("NEVER leaks a HyperRPC token: a transport error echoing the token-in-path URL is scrubbed", async () => {
+    // undici/fetch transport errors often echo the full request URL — which carries the token in
+    // its path for HyperRPC. The thrown message must contain neither the token nor the raw URL.
+    const TOKEN = "sk-secret-envio-token-9f3a";
+    const url = `https://42161.rpc.hypersync.xyz/${TOKEN}`;
+    await expect(
+      fetchDigestLogs({ ...common, url, fetchImpl: async () => { throw new Error(`request to ${url} failed`); } }),
+    ).rejects.toThrow(/logs endpoint \(https:\/\/42161\.rpc\.hypersync\.xyz\/<redacted>\) unreachable/);
+    await fetchDigestLogs({ ...common, url, fetchImpl: async () => { throw new Error(`request to ${url} failed`); } }).catch((e: Error) => {
+      expect(e.message).not.toContain(TOKEN);
+      expect(e.message).not.toContain(url);
+    });
   });
   it("an error response with no message falls back to the HTTP status", async () => {
     await expect(
