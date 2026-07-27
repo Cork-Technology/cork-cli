@@ -11,6 +11,7 @@ import {
   decodeCloneRows,
   decodeLopFillRows,
   decodeRolloverFillRows,
+  decodeWhitelistRows,
   loadHyperSync,
   MARKET_CREATED_TOPIC,
   CLONE_DEPLOYED_TOPIC,
@@ -18,6 +19,7 @@ import {
   type HyperSyncLog,
   type HyperSyncSource,
 } from "@cork/core";
+import { stubRpc } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 const POOL = `0x${"cc".repeat(32)}`;
@@ -328,5 +330,134 @@ describe("decode row helpers — direct, including the honest malformed-log skip
     expect(decodeCloneRows([bad])).toEqual([]);
     expect(decodeLopFillRows([bad])).toEqual([]);
     expect(decodeRolloverFillRows([bad])).toEqual([]);
+    expect(decodeWhitelistRows([bad])).toEqual([]);
+  });
+});
+
+// ── whitelisted-addresses: event replay + [K7] live-view verification ─────────────────────────
+
+const WLM_ARB = "0xec187ba7bbd4016d8db326ea1dfb3dd48d17bd3a"; // Arbitrum whitelistManager (cork-defaults)
+const wlAbi = parseAbi([
+  "event GlobalWhitelistAdded(address indexed account)",
+  "event GlobalWhitelistRemoved(address indexed account)",
+  "event MarketWhitelistAdded(bytes32 indexed poolId, address account)",
+  "event MarketWhitelistRemoved(bytes32 indexed poolId, address account)",
+  "event MarketWhitelistEnabled(bytes32 indexed poolId)",
+]);
+const ACCT_G = "0xaaaa000000000000000000000000000000000001";
+const ACCT_M = "0xbbbb000000000000000000000000000000000002";
+const ACCT_RM = "0xcccc000000000000000000000000000000000003";
+const OTHER_POOL = `0x${"dd".repeat(32)}` as `0x${string}`;
+
+function wlLog(eventName: "GlobalWhitelistAdded" | "GlobalWhitelistRemoved" | "MarketWhitelistEnabled", arg: string, block: number): HyperSyncLog {
+  const topics =
+    eventName === "MarketWhitelistEnabled"
+      ? encodeEventTopics({ abi: wlAbi, eventName, args: { poolId: arg as `0x${string}` } })
+      : encodeEventTopics({ abi: wlAbi, eventName, args: { account: arg as `0x${string}` } });
+  return { address: WLM_ARB, topics: [...topics] as Array<string | null>, data: "0x", blockNumber: block, transactionHash: `0x${"ee".repeat(32)}` };
+}
+
+function wlMarketLog(eventName: "MarketWhitelistAdded" | "MarketWhitelistRemoved", poolId: string, account: string, block: number): HyperSyncLog {
+  const topics = encodeEventTopics({ abi: wlAbi, eventName, args: { poolId: poolId as `0x${string}` } });
+  const data = encodeAbiParameters([{ type: "address" }], [account as `0x${string}`]);
+  return { address: WLM_ARB, topics: [...topics] as Array<string | null>, data, blockNumber: block, transactionHash: `0x${"ee".repeat(32)}` };
+}
+
+/** All whitelist fixture logs in chain order: global add, market adds (one later removed), enable. */
+function wlFixtureLogs(): HyperSyncLog[] {
+  return [
+    wlLog("GlobalWhitelistAdded", ACCT_G, 100),
+    wlMarketLog("MarketWhitelistAdded", POOL, ACCT_M, 101),
+    wlMarketLog("MarketWhitelistAdded", POOL, ACCT_RM, 102),
+    wlMarketLog("MarketWhitelistAdded", OTHER_POOL, ACCT_M, 103),
+    wlLog("MarketWhitelistEnabled", POOL, 104),
+    wlMarketLog("MarketWhitelistRemoved", POOL, ACCT_RM, 105), // removal wins over the earlier add
+  ];
+}
+
+function wlSource(logs: HyperSyncLog[], opts: { complete?: boolean } = {}, seen: Array<{ fromBlock: number; address?: string[] }> = []): HyperSyncSource {
+  return {
+    async queryLogs(q) {
+      seen.push({ fromBlock: q.fromBlock, ...(q.address ? { address: q.address } : {}) });
+      const wanted = new Set(q.topics?.[0] ?? []);
+      return { logs: logs.filter((l) => wanted.has(String(l.topics[0]))), archiveHeight: 485_999_999, ...(opts.complete === false ? { complete: false, nextBlock: 200 } : {}) };
+    },
+  };
+}
+
+describe("cork_query whitelisted-addresses (event replay over HyperSync)", () => {
+  const noRpc = async () => null;
+
+  it("replays add/remove to CURRENT membership; global rows ride along under a poolId filter", async () => {
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: POOL }, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: wlSource(wlFixtureLogs(), {}, seen), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.provenance.mode).toBe("full-decentralized");
+    expect(seen[0]?.address?.[0]?.toLowerCase()).toBe(WLM_ARB); // scoped to the configured WLM
+    const d = env.data as { count: number; items: Array<{ account: string; scope: string; poolId?: string }>; enabledByPool: Record<string, boolean>; verification: string };
+    // ACCT_RM was added then removed — replay must exclude it; OTHER_POOL's row is filtered out.
+    expect(d.items.map((i) => i.account.toLowerCase()).sort()).toEqual([ACCT_G, ACCT_M].sort());
+    expect(d.items.find((i) => i.account.toLowerCase() === ACCT_G)?.scope).toBe("global");
+    expect(d.items.find((i) => i.account.toLowerCase() === ACCT_M)?.scope).toBe("market");
+    expect(d.enabledByPool[POOL]).toBe(true);
+    expect(d.verification).toMatch(/skipped/);
+  });
+
+  it("without a poolId filter, every pool's rows and gating flags are returned", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "whitelisted-addresses", chainId: 42161, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: wlSource(wlFixtureLogs()), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; items: Array<{ poolId?: string }>; enabledByPool: Record<string, boolean> };
+    expect(d.count).toBe(3); // global + POOL market + OTHER_POOL market
+    expect(d.items.some((i) => i.poolId === OTHER_POOL)).toBe(true);
+    expect(d.enabledByPool[POOL]).toBe(true);
+    expect(d.enabledByPool[OTHER_POOL]).toBeUndefined(); // never gated — everyone passes
+  });
+
+  it("[K7] live-view verification: rows re-checked against the contract; a disagreement is disclosed", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: POOL }, pageSize: 25, format: "concise" },
+      {
+        nowSeconds: NOW,
+        hyperSync: wlSource(wlFixtureLogs()),
+        // isGlobalWhitelisted(ACCT_G) → true; isMarketWhitelisted(POOL, ACCT_M) → false (a removal
+        // the scan missed) — the chain view outranks the replay and is surfaced, not papered over.
+        resolveRpc: stubRpc((c) => c.functionName === "isGlobalWhitelisted"),
+      },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { items: Array<{ account: string; verified?: boolean }>; verification: string };
+    expect(d.verification).toMatch(/live/);
+    expect(d.items.find((i) => i.account.toLowerCase() === ACCT_G)?.verified).toBe(true);
+    expect(d.items.find((i) => i.account.toLowerCase() === ACCT_M)?.verified).toBe(false);
+    expect(env.warnings.some((w) => w.code === "status_mismatch")).toBe(true);
+  });
+
+  it("a partial scan is honest: pagination_incomplete + rows flagged as evidence", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "whitelisted-addresses", chainId: 42161, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: wlSource(wlFixtureLogs(), { complete: false }), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(true);
+  });
+
+  it("centralized mode is structurally rejected (the venue has no whitelist endpoint)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "whitelisted-addresses", chainId: 42161, mode: "centralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: wlSource([]) },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("mode_unavailable");
   });
 });

@@ -189,6 +189,32 @@ export const whitelistManagerAbi = [
     ],
     outputs: [{ type: "bool" }],
   },
+  // Per-scope views (IWhitelistManager) — the [K7] verification legs for the event-derived
+  // whitelisted-addresses enumeration (the membership mappings themselves are not enumerable).
+  {
+    type: "function",
+    name: "isGlobalWhitelisted",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "isMarketWhitelisted",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "isMarketWhitelistEnabled",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "bool" }],
+  },
 ] as const;
 
 export const poolShareAbi = [

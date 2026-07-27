@@ -89,10 +89,11 @@ describe("runTool: cork_query", () => {
     expect(d.deployment.corkAdapter).toBe("0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407");
     expect(d.create2Deployer).toBe("0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7");
   });
-  it("indexer-only resources are honestly unavailable", async () => {
-    const env = await runTool("cork_query", { resource: "whitelisted-addresses", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+  it("whitelisted-addresses rejects lite-decentralized honestly (mappings are not enumerable over RPC views)", async () => {
+    const env = await runTool("cork_query", { resource: "whitelisted-addresses", mode: "lite-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("needs_indexer");
+    expect(env.warnings[0]?.code).toBe("mode_unavailable");
+    expect(env.warnings[0]?.message).toMatch(/pool-whitelist/);
   });
   it("chain resources are requires_rpc when no RPC can be resolved", async () => {
     // Inject a resolver that yields nothing, so this deterministically exercises the no-RPC branch
@@ -431,10 +432,196 @@ describe("runTool: cork_decode (calldata)", () => {
     expect(legs[0]?.action).toBe("safeSwap");
   });
 
-  it("non-calldata kinds are honestly unavailable", async () => {
-    const env = await runTool("cork_decode", { kind: "event", data: {}, format: "concise" }, { nowSeconds: NOW });
-    expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("phase_gated");
+});
+
+describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3])", () => {
+  const ORDER_REC = {
+    salt: "1",
+    maker: RCV,
+    receiver: zeroAddress,
+    makerAsset: SUSDE,
+    takerAsset: VBUSDC,
+    makingAmount: "1000000000000000000",
+    takingAmount: "1000000",
+    makerTraits: "0",
+  };
+  const ORDER_STRUCT: LopOrder = {
+    salt: 1n,
+    maker: RCV,
+    receiver: zeroAddress,
+    makerAsset: SUSDE,
+    takerAsset: VBUSDC,
+    makingAmount: 1000000000000000000n,
+    takingAmount: 1000000n,
+    makerTraits: 0n,
+  };
+
+  it("order (JSON fields): full makerTraits breakdown + recomputed EIP-712 orderHash", async () => {
+    const env = await runTool("cork_decode", { kind: "order", data: ORDER_REC, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { orderHash: string; lop: string; makerTraits: Record<string, unknown>; order: Record<string, string> };
+    expect(d.lop).toBe(LOP_ADDRESSES[1]);
+    expect(d.orderHash).toBe(hashLopOrder(1, LOP_ADDRESSES[1]!, ORDER_STRUCT));
+    expect(d.makerTraits.allowPartialFills).toBe(true);
+    expect(d.makerTraits.allowMultipleFills).toBe(false);
+    expect(d.makerTraits.usePermit2).toBe(false);
+    expect(d.makerTraits.expiry).toBe("0");
+    expect(d.order.makingAmount).toBe("1000000000000000000");
+  });
+
+  it("order (hex tuple): decodes the 8-word uint256 form to the same result", async () => {
+    const words = [1n, BigInt(RCV), 0n, BigInt(SUSDE), BigInt(VBUSDC), 1000000000000000000n, 1000000n, 1n << 255n];
+    const data = `0x${words.map((w) => w.toString(16).padStart(64, "0")).join("")}`;
+    const env = await runTool("cork_decode", { kind: "order", data, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { makerTraits: Record<string, unknown>; order: Record<string, string> };
+    expect(String(d.order.maker).toLowerCase()).toBe(RCV.toLowerCase());
+    expect(d.makerTraits.allowPartialFills).toBe(false); // bit 255 set
+  });
+
+  it("order: a caller-claimed orderHash is cross-checked — mismatch is a conflict [K3]", async () => {
+    const env = await runTool(
+      "cork_decode",
+      { kind: "order", data: { ...ORDER_REC, orderHash: `0x${"11".repeat(32)}` }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.some((w) => w.code === "digest_mismatch")).toBe(true);
+  });
+
+  it("order: a salt not bound to the supplied extension is a conflict (InvalidExtension at fill)", async () => {
+    const ext = `0x${"00".repeat(32)}ff`; // valid-shaped bytes; salt 1 is not keccak-bound to them
+    const env = await runTool("cork_decode", { kind: "order", data: { ...ORDER_REC, extension: ext }, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.some((w) => w.code === "extension_salt_mismatch")).toBe(true);
+  });
+
+  it("order on a chain with no known LOP: struct + traits decode, hash honestly null", async () => {
+    const env = await runTool("cork_decode", { kind: "order", data: ORDER_REC, chainId: 8453, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    expect((env.data as { orderHash: unknown }).orderHash).toBeNull();
+    expect(env.warnings[0]?.code).toBe("no_lop");
+  });
+
+  it("event: a settler lifecycle log decodes to named args", async () => {
+    const digest = `0x${"93".repeat(32)}`;
+    const env = await runTool(
+      "cork_decode",
+      { kind: "event", data: { topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", digest], data: "0x" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { known: boolean; event: string; args: Record<string, string> };
+    expect(d.known).toBe(true);
+    expect(d.event).toBe("OrderSettled");
+    expect(d.args.orderId).toBe(digest);
+  });
+
+  it("event: an unknown topic0 comes back labeled raw, never guessed", async () => {
+    const env = await runTool(
+      "cork_decode",
+      { kind: "event", data: { topics: [`0x${"ab".repeat(32)}`], data: "0x" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { known: boolean; event: string | null; note: string };
+    expect(d.known).toBe(false);
+    expect(d.event).toBeNull();
+    expect(d.note).toMatch(/known/);
+  });
+
+  it("event: hex input is a teachable invalid-input (a log OBJECT is required)", async () => {
+    await expect(runTool("cork_decode", { kind: "event", data: "0x00", format: "concise" }, { nowSeconds: NOW })).rejects.toThrow(ToolInputError);
+  });
+
+  it("receipt: labels every log; status echoed as a normalized claim", async () => {
+    const digest = `0x${"93".repeat(32)}`;
+    const env = await runTool(
+      "cork_decode",
+      {
+        kind: "receipt",
+        data: {
+          status: "0x1",
+          logs: [
+            { address: SUSDE, topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", digest], data: "0x" },
+            { address: SUSDE, topics: [`0x${"ab".repeat(32)}`], data: "0x" },
+          ],
+        },
+        format: "concise",
+      },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { status: string; logCount: number; knownCount: number; logs: Array<{ known: boolean; event: string | null }> };
+    expect(d.status).toBe("success");
+    expect(d.logCount).toBe(2);
+    expect(d.knownCount).toBe(1);
+    expect(d.logs[0]?.event).toBe("OrderSettled");
+    expect(d.logs[1]?.known).toBe(false);
+  });
+
+  it("receipt: missing logs array is a teachable invalid-input", async () => {
+    await expect(runTool("cork_decode", { kind: "receipt", data: {}, format: "concise" }, { nowSeconds: NOW })).rejects.toThrow(ToolInputError);
+  });
+});
+
+describe("runTool: cork_prepare_phoenix (authority ops)", () => {
+  const APPROVE_SELECTOR = "0x095ea7b3";
+  const ADAPTER = "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407";
+
+  it("authority-onboard with amount omitted builds an unlimited approve to the adapter", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: RCV, clientRequestId: "auth-on-0001", action: { type: "authority-onboard", token: SUSDE, spender: ADAPTER }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { kind: string; to: string; calldata: string; amount: string; unlimited: boolean; spenderRole: string; value: string };
+    expect(d.kind).toBe("authority-onboard");
+    expect(d.to.toLowerCase()).toBe(SUSDE.toLowerCase()); // tx target is the TOKEN
+    expect(d.calldata.startsWith(APPROVE_SELECTOR)).toBe(true);
+    expect(d.calldata).toContain(ADAPTER.slice(2).toLowerCase()); // spender arg
+    expect(d.calldata.endsWith("f".repeat(64))).toBe(true); // max-uint amount word
+    expect(d.amount).toBe(((1n << 256n) - 1n).toString());
+    expect(d.unlimited).toBe(true);
+    expect(d.spenderRole).toMatch(/corkAdapter/);
+    expect(d.value).toBe("0");
+  });
+
+  it("authority-onboard with an explicit amount encodes exactly that amount", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: RCV, clientRequestId: "auth-on-0002", action: { type: "authority-onboard", token: SUSDE, spender: ADAPTER, amount: "2500000" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { amount: string; unlimited: boolean };
+    expect(d.amount).toBe("2500000");
+    expect(d.unlimited).toBe(false);
+  });
+
+  it("authority-revoke zeroes the allowance; an unrecognized spender is flagged", async () => {
+    const stranger = "0x00000000000000000000000000000000000000A1";
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: RCV, clientRequestId: "auth-rev-0001", action: { type: "authority-revoke", token: SUSDE, spender: stranger }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { amount: string; unlimited: boolean; spenderRole: string; calldata: string };
+    expect(d.amount).toBe("0");
+    expect(d.unlimited).toBe(false);
+    expect(d.calldata.endsWith("0".repeat(64))).toBe(true); // zero amount word
+    expect(d.spenderRole).toMatch(/unrecognized/i);
+  });
+
+  it("authority ops toward the canonical Permit2 name the permit2 layer", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: RCV, clientRequestId: "auth-on-0003", action: { type: "authority-onboard", token: SUSDE, spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect((env.data as { spenderRole: string }).spenderRole).toMatch(/Permit2/);
   });
 });
 

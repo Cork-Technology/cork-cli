@@ -50,9 +50,28 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 0n;
     case "isWhitelisted":
       return false;
+    case "isGlobalWhitelisted":
+    case "isMarketWhitelisted":
+      return true; // matches the seeded whitelist events below — verification leg agrees
     default:
       throw new Error(`stub has no fixture for ${args.functionName}`);
   }
+}
+
+// One seeded GlobalWhitelistAdded(WHITELISTED_ACCT) log so whitelisted-addresses has a
+// deterministic non-empty answer. topic0 = keccak("GlobalWhitelistAdded(address)").
+const WHITELISTED_ACCT = "0x00000000000000000000000000000000000a11ce";
+const GLOBAL_ADDED_TOPIC = "0x3dfb644c437d7ac77310a6355571af9bcbf4d2e01c805141c03aa9786737a2c5";
+function whitelistHyperSync() {
+  return {
+    async queryLogs(q: { topics?: Array<string[] | null> }) {
+      const wanted = new Set(q.topics?.[0] ?? []);
+      const logs = wanted.has(GLOBAL_ADDED_TOPIC)
+        ? [{ address: "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE", topics: [GLOBAL_ADDED_TOPIC, `0x${WHITELISTED_ACCT.slice(2).padStart(64, "0")}`], data: "0x", blockNumber: 23_000_000, transactionHash: `0x${"aa".repeat(32)}` }]
+        : [];
+      return { logs, archiveHeight: 23_000_100 };
+    },
+  };
 }
 
 /** Offline venue stub: canned api-phoenix responses for the eval tasks. */
@@ -74,6 +93,7 @@ export function stubContext(): HandlerContext {
   return {
     nowSeconds: NOW,
     venueFetch,
+    hyperSync: whitelistHyperSync(),
     rpcUrl: "https://stub.vnet.example/rpc", // enables the funding path; resolver below serves it
     resolveRpc: async (_chainId, url) => ({
       url: url ?? "https://stub.vnet.example/rpc",

@@ -64,7 +64,7 @@ export const QueryInput = z.object({
       "rfqs",
     ])
     .describe(
-      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=gated rows per pool; flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%); market-predict=derive a market BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+mode): oracle{address,deployed,deployable,rate}, pool id, resolved bands, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs (Arbitrum One); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a market's on-chain struct is the same contract that registry-oracle/market-predict report under oracle{address}",
+      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%); market-predict=derive a market BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+mode): oracle{address,deployed,deployable,rate}, pool id, resolved bands, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs (Arbitrum One); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a market's on-chain struct is the same contract that registry-oracle/market-predict report under oracle{address}",
     ),
   chainId: ChainId.optional(),
   mode: DataMode.optional(),
@@ -154,7 +154,9 @@ export type ComputeInput = z.infer<typeof ComputeInput>;
 export const DecodeInput = z.object({
   kind: z
     .enum(["calldata", "order", "event", "receipt"])
-    .describe("calldata=Cork/Bundler3 tx bytes → labeled legs (live); order/event/receipt are phase-gated and return unavailable"),
+    .describe(
+      "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
+    ),
   data: z.union([Hex, z.record(z.string(), z.unknown())]),
   chainId: ChainId.optional(),
   format: Format,
@@ -265,9 +267,9 @@ export const PhoenixAction = z.discriminatedUnion("type", [
     token: Address,
     spender: Address,
     amount: TokenAmount.optional(),
-  }).describe("token-authority op (phase-gated): grant a standing allowance; amount omitted = unlimited"),
+  }).describe("token-authority op: unsigned DIRECT ERC-20 approve tx granting a standing allowance (amount omitted = unlimited) — an owner-signed tx, not a bundle leg (allowances are keyed to msg.sender); spender is normally the corkAdapter (erc20-approve mode) or canonical Permit2 (permit2 mode)"),
   A("authority-revoke", { token: Address, spender: Address })
-    .describe("token-authority op (phase-gated): zero out an allowance"),
+    .describe("token-authority op: unsigned DIRECT ERC-20 approve(spender, 0) tx zeroing an allowance"),
 ]);
 export type PhoenixAction = z.infer<typeof PhoenixAction>;
 

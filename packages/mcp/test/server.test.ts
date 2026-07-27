@@ -62,10 +62,12 @@ describe("MCP server in-memory roundtrip", () => {
 
   it("marks phase-gated tools unavailable (isError)", async () => {
     const client = await connectedClient();
-    const res = await client.callTool({ name: "cork_query", arguments: { resource: "whitelisted-addresses", pageSize: 25, format: "concise" } });
+    // dutch-auction-price is one of the two deliberately-gated variants (Fusion out of scope).
+    const res = await client.callTool({ name: "cork_compute", arguments: { params: { kind: "dutch-auction-price", order: {} }, format: "concise" } });
     expect(res.isError).toBe(true);
-    const env = res.structuredContent as { state: string };
+    const env = res.structuredContent as { state: string; warnings: Array<{ code: string }> };
     expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("phase_gated");
   });
 
   it("conflict envelopes are NOT isError (the tool executed; it reports a mismatch)", async () => {

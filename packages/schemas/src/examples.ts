@@ -32,6 +32,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
     { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
     { title: "Predict a market before it exists: pool id + cST/cPT + oracle for a pair (Arbitrum)", input: { resource: "market-predict", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc", expiry: "1900000000", mode: "liquidity" } } },
+    { title: "Enumerate a pool's whitelist rows (event-derived; global rows ride along)", input: { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: DEMO_POOL_ID } } },
   ],
   cork_compute: [
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
@@ -41,6 +42,9 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   ],
   cork_decode: [
     { title: "Decode a Bundler3 multicall to labeled Cork legs", input: { kind: "calldata", data: DEMO_MULTICALL } },
+    { title: "Decode a LOP v4 order: makerTraits breakdown + recomputed orderHash", input: { kind: "order", data: { salt: "1", maker: DEMO_ACCOUNT, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" } } },
+    { title: "Decode one event log to named args (settler OrderSettled)", input: { kind: "event", data: { topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84"], data: "0x" } } },
+    { title: "Label every log in a tx receipt", input: { kind: "receipt", data: { status: "0x1", logs: [{ address: SUSDE, topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84"], data: "0x" }] } } },
   ],
   cork_capabilities: [
     { title: "Find the right tool/variant for 'unwind'", input: { search: "unwind" } },
@@ -50,6 +54,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_prepare_phoenix: [
     { title: "Unsigned deposit bundle (10 sUSDe into the demo pool)", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-deposit-0001", fundingMode: "erc20-approve", action: { type: "deposit", poolId: DEMO_POOL_ID, collateralAssetsIn: "10000000000000000000", receiver: DEMO_ACCOUNT, minCptAndCstSharesOut: "1" } } },
     { title: "Unsigned swap bundle (1 sUSDe out, capped inputs)", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-swap-0001", action: { type: "swap", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000", receiver: DEMO_ACCOUNT, maxCstSharesIn: "2000000000000000000", maxReferenceAssetsIn: "2000000" } } },
+    { title: "Unsigned ERC-20 approve for the erc20-approve funding mode (omit amount = unlimited)", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-onboard-0001", action: { type: "authority-onboard", token: SUSDE, spender: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407" } } },
   ],
   cork_prepare_orders: [
     { title: "Signable maker order: sell 1 sUSDe for 1 vbUSDC", input: { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "demo-order-0001", action: { type: "maker-order", poolId: DEMO_POOL_ID, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", expirySeconds: 3600 } } },
@@ -99,7 +104,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "pool-whitelist": { status: "activated" },
       "protocol-config": { status: "activated" },
       markets: { status: "activated", reason: "centralized (venue /v1/pools) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },
-      "whitelisted-addresses": { status: "specified", reason: "needs_indexer" },
+      "whitelisted-addresses": { status: "activated", reason: "event-derived enumeration (WhitelistManager add/remove/enable events over HyperSync, needs ENVIO token) + live-view [K7] verification when an RPC resolves; single-account checks are pool-whitelist" },
       flows: { status: "activated", reason: "centralized (/v1/rollover, filters.kind orders|fills|contracts); kind fills|contracts also full-decentralized via HyperSync" },
       "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
@@ -118,8 +123,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "unwind-rate": { status: "activated" },
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
-      "dutch-auction-price": { status: "specified", reason: "phase_gated (1inch Fusion, Phase 3)" },
-      "rfq-quote": { status: "specified", reason: "phase_gated (pricing model TBD; the registry band math it needs is live as resolve-recipe)" },
+      "dutch-auction-price": { status: "specified", reason: "phase_gated (out-of-scope external protocol: 1inch Fusion is not part of the current pilot — settlement is LOP v4 resting orders, so there are no live Fusion orders to price; unblocks if/when a Fusion integration lands)" },
+      "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the registry band math it would build on is already live as resolve-recipe)" },
       "resolve-recipe": { status: "activated", reason: "registry applyBands — bit-parity self-checked against chain on every call (42161)" },
     },
   },
@@ -127,9 +132,9 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       calldata: { status: "activated" },
-      order: { status: "specified", reason: "phase_gated" },
-      event: { status: "specified", reason: "phase_gated" },
-      receipt: { status: "specified", reason: "phase_gated" },
+      order: { status: "activated", reason: "pure local: LOP v4 order (hex tuple or JSON fields) → full makerTraits breakdown + recomputed EIP-712 orderHash; caller-claimed hashes are cross-checked, never trusted [K3]" },
+      event: { status: "activated", reason: "pure local: one log {topics,data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set; unverified layouts are labeled raw, never guessed" },
+      receipt: { status: "activated", reason: "pure local: labels every log in a receipt against the known ABI set; receipt claims (status, gas) are echoed as claims" },
     },
   },
   cork_capabilities: { status: "activated" },
@@ -137,8 +142,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       "13 adapter actions (mint…unwind-exercise-other)": { status: "activated" },
-      "authority-onboard": { status: "specified", reason: "phase_gated" },
-      "authority-revoke": { status: "specified", reason: "phase_gated" },
+      "authority-onboard": { status: "activated", reason: "unsigned DIRECT ERC-20 approve tx (amount omitted = unlimited) — not a bundle leg, since an allowance is keyed to msg.sender; spender role (corkAdapter/Permit2) disclosed" },
+      "authority-revoke": { status: "activated", reason: "unsigned DIRECT ERC-20 approve(spender, 0) tx zeroing the allowance" },
     },
   },
   cork_prepare_orders: {

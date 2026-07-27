@@ -147,6 +147,16 @@ const rolloverFillAbis = parseAbi([
   "event DefaulterResidualReclaimed(bytes32 indexed orderId, address indexed defaulterFiller, address indexed recipientRolloverContract, uint256 amount)",
 ]);
 const lopFilledAbi = parseAbi(["event OrderFilled(bytes32 orderHash, uint256 remainingAmount)"]);
+// WhitelistManager events, verbatim from phoenix-private IWhitelistManager.sol: the membership
+// mappings are NOT enumerable on-chain, so these six events are the only enumeration source.
+const whitelistAbi = parseAbi([
+  "event GlobalWhitelistAdded(address indexed account)",
+  "event GlobalWhitelistRemoved(address indexed account)",
+  "event MarketWhitelistAdded(bytes32 indexed poolId, address account)",
+  "event MarketWhitelistRemoved(bytes32 indexed poolId, address account)",
+  "event MarketWhitelistDisabled(bytes32 indexed poolId)",
+  "event MarketWhitelistEnabled(bytes32 indexed poolId)",
+]);
 
 export const MARKET_CREATED_TOPIC = toEventSelector("MarketCreated(bytes32,address,address,uint256,address,address,address)");
 export const CLONE_DEPLOYED_TOPIC = toEventSelector("RolloverContractDeployed(address,address)");
@@ -156,6 +166,14 @@ export const ROLLOVER_FILL_TOPICS = [
   toEventSelector("DefaulterResidualReclaimed(bytes32,address,address,uint256)"),
 ];
 export const LOP_FILLED_TOPIC = toEventSelector("OrderFilled(bytes32,uint256)");
+export const WHITELIST_TOPICS = [
+  toEventSelector("GlobalWhitelistAdded(address)"),
+  toEventSelector("GlobalWhitelistRemoved(address)"),
+  toEventSelector("MarketWhitelistAdded(bytes32,address)"),
+  toEventSelector("MarketWhitelistRemoved(bytes32,address)"),
+  toEventSelector("MarketWhitelistDisabled(bytes32)"),
+  toEventSelector("MarketWhitelistEnabled(bytes32)"),
+];
 
 function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
   return l.topics.filter((t): t is string => t != null) as [Hex, ...Hex[]];
@@ -214,6 +232,81 @@ export function decodeLopFillRows(logs: HyperSyncLog[]): Array<Record<string, un
       return [];
     }
   });
+}
+
+/** One decoded WhitelistManager lifecycle event, in log order. */
+export interface WhitelistEventRow {
+  type: "global-added" | "global-removed" | "market-added" | "market-removed" | "market-enabled" | "market-disabled";
+  account?: Address;
+  poolId?: Hex;
+  blockNumber: string;
+  txHash: string;
+  emitter: string;
+}
+
+export function decodeWhitelistRows(logs: HyperSyncLog[]): WhitelistEventRow[] {
+  return logs.flatMap((l): WhitelistEventRow[] => {
+    try {
+      const d = decodeEventLog({ abi: whitelistAbi, topics: strictTopics(l), data: l.data as Hex });
+      switch (d.eventName) {
+        case "GlobalWhitelistAdded":
+          return [{ type: "global-added", account: d.args.account, ...meta(l) }];
+        case "GlobalWhitelistRemoved":
+          return [{ type: "global-removed", account: d.args.account, ...meta(l) }];
+        case "MarketWhitelistAdded":
+          return [{ type: "market-added", poolId: d.args.poolId, account: d.args.account, ...meta(l) }];
+        case "MarketWhitelistRemoved":
+          return [{ type: "market-removed", poolId: d.args.poolId, account: d.args.account, ...meta(l) }];
+        case "MarketWhitelistEnabled":
+          return [{ type: "market-enabled", poolId: d.args.poolId, ...meta(l) }];
+        default:
+          return [{ type: "market-disabled", poolId: d.args.poolId, ...meta(l) }];
+      }
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** The current whitelist state replayed from the full event history (last event wins). */
+export interface WhitelistReplay {
+  /** Accounts on the GLOBAL whitelist (admitted to every gated pool). */
+  global: Address[];
+  /** Per-pool market whitelist membership. */
+  byPool: Record<string, Address[]>;
+  /** Per-pool gating flag; a pool with NO enable/disable event was never gated (isWhitelisted
+   *  returns true for everyone on it). */
+  enabledByPool: Record<string, boolean>;
+}
+
+/**
+ * Replay add/remove/enable events into the CURRENT membership sets. Rows must be in log order —
+ * HyperSync returns logs chronologically and collectPagedLogs appends pages in ascending block
+ * order, so the decoded array order IS the chain order; the last event per (scope, account) wins,
+ * mirroring the contract's last-write-wins mappings.
+ */
+export function replayWhitelist(rows: WhitelistEventRow[]): WhitelistReplay {
+  const global = new Map<string, Address>();
+  const byPool = new Map<string, Map<string, Address>>();
+  const enabled = new Map<string, boolean>();
+  for (const r of rows) {
+    if (r.type === "global-added") global.set(r.account!.toLowerCase(), r.account!);
+    else if (r.type === "global-removed") global.delete(r.account!.toLowerCase());
+    else if (r.type === "market-enabled") enabled.set(r.poolId!.toLowerCase(), true);
+    else if (r.type === "market-disabled") enabled.set(r.poolId!.toLowerCase(), false);
+    else {
+      const key = r.poolId!.toLowerCase();
+      const pool = byPool.get(key) ?? new Map<string, Address>();
+      if (r.type === "market-added") pool.set(r.account!.toLowerCase(), r.account!);
+      else pool.delete(r.account!.toLowerCase());
+      byPool.set(key, pool);
+    }
+  }
+  return {
+    global: [...global.values()],
+    byPool: Object.fromEntries([...byPool.entries()].map(([k, v]) => [k, [...v.values()]])),
+    enabledByPool: Object.fromEntries(enabled),
+  };
 }
 
 export type { Address as HsAddress };

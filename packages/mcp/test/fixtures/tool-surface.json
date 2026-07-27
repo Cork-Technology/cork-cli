@@ -1,9 +1,9 @@
 [
   {
     "name": "cork_query",
-    "description": "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
-    "descriptionTokensApprox": 127,
-    "inputSchemaSha256": "f472dc8d3c5fc2bc95189629f68b97c3d97724fdd3db47885354ee9fbadb0908",
+    "description": "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
+    "descriptionTokensApprox": 149,
+    "inputSchemaSha256": "b8773078553927d7693f1bc293960a718314f7b920fae9d1b496c6d26fca1099",
     "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: read state",
@@ -28,7 +28,7 @@
     "name": "cork_decode",
     "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
     "descriptionTokensApprox": 327,
-    "inputSchemaSha256": "c58011d28df567806546afde60ac7c57ffe796cb1ff704711dd50477333603c5",
+    "inputSchemaSha256": "5dcfe6638a3e5f3b185dc921a2dd7a96a414ac62d203e148648d205dcb6b61be",
     "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: decode bytes",
@@ -52,7 +52,7 @@
     "name": "cork_prepare_phoenix",
     "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
     "descriptionTokensApprox": 222,
-    "inputSchemaSha256": "720aaa23969d9a08a8458e3478a6f0e8d043cc9cd08e4553f38c928c46c0f640",
+    "inputSchemaSha256": "be6d8b9e72ba5f1bb588027df4642fe16439e7b9bc505389985e3cf5e7fad574",
     "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: build unsigned Phoenix bundle",

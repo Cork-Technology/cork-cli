@@ -46,6 +46,24 @@ describe("buildTeaching — corrected example matches the failing variant", () =
     expect(variant(t.example?.input)).toBe("txHash");
   });
 
+  // Activated 2026-07-27 — each new variant must teach with ITS OWN example, not the first one.
+  it("cork_decode order/event/receipt inputs → the matching decode example", () => {
+    for (const kind of ["order", "event", "receipt"] as const) {
+      const t = buildTeaching("cork_decode", [], { kind, data: 5 });
+      expect(variant(t.example?.input)).toBe(kind);
+    }
+  });
+
+  it("cork_query whitelisted-addresses input → the whitelisted-addresses example", () => {
+    const t = buildTeaching("cork_query", [], { resource: "whitelisted-addresses", filters: { poolId: "bad" } });
+    expect(variant(t.example?.input)).toBe("whitelisted-addresses");
+  });
+
+  it("cork_prepare_phoenix authority-onboard input → the authority example", () => {
+    const t = buildTeaching("cork_prepare_phoenix", [], { action: { type: "authority-onboard" } });
+    expect(variant(t.example?.input)).toBe("authority-onboard");
+  });
+
   it("falls back to the FIRST example when the variant has no matching example", () => {
     const t = buildTeaching("cork_compute", [], { params: { kind: "no-such-kind" } });
     expect(t.example).toBe(TOOL_EXAMPLES.cork_compute![0]);

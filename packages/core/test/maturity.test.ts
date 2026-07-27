@@ -9,27 +9,17 @@ import { MATURITY, type ToolName } from "@cork/schemas";
 import { runTool } from "@cork/core";
 
 const NOW = 1_800_000_000n;
-const A = "0xc0ffee0000000000000000000000000000000001";
-const T = "0x9d39a5de30e57443bff2a8307a4256c8797a3497"; // sUSDe (lowercase = no checksum claimed)
-const S = "0xccccccccccccbad6f772a511b337d9ccc9570407"; // corkAdapter
 
 /** One probe per MATURITY entry with status "specified"; key = `${tool}:${variantKey|*}`. */
 const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
-  // cork_query — indexer-backed resources
-  { tool: "cork_query" as const, key: "whitelisted-addresses", input: { resource: "whitelisted-addresses" } },
-  // cork_compute — backend-gated kinds
+  // cork_compute — the two deliberately-gated kinds. dutch-auction-price waits on an out-of-scope
+  // external protocol (1inch Fusion is not in the pilot); rfq-quote waits on a pricing MODEL (a
+  // product decision). Everything else is activated: whitelisted-addresses (2026-07-27, HyperSync
+  // event replay), decode order/event/receipt (2026-07-27, pure local), prepare_phoenix
+  // authority-onboard/revoke (2026-07-27, unsigned direct approve txs), taker-fill,
+  // track simulate/artifact, prepare_market — none probed as gated any more.
   { tool: "cork_compute", key: "dutch-auction-price", input: { params: { kind: "dutch-auction-price", order: {} } } },
   { tool: "cork_compute", key: "rfq-quote", input: { params: { kind: "rfq-quote", marketTypeBucket: "stable", durationSeconds: 86400 } } },
-  // cork_decode — non-calldata kinds
-  { tool: "cork_decode", key: "order", input: { kind: "order", data: {} } },
-  { tool: "cork_decode", key: "event", input: { kind: "event", data: "0x00" } },
-  { tool: "cork_decode", key: "receipt", input: { kind: "receipt", data: {} } },
-  // cork_prepare_phoenix — authority ops
-  { tool: "cork_prepare_phoenix", key: "authority-onboard", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-01", action: { type: "authority-onboard", token: T, spender: S } } },
-  { tool: "cork_prepare_phoenix", key: "authority-revoke", input: { chainId: 1, account: A, clientRequestId: "maturity-probe-02", action: { type: "authority-revoke", token: T, spender: S } } },
-  // cork_prepare_orders taker-fill activated (venue orderbook lookup + local re-hash + unsigned
-  // fill calldata); cork_track simulate/artifact activated 2026-07-22; cork_prepare_market
-  // activated 2026-07-22 (Q-REG closed) — none probed as gated any more.
 ];
 
 /** The reason string's leading token is the warning code the gated call must return. */

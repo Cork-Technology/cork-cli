@@ -38,8 +38,10 @@ const NO_PARTIAL_FILLS_FLAG = 1n << 255n;
 const ALLOW_MULTIPLE_FILLS_FLAG = 1n << 254n;
 const PRE_INTERACTION_CALL_FLAG = 1n << 252n;
 const POST_INTERACTION_CALL_FLAG = 1n << 251n;
+const NEED_CHECK_EPOCH_MANAGER_FLAG = 1n << 250n;
 const HAS_EXTENSION_FLAG = 1n << 249n;
 const USE_PERMIT2_FLAG = 1n << 248n;
+const UNWRAP_WETH_FLAG = 1n << 247n;
 
 // Interaction flags are NOT implied by HAS_EXTENSION: OrderMixin only invokes the pre-/post-
 // interaction embedded in the extension when the matching makerTraits bit is set. An extension
@@ -106,6 +108,70 @@ export function buildMakerTraits(p: MakerTraitsParts): bigint {
   t |= p.expiry << 80n;
   t |= p.nonce << 120n;
   return t; // low 80 bits (allowed sender) = 0 => any taker
+}
+
+/** Full MakerTraitsLib breakdown — the exact inverse of buildMakerTraits, plus the flags/slots
+ *  our builder never sets (epoch manager, unwrap-WETH, series, allowed sender). */
+export interface DecodedMakerTraits {
+  allowPartialFills: boolean;
+  allowMultipleFills: boolean;
+  preInteractionCall: boolean;
+  postInteractionCall: boolean;
+  needCheckEpochManager: boolean;
+  hasExtension: boolean;
+  usePermit2: boolean;
+  unwrapWeth: boolean;
+  /** Absolute unix seconds; 0 = no expiry. */
+  expiry: bigint;
+  nonce: bigint;
+  series: bigint;
+  /** Low 80 bits — the LAST 10 BYTES of the allowed sender (0 = any taker). The full address is
+   *  not recoverable from the traits; only this suffix is enforced on-chain. */
+  allowedSenderLow10Bytes: `0x${string}` | null;
+}
+
+/** Decode a makerTraits word against the MakerTraitsLib bit layout (bit-exact inverse). */
+export function decodeMakerTraits(t: bigint): DecodedMakerTraits {
+  const senderLow = t & ((1n << 80n) - 1n);
+  return {
+    allowPartialFills: (t & NO_PARTIAL_FILLS_FLAG) === 0n,
+    allowMultipleFills: (t & ALLOW_MULTIPLE_FILLS_FLAG) !== 0n,
+    preInteractionCall: (t & PRE_INTERACTION_CALL_FLAG) !== 0n,
+    postInteractionCall: (t & POST_INTERACTION_CALL_FLAG) !== 0n,
+    needCheckEpochManager: (t & NEED_CHECK_EPOCH_MANAGER_FLAG) !== 0n,
+    hasExtension: (t & HAS_EXTENSION_FLAG) !== 0n,
+    usePermit2: (t & USE_PERMIT2_FLAG) !== 0n,
+    unwrapWeth: (t & UNWRAP_WETH_FLAG) !== 0n,
+    expiry: (t >> 80n) & U40,
+    nonce: (t >> 120n) & U40,
+    series: (t >> 160n) & U40,
+    allowedSenderLow10Bytes: senderLow === 0n ? null : (`0x${senderLow.toString(16).padStart(20, "0")}` as `0x${string}`),
+  };
+}
+
+/** Decode the ABI-encoded 8-word Order tuple (the canonical uint256 form the v6 router uses).
+ *  Address-typed words are range-checked — a value above 2^160-1 is a malformed order, not an
+ *  address to silently truncate. */
+export function decodeOrderTuple(data: `0x${string}`): LopOrder {
+  if (size(data) !== 256) {
+    throw new Error(`a LOP v4 order tuple is exactly 8×32 = 256 ABI-encoded bytes, got ${size(data)} — pass the bare encoded Order struct (no selector, no offset header)`);
+  }
+  const words: bigint[] = [];
+  for (let i = 0; i < 8; i += 1) words.push(BigInt(sliceHex(data, i * 32, (i + 1) * 32)));
+  const addr = (w: bigint, field: string): `0x${string}` => {
+    if (w > U160) throw new Error(`order field '${field}' does not fit an address (value ${w} exceeds 2^160-1) — malformed order tuple`);
+    return `0x${w.toString(16).padStart(40, "0")}` as `0x${string}`;
+  };
+  return {
+    salt: words[0]!,
+    maker: addr(words[1]!, "maker"),
+    receiver: addr(words[2]!, "receiver"),
+    makerAsset: addr(words[3]!, "makerAsset"),
+    takerAsset: addr(words[4]!, "takerAsset"),
+    makingAmount: words[5]!,
+    takingAmount: words[6]!,
+    makerTraits: words[7]!,
+  };
 }
 
 export interface LopOrder {

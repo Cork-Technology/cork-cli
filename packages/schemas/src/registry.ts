@@ -43,7 +43,7 @@ export const REGISTRY = [
     cliPath: ["query"],
     phase: 1,
     description:
-      "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config. Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
+      "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     input: QueryInput,
     output: Envelope,

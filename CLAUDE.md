@@ -39,10 +39,10 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | Tool | Use when | Phase |
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
-| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161), market-predict (derive a market that may not exist yet — predicted oracle+live rate, LOCAL pool id, parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence; needs `filters.collateralAsset+referenceAsset+expiry+mode`; the derivation a JIT LOP fill runs, chain-native, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived subset also in `full-decentralized` mode (HyperSync). Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
+| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161), market-predict (derive a market that may not exist yet — predicted oracle+live rate, LOCAL pool id, parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence; needs `filters.collateralAsset+referenceAsset+expiry+mode`; the derivation a JIT LOP fill runs, chain-native, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived: whitelisted-addresses (CURRENT whitelist membership replayed from WhitelistManager events over HyperSync, needs ENVIO token; rows live-view verified when an RPC resolves; `filters.poolId` scopes to one pool, global rows ride along); the markets/fills/flows subset also serves `full-decentralized` mode (HyperSync). Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain). NOT raw reads, NOT byte-building. | 1 |
-| `cork_decode` | Bytes → labeled JSON. Recursively unwraps Bundler3 multicall. Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
-| `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions (token-authority ops are phase-gated). Auto-adds funding legs. Returns bytes for later signing — executes nothing [K1]. | 2 |
+| `cork_decode` | Bytes → labeled JSON, all four kinds live: calldata (recursively unwraps Bundler3 multicall), order (LOP v4 hex tuple or JSON fields → makerTraits breakdown + recomputed orderHash; supplied hash/extension cross-checked → `conflict` on mismatch), event (one log → named args against the source-verified ABI set; unverified layouts labeled raw), receipt (every log labeled). Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
+| `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions. Auto-adds funding legs. Also the token-authority ops: authority-onboard/authority-revoke build an unsigned DIRECT ERC-20 approve tx (onboard amount omitted = unlimited; revoke zeroes it) — owner-signed, not a bundle leg. Returns bytes for later signing — executes nothing [K1]. | 2 |
 | `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension/JIT orders) / cancel; **finalize-maker-order** (recover the external signer, reconstruct exact bytes, emit a verbatim `cork_submit` artifact — never signs); **taker-fill** (fetch + locally re-hash a resting venue order, emit canonical uint256-tuple fill calldata, unsigned); and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
 | `cork_track` | Verify a resource against chain, simulate frozen prepared bytes (eth_call dry-run: wouldRevert + reason BEFORE signing), or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Unsigned MarketRegistry.deploy(ca, ref) tx (permissionless, idempotent oracle deploy; Arbitrum). Q-REG closed 2026-07-22. Markets themselves are created JIT by LOP fills — `cork_prepare_orders` maker-order + `jitMarket`. | 4 |
@@ -56,10 +56,11 @@ as `structuredContent`, and every tool advertises this envelope as its `outputSc
 
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
-  retry the same call** and do not fabricate the answer — report the reason. Still-gated variants
-  (whitelisted-addresses, dutch-auction-price, rfq-quote, decode order/event/receipt) stay
-  `unavailable` by design. (`cork_prepare_orders` taker-fill and finalize-maker-order are now
-  activated — see the tool table.)
+  retry the same call** and do not fabricate the answer — report the reason. Only TWO variants
+  remain gated by design: `cork_compute` dutch-auction-price (1inch Fusion is not in the pilot —
+  an out-of-scope external protocol) and rfq-quote (a pricing MODEL, deliberately deferred as a
+  product decision). Everything else — whitelisted-addresses, decode order/event/receipt, and the
+  prepare_phoenix authority ops — was activated 2026-07-27.
 - `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
   surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
@@ -73,7 +74,7 @@ Warning codes you will encounter:
 | `pool_not_found` | prepare_phoenix funding: `market(poolId)` returned a zeroed struct — the pool doesn't exist on that chain, so no funding legs are built. |
 | `invalid_input` / `internal_error` | MCP-only, in the error envelope when a call fails before/outside a handler (bad input, unexpected exception). CLI equivalents are exit 2 / exit 1. |
 | `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
-| `phase_gated` | Variant not implemented in this iteration. |
+| `phase_gated` | One of the two deliberately-gated `cork_compute` kinds (dutch-auction-price: Fusion out of scope; rfq-quote: pricing model deferred) — the message names the real blocker and unblock condition. |
 | `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |
 | `mode_unavailable` | An explicitly requested data mode (`centralized`/`full-decentralized`) isn't wired yet — omit `mode` or use `lite-decentralized`. |
 | `unknown_topic` / `no_lop` | Capabilities topic not found / no 1inch LOP deployment for the chain. |

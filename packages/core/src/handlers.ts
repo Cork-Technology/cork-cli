@@ -5,6 +5,9 @@
 import { hashTypedData, isAddressEqual, keccak256, recoverAddress, stringToHex } from "viem";
 import {
   Address,
+  Bytes32,
+  Hex,
+  UintStr,
   buildTeaching,
   type ChainId,
   MATURITY,
@@ -36,18 +39,20 @@ import { computeMarketId } from "./marketid.ts";
 import { corkActionCall, type CorkActionParamMap } from "./bundle/actions.ts";
 import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
+import { buildAuthorityTx, spenderRoleOf, type AuthorityAction } from "./bundle/authority.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, RpcChainMismatchError, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type TakerFillResult } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
 import { accessControlAbi, applyBandsLocal, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, predictShares, type ConstraintBands, type PermitParams, type PredictSharesResult } from "./market-registry.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, ROLLOVER_FILL_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
+import { decodeKnownLog, type RawLogLike } from "./event-decode.ts";
 import { envioToken } from "./datasources/envio.ts";
 import {
   getLopFills,
@@ -343,6 +348,33 @@ function buildPhoenixCall(
   }
 }
 
+/** cork_prepare_phoenix authority-onboard / authority-revoke: byte-building lives in
+ *  bundle/authority.ts; this wraps it in the envelope with the spender-role disclosure. */
+function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Array<{ code: string; message: string }>, dep: CorkDeployment, ctx: HandlerContext): Envelope {
+  const a = input.action as AuthorityAction;
+  const tx = buildAuthorityTx(a);
+  return envelope({
+    state: "ok",
+    data: {
+      kind: a.type,
+      to: tx.to,
+      calldata: tx.calldata,
+      value: "0",
+      token: a.token,
+      spender: a.spender,
+      amount: tx.amount,
+      unlimited: tx.unlimited,
+      spenderRole: spenderRoleOf(a.spender, dep.corkAdapter, PERMIT2_ADDRESS),
+      note: "a direct tx from the token owner (an ERC-20 allowance is keyed to msg.sender, so this cannot ride inside a Bundler3 bundle); current allowances are readable via cork_query account-state",
+      clientRequestId: input.clientRequestId,
+    },
+    chainId: input.chainId,
+    source: "config",
+    warnings: depWarn,
+    ctx,
+  });
+}
+
 async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const p = input.params;
@@ -480,7 +512,182 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
     }
   }
 
-  return unavailable(chainId, "phase_gated", `compute kind '${p.kind}' is not implemented in this iteration`, ctx);
+  // The two deliberately-gated kinds: each names its REAL blocker and unblock condition —
+  // neither is missing infra this repo already has.
+  if (p.kind === "dutch-auction-price") {
+    return unavailable(chainId, "phase_gated", "dutch-auction-price prices 1inch FUSION dutch-auction orders, and Fusion is not part of the current pilot (settlement is LOP v4 resting orders, which do not decay) — there are no live Fusion orders to price. Out-of-scope external protocol; unblocks if/when a Fusion integration lands", ctx);
+  }
+  return unavailable(chainId, "phase_gated", "rfq-quote would RECOMMEND a price — a pricing-model/product decision that is deliberately deferred, not missing infrastructure. The registry band math it would build on is already live as cork_compute resolve-recipe; discover open RFQs with cork_query rfqs and answer them with cork_submit rfq-answer", ctx);
+}
+
+// ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
+
+/** Parse a caller-supplied order RECORD (e.g. a typedData.message round-trip) into a LopOrder.
+ *  Field-by-field validation with teachable paths; extra keys are ignored (we reconstruct from
+ *  the eight struct fields, never from any decoded claims riding along). */
+function parseOrderRecord(rec: Record<string, unknown>): LopOrder {
+  const fail = (key: string, message: string): never => {
+    throw new ToolInputError("cork_decode", [{ path: ["data", key], message }]);
+  };
+  const uint = (key: "salt" | "makingAmount" | "takingAmount" | "makerTraits"): bigint => {
+    const r = UintStr.safeParse(rec[key] === undefined ? undefined : String(rec[key]));
+    if (!r.success) fail(key, "expected an unsigned integer as a decimal string");
+    return BigInt(r.data!);
+  };
+  const addr = (key: "maker" | "receiver" | "makerAsset" | "takerAsset"): `0x${string}` => {
+    const r = Address.safeParse(rec[key]);
+    if (!r.success) fail(key, "not a valid EVM address");
+    return r.data!;
+  };
+  return {
+    salt: uint("salt"),
+    maker: addr("maker"),
+    receiver: addr("receiver"),
+    makerAsset: addr("makerAsset"),
+    takerAsset: addr("takerAsset"),
+    makingAmount: uint("makingAmount"),
+    takingAmount: uint("takingAmount"),
+    makerTraits: uint("makerTraits"),
+  };
+}
+
+const DECODE_U160 = (1n << 160n) - 1n;
+
+/** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
+ *  breakdown + locally recomputed orderHash; any caller-claimed hash is cross-checked, never
+ *  trusted [K3]. */
+function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Envelope {
+  let order: LopOrder;
+  let claimedOrderHash: `0x${string}` | undefined;
+  let extension: `0x${string}` | undefined;
+  if (typeof input.data === "string") {
+    try {
+      order = decodeOrderTuple(input.data as `0x${string}`);
+    } catch (err) {
+      throw new ToolInputError("cork_decode", [{ path: ["data"], message: err instanceof Error ? err.message : "not a decodable LOP v4 order tuple" }]);
+    }
+  } else {
+    order = parseOrderRecord(input.data);
+    if (input.data.orderHash !== undefined) {
+      const r = Bytes32.safeParse(input.data.orderHash);
+      if (!r.success) throw new ToolInputError("cork_decode", [{ path: ["data", "orderHash"], message: "not a 32-byte hex hash" }]);
+      claimedOrderHash = r.data;
+    }
+    if (input.data.extension !== undefined) {
+      const r = Hex.safeParse(input.data.extension);
+      if (!r.success) throw new ToolInputError("cork_decode", [{ path: ["data", "extension"], message: "not 0x-prefixed hex" }]);
+      extension = r.data as `0x${string}`;
+    }
+  }
+  const traits = decodeMakerTraits(order.makerTraits);
+  const lop = LOP_ADDRESSES[chainId];
+  const orderHash = lop ? hashLopOrder(chainId, lop, order) : null;
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (!lop) {
+    warnings.push({ code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${chainId} — the order decodes but its EIP-712 orderHash needs the verifying contract; pass a chainId with a known LOP (1, 42161) for the hash` });
+  }
+  const base = {
+    kind: "order" as const,
+    chainId,
+    lop: lop ?? null,
+    order,
+    makerTraits: { raw: order.makerTraits, ...traits },
+    orderHash,
+    ...(extension !== undefined ? { extension } : {}),
+  };
+  // Extension binding: OrderLib enforces salt.low160 == keccak256(extension).low160 at fill.
+  if (extension !== undefined && extension !== "0x") {
+    const bound = (order.salt & DECODE_U160) === (BigInt(keccak256(extension)) & DECODE_U160);
+    if (!bound) {
+      return envelope({
+        state: "conflict",
+        data: { ...base, saltBoundToExtension: false },
+        chainId,
+        source: "config",
+        warnings: [...warnings, { code: "extension_salt_mismatch", message: "salt's low 160 bits are NOT keccak256(extension)'s low 160 bits — this order would revert InvalidExtension at fill" }],
+        ctx,
+      });
+    }
+    (base as Record<string, unknown>).saltBoundToExtension = true;
+  }
+  // Cross-check a caller-claimed hash against the local reconstruction [K3].
+  if (claimedOrderHash !== undefined && orderHash !== null && claimedOrderHash.toLowerCase() !== orderHash.toLowerCase()) {
+    return envelope({
+      state: "conflict",
+      data: { ...base, claimedOrderHash },
+      chainId,
+      source: "config",
+      warnings: [...warnings, { code: "digest_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash` }],
+      ctx,
+    });
+  }
+  return envelope({
+    state: "ok",
+    data: { ...base, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },
+    chainId,
+    source: "config",
+    warnings,
+    ctx,
+  });
+}
+
+/** Normalize a caller-supplied log-shaped record for decodeKnownLog, with teachable failures. */
+function asRawLog(rec: Record<string, unknown>, pathPrefix: string[]): RawLogLike {
+  const topics = rec.topics;
+  if (!Array.isArray(topics)) {
+    throw new ToolInputError("cork_decode", [{ path: ["data", ...pathPrefix, "topics"], message: "expected topics: an array of 0x-prefixed 32-byte hex strings (topics[0] is the event selector)" }]);
+  }
+  return {
+    ...(typeof rec.address === "string" ? { address: rec.address } : {}),
+    topics: topics.map((t) => (typeof t === "string" ? t : null)),
+    ...(typeof rec.data === "string" ? { data: rec.data } : {}),
+  };
+}
+
+/** decode kind:"event" — one raw log {address?, topics[], data} → named args against the known
+ *  Cork/rollover/LOP/ERC-20 ABI set; unknown or unverified layouts come back labeled raw. */
+function handleDecodeEvent(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Envelope {
+  if (typeof input.data === "string") {
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "event decode takes a log OBJECT {address?, topics: string[], data: hex} — raw topics+data are what gets decoded [K3]; for transaction bytes use kind 'calldata'" }]);
+  }
+  const row = decodeKnownLog(asRawLog(input.data, []));
+  return envelope({ state: "ok", data: { kind: "event", ...row }, chainId, source: "config", ctx });
+}
+
+/** decode kind:"receipt" — label every log in a tx receipt against the known ABI set. The
+ *  receipt's own claims (status etc.) are echoed as claims; the decode work is the logs. */
+function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Envelope {
+  if (typeof input.data === "string") {
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "receipt decode takes the receipt OBJECT (eth_getTransactionReceipt result) — at minimum { logs: [{address?, topics[], data}] }" }]);
+  }
+  const logsRaw = input.data.logs;
+  if (!Array.isArray(logsRaw)) {
+    throw new ToolInputError("cork_decode", [{ path: ["data", "logs"], message: "expected logs: an array of log objects ({address?, topics[], data}) — the logs are what a receipt decode reconstructs from [K3]" }]);
+  }
+  const rows = logsRaw.map((l, i) => {
+    if (!l || typeof l !== "object" || Array.isArray(l)) {
+      throw new ToolInputError("cork_decode", [{ path: ["data", "logs", String(i)], message: "expected a log object {address?, topics[], data}" }]);
+    }
+    return decodeKnownLog(asRawLog(l as Record<string, unknown>, ["logs", String(i)]));
+  });
+  // Status normalization: echo the receipt's own claim in one canonical vocabulary.
+  const s = input.data.status;
+  const status = s === "success" || s === "0x1" || s === 1 || s === true ? "success" : s === "reverted" || s === "0x0" || s === 0 || s === false ? "reverted" : undefined;
+  const known = rows.filter((r) => r.known).length;
+  return envelope({
+    state: "ok",
+    data: {
+      kind: "receipt",
+      ...(status !== undefined ? { status, statusNote: "status/blockNumber/gasUsed are the receipt's own claims (echoed, not verifiable locally); the decoded logs below are reconstructed from their raw topics/data [K3]" } : {}),
+      ...(typeof input.data.transactionHash === "string" ? { transactionHash: input.data.transactionHash } : {}),
+      logCount: rows.length,
+      knownCount: known,
+      logs: rows,
+    },
+    chainId,
+    source: "config",
+    ctx,
+  });
 }
 
 /** Parse the free-form filters record into typed poolId/account, rejecting malformed values (exit 2). */
@@ -847,6 +1054,13 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
     }
   }
 
+  // whitelisted-addresses: event-derived enumeration (WhitelistManager's membership mappings are
+  // not enumerable on-chain) — its natural mode is full-decentralized, with a live-view [K7]
+  // verification leg when an RPC also resolves.
+  if (input.resource === "whitelisted-addresses") {
+    return handleQueryWhitelistedAddresses(input, filters, chainId, ctx);
+  }
+
   // Data mode is explicit, never a silent fallback [R1/§7]: chain resources serve only
   // lite-decentralized (RPC). Requesting an unwired mode fails loudly instead of being ignored.
   if (input.mode !== undefined && input.mode !== "lite-decentralized") {
@@ -871,6 +1085,8 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
 
   const chainResources = new Set(["market", "account-state", "pool-whitelist"]);
   if (!chainResources.has(input.resource)) {
+    // Unreachable today (every enum resource routes above) — kept so a future enum addition
+    // fails honestly instead of falling into the poolId-gated chain-read path below.
     return unavailable(chainId, "needs_indexer", `cork_query('${input.resource}') requires an indexer/service backend not wired in this iteration`, ctx);
   }
   if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
@@ -983,6 +1199,109 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
     return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
   } catch (err) {
     return chainReadFailed(chainId, err, w, ctx, resolved);
+  }
+}
+
+/**
+ * whitelisted-addresses: enumerate the WhitelistManager's CURRENT membership by replaying its
+ * lifecycle events (global add/remove, per-market add/remove, market enable/disable). The
+ * membership mappings are NOT enumerable on-chain, so the event history is the only enumeration
+ * source — served over the same HyperSync path that powers markets/fills/flows. When an RPC also
+ * resolves, every derived row is re-checked against the live isGlobalWhitelisted /
+ * isMarketWhitelisted views [K7: chain outranks any derivation, including our own].
+ */
+async function handleQueryWhitelistedAddresses(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+  if (input.mode === "centralized") {
+    return unavailable(chainId, "mode_unavailable", "'whitelisted-addresses' is chain-event-derived; the venue has no whitelist endpoint — omit mode or use 'full-decentralized'", ctx);
+  }
+  if (input.mode === "lite-decentralized") {
+    return unavailable(chainId, "mode_unavailable", "'whitelisted-addresses' cannot be ENUMERATED over plain RPC views (the WhitelistManager stores membership in non-enumerable mappings) — omit mode or use 'full-decentralized' (HyperSync event replay); for a single-account check use resource 'pool-whitelist'", ctx);
+  }
+  const { dep, depWarn } = await getDep(ctx, chainId);
+  if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+  if (!dep.whitelistManager) {
+    return unavailable(chainId, "unknown_deployment", `whitelistManager address is not configured for chainId ${chainId} (partial deployment)`, ctx);
+  }
+  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, envioToken("hypersync"));
+  if ("error" in load) return unavailable(chainId, "hypersync_unavailable", load.error, ctx);
+  try {
+    const r = await load.source.queryLogs({ fromBlock: 0, address: [dep.whitelistManager], topics: [WHITELIST_TOPICS] });
+    const warnings: Array<{ code: string; message: string }> = [...depWarn];
+    if (r.complete === false) {
+      warnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${r.nextBlock !== undefined ? ` (stopped at block ${r.nextBlock})` : ""} — membership replayed from a PARTIAL history can be stale or wrong; treat rows as evidence, not the full set` });
+    }
+    const replayed = replayWhitelist(decodeWhitelistRows(r.logs));
+    const wantPool = filters.poolId?.toLowerCase();
+    type Row = { account: `0x${string}`; scope: "global" | "market"; poolId?: string; verified?: boolean };
+    const items: Row[] = [
+      // Global members ride along even under a poolId filter: isWhitelisted() admits them to
+      // every gated pool, so omitting them would misreport the pool's effective allowlist.
+      ...replayed.global.map((account): Row => ({ account, scope: "global" })),
+      ...Object.entries(replayed.byPool)
+        .filter(([poolId]) => !wantPool || poolId === wantPool)
+        .flatMap(([poolId, accounts]) => accounts.map((account): Row => ({ account, scope: "market", poolId }))),
+    ];
+    const enabledByPool = wantPool
+      ? { [wantPool]: replayed.enabledByPool[wantPool] ?? false }
+      : replayed.enabledByPool;
+
+    // [K7] live-view verification leg (best-effort): re-check every derived row against the
+    // contract's own views. A disagreement is possible exactly when the scan was partial.
+    const VERIFY_CAP = 200;
+    let verification = "skipped (no rows, or no RPC resolved) — rows are event-derived only";
+    const resolved = items.length > 0 ? await getRpc(ctx, chainId) : null;
+    if (resolved && items.length <= VERIFY_CAP) {
+      const wlm = { address: dep.whitelistManager, abi: whitelistManagerAbi } as const;
+      try {
+        const checks = await Promise.all(
+          items.map((row) =>
+            resolved.client.readContract(
+              row.scope === "global"
+                ? { ...wlm, functionName: "isGlobalWhitelisted", args: [row.account] }
+                : { ...wlm, functionName: "isMarketWhitelisted", args: [row.poolId as `0x${string}`, row.account] },
+            ) as Promise<boolean>,
+          ),
+        );
+        items.forEach((row, i) => {
+          row.verified = checks[i]!;
+        });
+        verification = "live WhitelistManager views (isGlobalWhitelisted / isMarketWhitelisted)";
+        warnings.push(...rpcWarn(resolved));
+        const stale = items.filter((row) => row.verified === false);
+        if (stale.length > 0) {
+          warnings.push({ code: "status_mismatch", message: `${stale.length} event-derived row(s) failed live-view verification (verified:false) — the chain view outranks the event replay [K7]; the scan likely missed later removal events` });
+        }
+      } catch (err) {
+        verification = "attempted but the live views failed — rows are event-derived only";
+        warnings.push({ code: "chain_read_failed", message: `live-view verification failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — rows are event-derived only` });
+      }
+    } else if (resolved && items.length > VERIFY_CAP) {
+      verification = `skipped (${items.length} rows exceeds the ${VERIFY_CAP}-row live-verification cap) — rows are event-derived only`;
+    }
+
+    return envelope({
+      state: "ok",
+      data: {
+        resource: input.resource,
+        chainId,
+        whitelistManager: dep.whitelistManager,
+        ...(wantPool ? { poolId: filters.poolId } : {}),
+        // Semantics disclosure: a pool with NO enable event was never gated — everyone passes.
+        enabledByPool,
+        note: "a pool absent from enabledByPool (or false) is NOT gated: isWhitelisted() returns true for every account on it; global rows are admitted to every gated pool",
+        verification,
+        count: items.length,
+        items,
+        ...(r.archiveHeight !== undefined ? { archiveHeight: r.archiveHeight } : {}),
+      },
+      chainId,
+      source: "chain",
+      mode: "full-decentralized",
+      warnings,
+      ctx,
+    });
+  } catch (err) {
+    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`, ctx);
   }
 }
 
@@ -2440,9 +2759,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
     case "cork_decode": {
       const input = parsed.data as DecodeInput;
       const chainId = input.chainId ?? 1;
-      if (input.kind !== "calldata") {
-        return unavailable(chainId, "phase_gated", `decode kind '${input.kind}' is not implemented in this iteration`, ctx);
-      }
+      if (input.kind === "order") return handleDecodeOrder(input, chainId, ctx);
+      if (input.kind === "event") return handleDecodeEvent(input, chainId, ctx);
+      if (input.kind === "receipt") return handleDecodeReceipt(input, chainId, ctx);
       if (typeof input.data !== "string") {
         throw new ToolInputError(name, "calldata decode requires a hex string");
       }
@@ -2470,7 +2789,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       // (relative, default) re-anchors to the clock on each call.
       const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
       if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
-        return unavailable(input.chainId, "phase_gated", `token-authority op '${input.action.type}' is not built in this iteration`, ctx);
+        return handlePhoenixAuthority(input, depWarn, dep, ctx);
       }
       const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
       const warnings: Array<{ code: string; message: string }> = [...depWarn];
