@@ -5,9 +5,10 @@ import { HypersyncClient, LogField, BlockField } from "@envio-dev/hypersync-clie
 const token = process.env.ENVIO_API_TOKEN;
 console.log("module loaded OK (napi binding resolved under Bun)");
 
-const client = HypersyncClient.new({
+// client 1.x: a CONSTRUCTOR whose config field is `apiToken` (the 0.x API was `.new({ bearerToken })`).
+const client = new HypersyncClient({
   url: "https://arbitrum.hypersync.xyz",
-  ...(token ? { bearerToken: token } : {}),
+  apiToken: token ?? "",
 });
 console.log("client constructed OK:", typeof client.get);
 

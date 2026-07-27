@@ -1800,12 +1800,14 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
             warnings.push(venueNote);
           }
 
-          // Event-history leg via a logs-capable endpoint (HyperRPC preferred).
-          const logsUrl = resolveLogsEndpoint(chainId, ctx.logsUrl);
-          if (logsUrl && rollover) {
+          // Event-history leg via a logs-capable endpoint (HyperRPC preferred; token sent as a
+          // Bearer header by fetchDigestLogs, never in the URL).
+          const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
+          if (logsEndpoint && rollover) {
             try {
               const logs = await fetchDigestLogs({
-                url: logsUrl,
+                url: logsEndpoint.url,
+                ...(logsEndpoint.bearerToken ? { bearerToken: logsEndpoint.bearerToken } : {}),
                 addresses: [rollover.exactSettler, rollover.partialSettler],
                 digest,
                 fromBlock: rollover.seededAtBlock,
@@ -1819,7 +1821,7 @@ async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Enve
                   : { code: "logs_unavailable", message: `event-history leg failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` },
               );
             }
-          } else if (!logsUrl) {
+          } else if (!logsEndpoint) {
             warnings.push({ code: "logs_unavailable", message: "no logs-capable endpoint configured (set ENVIO_API_TOKEN for HyperRPC, or CORK_LOGS_RPC_URL) — event history omitted; status leg above still applies when an RPC resolved" });
           }
 

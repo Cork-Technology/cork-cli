@@ -39,9 +39,12 @@ export function hyperSyncUrl(chainId: number): string | undefined {
   return HYPERSYNC_URLS[chainId];
 }
 
-/** HyperRPC eth_getLogs endpoint. The token rides in the PATH — never log this URL unredacted. */
-export function hyperRpcUrl(chainId: number, token: string): string {
-  return `https://${chainId}.rpc.hypersync.xyz/${token}`;
+/** HyperRPC eth_getLogs host. The token is sent as an `Authorization: Bearer` header — the same
+ *  mechanism HyperSync uses — NOT in the URL path, so nothing secret rides in the URL. (Envio only
+ *  documents the path form, but the header is empirically supported and confirmed with a live
+ *  token on chains 1 and 42161; keeping the secret out of the URL removes the leak class entirely.) */
+export function hyperRpcHost(chainId: number): string {
+  return `https://${chainId}.rpc.hypersync.xyz`;
 }
 
 /**

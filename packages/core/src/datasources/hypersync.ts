@@ -86,14 +86,14 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   const url = hyperSyncUrl(chainId);
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };
   if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
-  // Structural view of the napi module: HypersyncClient.new is a napi-rs STATIC factory
-  // method (a property named "new"), not a constructor. One cast at the import boundary —
-  // the module is untyped to us because it is an optional dep imported by bare name.
+  // Structural view of the napi module. Client 1.x exposes HypersyncClient as a CONSTRUCTOR whose
+  // config field is `apiToken` (the 0.x API was a static `.new({ bearerToken })` — different on both
+  // counts). Verified against the pinned 1.4.0 package's shipped README + index.d.ts; a wrong shape
+  // here is invisible to CI because the native binding cannot load on this arm64-musl host. One cast
+  // at the import boundary — the module is untyped to us as an optional dep imported by bare name.
   interface HyperSyncNapiModule {
-    HypersyncClient: {
-      new: (opts: { url: string; bearerToken: string }) => {
-        get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
-      };
+    HypersyncClient: new (cfg: { url: string; apiToken: string }) => {
+      get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
     };
     LogField: Record<string, string>;
   }
@@ -104,7 +104,7 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   } catch (err) {
     return { error: `the @envio-dev/hypersync-client native binding could not load on this host (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — see experiments/hypersync-spike/README.md for platform coverage` };
   }
-  const client = mod.HypersyncClient.new({ url, bearerToken: token });
+  const client = new mod.HypersyncClient({ url, apiToken: token });
   const F = mod.LogField;
   return {
     source: {

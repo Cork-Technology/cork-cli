@@ -10,7 +10,7 @@
 // the ERC-7683 `Open` event's tuple layout is not reproduced here, so an Open log surfaces as
 // an unlabeled event rather than being guessed [K3-honest].
 import { keccak256, stringToHex, toEventSelector } from "viem";
-import { envioToken, hyperRpcUrl, redactEnvioUrl, redactUrlIn } from "./datasources/envio.ts";
+import { envioToken, hyperRpcHost, redactEnvioUrl, redactUrlIn } from "./datasources/envio.ts";
 
 type Hex = `0x${string}`;
 type Address = `0x${string}`;
@@ -70,16 +70,24 @@ export function venueChainConsistent(venueStatus: string, chain: string): boolea
 
 // ── Logs endpoint resolution ─────────────────────────────────────────────────
 
+/** A logs-capable endpoint plus how to authenticate to it. `bearerToken`, when present, is sent as
+ *  an `Authorization: Bearer` header (HyperRPC) — the token is NEVER placed in the URL. */
+export interface LogsEndpoint {
+  url: string;
+  bearerToken?: string;
+}
+
 /** Resolve a logs-capable JSON-RPC endpoint: explicit override → CORK_LOGS_RPC_URL → HyperRPC
  *  (token-gated). Returns null when nothing is configured — verification then honestly reports the
- *  gap. Token + URL resolution is delegated to ./datasources/envio.ts so the HyperRPC/HyperSync
- *  auth rules live in exactly one place. The returned URL may carry a secret in its path; redact
- *  it (redactEnvioUrl) before putting it in any message. */
-export function resolveLogsEndpoint(chainId: number, override?: string): string | null {
-  if (override) return override;
-  if (process.env.CORK_LOGS_RPC_URL) return process.env.CORK_LOGS_RPC_URL;
+ *  gap. For HyperRPC the token is returned SEPARATELY (sent as a Bearer header by fetchDigestLogs),
+ *  never embedded in the URL; overrides are used verbatim (their own auth, whatever the operator
+ *  baked in). Token resolution is delegated to ./datasources/envio.ts so the Envio auth rules live
+ *  in exactly one place. */
+export function resolveLogsEndpoint(chainId: number, override?: string): LogsEndpoint | null {
+  if (override) return { url: override };
+  if (process.env.CORK_LOGS_RPC_URL) return { url: process.env.CORK_LOGS_RPC_URL };
   const token = envioToken("hyperrpc");
-  return token ? hyperRpcUrl(chainId, token) : null;
+  return token ? { url: hyperRpcHost(chainId), bearerToken: token } : null;
 }
 
 export interface RawLog {
@@ -99,16 +107,23 @@ export class LogsRangeLimited extends Error {
 }
 
 /** Fetch every log mentioning the digest as topic1 from the given addresses (fetch-injectable).
- *  All error messages are token-safe: the endpoint URL may carry a HyperRPC token in its path, so
- *  it is redacted (host-only) and scrubbed out of any transport error before being thrown. */
+ *  All error messages are token-safe: the URL is redacted host-only and both the raw URL and the
+ *  bearer token are scrubbed out of any transport/RPC error before it is thrown. */
 export async function fetchDigestLogs(args: {
   url: string;
   addresses: Address[];
   digest: Hex;
   fromBlock: number;
+  bearerToken?: string;
   fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
   timeoutMs?: number;
 }): Promise<RawLog[]> {
+  // Scrub both the URL and the token from any message we might throw.
+  const scrub = (m: string): string => {
+    let s = redactUrlIn(m, args.url);
+    if (args.bearerToken) s = s.split(args.bearerToken).join("<redacted>");
+    return s;
+  };
   const f = args.fetchImpl ?? fetch;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), args.timeoutMs ?? 20_000);
@@ -116,7 +131,10 @@ export async function fetchDigestLogs(args: {
   try {
     res = await f(args.url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(args.bearerToken ? { authorization: `Bearer ${args.bearerToken}` } : {}),
+      },
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -134,13 +152,13 @@ export async function fetchDigestLogs(args: {
     });
   } catch (err) {
     const raw = err instanceof Error ? err.message.split("\n")[0]! : String(err);
-    throw new Error(`logs endpoint (${redactEnvioUrl(args.url)}) unreachable: ${redactUrlIn(raw, args.url)}`);
+    throw new Error(`logs endpoint (${redactEnvioUrl(args.url)}) unreachable: ${scrub(raw)}`);
   } finally {
     clearTimeout(t);
   }
   const body = (await res.json().catch(() => null)) as { result?: RawLog[]; error?: { message?: string } } | null;
   if (!body || body.error || !Array.isArray(body.result)) {
-    const msg = redactUrlIn(body?.error?.message ?? `HTTP ${res.status}`, args.url);
+    const msg = scrub(body?.error?.message ?? `HTTP ${res.status}`);
     // Range-cap rejections (non-archive nodes, free tiers) are a distinct, honest outcome.
     if (/range|archive|10000|block/i.test(msg)) throw new LogsRangeLimited(msg);
     throw new Error(`logs endpoint error: ${msg}`);

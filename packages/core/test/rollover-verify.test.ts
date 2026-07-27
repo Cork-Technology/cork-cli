@@ -139,18 +139,18 @@ describe("helpers", () => {
     expect(venueChainConsistent("AWAITING_PREMIUM", "Opened")).toBe(true);
     expect(venueChainConsistent("PARTIALLY_FILLED", "Settled")).toBe(false);
   });
-  it("logs endpoint resolution: explicit override wins; HyperRPC URL shape from the token", () => {
-    expect(resolveLogsEndpoint(42161, "https://x/rpc")).toBe("https://x/rpc");
+  it("logs endpoint resolution: override wins (no bearer); HyperRPC returns bare host + bearer token (NOT in the URL)", () => {
+    expect(resolveLogsEndpoint(42161, "https://x/rpc")).toEqual({ url: "https://x/rpc" });
     const prevToken = process.env.ENVIO_API_TOKEN;
     const prevRpcToken = process.env.ENVIO_HYPERRPC_TOKEN;
     const prevUrl = process.env.CORK_LOGS_RPC_URL;
     delete process.env.CORK_LOGS_RPC_URL;
     delete process.env.ENVIO_HYPERRPC_TOKEN;
     process.env.ENVIO_API_TOKEN = "tok123";
-    expect(resolveLogsEndpoint(42161)).toBe("https://42161.rpc.hypersync.xyz/tok123");
+    expect(resolveLogsEndpoint(42161)).toEqual({ url: "https://42161.rpc.hypersync.xyz", bearerToken: "tok123" });
     // separate Envio products: the dedicated var outranks the shared fallback
     process.env.ENVIO_HYPERRPC_TOKEN = "rpc456";
-    expect(resolveLogsEndpoint(42161)).toBe("https://42161.rpc.hypersync.xyz/rpc456");
+    expect(resolveLogsEndpoint(42161)).toEqual({ url: "https://42161.rpc.hypersync.xyz", bearerToken: "rpc456" });
     delete process.env.ENVIO_HYPERRPC_TOKEN;
     delete process.env.ENVIO_API_TOKEN;
     expect(resolveLogsEndpoint(42161)).toBe(null);
@@ -222,6 +222,34 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
     await expect(
       fetchDigestLogs({ ...common, fetchImpl: async () => new Response("not json", { status: 503 }) }),
     ).rejects.toThrow("logs endpoint error: HTTP 503");
+  });
+  it("sends the token as an Authorization: Bearer header — never in the URL", async () => {
+    let seenUrl: string | undefined;
+    let seenAuth: string | undefined;
+    await fetchDigestLogs({
+      ...common,
+      url: "https://1.rpc.hypersync.xyz", // bare host, no token
+      bearerToken: "envio-tok-xyz",
+      fetchImpl: async (url, init) => {
+        seenUrl = url;
+        seenAuth = (init?.headers as Record<string, string> | undefined)?.authorization;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+      },
+    });
+    expect(seenUrl).toBe("https://1.rpc.hypersync.xyz"); // the token is NOT in the request URL
+    expect(seenAuth).toBe("Bearer envio-tok-xyz");
+  });
+  it("scrubs a bearer token that an error happens to echo (defense in depth)", async () => {
+    const TOKEN = "aaaa-bbbb-cccc-dddd";
+    await fetchDigestLogs({
+      ...common,
+      url: "https://1.rpc.hypersync.xyz",
+      bearerToken: TOKEN,
+      fetchImpl: async () => { throw new Error(`upstream said: Bearer ${TOKEN} rejected`); },
+    }).catch((e: Error) => {
+      expect(e.message).not.toContain(TOKEN);
+      expect(e.message).toContain("<redacted>");
+    });
   });
 });
 

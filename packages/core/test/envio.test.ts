@@ -1,7 +1,7 @@
 // Envio connection details in one place: the per-product-secret + shared-fallback token rule, the
 // two endpoint URL shapes, and the URL redaction that keeps a HyperRPC token out of error text.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { envioToken, hyperSyncUrl, hyperRpcUrl, redactEnvioUrl, redactUrlIn } from "@cork/core";
+import { envioToken, hyperSyncUrl, hyperRpcHost, redactEnvioUrl, redactUrlIn } from "@cork/core";
 
 const VARS = ["ENVIO_HYPERSYNC_TOKEN", "ENVIO_HYPERRPC_TOKEN", "ENVIO_API_TOKEN"] as const;
 
@@ -53,9 +53,9 @@ describe("Envio endpoint URLs", () => {
     expect(hyperSyncUrl(8453)).toBe("https://base.hypersync.xyz");
     expect(hyperSyncUrl(999999)).toBeUndefined();
   });
-  it("hyperRpcUrl builds the chain-scoped token-in-path form", () => {
-    expect(hyperRpcUrl(42161, "tok")).toBe("https://42161.rpc.hypersync.xyz/tok");
-    expect(hyperRpcUrl(1, "abc")).toBe("https://1.rpc.hypersync.xyz/abc");
+  it("hyperRpcHost is the bare host — no token in the URL (auth rides an Authorization header)", () => {
+    expect(hyperRpcHost(42161)).toBe("https://42161.rpc.hypersync.xyz");
+    expect(hyperRpcHost(1)).toBe("https://1.rpc.hypersync.xyz");
   });
 });
 
