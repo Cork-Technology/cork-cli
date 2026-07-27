@@ -88,14 +88,15 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
   if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
   // Structural view of the napi module. Client 1.x exposes HypersyncClient as a CONSTRUCTOR whose
   // config field is `apiToken` (the 0.x API was a static `.new({ bearerToken })` — different on both
-  // counts). Verified against the pinned 1.4.0 package's shipped README + index.d.ts; a wrong shape
-  // here is invisible to CI because the native binding cannot load on this arm64-musl host. One cast
-  // at the import boundary — the module is untyped to us as an optional dep imported by bare name.
+  // counts). LIVE-verified against the real 1.4.0 client (glibc container, 2026-07-27): `LogField`
+  // is a TYPE-only string union in 1.4.0 (`module.exports.LogField` is an empty napi object at
+  // runtime), so field selection must use the literal strings from index.d.ts — the old
+  // `F.Address`-style lookups silently produced `[undefined…]`. One cast at the import boundary —
+  // the module is untyped to us as an optional dep imported by bare name.
   interface HyperSyncNapiModule {
     HypersyncClient: new (cfg: { url: string; apiToken: string }) => {
       get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
     };
-    LogField: Record<string, string>;
   }
   let mod: HyperSyncNapiModule;
   try {
@@ -105,7 +106,8 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
     return { error: `the @envio-dev/hypersync-client native binding could not load on this host (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — see experiments/hypersync-spike/README.md for platform coverage` };
   }
   const client = new mod.HypersyncClient({ url, apiToken: token });
-  const F = mod.LogField;
+  // Literal LogField union members per the shipped 1.4.0 index.d.ts.
+  const LOG_FIELDS = ["Address", "Topic0", "Topic1", "Topic2", "Topic3", "Data", "BlockNumber", "TransactionHash"];
   return {
     source: {
       // HyperSync answers are PAGED: each response carries `nextBlock`, the resume point. This
@@ -116,22 +118,37 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
           const res = await client.get({
             fromBlock,
             logs: [{ ...(q.address ? { address: q.address } : {}), ...(q.topics ? { topics: q.topics } : {}) }],
-            fieldSelection: { log: [F.Address, F.Topic0, F.Topic1, F.Topic2, F.Topic3, F.Data, F.BlockNumber, F.TransactionHash] },
+            fieldSelection: { log: LOG_FIELDS },
           });
           return {
-            logs: res.data.logs.map((l) => ({
-              address: String(l.address),
-              topics: [l.topic0, l.topic1, l.topic2, l.topic3].map((t) => (t == null ? null : String(t))),
-              data: String(l.data ?? "0x"),
-              blockNumber: Number(l.blockNumber ?? 0),
-              transactionHash: String(l.transactionHash ?? "0x"),
-            })),
+            logs: res.data.logs.map(normalizeNapiLog),
             ...(res.archiveHeight !== undefined ? { archiveHeight: res.archiveHeight } : {}),
             ...(res.nextBlock !== undefined ? { nextBlock: res.nextBlock } : {}),
           };
         });
       },
     },
+  };
+}
+
+/**
+ * Normalize one napi-client log row to our HyperSyncLog. The 1.4.0 client returns a `topics`
+ * ARRAY (`Array<string | undefined | null>`, per its index.d.ts Log type) — NOT the `topic0..3`
+ * scalar fields the 0.x shape used. Both shapes are accepted: the old mapping read `l.topic0` of
+ * a 1.4.0 row as undefined×4, so every decode failed and every full-decentralized read returned
+ * an empty-but-"ok" result. LIVE-verified against Arbitrum MarketCreated logs (2026-07-27).
+ */
+export function normalizeNapiLog(l: Record<string, unknown>): HyperSyncLog {
+  const topics = Array.isArray(l.topics)
+    ? l.topics.map((t) => (t == null ? null : String(t)))
+    : [l.topic0, l.topic1, l.topic2, l.topic3].map((t) => (t == null ? null : String(t)));
+  while (topics.length < 4) topics.push(null);
+  return {
+    address: String(l.address),
+    topics,
+    data: String(l.data ?? "0x"),
+    blockNumber: Number(l.blockNumber ?? 0),
+    transactionHash: String(l.transactionHash ?? "0x"),
   };
 }
 

@@ -13,6 +13,7 @@ import {
   decodeRolloverFillRows,
   decodeWhitelistRows,
   loadHyperSync,
+  normalizeNapiLog,
   MARKET_CREATED_TOPIC,
   CLONE_DEPLOYED_TOPIC,
   type HandlerContext,
@@ -384,6 +385,27 @@ function wlSource(logs: HyperSyncLog[], opts: { complete?: boolean } = {}, seen:
     },
   };
 }
+
+describe("normalizeNapiLog — 1.4.0 topics-array shape AND legacy topic0..3 scalars", () => {
+  // LIVE-verified 2026-07-27: the 1.4.0 napi client returns `topics: Array<string|null>`, not
+  // topic0..3 scalars — the old mapping read undefined×4 and every decode silently dropped,
+  // so full-decentralized reads returned empty-but-"ok". This pins both accepted shapes.
+  it("1.4.0 shape: topics array is passed through and padded to 4", () => {
+    const l = normalizeNapiLog({ address: "0xabc", topics: ["0x11", "0x22"], data: "0xdd", blockNumber: 7, transactionHash: "0xtt" });
+    expect(l.topics).toEqual(["0x11", "0x22", null, null]);
+    expect(l.blockNumber).toBe(7);
+  });
+  it("legacy shape: topic0..3 scalars still map", () => {
+    const l = normalizeNapiLog({ address: "0xabc", topic0: "0x11", topic1: null, data: "0xdd", blockNumber: 7, transactionHash: "0xtt" });
+    expect(l.topics).toEqual(["0x11", null, null, null]);
+  });
+  it("a real MarketCreated row in 1.4.0 shape decodes to a market", () => {
+    const src = marketLog();
+    const rows = decodeMarketRows([normalizeNapiLog({ address: src.address, topics: src.topics, data: src.data, blockNumber: src.blockNumber, transactionHash: src.transactionHash })]);
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]!.poolId).toLowerCase()).toBe(POOL);
+  });
+});
 
 describe("cork_query whitelisted-addresses (event replay over HyperSync)", () => {
   const noRpc = async () => null;
