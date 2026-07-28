@@ -381,6 +381,16 @@ reconciliation want an Envio token (`ENVIO_API_TOKEN`) — generate one at
 <https://envio.dev/app/api-tokens> (sign-in required; docs at
 <https://docs.envio.dev/docs/HyperSync/api-tokens>). **Never commit an RPC URL or token** — env only.
 
+**Prefer decentralized reads when freshness matters.** The venue-backed reads (`orderbook`, `rfqs`,
+`fills`, `flows`, `markets`) are served by Cork's off-chain indexer (api-phoenix), which can lag chain
+head. For anything time-sensitive — discovering an order right before a fill, checking order status,
+reconciling after — lean on the decentralized paths instead: `lite-decentralized` (direct RPC chain
+reads, already the default for `market` / `account-state` / `market-predict`) and `full-decentralized`
+(HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports more than one backend you
+can force it with `mode` on `ch query`, and every result's `provenance.mode` tells you which one
+answered. When the indexer and chain disagree, chain wins — that's the reconcile principle behind
+`ch track` (§5, item F).
+
 ---
 
 ## 5. Risks & ownership
