@@ -19,7 +19,7 @@ position into two ERC-20 legs:
 
 | Term | Meaning | Who holds it |
 |---|---|---|
-| **REF** | the covered/reference asset (pilot: yoUSD) | — |
+| **REF** | the covered/reference asset (design pair: yoUSD; the live Arbitrum markets on 2026-07-28 were sUSDe against **waArbUSDT**/waArbUSDCn — read the market, don't assume) | — |
 | **CA** | the liquid collateral asset paid out on cover (pilot: **sUSDe**, `0x211Cc4DD…5fE5d2`, 18 dec) | pool |
 | **cST** | the cover / "swap" token — right to swap REF→CA at the market's fixed rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token — the underwriter's leg + premium | **bond.credit (supply)** |
@@ -91,7 +91,8 @@ reconcile), `submit` (the only relay).
   blindly). `conflict` → the tool ran and found a mismatch (e.g. a stale rate, a digest mismatch) —
   surface it, don't paper over it. CLI exit codes mirror this (`0/2/3/4/1`).
 - Money/rate outputs carry a `scales` block + `collateralDecimals`/`referenceDecimals` — **read the
-  labels; do not assume 18 decimals** (yoUSD is 6-dec, sUSDe is 18-dec).
+  labels; do not assume 18 decimals** (the reference leg is 6-dec on every live market so far —
+  yoUSD and waArbUSDT alike — while sUSDe collateral is 18-dec).
 
 **Maturity — the tool self-reports it, and the labels are precise.** `cork_capabilities` returns a
 per-tool/per-variant map with three states (mirrors the committed source; verified 2026-07-27):
@@ -160,9 +161,15 @@ this — the "Scope & Ownership" write-up — on request.)
 `msg.sender` of the mint; a whitelisted pool can never be JIT-minted, so every fill would revert
 `MintUnavailable`. The JIT builders hardcode this — just don't fight it.
 
-**C. Different approve spenders.** CA premium → **1inch LOP**; cST and REF (for exercise) →
-**CorkPoolManager**. Same selector, different spender — easy to get wrong, and your carve-out must
-allow both spenders explicitly.
+**C. Different approve spenders — and one approval you do *not* need.** CA premium → **1inch LOP**;
+REF (for exercise) → **CorkPoolManager**. Same selector, different spender — easy to get wrong, and
+your carve-out must allow both explicitly. **cST needs no approval to the pool manager** (corrected
+2026-07-28, source-verified): the cST leg of `swap`/`exercise`/`exerciseOther` moves through the
+gated 4-arg `PoolShare.transferFrom(sender, owner, to, amount)` called as
+`(_msgSender(), _msgSender(), address(this), …)`, which skips `_spendAllowance` when
+`sender == owner`. Granting one anyway is a standing approval that can never be spent. The same
+applies to cPT when you exit your own position. If you route through a `*ForSelf` adapter, cST does
+need approving — to that adapter, never to the pool manager.
 
 **D. `exercise` has no slippage guard** and is gated by the constraint-rate credit bucket + a pause
 bit. Re-check the preview at send time; treat a zero preview as "unavailable," not "free."
