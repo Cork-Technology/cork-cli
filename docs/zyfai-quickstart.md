@@ -12,7 +12,7 @@ the shell to make every step concrete without signing or custodying anything.
 
 ---
 
-## 1. What Cork is, in one screen
+## 1. What Cork is
 
 Cork is middleware for **tokenized, tradeable downside cover**. A Cork *market* tokenizes one covered
 position into two ERC-20 legs:
@@ -50,7 +50,7 @@ returns **unsigned** artifacts or reads — you sign/broadcast with your own sta
 | 5 | **Exercise on impairment** | Hand in cST + REF, receive CA at the fixed rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare phoenix` → `exercise` / `exercise-other` |
 | 6 | **Rollover at expiry** | Re-run 1/4 against the successor market and exit the old one — no new selectors | `ch prepare orders` → `rollover-intent`, then `ch submit` |
 
-Notes that save you a day:
+Implementation notes:
 - **`taker-fill` picks the right fill flavor for you** — `fillOrderArgs` (EOA maker) vs
   `fillContractOrderArgs` (Safe/ERC-1271 maker). Guessing wrong reverts `BadSignature`.
 - **Market identity follows the live oracle rate.** If the rate moves between signing and filling,
@@ -127,11 +127,11 @@ reconciliation want an Envio token (`ENVIO_API_TOKEN`) — generate one at
 
 ---
 
-## 4. Footguns & what you own
+## 4. Risks & ownership
 
-Read this section twice. The first three are the security core.
+Sections A–C are the security core.
 
-**A. Outputs go to an address argument your cage cannot see — you must force the receiver.**
+**A. Outputs go to an address argument your policy layer cannot see — you must force the receiver.**
 Every asset-moving *raw* Cork method sends its output to a `receiver`/`target` **parameter**, while
 pulling inputs from `msg.sender`. A Zodiac/ERC-7579-style whitelist gates `(contract, selector)` but
 **not calldata**, so a prompt-injected or compromised agent can point that argument at an attacker
@@ -154,7 +154,7 @@ this — the "Scope & Ownership" write-up — on request.)
 
 **B. The market must be created with `isWhitelistEnabled = false`.** The JIT adapter is the
 `msg.sender` of the mint; a whitelisted pool can never be JIT-minted, so every fill would revert
-`MintUnavailable`. The JIT builders hardcode this — just don't fight it.
+`MintUnavailable`. The JIT builders set this; it is not configurable.
 
 **C. Different approve spenders — and one approval you do *not* need.** CA premium → **1inch LOP**;
 REF (for exercise) → **CorkPoolManager**. Same selector, different spender — easy to get wrong, and
