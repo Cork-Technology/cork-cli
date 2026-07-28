@@ -456,6 +456,104 @@ MarketRegistry `0xF674488b…`). The current venue pool list is `api-phoenix.cor
 
 ---
 
+## 7. Finding the right command (and letting Claude Code find it)
+
+You don't have to memorize any of the commands above. The tool documents itself two ways, and — once
+the MCP server is installed — Claude Code can pick the command for you.
+
+### 7a. `--explain` — the exact contract for one command
+
+Every `ch <command>` accepts `--explain`. It prints that command's description and full input JSON
+schema, then exits — no chain call. Use it when you know the command and want the precise parameter
+shape.
+
+```sh
+ch compute --explain
+```
+```jsonc
+{
+  "tool": "cork_compute",
+  "cli": "ch compute",
+  "phase": 1,
+  "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. …",
+  "inputSchema": {
+    "type": "object",
+    "properties": { "params": { "oneOf": [
+      { "properties": { "kind": { "const": "cst-swap-rate" }, "poolId": { "$ref": "#/$defs/MarketId" }, "collateralAssetsOut": { "$ref": "#/$defs/TokenAmount" } },
+        "required": ["kind","poolId","collateralAssetsOut"] },
+      { "properties": { "kind": { "const": "unwind-rate" }, "poolId": { "$ref": "#/$defs/MarketId" }, "collateralAssetsIn": { "$ref": "#/$defs/TokenAmount" } } }
+      // …one branch per compute kind
+    ] } }
+  }
+}
+```
+Each `$ref` carries its own units/format note in `$defs` (e.g. `TokenAmount` = base units as a
+decimal string), so you rarely have to guess a value's shape.
+
+### 7b. `ch capabilities` — the searchable manual
+
+`capabilities` is the whole manual in one command:
+
+```sh
+ch capabilities                                  # maturity of every tool + variant (what's live vs gated)
+ch capabilities --json '{"topic":"compute"}'     # full docs for one tool
+ch capabilities --json '{"search":"swap rate"}'  # keywords -> matching tool/variant + ready-to-run examples
+```
+The `search` result hands you example inputs you can paste straight into the command:
+```jsonc
+{ "state": "ok", "data": { "query": "swap rate", "matches": [ {
+  "name": "cork_compute", "cli": "ch compute", "variant": "cst-swap-rate",
+  "examples": [
+    { "title": "How much cST + reference does 1 sUSDe out cost right now?",
+      "input": { "params": { "kind": "cst-swap-rate", "poolId": "0x…", "collateralAssetsOut": "1000000000000000000" } } }
+    // …more examples
+  ] } ] } }
+```
+Copy the `input` object directly into `ch compute --json '<that object>'`.
+
+### 7c. Install the MCP server into Claude Code
+
+The CLI and the MCP server are the **same 9-tool core** — install the server to drive it from Claude
+Code (or any MCP client) instead of the shell:
+
+```sh
+# from the cloned repo; use an ABSOLUTE bun path so the spawned server can find it
+claude mcp add cork-defi -- "$(which bun)" /ABSOLUTE/PATH/TO/cork-helper-cli/packages/mcp/src/bin.ts
+
+# health check — expect: cork-defi … ✓ Connected
+claude mcp list
+```
+Then, inside Claude Code, calling `cork_capabilities` with no arguments should return **exactly 9
+tools** — that's the signal the server launched correctly. Optional env: `CORK_RPC_URL` (your own
+node) and `ENVIO_API_TOKEN` (full-decentralized reads); never commit either.
+
+### 7d. Ask Claude Code for the right command
+
+Because the MCP tools and the CLI commands are the same core with identical input shapes, two things
+follow:
+1. You can ask Claude Code in plain language and it will call the right tool with the right
+   parameters.
+2. **An MCP tool's input *is* the CLI `--json` payload.** So Claude Code can also hand you the exact
+   `ch … --json '…'` line to drop into a script — and any `--json` you have will run verbatim as an
+   MCP call.
+
+Example prompts, with the `cork-defi` server installed:
+
+> "Using cork-defi, derive the sUSDe / waArbUSDT market on Arbitrum that expires in 7 days, and give
+> me the poolId and cST address."
+
+> "What's the `ch` command with `--json` to build an unsigned exercise bundle — 1000 cST out of pool
+> `0x…`, receiver my Safe `0x…`?"
+
+> "List the Cork registry recipes on Arbitrum and explain the difference between `fixed` and
+> `liquidity` for my cover."
+
+Claude Code will call `cork_query` / `cork_compute` / `cork_prepare_phoenix` as needed, and can print
+the equivalent `ch … --json` line because the payloads are identical. When in doubt, start it with
+*"call `cork_capabilities` first"* so it grounds itself in the live tool/variant list before acting.
+
+---
+
 *Questions or a stale value? `ch capabilities` (search/topic) is the living manual — the authority on
 tool state, examples, and maturity. For the deeper security analysis and the pilot's open items, ask
 your Cork contact (Baptiste).*
