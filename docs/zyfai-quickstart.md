@@ -19,15 +19,15 @@ position into two ERC-20 legs:
 
 | Term | Meaning | Who holds it |
 |---|---|---|
-| **REF** | the covered/reference asset (design pair: yoUSD; the live Arbitrum markets on 2026-07-28 were sUSDe against **waArbUSDT**/waArbUSDCn — read the market, don't assume) | — |
+| **REF** | the asset your user is exposed to and wants cover on. Live Arbitrum markets use **waArbUSDT**, waArbUSDCn, or waArbwstETH — read the market, don't assume | the user |
 | **CA** | the liquid collateral asset paid out on cover (pilot: **sUSDe**, `0x211Cc4DD…5fE5d2`, 18 dec) | pool |
 | **cST** | the cover / "swap" token — right to swap REF→CA at the market's fixed rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token — the underwriter's leg + premium | **bond.credit (supply)** |
 
 The market itself is **identified by the keccak of its `Market` struct** (`poolId`), so it is fully
 **derivable off-chain before it exists**. Pilot markets are **short-dated (you pick the term — e.g.
-7 days) and typically fixed-rate** (recipe mode `fixed` = rate pinned 1.0, no drift), which keeps
-premiums tiny and drops the oracle dependency.
+7 days) and typically fixed-rate** (recipe mode `fixed` = rate pinned at creation, no drift), which
+keeps premiums tiny and drops the oracle dependency.
 
 **You are the demand side:** you buy cST cover on a position your yield agent manages, and you
 **exercise** it on impairment. bond.credit is the supply side; it prices and sells the cover and
@@ -66,243 +66,256 @@ Implementation notes:
 
 ## 3. The journey, step by step
 
-A plain-language walk through one full cover cycle, with the real `ch` command at each step
-(Arbitrum 42161, the live **sUSDe / waArbUSDT** pilot pair). Outputs below are trimmed real reads.
-The kit itself is detailed in §4; the risks you own are §5. Every `ch` call returns **unsigned**
-artifacts or reads — you sign with your own Safe stack.
+This section walks through one full cover cycle end to end. Every step has a real `ch` command you
+can run as-is, followed by a trimmed real response and a short note on what to check. Each command
+returns **unsigned** artifacts or plain reads — you sign with your own Safe stack.
 
-Naming, so the commands read cleanly:
-- **REF** = the asset your user is exposed to and wants cover on — here **waArbUSDT**
-  (`0xa6D12574…897F`, **6-dec**, registry `kind: 1`).
-- **CA** = the asset your user is paid out in when they exercise — here **sUSDe**
-  (`0x211Cc4DD…5fE5d2`, **18-dec**, registry `kind: 0`).
-- **cST** = the cover token your user holds; **cPT** = the underwriter's leg (bond.credit holds it).
-- In the tool, `market-predict` and the Market struct call CA `collateralAsset` and REF
-  `referenceAsset`.
+**Two conventions for every command below:**
+- Replace **`0xYOUR_SAFE`** with the user smart account (Safe) you're driving.
+- Steps 5–7 reuse one market's `poolId` and `cST` address. The values shown are the live
+  **sUSDe / waArbUSDT** market derived in Step 4. Because that market doesn't exist yet, those two
+  values drift with the oracle rate — run Step 4 yourself and paste *your* output. Everything else
+  (asset addresses, `chainId`) is real and runnable today.
+
+The pilot pair, for reference:
+
+| Role | Asset | Address | Decimals | `kind` |
+|---|---|---|---|---|
+| **REF** — what the user is exposed to and covers | waArbUSDT | `0xa6D12574eFB239FC1D2099732bd8b5dC6306897F` | 6 | 1 |
+| **CA** — what the user is paid out in on exercise | sUSDe | `0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2` | 18 | 0 |
+
+Your user holds **cST** (the cover); bond.credit holds **cPT** (the underwriter's leg). In the tool,
+CA is `collateralAsset` and REF is `referenceAsset`.
 
 ---
 
 ### Step 1 — Choose the REF asset to cover
 
-List the assets the MarketRegistry approves; the `kind` field splits them — `1` = reference-eligible
-(what you cover), `0` = collateral-eligible (what you're paid in).
+List the assets the registry approves. The `kind` field is the role: `1` = reference-eligible (what
+you cover), `0` = collateral-eligible (what you're paid in).
 
 ```sh
 ch query --json '{"resource":"registry-assets","chainId":42161}'
 ```
 ```jsonc
 { "state": "ok", "data": { "count": 9, "items": [
-  { "addr": "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", "name": "sUSDe",      "kind": 0, "denomination": "USD" },
-  { "addr": "0xa6D12574eFB239FC1D2099732bd8b5dC6306897F", "name": "waArbUSDT",  "kind": 1, "denomination": "USD" },
-  { "addr": "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc", "name": "waArbUSDCn", "kind": 1, "denomination": "USD" },
-  { "addr": "0xe98fc055c99DECD8Da0c111B090885d5d15C774E", "name": "waArbwstETH","kind": 1, "denomination": "USD" }
-  /* …9 total */ ] } }
+  { "addr": "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", "name": "sUSDe",       "kind": 0 },
+  { "addr": "0xa6D12574eFB239FC1D2099732bd8b5dC6306897F", "name": "waArbUSDT",   "kind": 1 },
+  { "addr": "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc", "name": "waArbUSDCn",  "kind": 1 },
+  { "addr": "0xe98fc055c99DECD8Da0c111B090885d5d15C774E", "name": "waArbwstETH", "kind": 1 }
+  // …9 total
+] } }
 ```
-**Pick** an approved `kind: 1` asset your users actually hold. We take **waArbUSDT**. (An asset
-missing from this list isn't coverable until it's registered — a Cork-side step.)
+Pick a `kind: 1` asset your users actually hold. This walkthrough uses **waArbUSDT**. (If an asset
+isn't on this list it isn't coverable yet — registering it is a Cork-side step.)
 
 ---
 
-### Step 2 — Choose the cover template (recipe / mode)
+### Step 2 — Choose the cover template (recipe)
 
-The recipe fixes how the cover's rate may move — i.e. *what kind of impairment it pays on*. List the
-live modes:
+The recipe sets how the market's rate may move, which is what defines the cover. List the live
+templates:
 
 ```sh
 ch query --json '{"resource":"registry-recipes","chainId":42161}'
 ```
 ```jsonc
-{ "state": "ok", "data": { "scale": "bands are PERCENTAGES: 1e18 = 1%", "modes": ["liquidity","fixed"], "items": [
-  { "mode": "liquidity", "rateMin": "99000000000000000000", "rateMax": "100000000000000000000", "rateChangePerDayMax": "100000000000000000000" },
-  { "mode": "fixed",     "rateMin": "1000000000000000000",  "rateMax": "1000000000000000000",   "rateChangePerDayMax": "0" }
+{ "state": "ok", "data": { "modes": ["liquidity","fixed"], "items": [
+  { "mode": "liquidity", "rateMin": "99000000000000000000", "rateMax": "100000000000000000000" },
+  { "mode": "fixed",     "rateMin": "1000000000000000000",  "rateMax": "1000000000000000000", "rateChangePerDayMax": "0" }
 ] } }
 ```
-- **`fixed`** — rate pinned to par (1.0), no drift. Simplest cover; premiums tiny; no oracle path.
-- **`liquidity`** — a narrow band (99–100%) that tracks the oracle within tolerance.
+- **`fixed`** — the rate is pinned at creation and can't drift (`rateChangePerDay = 0`), within a
+  tight ±1% tolerance. Simplest cover, smallest premiums. **Pilot default.**
+- **`liquidity`** — a wide band that lets the rate track the oracle across a large range.
 
-To resolve a mode's bands into **absolute** rate constraints at a given rate (the exact math a fill
-runs — self-checked bit-for-bit against chain):
+To see what a template resolves to as an **absolute** rate constraint (the exact math a fill runs,
+checked bit-for-bit against chain):
+
 ```sh
 ch compute --json '{"chainId":42161,"params":{"kind":"resolve-recipe","mode":"fixed","rate":"1000000000000000000"}}'
 ```
-**Pick** the mode matching the impairment you're hedging. Pilot default: **`fixed`**.
+Use `fixed` unless you specifically want the wider `liquidity` band.
 
 ---
 
 ### Step 3 — Choose the CA (payout) asset
 
-Same list, `kind: 0` — this is what your user receives on exercise. Pilot: **sUSDe**
-(`0x211Cc4DD…5fE5d2`, 18-dec). CA + REF + mode + expiry are the four inputs that name a market.
+The CA is what your user receives on exercise. It's the same list filtered to `kind: 0`. The pilot
+uses **sUSDe** (`0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2`, 18-dec).
+
+You've now chosen the four inputs that name a market: **CA + REF + recipe + expiry.**
 
 ---
 
-### Step 4 — Pick a duration and derive the market (before it exists)
+### Step 4 — Pick a duration and derive the market
 
-Cover markets are short-dated — pick any term (e.g. **7 days**) as a unix expiry, then derive the
-exact market a fill would create: `poolId`, cST/cPT addresses, oracle, resolved bands, and whether
-it exists yet — **all off-chain, nothing signed or deployed**.
+Markets are short-dated — pick any term (7 days here) as a Unix expiry, then derive the exact market
+a fill would create: its `poolId`, cST/cPT addresses, oracle, resolved bands, and whether it exists
+yet. Nothing is signed or deployed.
 
 ```sh
-EXP=$(date -u -d "+7 days" +%s)        # e.g. 1785848231
-ch query --json '{"resource":"market-predict","chainId":42161,"filters":{
-  "collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
-  "referenceAsset":"0xa6D12574eFB239FC1D2099732bd8b5dC6306897F",
-  "expiry":"'"$EXP"'","mode":"liquidity"}}'
+EXP=$(date -u -d '+7 days' +%s)
+ch query --json "{\"resource\":\"market-predict\",\"chainId\":42161,\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xa6D12574eFB239FC1D2099732bd8b5dC6306897F\",\"expiry\":\"$EXP\",\"mode\":\"fixed\"}}"
 ```
 ```jsonc
-{ "state": "ok",
-  "data": {
-    "oracle": { "address": "0x6c5ce1b9…34Ec", "deployed": true, "rate": "805138582043777852" },
-    "market": { "poolId": "0xac2bee2abb22905def74edd68af3ecd21fff29a28a0e7497e1bef96e400a5c9c",
-                "exists": false,
-                "resolved": { "rateMin": "8051385820437779", "rateMax": "1610277164087555704" } },
-    "shares": { "corkSwapToken": "0x0fEb532a…bCfb", "corkPrincipalToken": "0xD63A52A7…77DF", "source": "simulated" } },
+{ "state": "ok", "data": {
+  "oracle": { "address": "0x6c5ce1b98303a3687BB9871ce8cd2c41506e34Ec", "deployed": true, "rate": "805138582043777852" },
+  "market": { "poolId": "0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd",
+              "exists": false,
+              "resolved": { "rateMin": "797087196223340074", "rateMax": "813189967864215630", "rateChangePerDayMax": "0" } },
+  "shares": { "corkSwapToken": "0x5a21A1CBE2605193c06F9EecA93906A93843097d",
+              "corkPrincipalToken": "0xd2a69BB777A66551Ae7571dE39Fa1f41Ce0A4eE7", "source": "simulated" } },
   "warnings": [ { "code": "rate_drift_notice",
-    "message": "the pool does not exist yet, so pool id and cST/cPT are derived from TODAY's oracle rate and drift until the pool is created" } ] }
+    "message": "the pool does not exist yet, so pool id and cST/cPT are derived from today's oracle rate and drift until the pool is created" } ] }
 ```
-**Read the result:**
-- `oracle.deployed: true` — if `false`, deploy it first with `ch prepare market … deploy-wrapper`
-  (permissionless, idempotent — §2 step 0).
-- `market.exists` — `false` = the first fill JIT-creates it; `true` = you can fill straight away.
-- `corkSwapToken` = the **cST** you'll buy; `corkPrincipalToken` = cPT (the underwriter's leg).
-- The `rate_drift_notice`: until the pool exists, `poolId`/cST/cPT track the **live** oracle rate and
-  move with it. An order signed against a drifted rate reverts `OrderNotForPool` — so derive,
-  discover, and fill close together, and re-derive if the rate moved.
+What to check:
+- **`oracle.deployed`** — if `false`, deploy it first with `ch prepare market … deploy-wrapper`
+  (permissionless and idempotent; see §2, step 0).
+- **`market.exists`** — `false` means the first fill creates the market; `true` means you can fill
+  right away.
+- **`corkSwapToken`** is the **cST** you'll buy; **`corkPrincipalToken`** is the cPT.
+- **`rate_drift_notice`** — until the pool exists, the `poolId` and cST/cPT addresses are derived
+  from the *current* oracle rate and move with it. An order signed against a stale rate reverts
+  `OrderNotForPool`. So derive, discover, and fill close together, and re-derive if the rate moved.
+
+The commands below use this market: `poolId` =
+`0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd`, `cST` =
+`0x5a21A1CBE2605193c06F9EecA93906A93843097d`.
 
 ---
 
-### Step 5 — Buy the cST cover (drive the user's Safe)
+### Step 5 — Buy the cST cover
 
-Your user Safes are ERC-1271 smart accounts, so orders are Safe-signed and fills use
-`fillContractOrderArgs` (the tool picks this for you). Two demand-side paths:
+Your users are ERC-1271 smart accounts, so orders are Safe-signed and fills use
+`fillContractOrderArgs` — the tool selects that for you. There are two ways to buy.
 
-#### 5a — Fill an existing cST-SELL order (primary, fully tool-supported)
+#### Path A (recommended) — fill an existing SELL order
 
-bond.credit rests signed **SELL** orders (makerAsset = cST, takerAsset = CA) on the venue. Find one
-for your market, then build the fill:
+bond.credit rests signed **SELL** orders (`makerAsset` = cST, `takerAsset` = CA). Find one for your
+market:
 
 ```sh
-# once orders exist for your market, scope by poolId; the row below is a representative live SELL
-ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"<poolId>"}}'
+ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}'
 ```
 ```jsonc
 { "items": [ {
-  "orderHash": "0xe2b67c02…0510",
-  "maker": "0xd2f5f275…18d0", "makerAsset": "0xd1f71c26…35f8" /* a cST */, "takerAsset": "0x211cc4dd…5fe5d2" /* sUSDe */,
-  "makingAmount": "124999875000000", "takingAmount": "9511739",
-  "side": "SELL", "premium": 0.0001, "allowsPartialFills": true,
-  "status": "OPEN", "remainingMakingAmount": "124999875000000" /* confirm status/remaining on the live row */ } ] }
+  "orderHash": "0xe2b67c02022118bb93bab230e110258425da5b57c8ae6052113032700ec40510",
+  "makerAsset": "0xd1f71c26cc66938b789b23615fe554f6fce835f8", // a cST
+  "takerAsset": "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2", // sUSDe (CA)
+  "side": "SELL", "allowsPartialFills": true,
+  "status": "OPEN", "remainingMakingAmount": "124999875000000"  // confirm status/remaining on the live row
+} ] }
 ```
-If step 4 showed `exists: false`, there are no resting orders yet — you're first: bond.credit posts
-the SELL whose **first fill JIT-creates** the market (maker preInteraction). Pick an order with
-enough `remainingMakingAmount`, re-verify on-chain, dry-run, then build the (unsigned) fill:
+If Step 4 showed `exists: false`, there won't be orders yet — you're the first mover, and
+bond.credit's SELL is the order whose first fill creates the market. Once you have an OPEN
+`orderHash` with enough `remainingMakingAmount`, re-verify the market on-chain and build the fill:
 
 ```sh
-ch query   --json '{"resource":"market","chainId":42161,"filters":{"poolId":"<poolId>"}}'          # book is discovery only — re-verify maker/market on-chain
-ch prepare orders --json '{"chainId":42161,"account":"<userSafe>","clientRequestId":"buy-0001",
-  "action":{"type":"taker-fill","orderHash":"0xe2b67c02…0510","fillMakingAmount":"124999875000000"}}'
-ch track   --json '{"mode":"simulate","chainId":42161,"subject":{"kind":"artifact","artifact":{ …the fill bytes… }}}'   # dry-run: wouldRevert + reason
-#   ← sign the returned calldata with your Safe stack, then broadcast
+# 1. re-verify the market on-chain (the book is discovery only)
+ch query --json '{"resource":"market","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}'
+
+# 2. build the unsigned fill (use an OPEN orderHash from the read above; replace 0xYOUR_SAFE)
+ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0xe2b67c02022118bb93bab230e110258425da5b57c8ae6052113032700ec40510","fillMakingAmount":"124999875000000"}}'
 ```
-The fill is atomic: the adapter (maker preInteraction) JIT-creates the market if new and JIT-mints
-the cST to your Safe, pulling the CA premium from you in the same tx. Set the CA allowance first
-(§5C) and pin the fill target to the Safe (§5A). Expect an `unsigned_artifact` warning (calldata
-only) and require a green `ch track simulate` (`wouldRevert: false`) before signing.
-
-#### 5b — Post your own cST-BUY order (supported on-chain; verify before relying on it)
-
-Instead of taking an existing ask, rest your **own** BUY order and let a supply-side filler match it
-— makerAsset = CA (the premium you offer), takerAsset = cST:
+The prepare output includes the unsigned fill calldata as an `artifact`. Dry-run it before you sign
+— paste that `artifact` object in place of `{…}`:
 
 ```sh
-ch prepare orders --json '{"chainId":42161,"account":"<userSafe>","clientRequestId":"bid-0001",
-  "action":{"type":"maker-order","poolId":"<poolId>","side":"BUY",
-    "makerAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",   /* CA offered  */
-    "takerAsset":"0x0fEb532a…bCfb",                               /* cST wanted (from step 4) */
-    "makingAmount":"1000000000000000000",                         /* 1 sUSDe premium (18-dec) */
-    "takingAmount":"1000000000000000000000",                      /* cST shares  */
-    "expirySeconds":604800}}'
-#   ← sign (Safe/ERC-1271), then post to the book:
-ch submit --json '{"chainId":42161,"clientRequestId":"bid-0001","action":{"type":"lop-order","order":{…},"signature":"0x…","side":"BUY","premium":<num>,"expiry":<unix>,"nonce":"<n>","allowsPartialFills":true}}'
+# 3. dry-run: does it revert at current state?
+ch track --json '{"mode":"simulate","chainId":42161,"subject":{"kind":"artifact","artifact":{…}}}'
 ```
-> **Caveat — confirm with Cork before relying on this path.** The cST on a BUY order is minted by
-> the *filler* via the adapter's taker-side interaction (a real on-chain capability), but (i) `ch`
-> does not build that filler-side interaction today — it's the supply side's tooling, not yours; and
-> (ii) taker-side JIT mints into an **already-created** pool (market *creation* is maker-side only).
-> So a resting BUY order fills only when a supply-side filler with taker-JIT support picks it up,
-> against an existing pool. For the pilot, **5a (taker-fill) is the proven path**; treat 5b as
-> available-but-verify.
+Then **sign the calldata with your own Safe stack and broadcast.** The fill is atomic: the adapter
+creates the market if it's new and mints the cST to your Safe, pulling the CA premium from you in the
+same transaction. Before broadcasting, set the CA allowance (§5, item C) and pin the fill target to
+the Safe (§5, item A). Expect an `unsigned_artifact` warning on the prepare (it's calldata only), and
+require `wouldRevert: false` from the simulate.
+
+#### Path B — post your own BUY order
+
+Instead of taking an ask, rest your **own** BUY order and let a supply-side filler match it. Here
+`makerAsset` = CA (the premium you offer) and `takerAsset` = cST:
+
+```sh
+# replace 0xYOUR_SAFE; takerAsset is your cST from Step 4
+ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"bid-0001","action":{"type":"maker-order","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","side":"BUY","makerAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","takerAsset":"0x5a21A1CBE2605193c06F9EecA93906A93843097d","makingAmount":"1000000000000000000","takingAmount":"1000000000000000000000","expirySeconds":604800}}'
+```
+Sign it (Safe/ERC-1271), then post it to the venue with `ch submit` (`action.type: "lop-order"`).
+
+> **Confirm this path with Cork before relying on it.** On a BUY order the cST is minted by the
+> *filler* through the adapter's taker-side interaction. That's a real on-chain capability, but:
+> (1) `ch` doesn't build the filler side today — that's the supply side's tooling, not yours; and
+> (2) taker-side minting only works into a market that already exists (market *creation* happens on
+> the maker side). So a resting BUY order fills only when a supply-side filler with taker-side JIT
+> support picks it up, against an existing market. **Path A is the proven route for the pilot; treat
+> Path B as available-but-verify.**
 
 ---
 
-### Step 6 — Exercise before expiry on a haircut
+### Step 6 — Exercise the cover on a haircut
 
-When your risk monitor detects impairment on the user's REF exposure, exercise the cover: hand in
-**cST + REF**, receive **CA** at the market's rate. This is a **direct Phoenix call**, not an LOP
-fill.
+When your risk monitor sees impairment on the user's REF, exercise the cover: hand in **cST + REF**,
+receive **CA** at the market's rate. This is a direct Phoenix call, not an LOP fill.
 
 ```sh
-ch prepare phoenix --json '{"chainId":42161,"account":"<userSafe>","clientRequestId":"exercise-0001",
-  "action":{"type":"exercise","poolId":"<poolId>",
-    "cstSharesIn":"1000000000000000000000",       /* cST burned                              */
-    "receiver":"<userSafe>",                        /* forced to the Safe                      */
-    "minCollateralAssetsOut":"950000000000000000",  /* min sUSDe out (18-dec, slippage floor)  */
-    "maxReferenceAssetsIn":"1000000"}}'             /* max waArbUSDT in (6-dec)                */
-#   ← sign with your Safe stack; route through your *ForSelf adapter so `receiver` is forced (§5A)
+# replace 0xYOUR_SAFE (used for both account and receiver)
+ch prepare phoenix --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}'
 ```
-`exercise` has **no built-in slippage guard** beyond your `min*/max*`, and is gated by a credit
-bucket + a pause bit (§5D) — re-check the preview at send time and treat a zero preview as
-*unavailable*, not free. A REF pause (§5E) blocks the REF transfer, i.e. exactly the exercise leg —
-keep positions small and monitor REF liveness. Approvals: REF → CorkPoolManager; cST needs **no**
-pool-manager approval on the direct path (§5C).
+Sign with your Safe stack, and route the call through your `*ForSelf` adapter so `receiver` is forced
+to the Safe (§5, item A). A few things to keep in mind:
+- `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-check the preview at
+  send time, and treat a zero preview as *unavailable*, not free (§5, item D).
+- A REF pause blocks the REF transfer — i.e. the exercise leg itself — so keep positions small and
+  monitor REF liveness (§5, item E).
+- Approvals: REF → CorkPoolManager. cST needs **no** pool-manager approval on the direct path
+  (§5, item C).
 
 ---
 
-### Step 7 — Roll the cover near expiry (fill a rollover order)
+### Step 7 — Roll the cover near expiry
 
-Near expiry, roll the user's cover into the successor market instead of letting it lapse. Rollover
-is a **two-party** trade and the roles are easy to mix up:
-- The rollover order is **posted (signed) by a cPT-holder** — the underwriter/supply side
-  (`OrderData.user` = the cPT holder, a *different* party from your user). They offer to co-roll
-  their principal and **collect** a premium.
-- **You (Zyfai) are the FILLER** — the cST/demand side, acting for your user. You roll *your user's*
-  cover srcPool→dstPool and **pay** the premium.
+Near expiry, roll the user's cover into the successor market instead of letting it lapse. Rollover is
+a two-party trade, and the roles are easy to mix up:
+- The rollover order is **signed by a cPT-holder** — the underwriter/supply side, a *different*
+  party from your user. They offer to co-roll their principal and **collect** a premium.
+- **You are the filler** — the cST/demand side, acting for your user. You roll *your user's* cover
+  from the old market to the new one and **pay** that premium.
 
-Discover open rollover orders:
+Find open rollover orders:
+
 ```sh
 ch query --json '{"resource":"flows","chainId":42161,"filters":{"kind":"orders"}}'
 ```
 ```jsonc
-{ "state": "ok", "data": { "kind": "orders", "count": 0, "items": [],
-  "pagination": { "complete": true } } }   // none open right now — a normal, honest result
+{ "state": "ok", "data": { "kind": "orders", "count": 0, "items": [] } }  // none open right now — a normal result
 ```
+To fill one, a single atomic settler call does three things:
+1. **Fronts the user's expiring srcCST** (pulled from the user's Safe).
+2. **Pays the premium in the order's `premiumToken`.** You supply that token, so first **swap some of
+   the user's REF into it** in your own stack. (There is no swap hook — the order's hooks are
+   author-signed, attested modules, not something the filler injects.)
+3. **Delivers the fresh dstCST** — the new-term cover — to the user's Safe.
 
-To fill one, in a single atomic settler call you:
-1. **front the user's expiring srcCST** (pulled from your caller — the user's Safe);
-2. **pay the premium in the order's `premiumToken`** — so first **swap some of the user's REF →
-   premiumToken** in your own stack (there is no swap hook: the order's hooks are maker-authored,
-   ERC-7484-attested modules, not filler-supplied);
-3. receive the fresh **dstCST** (new-term cover), routed to the user's Safe.
+The counterparty (cPT-holder) supplies the matching srcCPT for the unwind, keeps their cPT leg, and
+receives your premium. Net: you spend the expiring cST plus a premium (bought with the user's REF) to
+get fresh cover for the user — you're paying to carry the cover forward, which you price to your user
+off-chain.
 
-The counterparty (cPT-holder) supplies the matching srcCPT to unwind, keeps their CPT leg, and
-receives your premium. Net: you spend [expiring srcCST] + [premium bought from the user's REF] to
-get [fresh dstCST for the user] — you pay to carry the user's cover forward, a service you price to
-your user off-chain.
+The on-chain entrypoint is the CorkSettler:
 
-**On-chain entrypoint** — the CorkSettler:
 ```
 ExactSettler.fill(bytes32 orderId, bytes originData, bytes fillerData)     // all-or-nothing
 PartialSettler.fill(bytes32 orderId, bytes originData, bytes fillerData)   // fill a slice
 ```
-The order's signed `allowPartialFills` flag routes it to exactly one settler (ExactSettler rejects
+The order's signed `allowPartialFills` flag routes it to exactly one of these (ExactSettler rejects
 partials; PartialSettler requires them).
 
-> **Tool status.** `ch` builds the **maker/supply** side of rollover today (`prepare orders` →
-> `rollover-intent`, then `submit` → `rollover-order`) — what a cPT-holder posts. It does **not** yet
-> build the **filler** transaction (the `fillerData` envelope + `settler.fill`) that Zyfai needs, nor
-> the REF→premiumToken swap. Discover with `flows`, then build and sign the `fill` with your own
-> stack; a filler-side `ch prepare` action is a candidate for a later kit release. Confirm the
-> current filler path with Cork.
+> **Tool status.** `ch` builds the **supply side** of rollover today (`ch prepare orders` →
+> `rollover-intent`, then `ch submit` → `rollover-order`) — what a cPT-holder posts. It does **not**
+> yet build the **filler** transaction (the `fillerData` envelope plus `settler.fill`) or the
+> REF→premium swap that you need. So for now: discover with `flows`, then build and sign the `fill`
+> with your own stack. A filler-side `ch prepare` action is a natural next addition — confirm the
+> current path with Cork.
 
 ---
 
