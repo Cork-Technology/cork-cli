@@ -62,8 +62,8 @@ describe("MCP server in-memory roundtrip", () => {
 
   it("marks phase-gated tools unavailable (isError)", async () => {
     const client = await connectedClient();
-    // dutch-auction-price is one of the two deliberately-gated variants (Fusion out of scope).
-    const res = await client.callTool({ name: "cork_compute", arguments: { params: { kind: "dutch-auction-price", order: {} }, format: "concise" } });
+    // rfq-quote is the LAST deliberately-gated variant (pricing model deferred).
+    const res = await client.callTool({ name: "cork_compute", arguments: { params: { kind: "rfq-quote", marketTypeBucket: "stable", durationSeconds: 86400 }, format: "concise" } });
     expect(res.isError).toBe(true);
     const env = res.structuredContent as { state: string; warnings: Array<{ code: string }> };
     expect(env.state).toBe("unavailable");

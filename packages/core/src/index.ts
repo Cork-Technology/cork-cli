@@ -14,6 +14,7 @@ export * from "./datasources/venue.ts";
 export * from "./datasources/envio.ts";
 export * from "./datasources/hypersync.ts";
 export * from "./event-decode.ts";
+export * from "./fusion.ts";
 export * from "./chain/abis.ts";
 export * from "./chain/reads.ts";
 export * from "./chain/rpc.ts";

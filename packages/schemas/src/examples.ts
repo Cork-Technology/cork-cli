@@ -39,6 +39,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Rollover premium floor (pure math, no RPC)", input: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } } },
     { title: "Worst-case impairment floor over 1 day", input: { params: { kind: "impairment-floor", poolId: DEMO_POOL_ID, horizonSeconds: 86400 } } },
     { title: "Resolve a registry recipe's bands at a rate (Arbitrum; bands 1e18=1%, resolved 1e18=1.0)", input: { chainId: 42161, params: { kind: "resolve-recipe", mode: "liquidity", rate: "1000000000000000000" } } },
+    { title: "Current decayed price of a Fusion dutch-auction order (pin the moment with at.timestamp)", input: { at: { timestamp: "1787962200" }, params: { kind: "dutch-auction-price", order: { salt: "72116775394861435818731221900729193628876322478708569", maker: DEMO_ACCOUNT, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "904625697166532776746648320380374280103671755200316906558262375061821325312", extension: "0x0000006e0000006e0000006e0000006e0000006e0000003700000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e00384000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e0038400000000000000" } } } },
   ],
   cork_decode: [
     { title: "Decode a Bundler3 multicall to labeled Cork legs", input: { kind: "calldata", data: DEMO_MULTICALL } },
@@ -123,7 +124,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "unwind-rate": { status: "activated" },
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
-      "dutch-auction-price": { status: "specified", reason: "phase_gated (out-of-scope external protocol: 1inch Fusion is not part of the current pilot — settlement is LOP v4 resting orders, so there are no live Fusion orders to price; unblocks if/when a Fusion integration lands)" },
+      "dutch-auction-price": { status: "activated", reason: "pure local pricing of 1inch Fusion v3.1 dutch-auction orders, reconstructed from the order's own extension bytes [K3]; wei-exact vs the deployed settlement getters on mainnet+Arbitrum (incl. a real production order); at.timestamp pins the moment, baseFeeWei omitted = upper-bound" },
       "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the registry band math it would build on is already live as resolve-recipe)" },
       "resolve-recipe": { status: "activated", reason: "registry applyBands — bit-parity self-checked against chain on every call (42161)" },
     },

@@ -12,13 +12,11 @@ const NOW = 1_800_000_000n;
 
 /** One probe per MATURITY entry with status "specified"; key = `${tool}:${variantKey|*}`. */
 const GATED_PROBES: Array<{ tool: ToolName; key: string; input: unknown }> = [
-  // cork_compute — the two deliberately-gated kinds. dutch-auction-price waits on an out-of-scope
-  // external protocol (1inch Fusion is not in the pilot); rfq-quote waits on a pricing MODEL (a
-  // product decision). Everything else is activated: whitelisted-addresses (2026-07-27, HyperSync
-  // event replay), decode order/event/receipt (2026-07-27, pure local), prepare_phoenix
-  // authority-onboard/revoke (2026-07-27, unsigned direct approve txs), taker-fill,
-  // track simulate/artifact, prepare_market — none probed as gated any more.
-  { tool: "cork_compute", key: "dutch-auction-price", input: { params: { kind: "dutch-auction-price", order: {} } } },
+  // cork_compute rfq-quote is the LAST deliberately-gated variant: it waits on a pricing MODEL
+  // (a product decision), and a Fusion-style decaying-premium order is the modeled-quote-free
+  // alternative now that dutch-auction-price is activated (2026-07-28, wei-exact vs the deployed
+  // settlement getters). Everything else: whitelisted-addresses + decode order/event/receipt +
+  // authority ops activated 2026-07-27; taker-fill, track simulate, prepare_market earlier.
   { tool: "cork_compute", key: "rfq-quote", input: { params: { kind: "rfq-quote", marketTypeBucket: "stable", durationSeconds: 86400 } } },
 ];
 

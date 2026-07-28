@@ -93,7 +93,7 @@ const PremiumPerShareRate = TokenAmount.describe(
 // ────────────────────────────────────────────────────────────────────────────
 const AtPin = z.strictObject({
   block: UintStr.optional().describe("pin the read to this block number for bit-identical replay"),
-  timestamp: UintStr.optional().describe("reserved for a later phase — accepted but not yet honored"),
+  timestamp: UnixSeconds.optional().describe("unix SECONDS to evaluate at. HONORED by dutch-auction-price (a time-decaying price is pinned by the clock, not a block); accepted-but-reserved for the block-anchored kinds"),
 });
 
 export const ComputeParams = z.discriminatedUnion("kind", [
@@ -109,9 +109,15 @@ export const ComputeParams = z.discriminatedUnion("kind", [
     }).describe("reverse of cst-swap-rate: what putting an exact collateral amount back in returns"),
   z.strictObject({
       kind: z.literal("dutch-auction-price"),
-      order: z.record(z.string(), z.unknown()),
-      baseFeeWei: UintStr.optional(),
-    }).describe("current decayed price of a 1inch Fusion dutch-auction order (phase-gated)"),
+      order: z
+        .record(z.string(), z.unknown())
+        .describe("the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes [K3]"),
+      baseFeeWei: UintStr.optional().describe("block base fee in WEI for the gas-bump term; omitted = gas bump skipped = the UPPER-BOUND price (public-node eth_call cannot verify this term — it runs with basefee 0)"),
+      taker: Address.optional().describe("price for THIS taker (getter-whitelist discount applies); omitted = both whitelisted and non-whitelisted prices are returned"),
+      makingAmount: TokenAmount.optional().describe("price this making amount; omitted = the full order"),
+    }).describe(
+      "current decayed price of a 1inch Fusion dutch-auction order (v3.1 layout) — pure local math, wei-exact vs the deployed settlement getters; pin the moment with at.timestamp (defaults to now)",
+    ),
   z.strictObject({
       kind: z.literal("rollover-premium-floor"),
       dstCstProduced: TokenAmount,

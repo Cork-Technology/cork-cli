@@ -46,8 +46,8 @@ describe("ch CLI", () => {
   });
 
   it("phase-gated tool → exit 3 (unavailable)", async () => {
-    // dutch-auction-price is one of the two deliberately-gated variants (Fusion out of scope).
-    const r = await runCli(["compute", "--json", JSON.stringify({ params: { kind: "dutch-auction-price", order: {} } })], { nowSeconds: NOW });
+    // rfq-quote is the LAST deliberately-gated variant (pricing model deferred).
+    const r = await runCli(["compute", "--json", JSON.stringify({ params: { kind: "rfq-quote", marketTypeBucket: "stable", durationSeconds: 86400 } })], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.unavailable);
     expect(JSON.parse(r.stdout).state).toBe("unavailable");
   });

@@ -22,6 +22,17 @@
     "1": "0x111111125421cA6dc452d289314280a0f8842A65",
     "42161": "0x111111125421cA6dc452d289314280a0f8842A65"
   },
+  "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only — the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement); legacy = recognized-but-refused older layouts (v2 both chains; v1 is mainnet-only and LOP v3 era).",
+  "fusionSettlements": {
+    "1": {
+      "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
+      "legacy": ["0xfb2809A5314473E1165f6B58018E20ed8F07B840", "0xA88800CD213dA5Ae406ce248380802BD53b47647"]
+    },
+    "42161": {
+      "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
+      "legacy": ["0xfb2809A5314473E1165f6B58018E20ed8F07B840"]
+    }
+  },
   "deploymentProfiles": {
     "42161": {
       "arbitrum-legacy": {

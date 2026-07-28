@@ -40,7 +40,7 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
 | `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161), market-predict (derive a market that may not exist yet — predicted oracle+live rate, LOCAL pool id, parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence; needs `filters.collateralAsset+referenceAsset+expiry+mode`; the derivation a JIT LOP fill runs, chain-native, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived: whitelisted-addresses (CURRENT whitelist membership replayed from WhitelistManager events over HyperSync, needs ENVIO token; rows live-view verified when an RPC resolves; `filters.poolId` scopes to one pool, global rows ride along); the markets/fills/flows subset also serves `full-decentralized` mode (HyperSync). Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
-| `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain). NOT raw reads, NOT byte-building. | 1 |
+| `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain), dutch-auction-price (1inch Fusion v3.1 current price, pure local from the order's own extension bytes [K3]; pin with `at.timestamp`, `baseFeeWei` omitted = upper bound). NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON, all four kinds live: calldata (recursively unwraps Bundler3 multicall), order (LOP v4 hex tuple or JSON fields → makerTraits breakdown + recomputed orderHash; supplied hash/extension cross-checked → `conflict` on mismatch), event (one log → named args against the source-verified ABI set; unverified layouts labeled raw), receipt (every log labeled). Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions. Auto-adds funding legs. Also the token-authority ops: authority-onboard/authority-revoke build an unsigned DIRECT ERC-20 approve tx (onboard amount omitted = unlimited; revoke zeroes it) — owner-signed, not a bundle leg. Returns bytes for later signing — executes nothing [K1]. | 2 |
 | `cork_prepare_orders` | Build **unsigned** signable artifacts: 1inch maker-order (incl. extension/JIT orders) / cancel; **finalize-maker-order** (recover the external signer, reconstruct exact bytes, emit a verbatim `cork_submit` artifact — never signs); **taker-fill** (fetch + locally re-hash a resting venue order, emit canonical uint256-tuple fill calldata, unsigned); and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed locally). | 3 |
@@ -56,11 +56,12 @@ as `structuredContent`, and every tool advertises this envelope as its `outputSc
 
 - `ok` — use `data`.
 - `unavailable` — honestly not servable right now; `warnings[0].code` says why (table below). **Do not
-  retry the same call** and do not fabricate the answer — report the reason. Only TWO variants
-  remain gated by design: `cork_compute` dutch-auction-price (1inch Fusion is not in the pilot —
-  an out-of-scope external protocol) and rfq-quote (a pricing MODEL, deliberately deferred as a
-  product decision). Everything else — whitelisted-addresses, decode order/event/receipt, and the
-  prepare_phoenix authority ops — was activated 2026-07-27.
+  retry the same call** and do not fabricate the answer — report the reason. Exactly ONE variant
+  remains gated by design: `cork_compute` rfq-quote (a pricing MODEL, deliberately deferred as a
+  product decision; a Fusion-style decaying-premium order is the modeled-quote-free alternative —
+  notes/fusion-integration-plan.md). dutch-auction-price was activated 2026-07-28 (pure local
+  Fusion v3.1 pricing, wei-exact vs the deployed settlement getters); whitelisted-addresses,
+  decode order/event/receipt, and the prepare_phoenix authority ops were activated 2026-07-27.
 - `conflict` — the tool executed and found a mismatch (e.g. `digest_mismatch`, `marketid_mismatch`);
   surface it, don't paper over it. On MCP, `conflict` is NOT an error result; `unavailable` is.
 
@@ -74,7 +75,7 @@ Warning codes you will encounter:
 | `pool_not_found` | prepare_phoenix funding: `market(poolId)` returned a zeroed struct — the pool doesn't exist on that chain, so no funding legs are built. |
 | `invalid_input` / `internal_error` | MCP-only, in the error envelope when a call fails before/outside a handler (bad input, unexpected exception). CLI equivalents are exit 2 / exit 1. |
 | `needs_indexer` / `needs_service` | Backend (indexer / orderbook / rollover service) not wired yet. |
-| `phase_gated` | One of the two deliberately-gated `cork_compute` kinds (dutch-auction-price: Fusion out of scope; rfq-quote: pricing model deferred) — the message names the real blocker and unblock condition. |
+| `phase_gated` | The one deliberately-gated `cork_compute` kind (rfq-quote: pricing model deferred — the message names the blocker and unblock condition). Also returned by dutch-auction-price for LEGACY Fusion layouts (v2/v1, superseded May 2025 — only v3.1 is implemented). |
 | `missing_filter` | The resource needs `filters.poolId` / `filters.account`. |
 | `mode_unavailable` | An explicitly requested data mode (`centralized`/`full-decentralized`) isn't wired yet — omit `mode` or use `lite-decentralized`. |
 | `unknown_topic` / `no_lop` | Capabilities topic not found / no 1inch LOP deployment for the chain. |
@@ -103,7 +104,7 @@ Warning codes you will encounter:
 | `rfq_not_found` | `cork_query rfqs` with `filters.rfqId`: the id is unknown to the venue — a normal outcome for a never-posted or mistyped id. |
 | `asset_not_found` | `cork_query registry-assets` with `filters.address`: the address is not a registry-approved asset on that chain. |
 | `settler_mode_mismatch` | rollover-intent: the chosen settler's on-chain mode gate would make the order unfillable (ExactSettler rejects `allowPartialFills:true`; PartialSettler requires it). The message names the right settler. |
-| `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler / order terms are incoherent (venue would reject). `invalid_order_terms` also covers a JIT maker-order fee above the 5% cap (a well-formed value that breaks a protocol rule → returned as an envelope, exit 3, not thrown). |
+| `settler_not_recognized` / `invalid_order_terms` | Informational: settler isn't a configured Cork settler — also used by dutch-auction-price when the Fusion settlement decoded from the extension isn't in the known set (priced as v3.1, verify independently) / order terms are incoherent (venue would reject). `invalid_order_terms` also covers a JIT maker-order fee above the 5% cap and a structurally-non-Fusion order handed to dutch-auction-price (well-formed values that break a protocol rule → envelope, exit 3, not thrown). |
 | `invalid_pair` | On `unavailable` (`cork_query market-predict`): collateralAsset and referenceAsset are equal — a market is a pair of distinct assets. A domain-rule violation returned as an envelope (exit 3), not a thrown schema error. |
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
@@ -112,7 +113,7 @@ Warning codes you will encounter:
 | `quote_ref_unverifiable` | On `conflict` (`cork_submit lop-order`): the cited RFQ option has no parsable positive premium, so the scale cross-check cannot run — NOT relayed (cite a valid option or drop quoteRef). |
 | `listing_traits_mismatch` | On `conflict` (`cork_submit lop-order`): the venue-listing fields (expiry/nonce/allowsPartialFills) contradict what the SIGNED makerTraits encode — derived from the signature, never trusted [K3]; NOT relayed. |
 | `invalid_state` | A LOCAL computation/domain failure (C11), distinct from `chain_read_failed`: the on-chain state or derived values violate a domain rule the port enforces (e.g. a 100% rateMin band). Also informational on `ok` impairment-floor when the worst rate collapses to 0 (maxReferencePerCst null = unbounded). |
-| `reserved_field_ignored` | Informational on `ok`: an accepted-but-reserved field (`cork_compute at.timestamp`) was validated and then ignored — results are NOT pinned by it. |
+| `reserved_field_ignored` | Informational on `ok`: an accepted-but-reserved field was validated and then ignored — results are NOT pinned by it. `cork_compute at.timestamp` is reserved for the BLOCK-anchored kinds only; dutch-auction-price HONORS it (a decaying price is clock-anchored). |
 | `expiry_far_future` | Informational on JIT maker-order prepares: `jitMarket.expiryTimestamp` is >5 years out — the chain enforces NO upper bound and cPT principal stays locked until expiry; double-check intent. |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed

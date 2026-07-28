@@ -40,3 +40,5 @@ evals/live-ab/runs/
 
 # local Slack drafts (never commit)
 slack-drafts-*.md
+out/
+cache/

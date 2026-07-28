@@ -54,6 +54,11 @@ describe("buildTeaching — corrected example matches the failing variant", () =
     }
   });
 
+  it("cork_compute dutch-auction-price input → the dutch-auction example (activated 2026-07-28)", () => {
+    const t = buildTeaching("cork_compute", [], { params: { kind: "dutch-auction-price", order: 5 } });
+    expect(variant(t.example?.input)).toBe("dutch-auction-price");
+  });
+
   it("cork_query whitelisted-addresses input → the whitelisted-addresses example", () => {
     const t = buildTeaching("cork_query", [], { resource: "whitelisted-addresses", filters: { poolId: "bad" } });
     expect(variant(t.example?.input)).toBe("whitelisted-addresses");

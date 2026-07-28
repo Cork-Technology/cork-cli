@@ -81,6 +81,48 @@ function validateExtensionShape(extension: `0x${string}`): void {
   }
 }
 
+/** The eight ExtensionLib dynamic fields + customData tail, each as raw bytes ("0x" = empty). */
+export interface LopExtensionFields {
+  makerAssetSuffix: `0x${string}`;
+  takerAssetSuffix: `0x${string}`;
+  makingAmountData: `0x${string}`;
+  takingAmountData: `0x${string}`;
+  predicate: `0x${string}`;
+  makerPermit: `0x${string}`;
+  preInteractionData: `0x${string}`;
+  postInteractionData: `0x${string}`;
+  customData: `0x${string}`;
+}
+
+/**
+ * Decode a LOP v4 extension blob into its eight fields (ExtensionLib/OffsetsLib layout: a 32-byte
+ * word of eight uint32 cumulative END offsets — index 0 in the lowest bits — followed by the
+ * concatenated fields; anything after end[7] is customData). Validates the same structural rules
+ * the builder enforces (validateExtensionShape) so malformed bytes throw instead of misparsing.
+ */
+export function decodeExtensionFields(extension: `0x${string}`): LopExtensionFields {
+  validateExtensionShape(extension);
+  const offsets = BigInt(sliceHex(extension, 0, 32));
+  const total = size(extension);
+  const field = (i: bigint): `0x${string}` => {
+    const begin = i === 0n ? 0n : (offsets >> (32n * (i - 1n))) & 0xffffffffn;
+    const end = (offsets >> (32n * i)) & 0xffffffffn;
+    return begin === end ? "0x" : sliceHex(extension, 32 + Number(begin), 32 + Number(end));
+  };
+  const lastEnd = Number((offsets >> 224n) & 0xffffffffn);
+  return {
+    makerAssetSuffix: field(0n),
+    takerAssetSuffix: field(1n),
+    makingAmountData: field(2n),
+    takingAmountData: field(3n),
+    predicate: field(4n),
+    makerPermit: field(5n),
+    preInteractionData: field(6n),
+    postInteractionData: field(7n),
+    customData: 32 + lastEnd < total ? sliceHex(extension, 32 + lastEnd) : "0x",
+  };
+}
+
 export interface MakerTraitsParts {
   allowPartialFills: boolean;
   allowMultipleFills: boolean;

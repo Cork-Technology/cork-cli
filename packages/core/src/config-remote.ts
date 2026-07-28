@@ -68,6 +68,11 @@ const DefaultsSchema = z.object({
   updated: z.string(),
   deployments: z.record(z.string(), DeploymentSchema),
   lopAddresses: z.record(z.string(), Address),
+  // 1inch Fusion settlement reference set — classification data for pricing/decode, never a call
+  // target we choose (the active settlement is decoded from the order's own extension bytes).
+  fusionSettlements: z
+    .record(z.string(), z.object({ current: Address, legacy: z.array(Address).default([]) }).strip())
+    .optional(),
   marketRegistry: z.record(z.string(), MarketRegistrySchema).optional(),
   // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
   // Arbitrum "arbitrum-legacy" pre-launch pair, kept so its calibration pools stay readable

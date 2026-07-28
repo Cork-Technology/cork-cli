@@ -5,7 +5,9 @@
 // outcome state, call efficiency, error-recovery, token cost. Run: `bun run eval`
 // (needs ANTHROPIC_API_KEY or an `ant auth login` profile; self-skips otherwise).
 //
-// Env knobs: CORK_EVAL_MODEL (default claude-opus-4-8; set claude-haiku-4-5 for cheap sweeps),
+// Env knobs: CORK_EVAL_MODEL (default claude-sonnet-5 — owner ruling 2026-07-28: evals ALWAYS run
+// on sonnet, never haiku; haiku's raw-SDK loop has a params-as-string artifact that grades the
+// model, not the tool surface),
 // CORK_EVAL_TRIALS (default 1; use 3 for stable numbers), EVAL_HELD_OUT=1 (include the held-out
 // set — do NOT tune descriptions against it), EVAL_GATE=1 (exit non-zero below thresholds),
 // CORK_EVAL_ONLY=<task-id> (single task).
@@ -15,7 +17,7 @@ import { runTool, ToolInputError } from "@cork/core";
 import { stubContext } from "./stub.ts";
 import { TASKS, type EvalTask } from "./tasks.ts";
 
-const MODEL = process.env.CORK_EVAL_MODEL ?? "claude-opus-4-8";
+const MODEL = process.env.CORK_EVAL_MODEL ?? "claude-sonnet-5";
 const TRIALS = Number(process.env.CORK_EVAL_TRIALS ?? 1);
 const MAX_LOOP = 6;
 

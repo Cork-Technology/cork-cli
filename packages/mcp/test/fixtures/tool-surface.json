@@ -16,7 +16,7 @@
     "name": "cork_compute",
     "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building. Example — How much cST + reference does 1 sUSDe out cost right now?: {\"params\":{\"kind\":\"cst-swap-rate\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsOut\":\"1000000000000000000\"}}",
     "descriptionTokensApprox": 105,
-    "inputSchemaSha256": "28ffaa162ff0ffde90583ec355f16b790b05428f6df67935e9e02fdd7b576eee",
+    "inputSchemaSha256": "f1e7d8564aacc249c0178623bb3fddc9e873627c58383f518c04ce958a395414",
     "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: deterministic math",
