@@ -118,16 +118,12 @@ awaiting a live-milestone flip (not a code gap); `specified` = designed, not bui
   idempotent by `clientRequestId`. The map flips it to `activated` on the first venue-accepted live
   POST — i.e. what's unproven is the live venue round-trip (partly the venue's readiness), not the
   relay logic. It never signs; you sign, it relays. Simulate + reconcile around it as normal.
-- **`specified`** (not built; returns `unavailable` by design) — exactly **one** `compute` kind:
-  `rfq-quote`, a **pricing model** (a product decision deliberately deferred, not missing infra;
-  the band math it would build on is already live as `compute resolve-recipe`, and a Fusion-style
-  decaying-premium order — `dutch-auction-price` is now live — is the modeled-quote-free
-  alternative). It does not sit on the pilot's critical path.
 
 **RPC & secrets:** Arbitrum reads **work out of the box** (built-in default endpoints + a public
 fallback). Set `CORK_RPC_URL` only to use your own/faster node. Full-decentralized reads and order
-reconciliation want an Envio token (`ENVIO_API_TOKEN`). **Never commit an RPC URL or token** — env
-only.
+reconciliation want an Envio token (`ENVIO_API_TOKEN`) — generate one at
+<https://envio.dev/app/api-tokens> (sign-in required; docs at
+<https://docs.envio.dev/docs/HyperSync/api-tokens>). **Never commit an RPC URL or token** — env only.
 
 ---
 
@@ -146,7 +142,6 @@ build**, across three distinct surfaces:
 |---|---|---|
 | `exercise` / `swap` / `redeem` / `withdraw` / `unwind*` (direct Phoenix) | `receiver` | Route through a **self-forcing wrapper** that fixes `receiver = Safe` |
 | Buying cST via the 1inch fill | takerTraits **bit-251 `target`** (routes the bought cST) | Leave `target` unset / pin it to the Safe on **every** fill |
-| cST/cPT ERC-20 `transfer` / `approve` | caller-chosen `to` / `spender` | Your ERC-20 recipient/spender carve-out (not fixable at the protocol layer) |
 
 **This is yours to own, and it fits what you already run.** Your deployed `*ForSelf` / AdapterProxy
 pattern (the one behind `supplyForSelf`/`withdrawForSelf`/… for Aave/Morpho/Euler) is exactly the
@@ -192,8 +187,8 @@ MarketRegistry `0xF674488b…`). The current venue pool list is `api-phoenix.cor
 1. **Stand up the tool** — `claude mcp add` (or `ch` on PATH), confirm `cork_capabilities` returns 9
    tools. Optional: `CORK_RPC_URL` (own node), `ENVIO_API_TOKEN` (decentralized reads).
 2. **Deploy the receiver-forcing routes on your side** — extend your `*ForSelf`/AdapterProxy to cover
-   the Cork exercise/swap family and a target-pinned 1inch fill; add cST/cPT to your ERC-20
-   recipient/spender carve-out. Cork ships examples; you audit + deploy.
+   the Cork exercise/swap family and a target-pinned 1inch fill. Cork ships examples; you audit +
+   deploy.
 3. **Load the whitelist** for the loop (your own AdapterProxy routes, not raw Cork): create/fill,
    `exercise`/`exerciseOther`, and the three approvals (CA→LOP, cST→PoolManager, REF→PoolManager).
 4. **Wire the loop against the tool** — derive with `market-predict`, discover on the book, **simulate
