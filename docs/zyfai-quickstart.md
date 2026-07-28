@@ -70,12 +70,14 @@ This section walks through one full cover cycle end to end. Every step has a rea
 can run as-is, followed by a trimmed real response and a short note on what to check. Each command
 returns **unsigned** artifacts or plain reads — you sign with your own Safe stack.
 
-**Two conventions for every command below:**
+**A few conventions for every command below:**
 - Replace **`0xYOUR_SAFE`** with the user smart account (Safe) you're driving.
 - Steps 5–7 reuse one market's `poolId` and `cST` address. The values shown are the live
   **sUSDe / waArbUSDT** market derived in Step 4. Because that market doesn't exist yet, those two
   values drift with the oracle rate — run Step 4 yourself and paste *your* output. Everything else
   (asset addresses, `chainId`) is real and runnable today.
+- Commands pipe to **`| jq .`** only to pretty-print the JSON — `ch` already emits indented JSON, so
+  drop the pipe if you don't have `jq` installed.
 
 The pilot pair, for reference:
 
@@ -95,7 +97,7 @@ List the assets the registry approves. The `kind` field is the role: `1` = refer
 you cover), `0` = collateral-eligible (what you're paid in).
 
 ```sh
-ch query --json '{"resource":"registry-assets","chainId":42161}'
+ch query --json '{"resource":"registry-assets","chainId":42161}' | jq .
 ```
 ```jsonc
 { "state": "ok", "data": { "count": 9, "items": [
@@ -117,7 +119,7 @@ The recipe sets how the market's rate may move, which is what defines the cover.
 templates:
 
 ```sh
-ch query --json '{"resource":"registry-recipes","chainId":42161}'
+ch query --json '{"resource":"registry-recipes","chainId":42161}' | jq .
 ```
 ```jsonc
 { "state": "ok", "data": { "modes": ["liquidity","fixed"], "items": [
@@ -133,7 +135,7 @@ To see what a template resolves to as an **absolute** rate constraint (the exact
 checked bit-for-bit against chain):
 
 ```sh
-ch compute --json '{"chainId":42161,"params":{"kind":"resolve-recipe","mode":"fixed","rate":"1000000000000000000"}}'
+ch compute --json '{"chainId":42161,"params":{"kind":"resolve-recipe","mode":"fixed","rate":"1000000000000000000"}}' | jq .
 ```
 Use `fixed` unless you specifically want the wider `liquidity` band.
 
@@ -156,7 +158,7 @@ yet. Nothing is signed or deployed.
 
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
-ch query --json "{\"resource\":\"market-predict\",\"chainId\":42161,\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xa6D12574eFB239FC1D2099732bd8b5dC6306897F\",\"expiry\":\"$EXP\",\"mode\":\"fixed\"}}"
+ch query --json "{\"resource\":\"market-predict\",\"chainId\":42161,\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xa6D12574eFB239FC1D2099732bd8b5dC6306897F\",\"expiry\":\"$EXP\",\"mode\":\"fixed\"}}" | jq .
 ```
 ```jsonc
 { "state": "ok", "data": {
@@ -196,7 +198,7 @@ bond.credit rests signed **SELL** orders (`makerAsset` = cST, `takerAsset` = CA)
 market:
 
 ```sh
-ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}'
+ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}' | jq .
 ```
 ```jsonc
 { "items": [ {
@@ -213,17 +215,17 @@ bond.credit's SELL is the order whose first fill creates the market. Once you ha
 
 ```sh
 # 1. re-verify the market on-chain (the book is discovery only)
-ch query --json '{"resource":"market","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}'
+ch query --json '{"resource":"market","chainId":42161,"filters":{"poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd"}}' | jq .
 
 # 2. build the unsigned fill (use an OPEN orderHash from the read above; replace 0xYOUR_SAFE)
-ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0xe2b67c02022118bb93bab230e110258425da5b57c8ae6052113032700ec40510","fillMakingAmount":"124999875000000"}}'
+ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0xe2b67c02022118bb93bab230e110258425da5b57c8ae6052113032700ec40510","fillMakingAmount":"124999875000000"}}' | jq .
 ```
 The prepare output includes the unsigned fill calldata as an `artifact`. Dry-run it before you sign
 — paste that `artifact` object in place of `{…}`:
 
 ```sh
 # 3. dry-run: does it revert at current state?
-ch track --json '{"mode":"simulate","chainId":42161,"subject":{"kind":"artifact","artifact":{…}}}'
+ch track --json '{"mode":"simulate","chainId":42161,"subject":{"kind":"artifact","artifact":{…}}}' | jq .
 ```
 Then **sign the calldata with your own Safe stack and broadcast.** The fill is atomic: the adapter
 creates the market if it's new and mints the cST to your Safe, pulling the CA premium from you in the
@@ -238,7 +240,7 @@ Instead of taking an ask, rest your **own** BUY order and let a supply-side fill
 
 ```sh
 # replace 0xYOUR_SAFE; takerAsset is your cST from Step 4
-ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"bid-0001","action":{"type":"maker-order","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","side":"BUY","makerAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","takerAsset":"0x5a21A1CBE2605193c06F9EecA93906A93843097d","makingAmount":"1000000000000000000","takingAmount":"1000000000000000000000","expirySeconds":604800}}'
+ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"bid-0001","action":{"type":"maker-order","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","side":"BUY","makerAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","takerAsset":"0x5a21A1CBE2605193c06F9EecA93906A93843097d","makingAmount":"1000000000000000000","takingAmount":"1000000000000000000000","expirySeconds":604800}}' | jq .
 ```
 Sign it (Safe/ERC-1271), then post it to the venue with `ch submit` (`action.type: "lop-order"`).
 
@@ -259,7 +261,7 @@ receive **CA** at the market's rate. This is a direct Phoenix call, not an LOP f
 
 ```sh
 # replace 0xYOUR_SAFE (used for both account and receiver)
-ch prepare phoenix --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}'
+ch prepare phoenix --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0xfb8644980136a0f81b33cbe5c2aed94ebeea58824aafbefe35d92206aa6615dd","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}' | jq .
 ```
 Sign with your Safe stack, and route the call through your `*ForSelf` adapter so `receiver` is forced
 to the Safe (§5, item A). A few things to keep in mind:
@@ -284,7 +286,7 @@ a two-party trade, and the roles are easy to mix up:
 Find open rollover orders:
 
 ```sh
-ch query --json '{"resource":"flows","chainId":42161,"filters":{"kind":"orders"}}'
+ch query --json '{"resource":"flows","chainId":42161,"filters":{"kind":"orders"}}' | jq .
 ```
 ```jsonc
 { "state": "ok", "data": { "kind": "orders", "count": 0, "items": [] } }  // none open right now — a normal result
@@ -478,7 +480,7 @@ schema, then exits — no chain call. Use it when you know the command and want 
 shape.
 
 ```sh
-ch compute --explain
+ch compute --explain | jq .
 ```
 ```jsonc
 {
@@ -505,9 +507,9 @@ decimal string), so you rarely have to guess a value's shape.
 `capabilities` is the whole manual in one command:
 
 ```sh
-ch capabilities                                  # maturity of every tool + variant (what's live vs gated)
-ch capabilities --json '{"topic":"compute"}'     # full docs for one tool
-ch capabilities --json '{"search":"swap rate"}'  # keywords -> matching tool/variant + ready-to-run examples
+ch capabilities | jq .                                   # maturity of every tool + variant (what's live vs gated)
+ch capabilities --json '{"topic":"compute"}' | jq .      # full docs for one tool
+ch capabilities --json '{"search":"swap rate"}' | jq .   # keywords -> matching tool/variant + ready-to-run examples
 ```
 The `search` result hands you example inputs you can paste straight into the command:
 ```jsonc
