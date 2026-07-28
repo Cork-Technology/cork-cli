@@ -104,22 +104,24 @@ awaiting a live-milestone flip (not a code gap); `specified` = designed, not bui
   events over HyperSync, live-view verified when an RPC resolves; needs an Envio token), `compute`,
   `prepare_market`, `prepare_orders` (maker-order incl. JIT, taker-fill, finalize, cancel,
   rollover-intent), `prepare_phoenix` (all 13 adapter actions **plus** the token-authority ops —
-  unsigned direct ERC-20 approve txs, onboard/revoke), `track` (verify / simulate / reconcile), and
+  unsigned direct ERC-20 approve txs, onboard/revoke), `track` (verify / simulate / reconcile),
   **all four `decode` kinds** (calldata incl. Bundler3 unwrap; order → makerTraits breakdown +
-  recomputed orderHash; event/receipt → named args against the verified ABI set). The math ports are
-  checked **bit-exact, wei-for-wei** against on-chain reads.
+  recomputed orderHash; event/receipt → named args against the verified ABI set), and `compute`'s
+  `dutch-auction-price` (pure-local pricing of 1inch Fusion v3.1 dutch-auction orders from the
+  order's own extension bytes — wei-exact vs the deployed settlement getters on mainnet+Arbitrum,
+  incl. a real production order; `at.timestamp` pins the moment). The math ports are checked
+  **bit-exact, wei-for-wei** against on-chain reads.
 - **`implemented`** — `submit`, the one venue-write tool. All four writes (`lop-order`,
   `rollover-order`, `rfq-open`, `rfq-answer`) are wired **and do real pre-flight**: it recomputes the
   `orderHash` / intent-hash and **recovers the maker/user signature locally** before relaying, and is
   idempotent by `clientRequestId`. The map flips it to `activated` on the first venue-accepted live
   POST — i.e. what's unproven is the live venue round-trip (partly the venue's readiness), not the
   relay logic. It never signs; you sign, it relays. Simulate + reconcile around it as normal.
-- **`specified`** (not built; return `unavailable` by design) — exactly **two** `compute` kinds,
-  each gated on a real external blocker, not missing infra: `dutch-auction-price` (prices 1inch
-  **Fusion** orders, and Fusion isn't part of the pilot — settlement is LOP v4; unblocks if a
-  Fusion integration lands) and `rfq-quote` (a **pricing model** — a product decision deliberately
-  deferred; the band math it would build on is already live as `compute resolve-recipe`). Neither
-  sits on the pilot's critical path.
+- **`specified`** (not built; returns `unavailable` by design) — exactly **one** `compute` kind:
+  `rfq-quote`, a **pricing model** (a product decision deliberately deferred, not missing infra;
+  the band math it would build on is already live as `compute resolve-recipe`, and a Fusion-style
+  decaying-premium order — `dutch-auction-price` is now live — is the modeled-quote-free
+  alternative). It does not sit on the pilot's critical path.
 
 **RPC & secrets:** Arbitrum reads **work out of the box** (built-in default endpoints + a public
 fallback). Set `CORK_RPC_URL` only to use your own/faster node. Full-decentralized reads and order
