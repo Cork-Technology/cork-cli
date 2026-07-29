@@ -1986,6 +1986,9 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
         orderHash: built.orderHash,
         extension: built.extension,
+        // The venue listing must carry this exact value: cork_submit compares the listing's nonce
+        // against what the signed makerTraits encode and refuses to relay a mismatch.
+        nonce: built.nonce,
         ...(jitData ? { jit: jitData } : {}),
         clientRequestId: input.clientRequestId,
       },

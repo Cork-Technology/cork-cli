@@ -178,6 +178,16 @@ are now honored (bounded venue traversal). No schema field is accepted-but-reser
 of the returned residual), so set it to the address that actually funds the bundle. (`cork_compute`
 `at.timestamp` is honored by dutch-auction-price and reserved only for the block-anchored kinds.)
 
+**Maker-order nonces are per-request, and that matters.** Cork-built orders set
+`allowMultipleFills: false`, so they always live in the 1inch **bit** invalidator — and
+`BitInvalidatorLib.checkAndInvalidate` keys on `(maker, nonce)`, **not** on orderHash. The nonce is
+therefore derived from `clientRequestId` (40-bit slot, so retries stay byte-identical [K2] while
+distinct requests get distinct bits). Two orders sharing a `clientRequestId` would share one
+invalidator bit, and filling or cancelling either would revert the other with `BitInvalidatedOrder`
+— so give every order you want live at the same time its own id. `cork_prepare_orders maker-order`
+returns the derived `nonce`; the venue listing must carry that exact value or `cork_submit` refuses
+to relay with `listing_traits_mismatch`.
+
 **Bundle summary.** `cork_prepare_phoenix` and `cork_decode` (kind `calldata`) both return
 `summary: string[]` — one numbered plain-English line per leg, in execution order, so a signer can
 check intent against the bytes *before* signing. Funding, action, and sweep legs each get a line;

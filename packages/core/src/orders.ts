@@ -275,6 +275,11 @@ export interface MakerOrderResult {
   orderHash: `0x${string}`;
   /** Extension bytes the taker must pass verbatim at fill ("0x" = plain order). */
   extension: `0x${string}`;
+  /**
+   * The bit-invalidator nonce packed into makerTraits. Surfaced because `cork_submit lop-order`
+   * cross-checks the venue listing against the SIGNED traits — the listing must carry this value.
+   */
+  nonce: bigint;
 }
 
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
@@ -287,13 +292,25 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const salt = hasExtension
     ? ((BigInt(keccak256(stringToHex(a.clientRequestId))) & U96) << 160n) | (BigInt(keccak256(a.extension!)) & U160)
     : BigInt(keccak256(stringToHex(a.clientRequestId))) & U160;
+  // The nonce must be DISTINCT per order, not 0. allowMultipleFills is off, so every order we
+  // build lives in the bit invalidator, and BitInvalidatorLib.checkAndInvalidate keys on
+  // (maker, nonce) — NOT on orderHash. A fixed nonce would therefore put every order a maker ever
+  // signs on the same bit: the first fill or cancel of any one of them would invalidate all the
+  // rest with BitInvalidatedOrder. That would also defeat the documented remedy for the
+  // one-fill-consumes-everything behaviour ("post several smaller orders"), since those orders
+  // would collide with each other.
+  //
+  // Derived from the idempotency key so retries stay byte-identical [K2] while genuinely
+  // different requests land on different bits. 40 bits of space, from a range of the hash the
+  // plain-order salt does not use.
+  const nonce = (BigInt(keccak256(stringToHex(a.clientRequestId))) >> 160n) & U40;
   let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
     allowMultipleFills: false,
     usePermit2: a.usePermit2 ?? false,
     hasExtension,
     expiry: a.expiry ?? 0n,
-    nonce: 0n,
+    nonce,
   });
   // An extension with a pre-/post-interaction only runs if its makerTraits flag is set.
   if (hasExtension) makerTraits |= extensionInteractionFlags(a.extension!);
@@ -309,7 +326,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   };
   const domain = lopDomain(a.chainId, a.lop);
   const orderHash = hashLopOrder(a.chainId, a.lop, order);
-  return { order, domain, types: ORDER_TYPES, primaryType: "Order", orderHash, extension: hasExtension ? a.extension! : "0x" };
+  return { order, domain, types: ORDER_TYPES, primaryType: "Order", orderHash, extension: hasExtension ? a.extension! : "0x", nonce };
 }
 
 // ── Finalize a caller-signed maker order ─────────────────────────────────────

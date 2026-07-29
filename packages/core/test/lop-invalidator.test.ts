@@ -20,8 +20,8 @@ const HASH = `0x${"7".repeat(64)}`;
 const MAKER = "0x00000000000000000000000000000000000000a1";
 
 describe("lopInvalidatorPlan (MakerTraitsLib layout)", () => {
-  it("Cork-built maker orders (allowMultipleFills:false) always use the bit invalidator", () => {
-    const { order } = buildMakerOrder({
+  const mk = (clientRequestId: string) =>
+    buildMakerOrder({
       chainId: 1,
       lop: "0x111111125421cA6dc452d289314280a0f8842A65",
       maker: "0x00000000000000000000000000000000000000A1",
@@ -29,13 +29,40 @@ describe("lopInvalidatorPlan (MakerTraitsLib layout)", () => {
       takerAsset: "0x00000000000000000000000000000000000000C1",
       makingAmount: 1n,
       takingAmount: 1n,
-      clientRequestId: "inv-test-0001",
+      clientRequestId,
     });
-    const plan = lopInvalidatorPlan(order.makerTraits);
+
+  it("Cork-built maker orders (allowMultipleFills:false) always use the bit invalidator", () => {
+    const plan = lopInvalidatorPlan(mk("inv-test-0001").order.makerTraits);
     expect(plan.mode).toBe("bit");
-    if (plan.mode === "bit") {
-      expect(plan.slot).toBe(0n); // nonce 0
-      expect(plan.mask).toBe(1n);
+  });
+
+  it("distinct requests get distinct invalidator bits, so two live orders do not kill each other", () => {
+    // BitInvalidatorLib.checkAndInvalidate keys on (maker, nonce), NOT orderHash. A fixed nonce
+    // would put every order one maker signs on a single bit: the first fill or cancel of any one
+    // would revert every other with BitInvalidatedOrder.
+    const a = lopInvalidatorPlan(mk("inv-test-0001").order.makerTraits);
+    const b = lopInvalidatorPlan(mk("inv-test-0002").order.makerTraits);
+    expect(a.mode).toBe("bit");
+    expect(b.mode).toBe("bit");
+    if (a.mode === "bit" && b.mode === "bit") {
+      // same (slot, mask) is the collision we are preventing
+      expect(`${a.slot}:${a.mask}`).not.toBe(`${b.slot}:${b.mask}`);
+      expect(a.nonceOrEpoch).not.toBe(b.nonceOrEpoch);
+    }
+  });
+
+  it("the same request id reproduces the same nonce (byte-identical retries [K2])", () => {
+    expect(mk("inv-test-0001").order.makerTraits).toBe(mk("inv-test-0001").order.makerTraits);
+    expect(mk("inv-test-0001").nonce).toBe(mk("inv-test-0001").nonce);
+  });
+
+  it("the derived nonce fits the 40-bit trait slot", () => {
+    const U40 = (1n << 40n) - 1n;
+    for (const id of ["a", "inv-test-0001", "x".repeat(120)]) {
+      const { nonce, order } = mk(id);
+      expect(nonce).toBeLessThanOrEqual(U40);
+      expect((order.makerTraits >> 120n) & U40).toBe(nonce); // packed where the fill path reads it
     }
   });
   it("no-partial-fills orders use the bit invalidator with slot/mask from nonceOrEpoch", () => {

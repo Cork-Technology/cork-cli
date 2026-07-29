@@ -348,7 +348,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     makingAmount: TokenAmount,
     takingAmount: TokenAmount,
     expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"),
-    allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. Post several smaller orders to serve multiple takers"),
+    allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId — the invalidator bit is derived from it, and orders sharing an id would share a bit, so filling one would invalidate the others"),
     usePermit2: z.boolean().default(false),
     extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket, which BUILDS the extension"),
     jitMarket: z
