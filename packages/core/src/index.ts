@@ -22,6 +22,7 @@ export * from "./bundle/corkAdapterAbi.ts";
 export * from "./bundle/bundler3.ts";
 export * from "./bundle/actions.ts";
 export * from "./bundle/decode.ts";
+export * from "./bundle/summary.ts";
 export * from "./bundle/authority.ts";
 export * from "./bundle/funding.ts";
 export * from "./bundle/preflight.ts";

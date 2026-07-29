@@ -40,6 +40,7 @@ import { computeMarketId } from "./marketid.ts";
 import { corkActionCall, type CorkActionParamMap } from "./bundle/actions.ts";
 import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
+import { summarizeBundle } from "./bundle/summary.ts";
 import { buildAuthorityTx, spenderRoleOf, type AuthorityAction } from "./bundle/authority.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
 import { poolPreflightWarnings } from "./bundle/preflight.ts";
@@ -3014,7 +3015,11 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         // Malformed top-level bytes are invalid INPUT (exit 2, teachable) — not an internal error.
         throw new ToolInputError(name, [{ path: ["data"], message: err instanceof Error ? err.message : "calldata does not decode as a Bundler3 multicall" }]);
       }
-      return envelope({ state: "ok", data: { kind: "calldata", legs }, chainId, source: "config", ctx });
+      // Plain-English rendering alongside the structured legs: these bytes usually arrive from
+      // somewhere else, and "what will this DO" is the question being asked of them.
+      const adapter = (await getDep(ctx, chainId)).dep?.corkAdapter;
+      // Summary before the leg dump: a reader scanning the prose output wants the intent first.
+      return envelope({ state: "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", ctx });
     }
     case "cork_compute":
       return handleCompute(parsed.data as ComputeInput, ctx);
@@ -3042,6 +3047,14 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
       }
       let funding: Call[] = [];
       let sweepBack: Call[] = [];
+      // Filled in whenever we read the pool, so the bundle summary can name tokens by their role.
+      let tokenRoles: Record<string, string> | undefined;
+      const roleMapOf = (t: { collateral: string; reference: string; cst: string; cpt: string }): Record<string, string> => ({
+        [t.collateral.toLowerCase()]: "collateral",
+        [t.reference.toLowerCase()]: "reference",
+        [t.cst.toLowerCase()]: "cST",
+        [t.cpt.toLowerCase()]: "cPT",
+      });
       const mode = input.fundingMode as FundingMode;
 
       if (mode === "pre-funded") {
@@ -3058,6 +3071,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
               if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
                 return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
               }
+              tokenRoles = roleMapOf(tokens);
               // 'pre-funded' gets the same guards as the funded path — it must not silently skip
               // checks its sibling enforces [F19].
               warnings.push(
@@ -3106,6 +3120,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
           return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
         }
+        tokenRoles = roleMapOf(tokens);
         // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
         // build-and-warn — a bundle that can only revert is still returned, clearly labelled.
         warnings.push(
@@ -3141,9 +3156,12 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
 
       const bundle = [...funding, actionLeg, ...sweepBack];
       const multicall = encodeMulticall(bundle);
+      // What the caller is about to sign, in words. Token roles come from the pool read when we
+      // did one, so amounts are attributed to "collateral"/"cST" rather than bare addresses.
+      const summary = summarizeBundle(decodeBundle(multicall), { tokenRoles, account: input.account, adapter: corkAdapter });
       return envelope({
         state: "ok",
-        data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, bundle, multicall, clientRequestId: input.clientRequestId },
+        data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, clientRequestId: input.clientRequestId },
         chainId: input.chainId,
         source: ctx.rpcUrl && funding.length ? "chain" : "config",
         warnings,

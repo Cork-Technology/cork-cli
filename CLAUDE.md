@@ -178,6 +178,16 @@ are now honored (bounded venue traversal). No schema field is accepted-but-reser
 of the returned residual), so set it to the address that actually funds the bundle. (`cork_compute`
 `at.timestamp` is honored by dutch-auction-price and reserved only for the block-anchored kinds.)
 
+**Bundle summary.** `cork_prepare_phoenix` and `cork_decode` (kind `calldata`) both return
+`summary: string[]` — one numbered plain-English line per leg, in execution order, so a signer can
+check intent against the bytes *before* signing. Funding, action, and sweep legs each get a line;
+the `uint256.max` sentinel reads as "the entire remaining balance" rather than a 78-digit number;
+addresses are named where known (`you`, `the adapter`, and token roles on the prepare path, which
+has read the pool). A Cork leg names its `receiver`/`owner`, so a redirected payout is visible
+rather than buried. Legs that would change what signing means are flagged inline — `skipRevert`
+("MAY FAIL SILENTLY") and any non-zero `value`. An undecodable leg is labelled `UNREADABLE … Do not
+sign until you have identified it`, never glossed. Renderer: `packages/core/src/bundle/summary.ts`.
+
 **Prepare pre-flight guards.** Every chain-backed `cork_prepare_phoenix` call (both the funded path
 and `pre-funded`) runs one batched read of the conditions that make a well-formed bundle revert:
 expiry, pause, and whitelist. All are **build-and-warn** — the bytes are still returned, clearly
