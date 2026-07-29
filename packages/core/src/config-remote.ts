@@ -22,7 +22,7 @@ import type { CorkDeployment } from "./config.ts";
 
 /** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. */
 export const CORK_DEFAULTS_URL =
-  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";
+  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";
 
 const DeploymentSchema = z
   .object({
