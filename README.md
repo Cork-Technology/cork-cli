@@ -33,16 +33,35 @@ cd cork-cli
 
 The server and CLI are TypeScript run directly by **[Bun](https://bun.sh)** (Node's native
 type-stripping can't run this code — it uses TypeScript parameter properties). Bun 1.3 is pinned in
-`mise.toml`, so from the repo root:
+`mise.toml`.
+
+**Install [mise](https://mise.jdx.dev)** — the tool-version manager that provisions the pinned Bun —
+if you don't already have it:
+
+```sh
+curl https://mise.run | sh          # installs mise into ~/.local/bin
+
+# activate it in your shell (pick the line for your shell), then reopen the terminal:
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc   # bash
+echo 'eval "$(~/.local/bin/mise activate zsh)"'  >> ~/.zshrc    # zsh
+
+# macOS Homebrew alternative:
+brew install mise
+```
+
+Other installers (apt, dnf, pacman, scoop, winget, …) are listed at
+<https://mise.jdx.dev/getting-started.html>. Verify with `mise --version`.
+
+Then, from the repo root:
 
 ```sh
 mise trust        # trust this repo's mise.toml — one-time, REQUIRED on a fresh checkout
-mise install      # installs the pinned Bun (or: curl -fsSL https://bun.sh/install | bash)
+mise install      # installs the pinned Bun
 bun install       # install deps + link the workspace packages
 ```
 
-(Skip `mise trust`/`mise install` if you already have Bun 1.3+ on your `PATH` by other means — then
-just `bun install`.)
+Prefer not to use mise? Install Bun 1.3+ directly (`curl -fsSL https://bun.sh/install | bash`), skip
+the two `mise` commands, and just run `bun install`.
 
 ### 2. Install into Claude Code
 
