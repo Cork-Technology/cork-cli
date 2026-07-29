@@ -163,7 +163,12 @@ export const DecodeInput = z.object({
     .describe(
       "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
     ),
-  data: z.union([Hex, z.record(z.string(), z.unknown())]),
+  data: z.union([
+    Hex.describe("raw bytes to decode — tx calldata for kind 'calldata', or the 8-word order tuple for kind 'order'"),
+    z
+      .record(z.string(), z.unknown())
+      .describe("an already-structured payload to label: the order's JSON struct fields (kind 'order'), ONE log object {address?, topics[], data} (kind 'event'), or a receipt {logs:[...]} (kind 'receipt')"),
+  ]),
   chainId: ChainId.optional(),
   format: Format,
 });
@@ -508,7 +513,7 @@ const RolloverOrderWire = z.strictObject({
   minPremiumPerShare: PremiumPerShareRate,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
-  premiumPaymentMode: z.union([z.literal(0), z.literal(1)]),
+  premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).describe("0=upfront, 1=on-settle — must match what the signature covers"),
   rolloverIntentHash: Bytes32.describe("EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed [K3]"),
   rolloverParams: RolloverParamsWire,
 });
