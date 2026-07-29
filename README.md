@@ -260,7 +260,7 @@ community RPC, the result envelope carries an `rpc_fallback` warning naming the 
 bun install
 bun run typecheck          # tsc --noEmit, strict (noUncheckedIndexedAccess, exactOptionalPropertyTypes)
 bun run test               # everything; network-gated suites self-skip without their env vars
-bun run test:unit          # offline-only (excludes fork-parity / bundle-sim / rpc-live)
+bun run test:unit          # offline-only (excludes fork-parity / bundle-sim / rpc-live / hyperrpc-live)
 bun run test:live          # just the network-gated suites (each self-skips without its env var)
 
 # Empirical fork-parity vs the live vnet fixture (never commit this RPC URL):
@@ -283,19 +283,30 @@ Implemented + tested:
 
 - **cork_capabilities** — tool list, `search`, `topic` docs, and `topic: "verify"` (re-derives
   deployed addresses via CREATE2 from prod.toml salt + Sourcify init-code hash).
-- **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1).
+- **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1),
+  plus a plain-English `summary` of what those legs do; also LOP orders, single logs, and whole receipts.
 - **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
   (chain-backed, block-pinnable); resolve-recipe (MarketRegistry band resolution, bit-parity
   self-checked against the chain view).
 - **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
   legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
-  actions; expired-pool tripwire (`pool_expired`); the authority-onboard / authority-revoke ops are
-  also live. deposit / swap / unwind-swap / exercise bundles are proven to **execute** against the
-  live vnet.
+  actions; **sweep-back legs** that return the unspent remainder of any funded slippage cap to
+  `account`, so it is not left on the adapter where anyone can take it; **pre-flight guards** for
+  expiry, pause (the global breaker and the per-pool bit for this action), and whitelist (which
+  checks *two* addresses — see below); a plain-English `summary` of what the bundle will do; and the
+  authority-onboard / authority-revoke ops. deposit / swap / unwind-swap / exercise bundles are
+  proven to **execute** against the live vnet.
+
+  Note the whitelist asymmetry: a gated pool checks the bundle's `initiator()` (you, via the
+  adapter's own modifier) **and** `msg.sender` (the *adapter*, via the pool manager). Both must be
+  whitelisted, so checking only your own address can read as a false green.
 - **cork_prepare_orders** — 1inch maker-order EIP-712 typed data (incl. extension orders and
   JIT-market orders with adapter pre-flight checks) + cancel calldata, order hash proven equal to
   on-chain `hashOrder`; rollover-intent ERC-7683 OrderData (CorkSettler domain, intent hash
-  recomputed locally, settler-mode gate checked).
+  recomputed locally, settler-mode gate checked). Orders live in the 1inch **bit** invalidator,
+  which keys on `(maker, nonce)` rather than order hash, so the nonce is derived per
+  `clientRequestId`: give each order you want live at the same time its own id, or they share a bit
+  and filling one invalidates the others.
 - **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref)` oracle-wrapper txs
   (permissionless, idempotent; Arbitrum).
 - **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
@@ -315,11 +326,11 @@ pricing model deferred by product decision (a Fusion-style decaying-premium orde
 modeled-quote-free alternative). Everything else advertised above is activated, including
 `cork_query` whitelisted-addresses enumeration, `cork_compute` dutch-auction-price (pure-local
 Fusion v3.1 pricing), `cork_decode` order/event/receipt, `cork_prepare_orders` taker-fill +
-finalize-maker-order, and the `cork_prepare_phoenix` authority-onboard / authority-revoke ops. One
-schema field is accepted but reserved: `cork_prepare_phoenix` `account` (`cork_compute`
-`at.timestamp` is honored by dutch-auction-price, reserved only for the block-anchored kinds).
+finalize-maker-order, and the `cork_prepare_phoenix` authority-onboard / authority-revoke ops. No
+schema field is accepted-but-reserved any more — `cork_prepare_phoenix` `account` became the
+sweep-back recipient (`cork_compute` `at.timestamp` is honored by dutch-auction-price, reserved only
+for the block-anchored kinds).
 
-Roadmap: per-enum-value / per-union-branch descriptions in the registered JSON schemas (RFC §5.4);
-the remaining prepare pre-flight guards (whitelist / pause checks — expiry and JIT adapter-binding
-checks are already in place), sweep legs, and a human-readable bundle summary (RFC §5.4); and
-`account-state` nonce/invalidator plus Safe config.
+Roadmap: `account-state` nonce/invalidator state, and Safe support — the latter phased by design
+(message-signature and transaction-confirmation are distinct problems, and these tools never confirm
+a Safe transaction).
