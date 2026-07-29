@@ -236,6 +236,27 @@ whole scope of receiver-forcing, and it should shape the rest of your policy:
    the adapter itself as maker would let the protocol spend the adapter's transient allowance. Today
    that is rejected only because `isValidSignature` does not exist here.
 
+## Building — check out the `lib/` submodules first
+
+`lib/forge-std` (v1.10.0) and `lib/openzeppelin-contracts` (v5.4.0) are **pinned git submodules**,
+not vendored files. A fresh clone leaves those directories empty until you fetch them, and `forge
+build` / `forge test` will fail with missing-import errors until you do.
+
+```sh
+# cloning fresh — pull the submodules in one step:
+git clone --recurse-submodules <repo-url>
+
+# already cloned (or pulled a commit that moved a pin) — initialise/refresh them:
+git submodule update --init --recursive
+
+# then build/test as usual (run from this directory):
+forge build
+```
+
+Each submodule is pinned to an exact commit (the versions above); `git submodule status` shows the
+pinned SHA per path. To move a pin: `cd lib/<name>`, `git checkout <new-tag>`, then `git add
+lib/<name>` and commit the updated gitlink.
+
 ## Tests
 
 38 tests. Most run against the **live** Arbitrum One deployment on a fork — real pool, real
