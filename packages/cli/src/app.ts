@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { REGISTRY, inputJsonSchema, type ToolDef } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { formatExplainText, explainWantsJson } from "./explain.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
@@ -77,10 +78,14 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
       .allowExcessArguments(false)
       .option("--json <json>", "structured tool input as a JSON string")
       .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
-      .option("--explain", "print the tool's contract (description + JSON schema) and exit")
+      .option("--explain", "describe the command (plain English; add --json or CORK_EXPLAIN_JSON=1 for the JSON schema) and exit")
       .action(async (opts: { json?: string; rpcUrl?: string; explain?: boolean }) => {
         if (opts.explain) {
-          out += `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`;
+          // Human-readable by default; the JSON schema is opt-in (--json value or CORK_EXPLAIN_JSON).
+          const doc = { tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) };
+          out += explainWantsJson(opts.json, process.env)
+            ? `${JSON.stringify(doc, null, 2)}\n`
+            : `${formatExplainText(doc)}\n`;
           return;
         }
         let input: unknown = {};
