@@ -52,7 +52,7 @@
     "name": "cork_prepare_phoenix",
     "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
     "descriptionTokensApprox": 222,
-    "inputSchemaSha256": "be6d8b9e72ba5f1bb588027df4642fe16439e7b9bc505389985e3cf5e7fad574",
+    "inputSchemaSha256": "1617850c31fc704432068fa09adca838e73eb8789f735f1560f844e276263eb6",
     "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
     "annotations": {
       "title": "Cork: build unsigned Phoenix bundle",

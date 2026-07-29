@@ -281,7 +281,7 @@ export type PhoenixAction = z.infer<typeof PhoenixAction>;
 
 export const PreparePhoenixInput = z.object({
   chainId: ChainId,
-  account: Address.describe("the initiating account (reserved: recorded but not yet consumed by bundle building — funding legs pull from Bundler3's initiator at execution time regardless)"),
+  account: Address.describe("the initiating account. Funding legs pull from Bundler3's initiator at execution time, but this is ALSO the recipient of the sweep-back legs: for actions funded from a slippage CAP (any max* input), the bundle ends by returning the unspent remainder here, so it is not left on the adapter where anyone can take it. Set it to the address that actually funds the bundle"),
   clientRequestId: ClientRequestId,
   fundingMode: z
     .enum(["permit2", "erc20-approve", "pre-funded"])

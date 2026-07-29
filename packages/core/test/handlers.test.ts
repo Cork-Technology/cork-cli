@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { zeroAddress } from "viem";
+import { toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  bundlerSweepAbi,
   corkActionCall,
   encodeMulticall,
   hashLopOrder,
@@ -264,6 +265,55 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     });
     expect(env.state).toBe("ok");
     expect((env.data as { fundingLegs: number }).fundingLegs).toBe(1);
+  });
+
+  // Sweep-back [F13], end-to-end through the handler: a CAPPED action must emit the return leg
+  // LAST, after the action leg, so the residual of the funded cap goes back to the initiator
+  // rather than sitting on the adapter where anyone can take it.
+  const mintInput = (id: string) => ({
+    chainId: 1,
+    account: RCV,
+    clientRequestId: id,
+    fundingMode: "erc20-approve",
+    action: { type: "mint", poolId: POOL, cptAndCstSharesOut: "1", receiver: RCV, maxCollateralAssetsIn: "9" },
+    format: "concise",
+  });
+  const healthyRpc = {
+    nowSeconds: NOW,
+    rpcUrl: "https://node.example/rpc",
+    resolveRpc: async (_c: unknown, url?: string) =>
+      stubResolved(
+        {
+          readContract: async (args: { functionName: string }) =>
+            args.functionName === "market"
+              ? { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: 0n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE }
+              : [SUSDE, SUSDE],
+        },
+        "explicit",
+        url!,
+      ),
+  };
+
+  it("capped action appends a sweep-back leg as the LAST leg, and discloses it", async () => {
+    const env = await runTool("cork_prepare_phoenix", mintInput("sweep-0001"), healthyRpc);
+    expect(env.state).toBe("ok");
+    const d = env.data as { fundingLegs: number; sweepBackLegs: number; bundle: Array<{ to: string; data: `0x${string}` }> };
+    expect(d.fundingLegs).toBe(1);
+    expect(d.sweepBackLegs).toBe(1);
+    // funding, action, sweep — in that order
+    expect(d.bundle).toHaveLength(3);
+    const last = d.bundle[d.bundle.length - 1]!;
+    expect(last.data.slice(0, 10)).toBe(toFunctionSelector(bundlerSweepAbi[0]!));
+    expect(env.warnings.some((w) => w.code === "sweep_back")).toBe(true);
+  });
+
+  it("exact-amount action gets no sweep-back leg (nothing is stranded)", async () => {
+    const env = await runTool("cork_prepare_phoenix", depositInput("sweep-0002"), healthyRpc);
+    expect(env.state).toBe("ok");
+    const d = env.data as { sweepBackLegs: number; bundle: unknown[] };
+    expect(d.sweepBackLegs).toBe(0);
+    expect(d.bundle).toHaveLength(2);
+    expect(env.warnings.some((w) => w.code === "sweep_back")).toBe(false);
   });
 });
 

@@ -108,6 +108,8 @@ Warning codes you will encounter:
 | `share_prediction_unavailable` | JIT prepare: eth_simulateV1 unsupported — predicted cST unknown; verify the order side + permit token yourself. |
 | `band_parity_mismatch` | On `conflict` (resolve-recipe): local applyBands port disagreed with the chain view — trust the chain, report the bug. |
 | `pool_expired` | Informational on `ok` prepare_phoenix results: a pre-expiry action (deposit/swap/…) against an expired pool — the bundle builds but would revert on-chain; withdraw/withdraw-other/redeem are the post-expiry paths. |
+| `sweep_back` | Informational on `ok` prepare_phoenix results: the bundle ends with sweep-back leg(s) returning the unspent remainder of a funded **cap** to `account` (see Sweep-back legs below). Names the swept tokens. Each sweeps the adapter's FULL balance of that token, so it also returns any residual an earlier bundle abandoned there — which was already takeable by anyone. |
+| `sweep_back_skipped` | Informational on `ok` prepare_phoenix results: a sweep was warranted but not built because the target would revert `erc20Transfer` (the zero address, or the adapter itself). Funding legs are still built — the residual stays on the adapter and is skimmable. Fix `account`. |
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
 | `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (4xx; HTTP status + message) / couldn't be reached OR answered 5xx (transient — retry; check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
@@ -169,10 +171,21 @@ and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
 backfill, blocks past its archive head are scanned over the regular resolved RPC and merged, so a
 lagging indexer doesn't hide recent events (gated on a complete backfill; degrades to a
 `live_tail_unavailable` warning, never a failed read). `cork_query` `cursor`/`pageSize`/`maxPages`
-are now honored (bounded venue traversal). One schema field remains accepted-but-reserved:
-`cork_prepare_phoenix` `account` — passing it is harmless; don't expect it to change behavior.
-(`cork_compute` `at.timestamp` is honored by dutch-auction-price and reserved only for the
-block-anchored kinds.)
+are now honored (bounded venue traversal). No schema field is accepted-but-reserved any more:
+`cork_prepare_phoenix` `account` became load-bearing with the sweep-back legs (it is the recipient
+of the returned residual), so set it to the address that actually funds the bundle. (`cork_compute`
+`at.timestamp` is honored by dutch-auction-price and reserved only for the block-anchored kinds.)
+
+**Sweep-back legs [F13].** Auto-funding (`erc20-approve`/`permit2`) moves the caller's slippage
+**cap** into the adapter for every `max*` input, but the pool consumes only the true amount. The
+delta isn't merely stranded — `CoreAdapter.erc20Transfer` is `onlyBundler3` yet never checks
+`receiver == initiator()`, and `Bundler3.multicall` is public, so anyone can take it in a later
+block. Every capped leg therefore gets a matching `erc20Transfer(token, account, uint256.max)`
+appended **after** the action leg, returning the remainder to `account`. This covers the burn-side
+caps (`withdraw`, `withdraw-other`, `unwind-deposit`) as well as the exact-OUT value-in ones. Exact
+inputs (`deposit`, `redeem`, `unwind-swap`, `unwind-mint`) strand nothing and get no sweep;
+`pre-funded` never sweeps, because the caller owns that balance. The result reports
+`sweepBackLegs: n` alongside `fundingLegs: n`, and a zero residual is a no-op rather than a revert.
 
 Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineSeconds`, re-anchors
 to the clock, so a later retry produces different bytes); pass an absolute `deadlineAt` (unix

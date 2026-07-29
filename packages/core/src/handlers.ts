@@ -3040,6 +3040,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         warnings.push({ code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — the bundle would revert its deadline check on-chain; pin a future absolute deadline for byte-stable retries` });
       }
       let funding: Call[] = [];
+      let sweepBack: Call[] = [];
       const mode = input.fundingMode as FundingMode;
 
       if (mode === "pre-funded") {
@@ -3102,16 +3103,28 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
             message: `pool ${poolId} expired at ${tokens.expiryTimestamp} (now ${nowSecs}) — '${input.action.type}' is a pre-expiry action and this bundle would revert on-chain; the post-expiry paths are withdraw/withdraw-other/redeem`,
           });
         }
-        const plan = fundingPlan(input.action, tokens, corkAdapter, mode);
+        // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
+        // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
+        // erc20Transfer never checks receiver==initiator() and Bundler3.multicall is public, so
+        // anyone can take it in a later block. Return it to the declared initiator in-bundle.
+        const plan = fundingPlan(input.action, tokens, corkAdapter, mode, input.account);
         funding = plan.legs;
+        sweepBack = plan.sweepLegs;
         if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
+        if (plan.sweepNote) warnings.push({ code: "sweep_back_skipped", message: plan.sweepNote });
+        if (sweepBack.length) {
+          warnings.push({
+            code: "sweep_back",
+            message: `this bundle ends with ${sweepBack.length} sweep-back leg(s) returning any unspent balance of ${plan.sweptTokens.join(", ")} to ${input.account}, because auto-funding moved a slippage CAP (not the exact amount) into the adapter. Each sweeps the adapter's FULL balance of that token (uint256.max sentinel), so it also returns any residual an earlier bundle abandoned there — that balance was already takeable by anyone. A zero residual is a no-op, not a revert.`,
+          });
+        }
       }
 
-      const bundle = [...funding, actionLeg];
+      const bundle = [...funding, actionLeg, ...sweepBack];
       const multicall = encodeMulticall(bundle);
       return envelope({
         state: "ok",
-        data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, bundle, multicall, clientRequestId: input.clientRequestId },
+        data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, bundle, multicall, clientRequestId: input.clientRequestId },
         chainId: input.chainId,
         source: ctx.rpcUrl && funding.length ? "chain" : "config",
         warnings,
