@@ -42,6 +42,7 @@ import { encodeMulticall, type Call } from "./bundle/bundler3.ts";
 import { decodeBundle } from "./bundle/decode.ts";
 import { buildAuthorityTx, spenderRoleOf, type AuthorityAction } from "./bundle/authority.ts";
 import { canAutoFund, fundingPlan, type FundingMode } from "./bundle/funding.ts";
+import { poolPreflightWarnings } from "./bundle/preflight.ts";
 import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/reads.ts";
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, RpcChainMismatchError, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
@@ -3057,10 +3058,22 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
               if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
                 return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
               }
-              const POST_EXPIRY = new Set(["withdraw", "withdraw-other", "redeem"]);
-              if (tokens.expiryTimestamp > 0n && tokens.expiryTimestamp <= nowSecs && !POST_EXPIRY.has(input.action.type)) {
-                warnings.push({ code: "pool_expired", message: `pool ${poolId} expired at ${tokens.expiryTimestamp} (now ${nowSecs}) — '${input.action.type}' is a pre-expiry action and this bundle would revert on-chain; the post-expiry paths are withdraw/withdraw-other/redeem` });
-              }
+              // 'pre-funded' gets the same guards as the funded path — it must not silently skip
+              // checks its sibling enforces [F19].
+              warnings.push(
+                ...(await poolPreflightWarnings({
+                  client: resolved.client,
+                  poolManager: dep.poolManager,
+                  whitelistManager: dep.whitelistManager,
+                  corkAdapter,
+                  poolId,
+                  actionType: input.action.type,
+                  account: input.account,
+                  expiryTimestamp: tokens.expiryTimestamp,
+                  nowSeconds: nowSecs,
+                  atBlock: ctx.atBlock,
+                })),
+              );
             } catch {
               // best-effort — pre-funded byte-building stays offline-capable by design
             }
@@ -3093,16 +3106,22 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
         if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
           return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
         }
-        // Expiry pre-flight [§5.4 guards]: pre-expiry actions against an expired pool build fine
-        // but revert on-chain. Withdraw-family actions are the post-expiry path — never flagged.
-        const POST_EXPIRY_ACTIONS = new Set(["withdraw", "withdraw-other", "redeem"]);
-        const nowSecs = nowSecondsOf(ctx);
-        if (tokens.expiryTimestamp > 0n && tokens.expiryTimestamp <= nowSecs && !POST_EXPIRY_ACTIONS.has(input.action.type)) {
-          warnings.push({
-            code: "pool_expired",
-            message: `pool ${poolId} expired at ${tokens.expiryTimestamp} (now ${nowSecs}) — '${input.action.type}' is a pre-expiry action and this bundle would revert on-chain; the post-expiry paths are withdraw/withdraw-other/redeem`,
-          });
-        }
+        // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
+        // build-and-warn — a bundle that can only revert is still returned, clearly labelled.
+        warnings.push(
+          ...(await poolPreflightWarnings({
+            client: resolved.client,
+            poolManager: dep.poolManager,
+            whitelistManager: dep.whitelistManager,
+            corkAdapter,
+            poolId,
+            actionType: input.action.type,
+            account: input.account,
+            expiryTimestamp: tokens.expiryTimestamp,
+            nowSeconds: nowSecondsOf(ctx),
+            atBlock: ctx.atBlock,
+          })),
+        );
         // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
         // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
         // erc20Transfer never checks receiver==initiator() and Bundler3.multicall is public, so

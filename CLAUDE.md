@@ -110,6 +110,8 @@ Warning codes you will encounter:
 | `pool_expired` | Informational on `ok` prepare_phoenix results: a pre-expiry action (deposit/swap/…) against an expired pool — the bundle builds but would revert on-chain; withdraw/withdraw-other/redeem are the post-expiry paths. |
 | `sweep_back` | Informational on `ok` prepare_phoenix results: the bundle ends with sweep-back leg(s) returning the unspent remainder of a funded **cap** to `account` (see Sweep-back legs below). Names the swept tokens. Each sweeps the adapter's FULL balance of that token, so it also returns any residual an earlier bundle abandoned there — which was already takeable by anyone. |
 | `sweep_back_skipped` | Informational on `ok` prepare_phoenix results: a sweep was warranted but not built because the target would revert `erc20Transfer` (the zero address, or the adapter itself). Funding legs are still built — the residual stays on the adapter and is skimmable. Fix `account`. |
+| `pool_paused` | Informational on `ok` prepare_phoenix results: the action is paused and the bundle would revert `EnforcedPause()`. Either the CorkPoolManager's GLOBAL pause (blocks every action on every pool) or the pool's own `getPausedBitMap` bit for this action's family (bit0 deposit/mint, bit1 swap/exercise/exercise-other, bit2 withdraw/withdraw-other/redeem, bit3 unwind-deposit/unwind-mint, bit4 unwind-swap/unwind-exercise/-other). Both can fire at once. |
+| `not_whitelisted` | Informational on `ok` prepare_phoenix results: a gated pool checks **two** addresses and this one fails. Emitted once per failing address — see the whitelist note below. |
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
 | `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (4xx; HTTP status + message) / couldn't be reached OR answered 5xx (transient — retry; check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
@@ -175,6 +177,22 @@ are now honored (bounded venue traversal). No schema field is accepted-but-reser
 `cork_prepare_phoenix` `account` became load-bearing with the sweep-back legs (it is the recipient
 of the returned residual), so set it to the address that actually funds the bundle. (`cork_compute`
 `at.timestamp` is honored by dutch-auction-price and reserved only for the block-anchored kinds.)
+
+**Prepare pre-flight guards.** Every chain-backed `cork_prepare_phoenix` call (both the funded path
+and `pre-funded`) runs one batched read of the conditions that make a well-formed bundle revert:
+expiry, pause, and whitelist. All are **build-and-warn** — the bytes are still returned, clearly
+labelled — and each degrades to silence if its view is unavailable, so byte-building never becomes a
+hard error. Guard logic lives in `packages/core/src/bundle/preflight.ts`.
+
+**A gated pool checks TWO addresses, and they differ.** `CorkAdapter`'s own `onlyWhitelisted`
+modifier checks `initiator()` — *you* — while `CorkPoolManager._onlyWhitelisted` checks
+`_msgSender()`, which for a bundled call is the **adapter**, not you (there is no ERC-2771 forwarding
+anywhere in the contracts, so `_msgSender()` is plain `msg.sender`). **Both** must be whitelisted for
+a bundle to execute. This is why checking only your own address — the natural reading of `cork_query
+pool-whitelist` with `filters.account` — can show a false green: a whitelisted user still cannot
+reach a gated pool through Bundler3 until the adapter itself is whitelisted. The pre-flight checks
+both and reports each failure separately. (`isWhitelisted` returns true for pools with no whitelist
+enabled, so an ungated pool never warns.)
 
 **Sweep-back legs [F13].** Auto-funding (`erc20-approve`/`permit2`) moves the caller's slippage
 **cap** into the adapter for every `max*` input, but the pool consumes only the true amount. The

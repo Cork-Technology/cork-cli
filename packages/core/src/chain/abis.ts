@@ -1,6 +1,23 @@
 // Minimal read ABIs (subset of phoenix-private interfaces) needed for state reads + parity.
 export const poolManagerAbi = [
   {
+    // Global circuit breaker (PausableUpgradeable). Every _corkPool*NotPaused helper checks this
+    // BEFORE the per-pool bit, so a global pause blocks all 13 actions on every pool.
+    type: "function",
+    name: "paused",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    // Per-pool pause bits — see PAUSE_BIT in handlers.ts for the action mapping.
+    type: "function",
+    name: "getPausedBitMap",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ name: "pauseBitMap", type: "uint16" }],
+  },
+  {
     type: "function",
     name: "swapRate",
     stateMutability: "view",

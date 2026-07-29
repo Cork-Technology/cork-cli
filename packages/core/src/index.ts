@@ -24,6 +24,7 @@ export * from "./bundle/actions.ts";
 export * from "./bundle/decode.ts";
 export * from "./bundle/authority.ts";
 export * from "./bundle/funding.ts";
+export * from "./bundle/preflight.ts";
 export * from "./bundle/legs.ts";
 export * from "./config.ts";
 export * from "./config-remote.ts";

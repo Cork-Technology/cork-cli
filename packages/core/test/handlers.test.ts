@@ -307,6 +307,41 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     expect(env.warnings.some((w) => w.code === "sweep_back")).toBe(true);
   });
 
+  it("pause + whitelist guards reach the result through the handler", async () => {
+    // The unit suite covers the guard matrix; this proves the handler is actually wired to it.
+    const env = await runTool("cork_prepare_phoenix", depositInput("preflight-0001"), {
+      nowSeconds: NOW,
+      rpcUrl: "https://node.example/rpc",
+      resolveRpc: async (_c: unknown, url?: string) =>
+        stubResolved(
+          {
+            readContract: async (args: { functionName: string; args?: readonly unknown[] }) => {
+              switch (args.functionName) {
+                case "market":
+                  return { collateralAsset: SUSDE, referenceAsset: SUSDE, expiryTimestamp: 0n, rateMin: 0n, rateMax: 0n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n, rateOracle: SUSDE };
+                case "shares":
+                  return [SUSDE, SUSDE];
+                case "paused":
+                  return false;
+                case "getPausedBitMap":
+                  return 1; // bit 0 -> deposit paused
+                case "isWhitelisted":
+                  return false; // neither the user nor the adapter
+                default:
+                  return [SUSDE, SUSDE];
+              }
+            },
+          },
+          "explicit",
+          url!,
+        ),
+    });
+    expect(env.state).toBe("ok"); // still built, just labelled
+    const codes = env.warnings.map((w) => w.code);
+    expect(codes).toContain("pool_paused");
+    expect(codes.filter((c) => c === "not_whitelisted")).toHaveLength(2); // initiator AND adapter
+  });
+
   it("exact-amount action gets no sweep-back leg (nothing is stranded)", async () => {
     const env = await runTool("cork_prepare_phoenix", depositInput("sweep-0002"), healthyRpc);
     expect(env.state).toBe("ok");
