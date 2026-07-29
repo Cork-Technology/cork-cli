@@ -12,7 +12,7 @@ Tenderly virtual-mainnet fixture pool (bit-exact, wei-for-wei).
 | `@cork/schemas` | zod v4 single source of truth: hex-typed primitives, the 9-tool registry, `z.toJSONSchema` projection to MCP input schemas. |
 | `@cork/core` | Deterministic bit-exact ports of on-chain math (`MathHelper`, `TransferHelper`, `ConstraintRateAdapter._calculateRate`, `PoolLib.preview*`), the committed-descent impairment floor, `MarketId`/CREATE2 derivation, chain reads (viem), the Bundler3 encoder/recursive decoder, and the shared tool dispatch (`runTool`). |
 | `@cork/mcp` | MCP server projecting the registry via the low-level `Server` API (advertises JSON Schema directly; avoids the SDK's bundled-zod coupling). Stdio entry `packages/mcp/src/bin.ts` (package bin `cork-mcp`), launched by your MCP client under Bun — see "Use it with Claude Code" below. |
-| `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`, with `--json`, `--explain`, and state-mapped exit codes. Binary: `ch` (launcher at `bin/ch`). |
+| `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`. Input as the wire JSON or as schema-derived flags; output as prose for people and JSON on request; `--explain` for a tool's contract; state-mapped exit codes. Binary: `ch` (launcher at `bin/ch`). |
 
 ## Use it with Claude Code (MCP)
 
@@ -135,22 +135,47 @@ mise trust && mise install && bun install
 export PATH="$(pwd)/bin:$PATH"
 # or symlink it into a dir already on PATH:  ln -s "$(pwd)/bin/ch" ~/.local/bin/ch
 
-# 3. test it — a healthy install prints an "ok" envelope listing the 9 tools
+# 3. test it — a healthy install lists the 9 tools
 ch capabilities
 
+# reads: a positional for the resource, flags named after the schema's own fields
+ch query protocol-config
+ch query registry-assets --chainid 42161
+
+# the canonical wire shape still works, and still answers in JSON
 ch query --json '{"resource":"protocol-config"}'
-ch compute --json '{"params":{"kind":"rollover-premium-floor","dstCstProduced":"1000000000000000000000","minPremiumPerShare":"20000000000000000"}}'
-ch compute --explain     # print a tool's contract (JSON schema) without running it
+
+ch compute --explain          # what the tool does and takes, in prose
+ch compute --explain --json   # the same contract as JSON Schema
 ```
 
-`ch capabilities` returning `"state": "ok"` with 9 tools means the CLI is wired correctly. Prefer not
-to touch `PATH`? The launcher runs the same either way — `./bin/ch capabilities` — and the long form
-works without the launcher at all: `bun packages/cli/src/bin.ts capabilities`.
+`ch capabilities` listing 9 tools means the CLI is wired correctly. Prefer not to touch `PATH`? The
+launcher runs the same either way — `./bin/ch capabilities` — and the long form works without the
+launcher at all: `bun packages/cli/src/bin.ts capabilities`.
 
-Every tool accepts an optional `"format"` in its JSON input — `"concise"` (the default, shown above)
-or `"full"` for the verbose envelope. Exit codes map the envelope state so scripts can branch: `0` ok
-· `2` invalid input · `3` unavailable · `4` conflict · `1` unexpected error. Chain-backed commands
-resolve an RPC automatically (see below); pass `--rpc-url <url>` (or set `CORK_RPC_URL`) to override.
+**Output is prose by default and JSON on request.** A person at a terminal gets a readable summary;
+ask for the wire format with a bare `--json`, or set `CH_JSON=1` to make JSON the default for every
+command in a shell. Supplying input *as* `--json '<object>'` also returns JSON — handing the tool the
+wire shape is itself a machine-readable intent — so every scripted example that predates this keeps
+working unchanged.
+
+**Input has three interchangeable forms.** `--json '<object>'` is canonical and identical to what the
+MCP server receives; `--input '<object>'` is the same thing under a name that cannot be confused with
+the output flag; or pass a positional plus flags named after the tool's own schema fields, which is
+usually what you want by hand:
+
+```sh
+ch query market --chainid 42161 --filters '{"poolId":"0xd68978…fe259"}'
+```
+
+Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
+spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag. Object-valued
+fields (`--filters`, `--params`, `--action`) take a JSON string.
+
+Every tool accepts an optional `"format"` — `"concise"` (the default) or `"full"` for the verbose
+envelope. Exit codes map the envelope state so scripts can branch: `0` ok · `2` invalid input · `3`
+unavailable · `4` conflict · `1` unexpected error. Chain-backed commands resolve an RPC automatically
+(see below); pass `--rpc-url <url>` (or set `CORK_RPC_URL`) to override.
 
 ## How RPC endpoints are resolved
 

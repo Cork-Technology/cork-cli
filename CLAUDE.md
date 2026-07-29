@@ -10,7 +10,17 @@ Run everything with **Bun**, never `node`. The `.ts` sources use TypeScript para
 Bun 1.3 is pinned in `mise.toml`.
 
 - MCP server (stdio): `bun packages/mcp/src/bin.ts`
-- CLI: invoked as **`ch`** (launcher `bin/ch`; put `bin/` on PATH). `ch <command> [--json '<input>'] [--rpc-url <url>] [--explain]`. Long form without PATH setup: `bun packages/cli/src/bin.ts <command> …`
+- CLI: invoked as **`ch`** (launcher `bin/ch`; put `bin/` on PATH). Long form without PATH setup:
+  `bun packages/cli/src/bin.ts <command> …`
+  - **Input**, three interchangeable forms: `--json '<object>'` (canonical wire shape, same as MCP) ·
+    `--input '<object>'` (identical, unambiguous name) · a positional for the first required scalar
+    plus flags named after the schema's own fields (`ch query registry-assets --chainid 42161`).
+    Flags override keys in a JSON blob. Spelling is normalised, so `--chainid`, `--chain-id` and
+    `--chainId` are one flag; object-valued fields (`--filters`, `--params`) take a JSON string.
+  - **Output** is prose by default, JSON on request: a bare `--json`, or `CH_JSON=1`. Passing input as
+    `--json '<object>'` also yields JSON, which is why every pre-existing scripted example still works.
+  - `--explain` prints the tool's contract — prose by default, JSON Schema under `--json`.
+  - `--rpc-url <url>` overrides RPC resolution for chain-backed commands.
 - Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip without env) ·
   `bun run test:unit` (offline only) · `bun run test:live` (vnet/live suites; need `CORK_TEST_RPC` / `CORK_RPC_LIVE=1`)
 

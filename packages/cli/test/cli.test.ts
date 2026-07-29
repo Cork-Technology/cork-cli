@@ -7,7 +7,7 @@ const RCV = "0xc0ffee0000000000000000000000000000000001";
 
 describe("ch CLI", () => {
   it("capabilities prints the tool list, exit 0", async () => {
-    const r = await runCli(["capabilities"], { nowSeconds: NOW });
+    const r = await runCli(["capabilities", "--json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.ok);
     const env = JSON.parse(r.stdout);
     expect(env.state).toBe("ok");
@@ -26,18 +26,83 @@ describe("ch CLI", () => {
     expect(JSON.parse(r.stdout).data.action).toBe("safeSwap");
   });
 
-  it("--explain prints the contract without running, exit 0", async () => {
-    const r = await runCli(["compute", "--explain"], { nowSeconds: NOW });
+  it("--explain --json prints the machine contract without running, exit 0", async () => {
+    const r = await runCli(["compute", "--explain", "--json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.ok);
     const doc = JSON.parse(r.stdout);
     expect(doc.tool).toBe("cork_compute");
     expect(doc.inputSchema.type).toBe("object");
   });
 
-  it("invalid --json → exit 2", async () => {
+  it("--explain without --json prints prose a person can read", async () => {
+    const r = await runCli(["compute", "--explain"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(() => JSON.parse(r.stdout)).toThrow();
+    expect(r.stdout).toContain("ch compute  —  cork_compute");
+    expect(r.stdout).toContain("Inputs");
+    expect(r.stdout).toContain("Output");
+    // The escape hatch has to be discoverable from the prose itself.
+    expect(r.stdout).toMatch(/--json/);
+  });
+
+  it("results are prose by default and JSON only on request", async () => {
+    const prose = await runCli(["query", "protocol-config"], { nowSeconds: NOW });
+    expect(prose.code).toBe(EXIT.ok);
+    expect(() => JSON.parse(prose.stdout)).toThrow();
+    expect(prose.stdout).toContain("OK");
+
+    const bare = await runCli(["query", "protocol-config", "--json"], { nowSeconds: NOW });
+    expect(JSON.parse(bare.stdout).state).toBe("ok");
+
+    const viaEnv = await runCli(["query", "protocol-config"], { nowSeconds: NOW }, { CH_JSON: "1" });
+    expect(JSON.parse(viaEnv.stdout).state).toBe("ok");
+  });
+
+  it("supplying input as --json '<object>' still returns JSON, as every documented example assumes", async () => {
+    const r = await runCli(["query", "--json", JSON.stringify({ resource: "protocol-config" })], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.resource).toBe("protocol-config");
+  });
+
+  it("takes input as a positional plus schema-derived flags", async () => {
+    const r = await runCli(["query", "protocol-config", "--chainid", "42161", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    const env = JSON.parse(r.stdout);
+    expect(env.data.resource).toBe("protocol-config");
+    expect(env.data.chainId).toBe(42161);
+  });
+
+  it("accepts a flag spelled --chainid, --chain-id or --chainId", async () => {
+    for (const spelling of ["--chainid", "--chain-id", "--chainId"]) {
+      const r = await runCli(["query", "protocol-config", spelling, "42161", "--json"], { nowSeconds: NOW });
+      expect(r.code, spelling).toBe(EXIT.ok);
+      expect(JSON.parse(r.stdout).data.chainId, spelling).toBe(42161);
+    }
+  });
+
+  it("a flag overrides the same key inside --json, so a blob can be reused", async () => {
+    const r = await runCli(
+      ["query", "--json", JSON.stringify({ resource: "protocol-config", chainId: 1 }), "--chainid", "42161"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.chainId).toBe(42161);
+  });
+
+  it("invalid JSON input → exit 2", async () => {
     const r = await runCli(["decode", "--json", "{not json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.invalid);
-    expect(r.stderr).toMatch(/invalid --json/);
+    expect(r.stderr).toMatch(/invalid JSON input/);
+  });
+
+  it("a failure is prose too, unless JSON was asked for", async () => {
+    const prose = await runCli(["decode", "--input", "{not json"], { nowSeconds: NOW });
+    expect(prose.code).toBe(EXIT.invalid);
+    expect(prose.stderr).toContain("ERROR");
+    expect(() => JSON.parse(prose.stderr)).toThrow();
+
+    const json = await runCli(["decode", "--json", "{not json"], { nowSeconds: NOW });
+    expect(JSON.parse(json.stderr).error.code).toBe("invalid_json");
   });
 
   it("schema-invalid input → exit 2", async () => {

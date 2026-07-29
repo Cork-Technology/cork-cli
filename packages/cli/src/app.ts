@@ -1,10 +1,24 @@
 // CLI projection of the same registry the MCP server uses — one command per tool at its cliPath.
-// Structured input arrives via --json (the canonical wire shape); --explain prints the tool's
-// contract (description + JSON schema) without running. Exit codes map envelope state so scripts
-// can branch: 0 ok, 2 invalid input, 3 unavailable, 4 conflict, 1 unexpected error.
+//
+// INPUT can arrive three ways, and they compose (later wins):
+//   1. `--json '<object>'`  the canonical wire shape, identical to what MCP receives
+//   2. `--input '<object>'` the same thing under an unambiguous name
+//   3. flags derived from the tool's own schema, plus one positional for the first required
+//      scalar — so `ch query registry-assets --chainid=42161` says what it means
+//
+// OUTPUT is prose by default and JSON on request (`--json` with no value, or CH_JSON=1).
+// The wire format has not changed; what changed is who the default serves. Scripts that
+// already pass `--json '<object>'` keep getting JSON, because supplying input that way is
+// itself a machine-readable intent.
+//
+// `--explain` prints the tool's contract: prose by default, JSON Schema under --json.
+//
+// Exit codes map envelope state so scripts can branch: 0 ok, 2 invalid input,
+// 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
-import { REGISTRY, inputJsonSchema, type ToolDef } from "@cork/schemas";
+import { REGISTRY, TOOL_EXAMPLES, MATURITY, inputJsonSchema, type ToolDef, type ToolName } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { renderEnvelope, renderError, renderExplain } from "./render.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
@@ -36,11 +50,83 @@ function leafName(tool: ToolDef): string {
   return tool.cliPath[tool.cliPath.length - 1]!;
 }
 
+interface SchemaNode {
+  type?: string | string[];
+  enum?: unknown[];
+  description?: string;
+  properties?: Record<string, SchemaNode>;
+  required?: string[];
+}
+
+/** Flag spelling for a schema property: lowercased, so `chainId` answers to `--chainid`. */
+function flagFor(prop: string): string {
+  return prop.toLowerCase();
+}
+
+/** `--chain-id`, `--chainId` and `--chainid` should all reach the same option. */
+function canonicalise(flagName: string): string {
+  return flagName.replace(/-/g, "").toLowerCase();
+}
+
+function isScalarNode(node: SchemaNode): boolean {
+  const t = Array.isArray(node.type) ? node.type[0] : node.type;
+  if (node.enum && node.enum.length > 0) return true;
+  return t === "string" || t === "number" || t === "integer" || t === "boolean";
+}
+
+/** Coerce a command-line string into the type the schema expects. */
+function coerce(node: SchemaNode, raw: string): unknown {
+  const t = Array.isArray(node.type) ? node.type[0] : node.type;
+  const numeric = t === "number" || t === "integer" || (!t && (node.enum ?? []).length > 0 && (node.enum ?? []).every((v) => typeof v === "number"));
+  if (numeric) {
+    const n = Number(raw);
+    return Number.isNaN(n) ? raw : n;
+  }
+  if (t === "boolean") return raw === "" || raw === "true" || raw === "1";
+  return raw;
+}
+
+/**
+ * Rewrite argv so a schema-derived flag can be spelled any of the ways a person might
+ * reasonably type it. Only names that resolve to a known property are touched; anything
+ * else (including `--rpc-url`) passes through untouched for commander to handle.
+ */
+export function normaliseArgv(argv: readonly string[], known: ReadonlySet<string>): string[] {
+  return argv.map((token) => {
+    if (!token.startsWith("--")) return token;
+    const eq = token.indexOf("=");
+    const name = (eq === -1 ? token.slice(2) : token.slice(2, eq)).trim();
+    const canon = canonicalise(name);
+    if (!known.has(canon) || canon === name) return token;
+    return eq === -1 ? `--${canon}` : `--${canon}${token.slice(eq)}`;
+  });
+}
+
+/** A one-word placeholder for a flag's value, shown in --help. */
+function describeShort(node: SchemaNode): string {
+  const t = Array.isArray(node.type) ? node.type[0] : node.type;
+  if (node.enum && node.enum.length > 0) return "value";
+  if (t === "number" || t === "integer") return "n";
+  if (t === "boolean") return "true|false";
+  return "value";
+}
+
+function firstSentence(text: string): string {
+  const cut = text.split(/(?<=\.)\s/)[0] ?? text;
+  return cut.length > 110 ? `${cut.slice(0, 107)}…` : cut;
+}
+
 /** Run the CLI over argv (without node/script prefix). Captures output; never calls process.exit. */
-export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<CliResult> {
+export async function runCli(
+  argv: string[],
+  ctx: HandlerContext = {},
+  env: Record<string, string | undefined> = {},
+): Promise<CliResult> {
   let out = "";
   let err = "";
   let code: number = EXIT.ok;
+  const envWantsJson = env["CH_JSON"] === "1" || env["CH_JSON"] === "true";
+
   const program = new Command();
   program
     .name("ch")
@@ -67,53 +153,124 @@ export async function runCli(argv: string[], ctx: HandlerContext = {}): Promise<
     return g;
   };
 
+  // Every schema-derived flag across every tool, so argv can be normalised before commander
+  // sees it (commander binds one long flag per option; spelling tolerance lives here).
+  const knownFlags = new Set<string>();
+  for (const tool of REGISTRY) {
+    const s = inputJsonSchema(tool.name) as SchemaNode;
+    for (const prop of Object.keys(s?.properties ?? {})) knownFlags.add(flagFor(prop));
+  }
+
   for (const tool of REGISTRY) {
     const parent = tool.cliPath.length > 1 ? groupFor(tool.cliPath[0]!) : program;
-    parent
+    const schema = inputJsonSchema(tool.name) as SchemaNode;
+    const props = schema?.properties ?? {};
+    const required = schema?.required ?? [];
+    // One positional, for the first required scalar — `ch query market`, `ch decode calldata`.
+    const positional = required.find((r) => props[r] && isScalarNode(props[r]!));
+
+    const cmd = parent
       .command(leafName(tool))
       .description(`[phase ${tool.phase}] ${tool.description}`)
       // commander v12 silently ignores extra positional args by default — a typo like
-      // `ch query market <poolId>` (input belongs in --json) must error, not half-run.
+      // `ch query market <poolId>` (input belongs in a flag) must error, not half-run.
       .allowExcessArguments(false)
-      .option("--json <json>", "structured tool input as a JSON string")
+      .option("--json [json]", "with a value: tool input as JSON. Bare: print JSON instead of prose.")
+      .option("--input <json>", "tool input as a JSON string (unambiguous form of --json <json>)")
       .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
-      .option("--explain", "print the tool's contract (description + JSON schema) and exit")
-      .action(async (opts: { json?: string; rpcUrl?: string; explain?: boolean }) => {
-        if (opts.explain) {
-          out += `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`;
+      .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)");
+
+    if (positional) cmd.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : `${positional} to act on`);
+
+    for (const [name, node] of Object.entries(props)) {
+      if (name === positional) continue;
+      const hint = isScalarNode(node) ? describeShort(node) : "json";
+      // Fall back to the accepted values rather than echoing the flag's own name, which
+      // tells a reader nothing they cannot see in the left-hand column.
+      const help = node.description
+        ? firstSentence(node.description)
+        : node.enum && node.enum.length > 0
+          ? `one of: ${node.enum.join(", ")}`
+          : `${name} (see --explain)`;
+      cmd.option(`--${flagFor(name)} <${hint}>`, help);
+    }
+
+    cmd.action(async (...args: unknown[]) => {
+      // commander hands (positionalArgs..., options, command); options is second-to-last.
+      const opts = args[args.length - 2] as Record<string, unknown>;
+      const positionalValue = positional ? (args[0] as string | undefined) : undefined;
+
+      const jsonOpt = opts["json"];
+      const wantsJson = jsonOpt !== undefined || envWantsJson;
+
+      if (opts["explain"]) {
+        out += wantsJson
+          ? `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`
+          : renderExplain(tool, inputJsonSchema(tool.name), TOOL_EXAMPLES[tool.name as ToolName] ?? [], MATURITY[tool.name as ToolName]);
+        return;
+      }
+
+      // Base input: whichever JSON form was supplied. `--json` with a value and `--input`
+      // mean the same thing; a bare `--json` is an output request, not input.
+      let input: Record<string, unknown> = {};
+      const rawJson = typeof jsonOpt === "string" ? jsonOpt : typeof opts["input"] === "string" ? (opts["input"] as string) : undefined;
+      if (rawJson !== undefined) {
+        try {
+          const parsed = parseJsonPrecise(rawJson);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("expected a JSON object");
+          input = parsed as Record<string, unknown>;
+        } catch (e) {
+          const payload = { error: { code: "invalid_json", tool: tool.name, message: `invalid JSON input: ${(e as Error).message}` } };
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          code = EXIT.invalid;
           return;
         }
-        let input: unknown = {};
-        if (opts.json) {
-          try {
-            input = parseJsonPrecise(opts.json);
-          } catch (e) {
-            err += `${JSON.stringify({ error: { code: "invalid_json", tool: tool.name, message: `invalid --json: ${(e as Error).message}` } })}\n`;
-            code = EXIT.invalid;
-            return;
-          }
+      }
+
+      // Then the ergonomic forms, which win over the JSON blob so a flag can override it.
+      if (positional && positionalValue !== undefined) input[positional] = coerce(props[positional]!, positionalValue);
+      for (const [name, node] of Object.entries(props)) {
+        if (name === positional) continue;
+        const supplied = opts[flagFor(name)];
+        if (supplied === undefined) continue;
+        if (isScalarNode(node)) {
+          input[name] = coerce(node, String(supplied));
+          continue;
         }
-        const callCtx: HandlerContext = { ...ctx, ...(opts.rpcUrl ? { rpcUrl: opts.rpcUrl } : {}) };
         try {
-          const envelope = await runTool(tool.name, input, callCtx);
-          out += `${JSON.stringify(envelope, null, 2)}\n`;
-          code = envelope.state === "ok" ? EXIT.ok : envelope.state === "conflict" ? EXIT.conflict : EXIT.unavailable;
+          input[name] = parseJsonPrecise(String(supplied));
         } catch (e) {
-          // Errors are structured JSON on stderr (one object per line) with the same closed codes
-          // as the envelope, so scripts parse failures the same way they parse stdout.
-          if (e instanceof ToolInputError) {
-            err += `${JSON.stringify({ error: { code: "invalid_input", tool: e.tool, issues: e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example, suggestions: e.teaching.issues.filter((i) => i.suggestion) } : {}) } })}\n`;
-            code = EXIT.invalid;
-          } else {
-            err += `${JSON.stringify({ error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] } })}\n`;
-            code = EXIT.error;
-          }
+          const payload = { error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(name)} expects JSON: ${(e as Error).message}` } };
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          code = EXIT.invalid;
+          return;
         }
-      });
+      }
+
+      const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
+      try {
+        const envelope = await runTool(tool.name, input, callCtx);
+        out += wantsJson ? `${JSON.stringify(envelope, null, 2)}\n` : renderEnvelope(envelope, tool);
+        const state = (envelope as { state?: string }).state;
+        code = state === "ok" ? EXIT.ok : state === "conflict" ? EXIT.conflict : EXIT.unavailable;
+      } catch (e) {
+        // Errors are structured on stderr with the same closed codes as the envelope, so
+        // scripts parse failures the way they parse stdout.
+        if (e instanceof ToolInputError) {
+          const payload = { error: { code: "invalid_input", tool: e.tool, issues: e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example, suggestions: e.teaching.issues.filter((i) => i.suggestion) } : {}) } };
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          code = EXIT.invalid;
+        } else {
+          const payload = { error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] } };
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          code = EXIT.error;
+        }
+      }
+    });
   }
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    await program.parseAsync(normaliseArgv(argv, knownFlags), { from: "user" });
   } catch (e) {
     // exitOverride throws CommanderError for --help/--version/parse errors.
     const ce = e as { code?: string; exitCode?: number; message?: string };
