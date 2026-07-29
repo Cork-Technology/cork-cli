@@ -6,7 +6,7 @@ const ctx = {
 };
 
 // The environment is passed in rather than read inside runCli so tests can drive output
-// mode (CH_JSON) without mutating the process they run in.
+// mode (CORK_JSON / CORK_EXPLAIN_JSON) without mutating the process they run in.
 const { code, stdout, stderr } = await runCli(process.argv.slice(2), ctx, process.env);
 if (stdout) process.stdout.write(stdout);
 if (stderr) process.stderr.write(stderr);

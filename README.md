@@ -145,7 +145,7 @@ ch query registry-assets --chainid 42161
 # the canonical wire shape still works, and still answers in JSON
 ch query --json '{"resource":"protocol-config"}'
 
-ch compute --explain          # what the tool does and takes, in prose
+ch compute --explain          # plain English: every parameter, unions unfolded
 ch compute --explain --json   # the same contract as JSON Schema
 ```
 
@@ -154,7 +154,7 @@ launcher runs the same either way — `./bin/ch capabilities` — and the long f
 launcher at all: `bun packages/cli/src/bin.ts capabilities`.
 
 **Output is prose by default and JSON on request.** A person at a terminal gets a readable summary;
-ask for the wire format with a bare `--json`, or set `CH_JSON=1` to make JSON the default for every
+ask for the wire format with a bare `--json`, or set `CORK_JSON=1` to make JSON the default for every
 command in a shell. Supplying input *as* `--json '<object>'` also returns JSON — handing the tool the
 wire shape is itself a machine-readable intent — so every scripted example that predates this keeps
 working unchanged.

@@ -6,19 +6,21 @@
 //   3. flags derived from the tool's own schema, plus one positional for the first required
 //      scalar — so `ch query registry-assets --chainid=42161` says what it means
 //
-// OUTPUT is prose by default and JSON on request (`--json` with no value, or CH_JSON=1).
+// OUTPUT is prose by default and JSON on request (`--json` with no value, or CORK_JSON=1).
 // The wire format has not changed; what changed is who the default serves. Scripts that
 // already pass `--json '<object>'` keep getting JSON, because supplying input that way is
 // itself a machine-readable intent.
 //
-// `--explain` prints the tool's contract: prose by default, JSON Schema under --json.
+// `--explain` prints the tool's contract: prose by default (explain.ts), JSON Schema under
+// --json or CORK_EXPLAIN_JSON=1.
 //
 // Exit codes map envelope state so scripts can branch: 0 ok, 2 invalid input,
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
-import { REGISTRY, TOOL_EXAMPLES, MATURITY, inputJsonSchema, type ToolDef, type ToolName } from "@cork/schemas";
+import { REGISTRY, inputJsonSchema, type ToolDef } from "@cork/schemas";
 import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
-import { renderEnvelope, renderError, renderExplain } from "./render.ts";
+import { explainWantsJson, formatExplainText } from "./explain.ts";
+import { renderEnvelope, renderError } from "./render.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
@@ -125,7 +127,7 @@ export async function runCli(
   let out = "";
   let err = "";
   let code: number = EXIT.ok;
-  const envWantsJson = env["CH_JSON"] === "1" || env["CH_JSON"] === "true";
+  const envWantsJson = env["CORK_JSON"] === "1" || env["CORK_JSON"] === "true";
 
   const program = new Command();
   program
@@ -204,9 +206,9 @@ export async function runCli(
       const wantsJson = jsonOpt !== undefined || envWantsJson;
 
       if (opts["explain"]) {
-        out += wantsJson
-          ? `${JSON.stringify({ tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) }, null, 2)}\n`
-          : renderExplain(tool, inputJsonSchema(tool.name), TOOL_EXAMPLES[tool.name as ToolName] ?? [], MATURITY[tool.name as ToolName]);
+        const doc = { tool: tool.name, cli: `ch ${tool.cliPath.join(" ")}`, phase: tool.phase, description: tool.description, inputSchema: inputJsonSchema(tool.name) };
+        // explainWantsJson carries the explain-scoped env var; the global one applies too.
+        out += wantsJson || explainWantsJson(undefined, env) ? `${JSON.stringify(doc, null, 2)}\n` : `${formatExplainText(doc)}\n`;
         return;
       }
 

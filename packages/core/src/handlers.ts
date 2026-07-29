@@ -52,7 +52,7 @@ import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./c
 import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncSource } from "./datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncLog, type HyperSyncSource } from "./datasources/hypersync.ts";
 import { decodeKnownLog, type RawLogLike } from "./event-decode.ts";
 import { decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder, type DecodedFusionOrder } from "./fusion.ts";
 import { envioToken } from "./datasources/envio.ts";
@@ -966,9 +966,70 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows", "rfqs"]);
 
+/** One event-derived resource's scan, shared by the HyperSync backfill AND the live-tail RPC merge
+ *  so the two legs can never scan different addresses/topics or decode differently. `key` yields a
+ *  stable per-row identity for de-duplicating the (block-disjoint) tail against the backfill. */
+interface HsScanSpec {
+  fromBlock: number;
+  address: string[];
+  topics: Array<string[] | null>;
+  decode: (logs: HyperSyncLog[]) => Array<Record<string, unknown>>;
+  postFilter: (rows: Array<Record<string, unknown>>) => Array<Record<string, unknown>>;
+  key: (row: Record<string, unknown>) => string;
+}
+
+/** The two JSON-RPC calls the live-tail needs; the resolved viem client answers both (cast at this
+ *  boundary — raw eth_getLogs with array topics is awkward to express in viem's typed surface). */
+interface LiveTailClient {
+  getBlockNumber(): Promise<bigint>;
+  request(args: { method: "eth_getLogs"; params: [{ fromBlock: string; toBlock: string; address: string[]; topics: Array<string[] | null> }] }): Promise<Array<{ address: string; topics: string[]; data: string; blockNumber: string; transactionHash: string }>>;
+}
+
+type LiveTailResult =
+  | { status: "no-rpc" } // nothing configured / a wrong-chain explicit endpoint — skip silently
+  | { status: "current" } // the archive head is already at/above chain head — nothing to add
+  | { status: "merged"; rows: Array<Record<string, unknown>>; headBlock: number }
+  | { status: "error"; message: string }; // the RPC refused the range (disclosed, non-fatal)
+
 /**
- * full-decentralized [C12]: the event-derived subset over HyperSync. Structural honesty:
- * resting orders / RFQs emit no events — those resources are venue-only in EVERY mode.
+ * Freshness leg for full-decentralized reads: HyperSync is an ARCHIVE index whose head can trail
+ * chain head, so a time-sensitive read would miss the most recent events. This scans the tail
+ * (archiveHeight+1 → chain head) over the REGULAR resolved Web3 RPC (CORK_RPC_URL / --rpc-url →
+ * built-in default → chainlist fallback) with the SAME address+topics+decoder, so recent blocks are
+ * covered. Best-effort by design: a missing RPC or a range-capped endpoint degrades to an honest
+ * warning, never a failed read — the HyperSync answer still stands. Callers gate this on a COMPLETE
+ * backfill (a page-capped partial already left an interior gap, so a disjoint tail would mislead).
+ */
+async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScanSpec, archiveHeight: number): Promise<LiveTailResult> {
+  let rpc: ResolvedRpc | null;
+  try {
+    rpc = await getRpc(ctx, chainId);
+  } catch {
+    return { status: "no-rpc" };
+  }
+  if (!rpc) return { status: "no-rpc" };
+  const client = rpc.client as unknown as LiveTailClient;
+  try {
+    const head = Number(await client.getBlockNumber());
+    if (!Number.isFinite(head) || head <= archiveHeight) return { status: "current" };
+    const toHex = (n: number) => `0x${n.toString(16)}`;
+    // Bounded to (archiveHeight, head]: disjoint from the backfill by block number, so a small,
+    // recent-only range that ordinary public RPCs serve even when they refuse deep history.
+    const logs = await client.request({
+      method: "eth_getLogs",
+      params: [{ fromBlock: toHex(archiveHeight + 1), toBlock: toHex(head), address: spec.address, topics: spec.topics }],
+    });
+    const rows = spec.postFilter(spec.decode(logs.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: Number(l.blockNumber), transactionHash: l.transactionHash }))));
+    return { status: "merged", rows, headBlock: head };
+  } catch (err) {
+    return { status: "error", message: `live-tail eth_getLogs via ${hostOf(rpc.url)} failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
+  }
+}
+
+/**
+ * full-decentralized [C12]: the event-derived subset over HyperSync, with a live-tail RPC merge for
+ * freshness (see fetchLiveTail). Structural honesty: resting orders / RFQs emit no events — those
+ * resources are venue-only in EVERY mode.
  */
 async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   const kind = filters.kind ?? "orders";
@@ -989,16 +1050,10 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
   const hs = load.source;
 
   try {
-    let items: Array<Record<string, unknown>>;
-    let archiveHeight: number | undefined;
     const hsWarnings: Array<{ code: string; message: string }> = [];
-    // Honest completeness (F15): a HyperSync scan that hits the page bound is partial EVIDENCE,
-    // never presented as the complete set — mirroring the venue path's pagination discipline.
-    const note = (r: { complete?: boolean; nextBlock?: number }) => {
-      if (r.complete === false) {
-        hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${r.nextBlock !== undefined ? ` (stopped at block ${r.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
-      }
-    };
+    // Build the per-resource scan ONCE (address/topics/decoder/filter); both the HyperSync backfill
+    // and the live-tail RPC merge below run it, so they can never diverge.
+    let spec: HsScanSpec;
     if (input.resource === "markets") {
       // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
       const cfg = await resolveConfig();
@@ -1007,25 +1062,31 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       if (primary) pms.add(primary.poolManager);
       for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
       if (pms.size === 0) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
-      const r = await hs.queryLogs({ fromBlock: 0, address: [...pms], topics: [[MARKET_CREATED_TOPIC]] });
-      archiveHeight = r.archiveHeight;
-      note(r);
-      items = decodeMarketRows(r.logs);
-      if (filters.poolId) items = items.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase());
+      spec = {
+        fromBlock: 0,
+        address: [...pms],
+        topics: [[MARKET_CREATED_TOPIC]],
+        decode: decodeMarketRows,
+        postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
+        key: (m) => `market:${String(m.poolId).toLowerCase()}`,
+      };
     } else if (input.resource === "fills") {
       const lop = LOP_ADDRESSES[chainId];
       if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
-      const r = await hs.queryLogs({ fromBlock: 0, address: [lop], topics: [[LOP_FILLED_TOPIC]] });
-      archiveHeight = r.archiveHeight;
-      note(r);
-      items = decodeLopFillRows(r.logs);
-      if (filters.orderHash) items = items.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase());
-      else {
+      if (!filters.orderHash) {
         // OrderFilled's orderHash is NOT an indexed topic, so this scan sees the ENTIRE 1inch
         // LOP — a very high-volume address. Without an orderHash filter the rows are all of
         // 1inch's fills, not Cork's; disclose instead of presenting them as Cork activity (F15).
         hsWarnings.push({ code: "pagination_incomplete", message: "fills in full-decentralized mode scan the whole 1inch LOP (orderHash is not an indexed topic) — rows are NOT Cork-scoped; pass filters.orderHash to isolate one order, or use centralized mode for the Cork-only feed" });
       }
+      spec = {
+        fromBlock: 0,
+        address: [lop],
+        topics: [[LOP_FILLED_TOPIC]],
+        decode: decodeLopFillRows,
+        postFilter: (rows) => (filters.orderHash ? rows.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase()) : rows),
+        key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
+      };
     } else {
       // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
       const { rollover } = await resolveRollover(chainId);
@@ -1033,19 +1094,58 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       if (kind === "fills") {
         const topics: Array<string[] | null> = [ROLLOVER_FILL_TOPICS];
         if (filters.orderDigest) topics.push([filters.orderDigest]);
-        const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.exactSettler, rollover.partialSettler], topics });
-        archiveHeight = r.archiveHeight;
-        note(r);
-        items = decodeRolloverFillRows(r.logs);
-        if (filters.filler) items = items.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase());
+        spec = {
+          fromBlock: rollover.seededAtBlock,
+          address: [rollover.exactSettler, rollover.partialSettler],
+          topics,
+          decode: decodeRolloverFillRows,
+          postFilter: (rows) => (filters.filler ? rows.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase()) : rows),
+          key: (f) => `rfill:${String(f.txHash)}:${String(f.leg)}:${String(f.orderDigest)}`,
+        };
       } else {
-        const r = await hs.queryLogs({ fromBlock: rollover.seededAtBlock, address: [rollover.factory], topics: [[CLONE_DEPLOYED_TOPIC]] });
-        archiveHeight = r.archiveHeight;
-        note(r);
-        items = decodeCloneRows(r.logs);
-        if (filters.account) items = items.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
+        spec = {
+          fromBlock: rollover.seededAtBlock,
+          address: [rollover.factory],
+          topics: [[CLONE_DEPLOYED_TOPIC]],
+          decode: decodeCloneRows,
+          postFilter: (rows) => (filters.account ? rows.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase()) : rows),
+          key: (c) => `clone:${String(c.rolloverContract).toLowerCase()}`,
+        };
       }
     }
+
+    const r = await hs.queryLogs({ fromBlock: spec.fromBlock, address: spec.address, topics: spec.topics });
+    const archiveHeight = r.archiveHeight;
+    // Honest completeness (F15): a HyperSync scan that hits the page bound is partial EVIDENCE,
+    // never presented as the complete set — mirroring the venue path's pagination discipline.
+    if (r.complete === false) {
+      hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${r.nextBlock !== undefined ? ` (stopped at block ${r.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
+    }
+    let items = spec.postFilter(spec.decode(r.logs));
+
+    // Live-tail merge [freshness]: cover blocks the archive index hasn't ingested yet by scanning
+    // (archiveHeight, chain head] over the regular RPC. Only when the backfill actually reached its
+    // archive head — a page-capped partial already left an interior gap, so a disjoint tail atop it
+    // would mislead; that read is honestly labeled pagination_incomplete instead.
+    let liveTail: { fromBlock: number; headBlock: number; merged: number } | undefined;
+    if (r.complete !== false && archiveHeight !== undefined) {
+      const tail = await fetchLiveTail(ctx, chainId, spec, archiveHeight);
+      if (tail.status === "merged") {
+        // The tail is block-disjoint from the backfill; the seen-set is a defensive guard against a
+        // boundary reorg re-emitting an archived log, never the primary correctness mechanism.
+        const have = new Set(items.map(spec.key));
+        const fresh = tail.rows.filter((row) => !have.has(spec.key(row)));
+        items = items.concat(fresh);
+        liveTail = { fromBlock: archiveHeight + 1, headBlock: tail.headBlock, merged: fresh.length };
+        if (fresh.length > 0) {
+          hsWarnings.push({ code: "live_tail_merged", message: `merged ${fresh.length} recent event row(s) from the RPC tail (blocks ${archiveHeight + 1}–${tail.headBlock}) beyond HyperSync's archive height ${archiveHeight}; results reflect chain head, not just the indexer` });
+        }
+      } else if (tail.status === "error") {
+        hsWarnings.push({ code: "live_tail_unavailable", message: `${tail.message} — results reflect the HyperSync archive (height ${archiveHeight}) only; blocks after it may be missing` });
+      }
+      // "no-rpc" (nothing configured) and "current" (archive already at/above head) add nothing, silently.
+    }
+
     return envelope({
       state: "ok",
       data: {
@@ -1054,6 +1154,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         count: items.length,
         items,
         ...(archiveHeight !== undefined ? { archiveHeight } : {}),
+        ...(liveTail ? { liveTail } : {}),
       },
       chainId,
       source: "chain",

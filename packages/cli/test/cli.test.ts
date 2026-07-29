@@ -26,23 +26,28 @@ describe("ch CLI", () => {
     expect(JSON.parse(r.stdout).data.action).toBe("safeSwap");
   });
 
-  it("--explain --json prints the machine contract without running, exit 0", async () => {
-    const r = await runCli(["compute", "--explain", "--json"], { nowSeconds: NOW });
+  it("--explain prints a plain-English contract by default (not JSON), exit 0", async () => {
+    const r = await runCli(["compute", "--explain"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    // Human-readable header + variant blocks; explicitly NOT machine JSON.
+    expect(r.stdout).toContain("cork_compute  ·  ch compute  ·  phase 1");
+    expect(r.stdout).toContain("cst-swap-rate");
+    expect(r.stdout).toContain("CORK_EXPLAIN_JSON=1");
+    expect(() => JSON.parse(r.stdout)).toThrow();
+  });
+
+  it("--explain --json '{}' emits the machine-readable JSON schema, exit 0", async () => {
+    const r = await runCli(["compute", "--explain", "--json", "{}"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.ok);
     const doc = JSON.parse(r.stdout);
     expect(doc.tool).toBe("cork_compute");
     expect(doc.inputSchema.type).toBe("object");
   });
 
-  it("--explain without --json prints prose a person can read", async () => {
-    const r = await runCli(["compute", "--explain"], { nowSeconds: NOW });
+  it("--explain honors CORK_EXPLAIN_JSON=1 for JSON output, exit 0", async () => {
+    const r = await runCli(["query", "--explain"], { nowSeconds: NOW }, { CORK_EXPLAIN_JSON: "1" });
     expect(r.code).toBe(EXIT.ok);
-    expect(() => JSON.parse(r.stdout)).toThrow();
-    expect(r.stdout).toContain("ch compute  —  cork_compute");
-    expect(r.stdout).toContain("Inputs");
-    expect(r.stdout).toContain("Output");
-    // The escape hatch has to be discoverable from the prose itself.
-    expect(r.stdout).toMatch(/--json/);
+    expect(JSON.parse(r.stdout).tool).toBe("cork_query");
   });
 
   it("results are prose by default and JSON only on request", async () => {
@@ -54,7 +59,7 @@ describe("ch CLI", () => {
     const bare = await runCli(["query", "protocol-config", "--json"], { nowSeconds: NOW });
     expect(JSON.parse(bare.stdout).state).toBe("ok");
 
-    const viaEnv = await runCli(["query", "protocol-config"], { nowSeconds: NOW }, { CH_JSON: "1" });
+    const viaEnv = await runCli(["query", "protocol-config"], { nowSeconds: NOW }, { CORK_JSON: "1" });
     expect(JSON.parse(viaEnv.stdout).state).toBe("ok");
   });
 

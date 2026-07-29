@@ -17,9 +17,12 @@ Bun 1.3 is pinned in `mise.toml`.
     plus flags named after the schema's own fields (`ch query registry-assets --chainid 42161`).
     Flags override keys in a JSON blob. Spelling is normalised, so `--chainid`, `--chain-id` and
     `--chainId` are one flag; object-valued fields (`--filters`, `--params`) take a JSON string.
-  - **Output** is prose by default, JSON on request: a bare `--json`, or `CH_JSON=1`. Passing input as
-    `--json '<object>'` also yields JSON, which is why every pre-existing scripted example still works.
-  - `--explain` prints the tool's contract — prose by default, JSON Schema under `--json`.
+  - **Output** is prose by default, JSON on request: a bare `--json`, or `CORK_JSON=1`. Passing input
+    as `--json '<object>'` also yields JSON, which is why every pre-existing scripted example works.
+    Results/errors render via `packages/cli/src/render.ts`.
+  - `--explain` prints a plain-English contract (description + per-parameter breakdown, `$ref`
+    resolved, oneOf/anyOf variants unfolded) and exits; the JSON schema is opt-in via `--json` or
+    `CORK_EXPLAIN_JSON=1`. Renderer: `packages/cli/src/explain.ts`.
   - `--rpc-url <url>` overrides RPC resolution for chain-backed commands.
 - Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip without env) ·
   `bun run test:unit` (offline only) · `bun run test:live` (vnet/live suites; need `CORK_TEST_RPC` / `CORK_RPC_LIVE=1`)
@@ -49,7 +52,7 @@ tools aren't visible, the stdio server failed to launch (Bun missing, `bun insta
 | Tool | Use when | Phase |
 |---|---|---|
 | `cork_capabilities` | Discover/introspect: list tools, `search` by keyword, `topic` for docs, `topic:"verify"` re-derives deployed addresses via CREATE2. Start here when unsure. | 1 |
-| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161), market-predict (derive a market that may not exist yet — predicted oracle+live rate, LOCAL pool id, parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence; needs `filters.collateralAsset+referenceAsset+expiry+mode`; the derivation a JIT LOP fill runs, chain-native, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived: whitelisted-addresses (CURRENT whitelist membership replayed from WhitelistManager events over HyperSync, needs ENVIO token; rows live-view verified when an RPC resolves; `filters.poolId` scopes to one pool, global rows ride along); the markets/fills/flows subset also serves `full-decentralized` mode (HyperSync). Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
+| `cork_query` | **State reads** — live chain: market, account-state, pool-whitelist, protocol-config, registry-assets/registry-oracle/registry-recipes (MarketRegistry views, 42161), market-predict (derive a market that may not exist yet — predicted oracle+live rate, LOCAL pool id, parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence; needs `filters.collateralAsset+referenceAsset+expiry+mode`; the derivation a JIT LOP fill runs, chain-native, 42161). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via `filters.kind`), rfqs (RFQ discovery feed, default `state=open`; `filters.rfqId` for one record with all answers; `withAnswers` embeds answers in the list). Event-derived: whitelisted-addresses (CURRENT whitelist membership replayed from WhitelistManager events over HyperSync, needs ENVIO token; rows live-view verified when an RPC resolves; `filters.poolId` scopes to one pool, global rows ride along); the markets/fills/flows subset also serves `full-decentralized` mode (HyperSync) — those reads then merge a recent RPC event tail (blocks past HyperSync's archive head, scanned over the regular resolved RPC with the same address/topics) so time-sensitive results reflect chain head, not just the indexer; the merge is disclosed via a `data.liveTail` block and a `live_tail_merged`/`live_tail_unavailable` warning. Venue lists are **bounded traversals**: `data.pagination.{complete,pagesFetched,nextCursor,reason}`; a partial read is `ok`+`pagination_incomplete` (evidence, not the full set), a repeated venue cursor is `conflict`. `cursor`/`pageSize`/`maxPages` control it. | 1 |
 | `cork_compute` | **Deterministic math** over verified state — swap/unwind rate, rollover premium floor, worst-case impairment floor, resolve-recipe (registry band resolution, bit-parity self-checked on-chain), dutch-auction-price (1inch Fusion v3.1 current price, pure local from the order's own extension bytes [K3]; pin with `at.timestamp`, `baseFeeWei` omitted = upper bound). NOT raw reads, NOT byte-building. | 1 |
 | `cork_decode` | Bytes → labeled JSON, all four kinds live: calldata (recursively unwraps Bundler3 multicall), order (LOP v4 hex tuple or JSON fields → makerTraits breakdown + recomputed orderHash; supplied hash/extension cross-checked → `conflict` on mismatch), event (one log → named args against the source-verified ABI set; unverified layouts labeled raw), receipt (every log labeled). Reconstructs from bytes; never trusts a supplied parse [K3]. | 1 |
 | `cork_prepare_phoenix` | Build an **unsigned** Bundler3 bundle for any of the 13 adapter actions. Auto-adds funding legs. Also the token-authority ops: authority-onboard/authority-revoke build an unsigned DIRECT ERC-20 approve tx (onboard amount omitted = unlimited; revoke zeroes it) — owner-signed, not a bundle leg. Returns bytes for later signing — executes nothing [K1]. | 2 |
@@ -119,6 +122,8 @@ Warning codes you will encounter:
 | `status_mismatch` | On `conflict` (track reconcile): the venue's lifecycle disagrees with the settler's on-chain `orderStatus()` — chain outranks indexer [K7]. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps, disclosed: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / the logs endpoint refused the historical range. |
 | `hypersync_unavailable` | full-decentralized mode: no HyperSync token, unsupported chain, or the napi client can't load on this host. Envio env vars: `ENVIO_HYPERSYNC_TOKEN` (query API) and `ENVIO_HYPERRPC_TOKEN` (logs RPC) with `ENVIO_API_TOKEN` as shared fallback for both — tokens verified interchangeable across products in practice, so one shared token also works. |
+| `live_tail_merged` | Informational on `ok` (full-decentralized reads): recent events beyond HyperSync's archive head were merged from a live RPC tail — the count reflects chain head. The merged span is in `data.liveTail` (`fromBlock`/`headBlock`/`merged`). |
+| `live_tail_unavailable` | Informational on `ok` (full-decentralized reads): the live-tail RPC scan couldn't run (no RPC resolved, or the endpoint refused the block range) — results reflect the HyperSync archive only; blocks after its head may be missing. Non-fatal; the backfill still stands. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Numbers-contract tripwires (fraction "0.041" vs percent 4.1): suspicious sub-0.1% premium (warned, relayed) / >=100x divergence from the cited quote_ref, decided in EXACT integer arithmetic (conflict, NOT relayed). |
 | `quote_ref_unverifiable` | On `conflict` (`cork_submit lop-order`): the cited RFQ option has no parsable positive premium, so the scale cross-check cannot run — NOT relayed (cite a valid option or drop quoteRef). |
 | `listing_traits_mismatch` | On `conflict` (`cork_submit lop-order`): the venue-listing fields (expiry/nonce/allowsPartialFills) contradict what the SIGNED makerTraits encode — derived from the signature, never trusted [K3]; NOT relayed. |
@@ -157,8 +162,11 @@ result states its data mode: `provenance.mode = "lite-decentralized"` (RPC chain
 explicitly, never silently substituted: venue-only resources reject decentralized modes (resting
 orders/RFQs emit no events — structural, not a phase gap), chain resources reject `centralized`,
 and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
-`full-decentralized`. `cork_query` `cursor`/`pageSize`/`maxPages` are now honored (bounded venue
-traversal). Some schema fields remain accepted-but-reserved (`cork_compute` `at.timestamp`,
+`full-decentralized` — with a best-effort **live-tail RPC merge** for freshness: after the HyperSync
+backfill, blocks past its archive head are scanned over the regular resolved RPC and merged, so a
+lagging indexer doesn't hide recent events (gated on a complete backfill; degrades to a
+`live_tail_unavailable` warning, never a failed read). `cork_query` `cursor`/`pageSize`/`maxPages`
+are now honored (bounded venue traversal). Some schema fields remain accepted-but-reserved (`cork_compute` `at.timestamp`,
 `cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
 
 Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineSeconds`, re-anchors
