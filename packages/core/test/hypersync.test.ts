@@ -34,6 +34,10 @@ const FACTORY = "0xbbcc54c637c26b484a8c57b5695c04e09dace13a";
 const OWNER = "0xc0ffee0000000000000000000000000000000001";
 const CLONE = "0xc10e000000000000000000000000000000000001";
 
+// The live-tail freshness merge resolves the regular RPC by default; offline tests that only assert
+// the HyperSync backfill inject a null resolver so no network is touched (the merge then no-ops).
+const noRpc = async () => null;
+
 const marketAbi = parseAbi([
   "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
 ]);
@@ -67,7 +71,7 @@ function fakeSource(logsByTopic: Record<string, HyperSyncLog[]>, seen: Array<{ f
 describe("full-decentralized cork_query over an injected HyperSync source", () => {
   it("markets: decodes MarketCreated across configured PMs (primary + staging profile)", async () => {
     const seen: Array<{ fromBlock: number; address?: string[] }> = [];
-    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }, seen) };
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }, seen), resolveRpc: noRpc };
     const env = await runTool("cork_query", { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("full-decentralized");
@@ -83,7 +87,7 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
 
   it("flows kind=contracts: clone discovery from the factory's RolloverContractDeployed", async () => {
     const seen: Array<{ fromBlock: number; address?: string[] }> = [];
-    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }, seen) };
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }, seen), resolveRpc: noRpc };
     const env = await runTool(
       "cork_query",
       { resource: "flows", chainId: 42161, mode: "full-decentralized", filters: { kind: "contracts", account: OWNER }, pageSize: 25, format: "concise" },
@@ -191,7 +195,7 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     const env = await runTool(
       "cork_query",
       { resource: "flows", chainId: 42161, mode: "full-decentralized", filters: { kind: "fills", orderDigest: DIGEST }, pageSize: 25, format: "concise" },
-      { nowSeconds: NOW, hyperSync: fakeSource(byTopic, seen) },
+      { nowSeconds: NOW, hyperSync: fakeSource(byTopic, seen), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { items: Array<Record<string, unknown>> };
@@ -215,7 +219,7 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     const env = await runTool(
       "cork_query",
       { resource: "fills", chainId: 42161, mode: "full-decentralized", filters: { orderHash: DIGEST }, pageSize: 25, format: "concise" },
-      { nowSeconds: NOW, hyperSync: fakeSource({ [topic]: [mk(DIGEST), mk(`0x${"6".repeat(64)}`)] }) },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [topic]: [mk(DIGEST), mk(`0x${"6".repeat(64)}`)] }), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { count: number; items: Array<Record<string, unknown>> };
@@ -248,7 +252,7 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     const env = await runTool(
       "cork_query",
       { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
-      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }) },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(false);
@@ -258,10 +262,102 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     const env = await runTool(
       "cork_query",
       { resource: "fills", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
-      { nowSeconds: NOW, hyperSync: fakeSource({}) },
+      { nowSeconds: NOW, hyperSync: fakeSource({}), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "pagination_incomplete" && /1inch LOP|Cork-scoped/i.test(w.message))).toBe(true);
+  });
+});
+
+describe("full-decentralized live-tail merge: recent RPC events top up the HyperSync archive", () => {
+  const POOL2 = `0x${"b2".repeat(32)}` as `0x${string}`;
+  const ARCHIVE = 485_999_999; // fakeSource's archiveHeight
+
+  /** One MarketCreated in eth_getLogs wire shape (hex blockNumber, non-null topic array). */
+  function rpcMarketLog(poolId: `0x${string}`, block: number) {
+    const topics = encodeEventTopics({ abi: marketAbi, eventName: "MarketCreated", args: { id: poolId, referenceAsset: REF, collateralAsset: COL } });
+    const data = encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "address" }, { type: "address" }], [1798761600n, ORACLE, CPT, CST]);
+    return { address: STAGING_PM, topics: topics as string[], data, blockNumber: `0x${block.toString(16)}`, transactionHash: `0x${"a1".repeat(32)}` };
+  }
+
+  /** A resolveRpc whose client answers only the two calls the live-tail makes. */
+  function tailRpc(opts: { head: number; logs?: ReturnType<typeof rpcMarketLog>[]; throwOn?: "getLogs" | "blockNumber" }): NonNullable<HandlerContext["resolveRpc"]> {
+    return async () => ({
+      url: "https://stub/rpc",
+      source: "explicit" as const,
+      client: {
+        getBlockNumber: async () => {
+          if (opts.throwOn === "blockNumber") throw new Error("rpc unreachable");
+          return BigInt(opts.head);
+        },
+        request: async () => {
+          if (opts.throwOn === "getLogs") throw new Error("query returned more than 10000 results");
+          return opts.logs ?? [];
+        },
+      } as never,
+    });
+  }
+
+  it("merges a market created in the tail (beyond archiveHeight) and discloses it", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      {
+        nowSeconds: NOW,
+        hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }),
+        resolveRpc: tailRpc({ head: ARCHIVE + 50, logs: [rpcMarketLog(POOL2, ARCHIVE + 10)] }),
+      },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; items: Array<{ poolId: string }>; liveTail?: { fromBlock: number; headBlock: number; merged: number } };
+    expect(d.count).toBe(2); // backfill POOL + tail POOL2
+    expect(d.items.map((i) => i.poolId.toLowerCase())).toEqual(expect.arrayContaining([POOL, POOL2]));
+    expect(d.liveTail).toEqual({ fromBlock: ARCHIVE + 1, headBlock: ARCHIVE + 50, merged: 1 });
+    expect(env.warnings.some((w) => w.code === "live_tail_merged")).toBe(true);
+  });
+
+  it("a tail row already in the backfill is not double-counted (dedup by identity)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      {
+        nowSeconds: NOW,
+        hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }),
+        // same POOL the backfill already returned (boundary reorg) → merged:0, no warning
+        resolveRpc: tailRpc({ head: ARCHIVE + 50, logs: [rpcMarketLog(POOL as `0x${string}`, ARCHIVE + 5)] }),
+      },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; liveTail?: { merged: number } };
+    expect(d.count).toBe(1);
+    expect(d.liveTail?.merged).toBe(0);
+    expect(env.warnings.some((w) => w.code === "live_tail_merged")).toBe(false);
+  });
+
+  it("a range-capped RPC degrades to an honest warning, not a failed read", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: tailRpc({ head: ARCHIVE + 50, throwOn: "getLogs" }) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; liveTail?: unknown };
+    expect(d.count).toBe(1); // backfill still stands
+    expect(d.liveTail).toBeUndefined();
+    expect(env.warnings.some((w) => w.code === "live_tail_unavailable")).toBe(true);
+  });
+
+  it("no merge when the archive head is already at/above chain head", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: tailRpc({ head: ARCHIVE }) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; liveTail?: unknown };
+    expect(d.count).toBe(1);
+    expect(d.liveTail).toBeUndefined();
+    expect(env.warnings.some((w) => w.code.startsWith("live_tail"))).toBe(false);
   });
 });
 
