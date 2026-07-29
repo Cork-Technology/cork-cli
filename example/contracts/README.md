@@ -279,10 +279,10 @@ with the account's balance untouched.
 The two exceptions are `test/JitOrdering.t.sol`, which uses mocks and needs no fork. They pin the
 one property a live market cannot demonstrate: that the market binding is checked *after* the fill,
 so an order whose market is created during that same fill is accepted, while one whose market never
-appears still reverts and unwinds the payment. Mocks are used there by necessity — as of 2026-07-28
-no JIT adapter exists for the live deployment (the only one deployed is bound to the pre-launch pool
-manager, and every order in the live book carries an empty extension), so there is nothing to fill
-against. What those tests cover is this wrapper's ordering, which is the part Cork owns.
+appears still reverts and unwinds the payment. Mocks are used there by necessity: no JIT adapter yet
+exists for the live deployment (the only one deployed is bound to the pre-launch pool manager, and
+every order in the live book carries an empty extension), so there is nothing to fill against. What
+those tests cover is this wrapper's ordering, which is the part Cork owns.
 
 ### Verified against the deployed Zyfai account
 

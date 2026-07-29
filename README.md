@@ -1,9 +1,11 @@
 # cork-helper-cli
 
 TypeScript monorepo implementing the Cork Phoenix **MCP server + CLI over one typed core**
-(RFC 011). This first iteration ships the Phase-1 read/math core, the Bundler3 bundle
-builder/decoder, and the MCP + CLI projections — all grounded empirically against the live
-Tenderly virtual-mainnet fixture pool (bit-exact, wei-for-wei).
+(RFC 011). All 9 tools are live across phases 1–4 — state reads, bit-exact math, byte decode,
+and unsigned preparation of Bundler3 bundles / 1inch orders / market-oracle txs, plus
+verify-simulate-reconcile and caller-signed venue submission. Activated on Ethereum mainnet
+**and** Arbitrum One, grounded empirically (bit-exact, wei-for-wei) against live on-chain reads
+and the Tenderly virtual-mainnet fixture pool.
 
 ## Packages
 
@@ -21,6 +23,13 @@ can then read protocol state, run the bit-exact math, and build unsigned bundles
 without ever signing or broadcasting anything.
 
 ### 1. Prerequisites
+
+Clone the repo (hosted at `github.com/Cork-Technology/cork-cli`), then set up the runtime:
+
+```sh
+git clone git@github.com:Cork-Technology/cork-cli.git
+cd cork-cli
+```
 
 The server and CLI are TypeScript run directly by **[Bun](https://bun.sh)** (Node's native
 type-stripping can't run this code — it uses TypeScript parameter properties). Bun 1.3 is pinned in
@@ -103,8 +112,8 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 > - "What's the current cST swap rate for 1e18 collateral out of that pool?"
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
-Arbitrum (chainId 42161) is a **full** deployment like mainnet (announced 2026-07-22, bindings
-verified on-chain): reads, bundle building, orders, and the MarketRegistry resources
+Arbitrum (chainId 42161) is a **full** deployment like mainnet (bindings verified on-chain): reads,
+bundle building, orders, and the MarketRegistry resources
 (registry-assets / registry-oracle / registry-recipes / market-predict, plus `cork_prepare_market`
 oracle deploys) all work there. `market-predict` derives the market a JIT LOP fill would create —
 predicted oracle, pool id, resolved bands, and cST/cPT tokens — before anything is deployed or signed.
@@ -113,12 +122,12 @@ The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, th
 feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served from
 `api-phoenix.cork.tech` and labeled `provenance.mode: "centralized"`; rollover orders are buildable
 offline (`prepare orders`, CorkSettler EIP-712) and reconciles are chain-verified against the
-settler's `orderStatus()` when an RPC resolves. A few variants are still honestly gated (state
-`unavailable` with a reason code) rather than fabricated — the whitelisted-addresses enumeration,
-dutch-auction-price / rfq-quote pricing, and `cork_decode` order/event/receipt (`cork_prepare_orders`
-taker-fill and finalize-maker-order are activated). Reading
-a pool that doesn't exist on the queried chain returns `unavailable` with `chain_read_failed` (not
-a crash). That's expected; it's not a broken install.
+settler's `orderStatus()` when an RPC resolves. Exactly one variant is deliberately gated (state
+`unavailable` with a reason code) rather than fabricated — `cork_compute` rfq-quote, a pricing
+model deferred by product decision. Everything else is activated, including whitelisted-addresses
+enumeration, dutch-auction-price, `cork_decode` order/event/receipt, and `cork_prepare_orders`
+taker-fill / finalize-maker-order. Reading a pool that doesn't exist on the queried chain returns
+`unavailable` with `chain_read_failed` (not a crash). That's expected; it's not a broken install.
 
 ### CLI: `ch` (no MCP client needed)
 
@@ -261,14 +270,15 @@ Implemented + tested:
   self-checked against the chain view).
 - **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
   legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
-  actions; expired-pool tripwire (`pool_expired`). deposit / swap / unwind-swap / exercise bundles
-  are proven to **execute** against the live vnet.
+  actions; expired-pool tripwire (`pool_expired`); the authority-onboard / authority-revoke ops are
+  also live. deposit / swap / unwind-swap / exercise bundles are proven to **execute** against the
+  live vnet.
 - **cork_prepare_orders** — 1inch maker-order EIP-712 typed data (incl. extension orders and
   JIT-market orders with adapter pre-flight checks) + cancel calldata, order hash proven equal to
   on-chain `hashOrder`; rollover-intent ERC-7683 OrderData (CorkSettler domain, intent hash
   recomputed locally, settler-mode gate checked).
 - **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref)` oracle-wrapper txs
-  (permissionless, idempotent; Arbitrum). Q-REG closed 2026-07-22.
+  (permissionless, idempotent; Arbitrum).
 - **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
   spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
   registry-recipes / market-predict — predict a market's oracle, pool id, bands, and cST/cPT before
@@ -281,16 +291,16 @@ Implemented + tested:
 - **cork_submit** — the one side-effecting tool: relays caller-signed/authored payloads to the venue
   (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`), recomputing commitments before relay [K3].
 
-Honestly gated (`unavailable` with a reason, never faked): `cork_query` whitelisted-addresses
-enumeration, `cork_compute` dutch-auction-price (needs a live Fusion order) / rfq-quote
-(pricing-signal shape pending), and `cork_decode` order/event/receipt. (`cork_prepare_orders`
-taker-fill and finalize-maker-order are activated — orderbook lookup + local re-hash, and
-external-signer recovery, respectively.) Some schema fields are accepted but reserved for later
-phases (`cork_compute` `at.timestamp`, `cork_prepare_phoenix` `account`).
+Deliberately gated (`unavailable` with a reason, never faked): only `cork_compute` rfq-quote — a
+pricing model deferred by product decision (a Fusion-style decaying-premium order is the
+modeled-quote-free alternative). Everything else advertised above is activated, including
+`cork_query` whitelisted-addresses enumeration, `cork_compute` dutch-auction-price (pure-local
+Fusion v3.1 pricing), `cork_decode` order/event/receipt, `cork_prepare_orders` taker-fill +
+finalize-maker-order, and the `cork_prepare_phoenix` authority-onboard / authority-revoke ops. One
+schema field is accepted but reserved: `cork_prepare_phoenix` `account` (`cork_compute`
+`at.timestamp` is honored by dutch-auction-price, reserved only for the block-anchored kinds).
 
-Known gaps, sequenced deliberately (tracked, not forgotten): per-enum-value / per-union-branch
-descriptions inside the registered JSON schemas (RFC §5.4's table); remaining prepare pre-flight
-guards (whitelist / pause checks — expiry and JIT adapter-binding checks shipped), sweep legs, and
-a human summary on bundles (RFC §5.4); and `account-state` nonce/invalidator and Safe config.
-(Bounded venue pagination — `cursor`/`pageSize`/`maxPages`, `data.pagination`, `pagination_incomplete`
-— shipped, as did compiled-`dist` packaging for `@cork/mcp` via `bun run build`.)
+Roadmap: per-enum-value / per-union-branch descriptions in the registered JSON schemas (RFC §5.4);
+the remaining prepare pre-flight guards (whitelist / pause checks — expiry and JIT adapter-binding
+checks are already in place), sweep legs, and a human-readable bundle summary (RFC §5.4); and
+`account-state` nonce/invalidator plus Safe config.

@@ -29,6 +29,9 @@ Bun 1.3 is pinned in `mise.toml`.
 
 ## Install / verify as an MCP server
 
+Repo: `github.com/Cork-Technology/cork-cli` — `git clone git@github.com:Cork-Technology/cork-cli.git`,
+then from the repo root:
+
 ```sh
 mise trust && mise install                                                               # fresh checkout: trust mise.toml + install pinned Bun
 bun install                                                                              # from repo root, once
@@ -166,8 +169,10 @@ and the event-derived subset (markets, fills, flows kind=fills|contracts) serves
 backfill, blocks past its archive head are scanned over the regular resolved RPC and merged, so a
 lagging indexer doesn't hide recent events (gated on a complete backfill; degrades to a
 `live_tail_unavailable` warning, never a failed read). `cork_query` `cursor`/`pageSize`/`maxPages`
-are now honored (bounded venue traversal). Some schema fields remain accepted-but-reserved (`cork_compute` `at.timestamp`,
-`cork_prepare_phoenix` `account`) — passing them is harmless; don't expect them to change behavior.
+are now honored (bounded venue traversal). One schema field remains accepted-but-reserved:
+`cork_prepare_phoenix` `account` — passing it is harmless; don't expect it to change behavior.
+(`cork_compute` `at.timestamp` is honored by dutch-auction-price and reserved only for the
+block-anchored kinds.)
 
 Retry semantics [K2]: prepare bundles default to a relative deadline (`deadlineSeconds`, re-anchors
 to the clock, so a later retry produces different bytes); pass an absolute `deadlineAt` (unix
