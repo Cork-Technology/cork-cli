@@ -6,7 +6,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ChainId, descriptionExample, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
-import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { BUILD_VERSION, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 
 // All tools return the same envelope; advertise it once so clients can rely on structuredContent.
 // io:"input": the hex primitives are transforms (string -> `0x${string}`) whose output side zod
@@ -14,8 +14,10 @@ import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
 const ENVELOPE_SCHEMA = z.toJSONSchema(Envelope, { io: "input" }) as { type: "object" };
 
 export function createCorkServer(ctx: HandlerContext = {}): Server {
+  // serverInfo.version is the BUILD version (release tag, "dev" in source runs); the envelope
+  // schema version stays SCHEMA_VERSION on every result — two different contracts.
   const server = new Server(
-    { name: "cork-mcp", version: SCHEMA_VERSION },
+    { name: "cork-mcp", version: BUILD_VERSION },
     { capabilities: { tools: {} } },
   );
 

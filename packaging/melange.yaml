@@ -1,0 +1,80 @@
+# melange package spec for the single-binary `ch` (CLI + `ch mcp`) — the apk-repository channel
+#. Built per release tag by .github/workflows/apk-repo.yml:
+#   melange build packaging/melange.yaml --arch <native> --signing-key melange.rsa --generate-provenance
+# which emits, per arch: cork-cli-X.Y.Z-rN.apk + its .attest.tar.gz SLSA provenance + APKINDEX.
+#
+# CI substitutes (yq) before building — placeholders are deliberately invalid so an unsubstituted
+# build fails loudly instead of packaging the wrong source:
+#   .package.version                     <- release tag without the leading v
+#   .vars.commit                         <- the tag's commit sha
+#   .pipeline[0].with.expected-commit    <- the same sha (pins git-checkout)
+#
+# Each arch is built on its NATIVE runner (ubuntu-latest / ubuntu-24.04-arm): bun under qemu is
+# slow and unproven, and native builds keep the determinism statement identical to the release
+# binaries (same source, same wolfi bun 1.3.14 — pin asserted against mise.toml below).
+package:
+  name: cork-cli
+  version: 0.0.0-SUBSTITUTED-BY-CI
+  epoch: 0
+  description: Cork Phoenix CLI (ch) and MCP stdio server, one self-contained binary
+  copyright:
+    - license: NOASSERTION # keep in lockstep with the cork-cli repo LICENSE
+  # No explicit runtime deps: melange's SCA scans the ELF and declares the so: deps
+  # (glibc, libstdc++, libgcc) automatically.
+
+vars:
+  commit: SUBSTITUTED-BY-CI
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - busybox
+      - bun # wolfi's pin; asserted == mise.toml below
+      - ca-certificates-bundle
+      # git arrives via the git-checkout builtin pipeline's own dependency injection
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/Cork-Technology/cork-cli
+      tag: v${{package.version}}
+      expected-commit: 0000000000000000000000000000000000000000
+
+  - name: assert the wolfi bun matches the repo's pinned toolchain
+    runs: |
+      want="$(grep -E '^bun *= *"' mise.toml | head -1 | cut -d'"' -f2)"
+      got="$(bun --version)"
+      if [ "$want" != "$got" ]; then
+        echo "wolfi bun $got != mise.toml pin $want — the runtime is embedded in the binary; refusing to drift" >&2
+        exit 1
+      fi
+
+  - name: build the single binary (native arch)
+    runs: |
+      bun install --frozen-lockfile
+      case "${{build.arch}}" in
+        x86_64)  target=bun-linux-x64 ;;
+        aarch64) target=bun-linux-arm64 ;;
+        *) echo "unmapped arch ${{build.arch}}" >&2; exit 1 ;;
+      esac
+      # No --target flag: the native build IS that target on wolfi (glibc). The define must still
+      # carry it so `ch version` reports identity and self-update knows its asset — though an
+      # apk-installed /usr/bin/ch is root-owned, so self-update correctly defers to `apk upgrade`.
+      bun build --compile \
+        --define 'process.env.CH_BUILD_VERSION="v${{package.version}}"' \
+        --define 'process.env.CH_BUILD_COMMIT="${{vars.commit}}"' \
+        --define "process.env.CH_BUILD_TARGET=\"$target\"" \
+        packages/cli/src/bin.ts --outfile ch
+      install -Dm755 ch "${{targets.destdir}}/usr/bin/ch"
+
+  - name: smoke
+    runs: |
+      CORK_CONFIG_NO_FETCH=1 "${{targets.destdir}}/usr/bin/ch" version
+      CORK_CONFIG_NO_FETCH=1 "${{targets.destdir}}/usr/bin/ch" capabilities >/dev/null
+
+update:
+  enabled: false # versions land via the release workflow, not a bot

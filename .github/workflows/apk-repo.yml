@@ -1,0 +1,189 @@
+# apk-repository + OCI-image channel.
+# Runs after a (non-prerelease) GitHub release is published:
+#
+#   1. melange builds the cork-cli apk from source at the tag, per NATIVE arch runner, with
+#      --generate-provenance (SLSA provenance as .attest.tar.gz beside each apk) and a signed index.
+#   2. The cumulative apk repository lives on the gh-pages branch and is served by GitHub Pages
+#      (repo setting: Pages -> deploy from branch gh-pages, root). Published apks are immutable:
+#      the job refuses to overwrite an existing package file.
+#   3. apko composes the minimal Wolfi image FROM THE PUBLISHED Pages repo and pushes it to
+#      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
+#
+# One-time setup this expects:
+#   - `melange keygen` pair: private key in the MELANGE_SIGNING_KEY secret, public half committed
+#     as packaging/melange.rsa.pub (also served at the Pages root for consumers).
+#   - Pages enabled from the gh-pages branch.
+name: apk-repo
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  AQUA_CONFIG: packaging/aqua.yaml
+
+jobs:
+  melange-build:
+    if: ${{ !github.event.release.prerelease }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: aquaproj/aqua-installer@v4
+        with:
+          aqua_version: v2.53.5
+
+      - name: Install bubblewrap (melange build sandbox)
+        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+
+      - name: Substitute release identity into the spec
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${TAG#v}" COMMIT="$(git rev-parse HEAD)" \
+          yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
+            packaging/melange.yaml
+          yq '.package.version, .vars.commit' packaging/melange.yaml
+
+      - name: Build the apk (+ SLSA provenance, signed)
+        env:
+          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+        run: |
+          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
+          sudo -E "$(command -v melange)" build packaging/melange.yaml \
+            --arch "${{ matrix.arch }}" \
+            --signing-key melange.rsa \
+            --generate-provenance \
+            --out-dir packages
+          rm -f melange.rsa
+          ls -l "packages/${{ matrix.arch }}/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.arch }}
+          path: packages/${{ matrix.arch }}/*.apk*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-pages:
+    needs: melange-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # pushes the gh-pages branch
+    steps:
+      - uses: actions/checkout@v4 # main: for packaging/{aqua.yaml,melange.rsa.pub}
+      - uses: aquaproj/aqua-installer@v4
+        with:
+          aqua_version: v2.53.5
+
+      - name: Check out (or initialize) the gh-pages apk repository
+        run: |
+          git fetch origin gh-pages && git worktree add site origin/gh-pages || {
+            git worktree add --detach site
+            git -C site checkout --orphan gh-pages
+            git -C site rm -rf --quiet . 2>/dev/null || true
+          }
+          mkdir -p site/apk/x86_64 site/apk/aarch64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk-x86_64
+          path: incoming/x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk-aarch64
+          path: incoming/aarch64
+
+      - name: Add packages (immutably) and re-sign the index
+        env:
+          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+        run: |
+          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
+          for arch in x86_64 aarch64; do
+            for f in incoming/$arch/*; do
+              base="$(basename "$f")"
+              if [ -e "site/apk/$arch/$base" ]; then
+                echo "REFUSING to overwrite already-published $arch/$base — published apks are immutable (bump the epoch instead)" >&2
+                exit 1
+              fi
+              cp "$f" "site/apk/$arch/$base"
+            done
+            # Regenerate the signed index over EVERYTHING published for the arch (cumulative repo).
+            (cd "site/apk/$arch" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+          done
+          rm -f melange.rsa
+          cp packaging/melange.rsa.pub site/melange.rsa.pub
+
+      - name: Publish (push gh-pages; Pages serves the branch)
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "apk repo: add cork-cli $TAG"
+          git push origin HEAD:gh-pages
+
+  apko-publish:
+    needs: publish-pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write # ghcr push
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquaproj/aqua-installer@v4
+        with:
+          aqua_version: v2.53.5
+
+      - name: Wait for Pages to serve the new package
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          url="https://cork-technology.github.io/cork-cli/apk/x86_64/APKINDEX.tar.gz"
+          for i in $(seq 1 60); do
+            if curl -fsSL "$url" | tar -Oxz APKINDEX 2>/dev/null | grep -q "V:${TAG#v}"; then
+              echo "Pages serves ${TAG#v}"; exit 0
+            fi
+            echo "waiting for Pages deploy ($i/60)…"; sleep 15
+          done
+          echo "Pages never served ${TAG#v}" >&2; exit 1
+
+      - name: Build + push the image from the published repo
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
+          apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+          apko publish packaging/cork-cli.apko.yaml \
+            "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
+            --sbom-path sboms/ | tee digest.txt
+          # apko prints the pushed ref with digest as the last line: capture for attestation.
+          echo "IMAGE_DIGEST=$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
+
+      - name: Attest the image digest
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
+          push-to-registry: true

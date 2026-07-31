@@ -42,3 +42,7 @@ evals/live-ab/runs/
 slack-drafts-*.md
 out/
 cache/
+
+# single-binary release build outputs (scripts/compile-binaries.mjs) + bun temp files
+dist/
+*.bun-build

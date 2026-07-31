@@ -27,6 +27,7 @@ export * from "./bundle/authority.ts";
 export * from "./bundle/funding.ts";
 export * from "./bundle/preflight.ts";
 export * from "./bundle/legs.ts";
+export * from "./version.ts";
 export * from "./config.ts";
 export * from "./config-remote.ts";
 export * from "./handlers.ts";

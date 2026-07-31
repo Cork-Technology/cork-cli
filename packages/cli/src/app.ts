@@ -17,10 +17,11 @@
 // Exit codes map envelope state so scripts can branch: 0 ok, 2 invalid input,
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
-import { REGISTRY, inputJsonSchema, type ToolDef } from "@cork/schemas";
-import { runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { REGISTRY, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
+import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
+import { runSelfUpdate } from "./self-update.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
@@ -133,6 +134,7 @@ export async function runCli(
   program
     .name("ch")
     .description("Cork Phoenix CLI (ch) — reads, deterministic math, and unsigned tx/bundle preparation.")
+    .version(BUILD_VERSION, "-V, --version", "print the ch version")
     .exitOverride()
     .configureOutput({
       writeOut: (s) => (out += s),
@@ -270,6 +272,49 @@ export async function runCli(
       }
     });
   }
+
+  // Non-tool commands: version/build identity, the MCP server, and self-update. These are CLI
+  // plumbing, not registry tools — no envelope, no --explain.
+  program
+    .command("version")
+    .description("print version and build identity (--json for machine-readable)")
+    .option("--json", "print as JSON")
+    .action((opts: { json?: boolean }) => {
+      const info = {
+        version: BUILD_VERSION,
+        commit: BUILD_COMMIT,
+        target: BUILD_TARGET || null,
+        schemaVersion: SCHEMA_VERSION,
+        runtime: (globalThis as { Bun?: { version: string } }).Bun ? `bun ${(globalThis as { Bun?: { version: string } }).Bun!.version}` : `node ${process.versions.node}`,
+      };
+      out +=
+        opts.json || envWantsJson
+          ? `${JSON.stringify(info, null, 2)}\n`
+          : `ch ${info.version} (commit ${info.commit})\n  target   ${info.target ?? "(source run)"}\n  schema   ${info.schemaVersion}\n  runtime  ${info.runtime}\n`;
+    });
+
+  program
+    .command("mcp")
+    .description("start the Cork MCP stdio server (all 9 tools) — e.g. `claude mcp add cork-defi -- ch mcp`")
+    .action(() => {
+      // The real server must own stdio from process start, so the binary entrypoint (bin.ts)
+      // intercepts `mcp` before commander ever parses. Reaching this action means runCli was
+      // invoked directly (tests/embedding), where a captured stdio server cannot work.
+      err += "the MCP server owns stdio from process start — run it via the ch entrypoint: `ch mcp`\n";
+      code = EXIT.error;
+    });
+
+  program
+    .command("self-update")
+    .description("update ch in place from the latest GitHub release (verifies provenance before swapping)")
+    .option("--tag <tag>", "update to a specific release tag instead of latest")
+    .option("--dry-run", "resolve and report what would change without downloading")
+    .action(async (opts: { tag?: string; dryRun?: boolean }) => {
+      const res = await runSelfUpdate({ ...(opts.tag ? { tag: opts.tag } : {}), ...(opts.dryRun ? { dryRun: true } : {}) });
+      out += res.out;
+      err += res.err;
+      code = res.code === 0 ? EXIT.ok : EXIT.error;
+    });
 
   try {
     await program.parseAsync(normaliseArgv(argv, knownFlags), { from: "user" });

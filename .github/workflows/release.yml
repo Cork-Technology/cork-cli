@@ -1,0 +1,132 @@
+# Tag-driven single-binary release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Gate order: two INDEPENDENT builds of the same commit must produce byte-identical binaries
+# (cross-runner determinism proof), the primary build's binaries must pass offline smoke on all
+# three OS families, and only then is the release published — from the attested primary bytes.
+#
+# Repo settings this relies on:
+#  - Immutable releases ENABLED (assets + tag locked at publish; every asset auto-attested).
+#    A tag name is burned forever once released — rehearse on vX.Y.Z-rc.N tags.
+#  - Actions can create releases (contents: write below).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-primary:
+    uses: ./.github/workflows/build-binaries.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      version: ${{ github.ref_name }}
+      attest: true
+      artifact-name: binaries-primary
+
+  # Same commit, second independent runner, no attestation — exists only to prove determinism.
+  build-shadow:
+    uses: ./.github/workflows/build-binaries.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      version: ${{ github.ref_name }}
+      attest: false
+      artifact-name: binaries-shadow
+
+  determinism:
+    needs: [build-primary, build-shadow]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-primary
+          path: primary
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-shadow
+          path: shadow
+      - name: Two independent builds must be byte-identical
+        run: |
+          diff primary/checksums.txt shadow/checksums.txt
+          echo "deterministic: both runs agree on"
+          cat primary/checksums.txt
+
+  smoke:
+    needs: determinism
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: ch-linux-x64
+          - os: ubuntu-24.04-arm
+            asset: ch-linux-arm64
+          - os: macos-latest
+            asset: ch-darwin-arm64
+          - os: windows-latest
+            asset: ch-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-primary
+          path: dist
+      # Offline-only commands: no RPC flakiness may block a release. capabilities exercises the
+      # full registry; protocol-config exercises the bundled-defaults path; version must echo the
+      # tag that was stamped at compile time.
+      - name: Smoke-test the compiled binary
+        shell: bash
+        env:
+          CORK_CONFIG_NO_FETCH: "1"
+          CORK_NO_UPDATE_NOTIFIER: "1"
+        run: |
+          chmod +x "dist/${{ matrix.asset }}" || true
+          "./dist/${{ matrix.asset }}" version | tee /dev/stderr | grep -F "${{ github.ref_name }}"
+          "./dist/${{ matrix.asset }}" capabilities >/dev/null
+          "./dist/${{ matrix.asset }}" query protocol-config --chainid 42161 >/dev/null
+      - name: MCP stdio handshake
+        shell: bash
+        env:
+          CORK_CONFIG_NO_FETCH: "1"
+        run: |
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n' \
+            | "./dist/${{ matrix.asset }}" mcp | head -c 4096 | grep -F '"serverInfo"'
+
+  publish:
+    needs: [determinism, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-primary
+          path: dist
+      - name: Create the (immutable) release from the attested primary bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ github.ref_name }}" in *-*) PRE="--prerelease";; *) PRE="";; esac
+          gh release create "${{ github.ref_name }}" $PRE \
+            --verify-tag \
+            --title "${{ github.ref_name }}" \
+            --notes "Single-binary \`ch\` (CLI + \`ch mcp\` stdio server). Verify any asset with:
+          \`\`\`
+          gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml
+          \`\`\`
+          Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt." \
+            dist/ch-* dist/checksums.txt

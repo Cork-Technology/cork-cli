@@ -1,0 +1,73 @@
+# Reusable single-binary build. Holding the build steps in
+# a REUSABLE workflow is what lifts the artifact attestations to SLSA v1 Build L3 — verifiers pin
+# it with:  gh attestation verify <asset> --repo Cork-Technology/cork-cli \
+#            --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml
+# (`ch self-update` runs exactly that check; keep this filename stable.)
+#
+# Reproducibility contract: same commit + same Bun (exact pin in mise.toml) + the fixed asset
+# names from scripts/compile-binaries.mjs => byte-identical binaries. release.yml calls this
+# twice on independent runners and refuses to publish unless both runs' checksums agree.
+name: build-binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "release version to stamp (vX.Y.Z[-rc.N])"
+        required: true
+        type: string
+      attest:
+        description: "generate build-provenance attestations for the binaries"
+        required: false
+        type: boolean
+        default: false
+      artifact-name:
+        description: "name for the uploaded artifact bundle"
+        required: false
+        type: string
+        default: binaries
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain from mise.toml — the ONE place the Bun version is pinned.
+      - uses: jdx/mise-action@v2
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck + offline tests
+        env:
+          CORK_CONFIG_NO_FETCH: "1"
+        run: |
+          bun run typecheck
+          bun run test:unit
+
+      - name: Compile release binaries (all targets, cross-compiled)
+        run: bun scripts/compile-binaries.mjs --version "${{ inputs.version }}" --commit "${{ github.sha }}" --outdir dist
+
+      - name: Attest build provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            dist/ch-*
+            dist/checksums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,12 @@
+# Pinned, checksum-verified toolchain for the apk/OCI packaging jobs (aquaproj/aqua-installer
+# reads this via AQUA_CONFIG). Versions are exact on purpose — bump deliberately.
+---
+registries:
+  - type: standard
+    ref: v4.431.0 # renovate: depName=aquaproj/aqua-registry
+packages:
+  - name: chainguard-dev/melange@v0.56.4
+  - name: chainguard-dev/apko@v1.2.30
+checksum:
+  enabled: true
+  require_checksum: false # registry cosign/slsa verification still applies; flip on once aqua-checksums.json is committed
