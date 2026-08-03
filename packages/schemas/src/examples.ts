@@ -31,14 +31,15 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Token balances an account holds in a pool", input: { resource: "account-state", filters: { poolId: DEMO_POOL_ID, account: DEMO_ACCOUNT } } },
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
     { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
-    { title: "Predict a market before it exists: pool id + cST/cPT + oracle for a pair (Arbitrum)", input: { resource: "market-predict", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc", expiry: "1900000000", mode: "liquidity" } } },
+    { title: "Predict a market before it exists: pool id + cST/cPT + constraint for a pair (Arbitrum; recipe = the approved liquidity recipe CONTRACT)", input: { resource: "market-predict", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiry: "1900000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
+    { title: "The approved recipe contracts with their live constants + argument shapes (Arbitrum)", input: { resource: "registry-recipes", chainId: 42161 } },
     { title: "Enumerate a pool's whitelist rows (event-derived; global rows ride along)", input: { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: DEMO_POOL_ID } } },
   ],
   cork_compute: [
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
     { title: "Rollover premium floor (pure math, no RPC)", input: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } } },
     { title: "Worst-case impairment floor over 1 day", input: { params: { kind: "impairment-floor", poolId: DEMO_POOL_ID, horizonSeconds: 86400 } } },
-    { title: "Resolve a registry recipe's bands at a rate (Arbitrum; bands 1e18=1%, resolved 1e18=1.0)", input: { chainId: 42161, params: { kind: "resolve-recipe", mode: "liquidity", rate: "1000000000000000000" } } },
+    { title: "Ask a recipe what constraint it imposes on a pair — THE step that produces what a JIT order signs (Arbitrum)", input: { chainId: 42161, params: { kind: "resolve-recipe", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
     { title: "Current decayed price of a Fusion dutch-auction order (pin the moment with at.timestamp)", input: { at: { timestamp: "1787962200" }, params: { kind: "dutch-auction-price", order: { salt: "72116775394861435818731221900729193628876322478708569", maker: DEMO_ACCOUNT, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "904625697166532776746648320380374280103671755200316906558262375061821325312", extension: "0x0000006e0000006e0000006e0000006e0000006e0000003700000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e00384000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e0038400000000000000" } } } },
   ],
   cork_decode: [
@@ -65,7 +66,8 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Signable rollover order (Arbitrum, ExactSettler, all-or-nothing)", input: { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "demo-roll-0001", action: { type: "rollover-intent", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", rolloverContract: DEMO_ACCOUNT, srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1795000000", fillDeadline: "1795604800" } } },
   ],
   cork_prepare_market: [
-    { title: "Unsigned oracle-deploy tx for a pair (registry.deploy — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc" } } },
+    { title: "Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", mode: "price" } } },
+    { title: "Unsigned fixed-rate-oracle deploy tx (keyed on the RATE, no pair; the oracle a FIXED order's rateOverride produces)", input: { chainId: 42161, clientRequestId: "demo-market-0002", action: { type: "deploy-fixed-oracle", rate: "1000000000000000000" } } },
   ],
   cork_track: [
     { title: "Digest-pin an artifact you were handed", input: { mode: "verify", subject: { kind: "artifact", artifact: { any: "json" } } } },
@@ -110,11 +112,13 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
       fills: { status: "activated", reason: "centralized (venue) or full-decentralized (HyperSync OrderFilled scan)" },
-      "registry-assets": { status: "activated", reason: "MarketRegistry chain views — Arbitrum One (42161); filters.address for a single asset by natural key" },
+      "registry-assets": { status: "activated", reason: "MarketRegistry 2.1.0 chain views — Arbitrum One (42161): two named source slots (priceSource/navSource) + token self-description; filters.address for a single asset" },
       rfqs: { status: "activated", reason: "venue-backed (centralized mode): GET /v1/rfqs discovery feed + single get via filters.rfqId; venue-only in every mode (RFQ requests/answers never bind and emit no events)" },
-      "registry-oracle": { status: "activated", reason: "lookupWrapper + simulated deploy: deployed/deployable/why-not (42161)" },
-      "registry-recipes": { status: "activated", reason: "constraint recipe bands, 1e18 = 1% (42161)" },
-      "market-predict": { status: "activated", reason: "MarketRegistry+adapter derivation (42161): predicted oracle+live rate, LOCAL pool id (computeMarketId), parity-checked resolved bands, cST/cPT via eth_simulateV1, and pool existence — the same derivation a JIT LOP fill runs, before anything is deployed or signed" },
+      "registry-oracle": { status: "activated", reason: "2.1.0 mode-keyed pair wrappers (price|nav via 3-arg lookupWrapper + simulated deploy: deployed/deployable/why-not) AND fixed-rate oracles keyed on the rate (filters.rate) — 42161" },
+      "registry-recipes": { status: "activated", reason: "2.1.0 recipes-as-contracts: address + source + description + live constants + args annotation (isRecipe is the only membership gate) — 42161" },
+      "registry-denominations": { status: "activated", reason: "2.1.0 label→unit map with display-label resolution (pseudo-unit table + unit symbol); labelHash is the identity — 42161" },
+      "registry-feeds": { status: "activated", reason: "2.1.0 directed conversion-feed edges with live aggregator answers (decimals drift visible) — 42161" },
+      "market-predict": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
     },
   },
   cork_compute: {
@@ -125,8 +129,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
       "dutch-auction-price": { status: "activated", reason: "pure local pricing of 1inch Fusion v3.1 dutch-auction orders, reconstructed from the order's own extension bytes [K3]; wei-exact vs the deployed settlement getters on mainnet+Arbitrum (incl. a real production order); at.timestamp pins the moment, baseFeeWei omitted = upper-bound" },
-      "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the registry band math it would build on is already live as resolve-recipe)" },
-      "resolve-recipe": { status: "activated", reason: "registry applyBands — bit-parity self-checked against chain on every call (42161)" },
+      "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the constraint math it would build on is already live as resolve-recipe)" },
+      "resolve-recipe": { status: "activated", reason: "2.1.0 recipe.resolve staticcall — THE step that produces the constraint a JIT order signs (42161). The pre-2.1.0 percentage-band math survives behind legacy:true + CORK_ENABLE_DEPRECATED=1" },
     },
   },
   cork_decode: {
@@ -159,8 +163,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   },
   cork_prepare_market: {
     status: "activated",
-    reason: "Q-REG closed 2026-07-22: MarketRegistry verified on-chain (Arbitrum One); deploy-wrapper builds the permissionless idempotent registry.deploy(ca, ref) tx",
-    variants: { "deploy-wrapper": { status: "activated" } },
+    reason: "MarketRegistry 2.1.0 verified on-chain 2026-08-03 (Arbitrum One, full redeploy — every address changed): deploy-wrapper builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
+    variants: { "deploy-wrapper": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" } },
   },
   cork_track: {
     status: "activated",

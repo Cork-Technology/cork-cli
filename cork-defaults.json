@@ -41,7 +41,25 @@
       }
     }
   },
+  "$marketRegistryComment": "MarketRegistry stack, contracts release 2.1.0 (redeployed from scratch 2026-07-31 under a new CREATE2 salt — EVERY address changed; verified on-chain 2026-08-03: adapter binds this registry + the 42161 poolManager, both recipes registered, factories match). `recipes` are NAMED HINTS for the deprecated mode sugar only — membership is decided solely by isRecipe on chain. The previous generation (which still ANSWERS 2.1.0-shaped calls with misdecoded garbage) lives under marketRegistryLegacy, reachable only with CORK_ENABLE_DEPRECATED=1.",
   "marketRegistry": {
+    "42161": {
+      "registry": "0x47C3AF38435Db64D9400c30575E4c10482c0752D",
+      "adapter": "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B",
+      "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172",
+      "wrapperFactory": "0xDb8bd7eEA5322Df5c6c079c7D11C1b27F56e2007",
+      "fixedRateOracleFactory": "0xE899a11994eC6b8B50A1F7cbfD546fd260BbB0c5",
+      "aggregatorAdapterFactory": "0xB1d34dca3c63CCEF1239D0432Bedcf4031c172c2",
+      "recipes": {
+        "liquidity": "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D",
+        "fixed": "0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682"
+      },
+      "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
+      "contractsVersion": "2.1.0",
+      "deployedAtBlock": 489540043
+    }
+  },
+  "marketRegistryLegacy": {
     "42161": {
       "registry": "0xF674488bf4643e205ccd826951e8b0d29f77600A",
       "oracleFactory": "0x0d81045225932C8B99a5DBD3cAe8d047b44D44A2",

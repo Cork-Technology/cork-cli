@@ -1,32 +1,97 @@
-// MarketRegistry + CorkLimitOrderAdapter integration (market-registry-api, pinned @ 895748ca).
-// Everything here is either a pure port pinned against the Solidity source or an ABI surface
-// verified against the live Arbitrum deployment (registry 0xF674…600A, adapter 0xea15…8505,
-// both roles GRANTED on the controller as of 2026-07-22 — INTEGRATOR.md's "not usable yet" is
-// stale). The JIT flow: a 1inch LOP v4 order carries the adapter as its preInteraction hook,
-// with JITMarketParams (+ optional ERC-2612 permits) in the extension; the fill derives the
-// market from the registry recipe against the LIVE oracle rate, creates the pool if missing,
-// and (maker-side, gated by enableJitMint) mints the cST just in time.
-import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
+// MarketRegistry + CorkLimitOrderAdapter integration — contracts release 2.1.0 (Arbitrum One,
+// deployed at block 489540043; ABI pinned against market-registry-private tag 2.1.0 commit
+// 70c2cf8, cross-checked on-chain 2026-08-03: adapter immutables, recipe membership, factory
+// bindings, predictFixedRateOracle parity with the read API).
+//
+// The 2.1.0 model (everything the legacy module did differently):
+//  - A recipe is an approved CONTRACT ADDRESS (isRecipe is the only membership gate), not a mode
+//    string. It self-reports source()/description() and resolves the four rate limits itself via
+//    a staticcall — registry applyBands/percentage bands are gone from the public surface.
+//  - The constraint is derived OFF-CHAIN at signing time and CARRIED in the order; on-chain the
+//    fill only re-checks it with recipe.verify (false ⇒ RecipeRejectedConstraint). Pool id and
+//    the CREATE2-derived share addresses are therefore PINNED the moment the order is signed —
+//    market identity no longer follows the live rate.
+//  - Pair oracles are MODE-KEYED (one pair can hold a PRICE and a NAV wrapper at different
+//    addresses), and fixed-rate oracles are keyed on the RATE, not a pair.
+//  - ENUM TRAP: RecipeSource is NAV=0,PRICE=1,FIXED=2 while OracleMode/SourceType are
+//    PRICE=0,NAV=1 — inverted. Never pass one where the other is expected.
+import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
 import type { PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import type { Market } from "./types.ts";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
-// ── ABIs (verified against Sourcify-published ABIs / INTEGRATOR.md) ──────────
+// ── Enums (numeric values from IMarketRegistry.sol / IMarketRecipe.sol, tag 2.1.0) ──────────
+export const ASSET_KIND = ["ERC20", "ERC4626"] as const;
+export const SOURCE_TYPE = ["PRICE", "NAV"] as const;
+export const SOURCE_INTERFACE = ["AGGREGATOR_V3", "ERC4626"] as const;
+/** OracleMode: PRICE=0, NAV=1 (NOT the RecipeSource ordering). */
+export const ORACLE_MODE = { price: 0, nav: 1 } as const;
+export type OracleModeName = keyof typeof ORACLE_MODE;
+/** RecipeSource: NAV=0, PRICE=1, FIXED=2 (inverted vs OracleMode — deliberate upstream). */
+export const RECIPE_SOURCE = ["nav", "price", "fixed"] as const;
+export type RecipeSourceName = (typeof RECIPE_SOURCE)[number];
+
+/** The OracleMode ordinal a fill would use for a recipe source (FIXED has no pair oracle). */
+export function oracleModeForSource(source: RecipeSourceName): (typeof ORACLE_MODE)[OracleModeName] | null {
+  if (source === "fixed") return null;
+  return ORACLE_MODE[source];
+}
+
+// ── ABIs (pinned tag 2.1.0) ─────────────────────────────────────────────────────────────────
 export const marketRegistryAbi = parseAbi([
-  "struct AssetSource { address addr; string quoteUnit; }",
-  "struct Asset { address addr; uint64 chainId; string name; uint8 kind; string denomination; AssetSource[] sources; }",
-  "struct ConstraintBands { string mode; uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
-  "struct ResolvedConstraint { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
-  "function lookupAssetByAddress(address addr, uint64 chainId) view returns (bool found, Asset entry)",
-  "function lookupWrapper(address ca, address ref) view returns (address wrapper)",
-  "function lookupRecipe(string mode) view returns (bool found, ConstraintBands entry)",
-  "function applyBands(string mode, uint256 rate) view returns (ResolvedConstraint constraint)",
+  "struct AssetSource { address addr; uint8 sourceType; uint8 sourceInterface; string denomination; }",
+  "struct Asset { address addr; string name; uint8 kind; AssetSource priceSource; AssetSource navSource; }",
+  "struct ConversionFeed { address base; address quote; address aggregatorAddress; uint8 feedDecimals; }",
+  "struct Denomination { bytes32 labelHash; address unit; }",
+  "function WRAPPER_FACTORY() view returns (address)",
+  "function FIXED_RATE_ORACLE_FACTORY() view returns (address)",
+  "function owner() view returns (address)",
+  "function isAsset(address addr) view returns (bool)",
+  "function isRecipe(address recipe) view returns (bool)",
+  "function lookupAssetByAddress(address addr) view returns (bool found, Asset entry)",
+  "function lookupAssetByName(string name) view returns (bool found, Asset entry)",
+  "function lookupConversionFeed(address base, address quote) view returns (bool found, ConversionFeed entry)",
+  "function lookupDenomination(string label) view returns (bool found, address unit)",
+  "function lookupWrapper(address ca, address ref, uint8 mode) view returns (address wrapper)",
+  "function predictFixedRateOracle(uint256 rate) view returns (address oracle)",
   "function getAssets(uint256 offset, uint256 limit) view returns (Asset[] page, uint256 total)",
-  "function getRecipes(uint256 offset, uint256 limit) view returns (ConstraintBands[] page, string[] modes, uint256 total)",
-  "function deploy(address ca, address ref) returns (address wrapper)",
+  "function getConversionFeeds(uint256 offset, uint256 limit) view returns (ConversionFeed[] page, uint256 total)",
+  "function getDenominations(uint256 offset, uint256 limit) view returns (Denomination[] page, uint256 total)",
+  "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+  "function deploy(address ca, address ref, uint8 mode) returns (address wrapper)",
+  "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
 ]);
+
+export const recipeAbi = parseAbi([
+  "function source() view returns (uint8)",
+  "function description() view returns (string)",
+  "function REGISTRY() view returns (address)",
+  "function resolve(address ca, address ref, address rateOracle, bytes additionalData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
+  "function verify(address ca, address ref, address rateOracle, (uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint, bytes additionalData) view returns (bool ok)",
+]);
+
+/** Token self-description for asset/denomination display (best-effort — a token that will not
+ *  name itself degrades to nulls, never a failed read). */
+export const erc20MetadataAbi = parseAbi([
+  "function symbol() view returns (string)",
+  "function name() view returns (string)",
+  "function decimals() view returns (uint8)",
+]);
+
+/** Chainlink-style aggregator surface for conversion-feed live answers. */
+export const aggregatorV3Abi = parseAbi([
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+]);
+
+/** Chainlink pseudo-addresses used as denomination units for fiat/native labels — code-less, so
+ *  their display text comes from this table instead of symbol(). */
+export const DENOMINATION_PSEUDO_UNITS: Record<string, string> = {
+  "0x0000000000000000000000000000000000000348": "USD", // ISO-4217 code 840
+  "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ETH",
+};
 
 export const jitAdapterAbi = parseAbi([
   "function LIMIT_ORDER_PROTOCOL() view returns (address)",
@@ -39,32 +104,44 @@ export const accessControlAbi = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 
-/** DefaultCorkController.createNewPool — Sourcify-verified shape; used ONLY in eth_simulateV1
- *  chains (from: adapter, which holds POOL_CREATOR_ROLE) to predict the cST of a not-yet-created
- *  pool. Field order is load-bearing: unwind fee BEFORE swap fee. */
+/** DefaultCorkController.createNewPool — used in state-override simulations to predict the cST
+ *  of a not-yet-created pool. Field order is load-bearing: unwind fee BEFORE swap fee. */
 export const controllerCreatePoolAbi = parseAbi([
   "struct Market_ { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; address rateOracle; }",
   "struct PoolCreationParams { Market_ pool; uint256 unwindSwapFeePercentage; uint256 swapFeePercentage; bool isWhitelistEnabled; }",
   "function createNewPool(PoolCreationParams params)",
 ]);
 
-/** Controller role hashes (INTEGRATOR.md; confirmed granted on-chain 2026-07-22). */
+/** Controller role hashes (keccak256 of the role name; declared in DefaultCorkController). */
 export const POOL_CREATOR_ROLE = "0x4066b03ab177190abcd4de6384e71f7a60f56b879537b65d43a0523ade6cfe52" as const;
 export const CONFIGURATOR_ROLE = "0x3b49a237fe2d18fa4d9642b8a0e065923cceb71b797783b619a030a61d848bf0" as const;
 
-// ── applyBands: bit-exact port of MarketRegistryLib.applyBands ───────────────
-// Bands are PERCENTAGES (1e18 = 1%, denominator 100e18); rate and the resolved outputs are plain
-// 18-decimal fixed point (1e18 = 1.0). Rounding always tightens: the floor rounds UP, the other
-// three round DOWN. bigint products are exact, matching mulDiv's 512-bit intermediate.
-export const PERCENTAGE_DENOMINATOR = 100n * 10n ** 18n;
-
-export interface ConstraintBands {
-  mode: string;
-  rateMin: bigint;
-  rateMax: bigint;
-  rateChangePerDayMax: bigint;
-  rateChangeCapacityMax: bigint;
+// ── Recipe constants catalog (mirrors the read API's hand-maintained annotation layer) ──────
+// Keyed by lowercased recipe address (CREATE2 ⇒ chain-stable). Supplies only the constant getter
+// NAMES + the additionalData arg annotation; every VALUE is read live off the recipe. Catalog
+// absence is NOT a gate — isRecipe on chain is the only membership check; an uncatalogued recipe
+// still lists, still self-describes, it just arrives with argsKnown:false.
+export interface RecipeCatalogEntry {
+  constants: readonly string[];
+  args: { type: string; display: string } | null;
 }
+export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
+  "0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d": {
+    constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
+    args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
+  },
+  "0xa85cfa6e66f301a18d182a8304f5c4afef5b4682": {
+    constants: ["WINDOW_WIDTH"],
+    args: { type: "()", display: "no payload — the fixed-rate recipe rejects any additionalData" },
+  },
+};
+
+/** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out). */
+export function constantGetterAbi(name: string) {
+  return [{ type: "function" as const, name, stateMutability: "view" as const, inputs: [], outputs: [{ type: "uint256" as const }] }];
+}
+
+// ── JIT hook payload (2.1.0 shape) + 1inch v4 extension building ────────────────────────────
 export interface ResolvedConstraint {
   rateMin: bigint;
   rateMax: bigint;
@@ -72,28 +149,22 @@ export interface ResolvedConstraint {
   rateChangeCapacityMax: bigint;
 }
 
-const mulDivFloor = (a: bigint, b: bigint, d: bigint) => (a * b) / d;
-const mulDivCeil = (a: bigint, b: bigint, d: bigint) => (a * b + d - 1n) / d;
-
-export function applyBandsLocal(b: ConstraintBands, rate: bigint): ResolvedConstraint {
-  if (b.rateMin > PERCENTAGE_DENOMINATOR) throw new Error("rateMin band above 100% — registry would never store this");
-  return {
-    rateMin: mulDivCeil(rate, PERCENTAGE_DENOMINATOR - b.rateMin, PERCENTAGE_DENOMINATOR),
-    rateMax: mulDivFloor(rate, PERCENTAGE_DENOMINATOR + b.rateMax, PERCENTAGE_DENOMINATOR),
-    rateChangePerDayMax: mulDivFloor(rate, b.rateChangePerDayMax, PERCENTAGE_DENOMINATOR),
-    rateChangeCapacityMax: mulDivFloor(rate, b.rateChangeCapacityMax, PERCENTAGE_DENOMINATOR),
-  };
-}
-
-// ── JIT hook payload + 1inch v4 extension building ───────────────────────────
 export interface JITMarketParams {
   collateralAsset: `0x${string}`;
   referenceAsset: `0x${string}`;
   expiryTimestamp: bigint;
-  mode: string;
+  /** The approved IMarketRecipe contract — required, never zero (no unverified path). */
+  recipe: `0x${string}`;
+  /** FIXED recipes only: the rate a FixedRateOracle is deployed at. Else MUST be 0 — a non-zero
+   *  value on a price/nav recipe is REJECTED by the fill (UnexpectedRateOverride), not ignored. */
+  rateOverride: bigint;
+  /** The four limits, derived OFF-CHAIN at signing time (recipe.resolve) — part of pool identity. */
+  constraint: ResolvedConstraint;
+  /** The recipe-specific bytes the constraint was derived from (verify re-reads them). */
+  additionalData: `0x${string}`;
   swapFeePercentage: bigint; // 1e18 = 1%, max 5e18 — consumed only when the fill creates the pool
   unwindSwapFeePercentage: bigint;
-  enableJitMint: boolean;
+  enableJitMint: boolean; // gates the maker-side mint; IGNORED on the taker path (always mints)
 }
 export interface PermitParams {
   token: `0x${string}`;
@@ -111,7 +182,19 @@ const JIT_PARAMS_ABI = [
       { name: "collateralAsset", type: "address" },
       { name: "referenceAsset", type: "address" },
       { name: "expiryTimestamp", type: "uint256" },
-      { name: "mode", type: "string" },
+      { name: "recipe", type: "address" },
+      { name: "rateOverride", type: "uint256" },
+      {
+        name: "constraint",
+        type: "tuple",
+        components: [
+          { name: "rateMin", type: "uint256" },
+          { name: "rateMax", type: "uint256" },
+          { name: "rateChangePerDayMax", type: "uint256" },
+          { name: "rateChangeCapacityMax", type: "uint256" },
+        ],
+      },
+      { name: "additionalData", type: "bytes" },
       { name: "swapFeePercentage", type: "uint256" },
       { name: "unwindSwapFeePercentage", type: "uint256" },
       { name: "enableJitMint", type: "bool" },
@@ -137,7 +220,10 @@ export function encodeJitExtraData(params: JITMarketParams, permits: readonly Pe
       collateralAsset: params.collateralAsset,
       referenceAsset: params.referenceAsset,
       expiryTimestamp: params.expiryTimestamp,
-      mode: params.mode,
+      recipe: params.recipe,
+      rateOverride: params.rateOverride,
+      constraint: { ...params.constraint },
+      additionalData: params.additionalData,
       swapFeePercentage: params.swapFeePercentage,
       unwindSwapFeePercentage: params.unwindSwapFeePercentage,
       enableJitMint: params.enableJitMint,
@@ -154,8 +240,6 @@ export function encodeJitExtraData(params: JITMarketParams, permits: readonly Pe
 export function buildJitExtension(adapter: `0x${string}`, extraData: `0x${string}`): `0x${string}` {
   const pre = concatHex([getAddress(adapter), extraData]);
   const end = BigInt(size(pre));
-  // fields 0..5 empty (end offset 0); field 6 ends at `end`; field 7 (postInteraction) ends at
-  // the same cumulative offset (empty). CustomData (bits 224+ tail) is empty too.
   const offsets = (end << (32n * 6n)) | (end << (32n * 7n));
   return concatHex([toHex(offsets, { size: 32 }), pre]);
 }
@@ -170,43 +254,63 @@ export function decodeJitExtension(extension: `0x${string}`): { adapter: `0x${st
   const pre = sliceHex(concat, begin, end);
   const adapter = getAddress(sliceHex(pre, 0, 20));
   const [p, permits] = decodeAbiParameters(JIT_PARAMS_ABI, sliceHex(pre, 20)) as [
-    { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: bigint; mode: string; swapFeePercentage: bigint; unwindSwapFeePercentage: bigint; enableJitMint: boolean },
+    {
+      collateralAsset: `0x${string}`;
+      referenceAsset: `0x${string}`;
+      expiryTimestamp: bigint;
+      recipe: `0x${string}`;
+      rateOverride: bigint;
+      constraint: { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+      additionalData: `0x${string}`;
+      swapFeePercentage: bigint;
+      unwindSwapFeePercentage: bigint;
+      enableJitMint: boolean;
+    },
     Array<{ token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` }>,
   ];
-  return { adapter, params: { ...p }, permits: permits.map((x) => ({ ...x })) };
+  return { adapter, params: { ...p, constraint: { ...p.constraint } }, permits: permits.map((x) => ({ ...x })) };
 }
 
-// ── Market derivation (what the fill will compute) ───────────────────────────
-/** Derive the Market struct + poolId the adapter would derive at fill time, given the live
- *  oracle rate. Field order matches the adapter exactly; the id comes from our verified
- *  computeMarketId (keccak256(abi.encode(Market))). */
+// ── Market derivation (what the fill will compute) ──────────────────────────────────────────
+/** Build the Market struct + poolId a fill carrying `constraint` would produce. In 2.1.0 the
+ *  constraint comes IN (resolved off-chain at signing), so the identity is a pure function of
+ *  the order — no rate read, no drift. Field order matches the adapter/controller exactly; the
+ *  id is our verified computeMarketId (keccak256(abi.encode(Market)), bit-identical to
+ *  poolManager.getId). */
 export function deriveJitMarket(args: {
-  params: Pick<JITMarketParams, "collateralAsset" | "referenceAsset" | "expiryTimestamp" | "mode">;
+  collateralAsset: `0x${string}`;
+  referenceAsset: `0x${string}`;
+  expiryTimestamp: bigint;
+  constraint: ResolvedConstraint;
   oracle: `0x${string}`;
-  rate: bigint;
-  bands: ConstraintBands;
-}): { market: Market; poolId: `0x${string}`; resolved: ResolvedConstraint } {
-  const resolved = applyBandsLocal(args.bands, args.rate);
+}): { market: Market; poolId: `0x${string}` } {
   const market: Market = {
-    collateralAsset: args.params.collateralAsset,
-    referenceAsset: args.params.referenceAsset,
-    expiryTimestamp: args.params.expiryTimestamp,
-    rateMin: resolved.rateMin,
-    rateMax: resolved.rateMax,
-    rateChangePerDayMax: resolved.rateChangePerDayMax,
-    rateChangeCapacityMax: resolved.rateChangeCapacityMax,
+    collateralAsset: args.collateralAsset,
+    referenceAsset: args.referenceAsset,
+    expiryTimestamp: args.expiryTimestamp,
+    rateMin: args.constraint.rateMin,
+    rateMax: args.constraint.rateMax,
+    rateChangePerDayMax: args.constraint.rateChangePerDayMax,
+    rateChangeCapacityMax: args.constraint.rateChangeCapacityMax,
     rateOracle: args.oracle,
   };
-  return { market, poolId: computeMarketId(market), resolved };
+  return { market, poolId: computeMarketId(market) };
 }
 
-/** Unsigned MarketRegistry.deploy(ca, ref) calldata — permissionless + idempotent (an existing
- *  pair just returns the recorded wrapper). The `deploy-wrapper` prepare_market variant. */
-export function buildDeployOracleCall(ca: `0x${string}`, ref: `0x${string}`): `0x${string}` {
-  return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [ca, ref] });
+/** Unsigned MarketRegistry.deploy(ca, ref, mode) calldata — permissionless + idempotent (an
+ *  existing pair/mode just returns the recorded wrapper). */
+export function buildDeployOracleCall(ca: `0x${string}`, ref: `0x${string}`, mode: OracleModeName): `0x${string}` {
+  return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode]] });
 }
 
-/** controller.createNewPool calldata for eth_simulateV1 share-prediction chains (from: adapter). */
+/** Unsigned MarketRegistry.deployFixedRateOracle(rate) calldata — CREATE2-salted by the rate,
+ *  so a given rate has ONE oracle per chain; idempotent; a zero rate reverts in the oracle
+ *  constructor. */
+export function buildDeployFixedRateOracleCall(rate: bigint): `0x${string}` {
+  return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deployFixedRateOracle", args: [rate] });
+}
+
+/** controller.createNewPool calldata for share-prediction simulations. */
 export function buildCreatePoolCall(market: Market, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
   return encodeFunctionData({
     abi: controllerCreatePoolAbi,
@@ -222,15 +326,25 @@ export function buildSharesCall(poolId: `0x${string}`): `0x${string}` {
   return encodeFunctionData({ abi: sharesAbi, functionName: "shares", args: [poolId] });
 }
 
+/** Storage slot of `_roles[role].hasRole[account]` in plain OZ AccessControl (mapping at slot 0,
+ *  NOT ERC-7201 — empirically verified upstream). Used to GRANT the role inside a simulation's
+ *  state override, since post-redeploy no live account may hold POOL_CREATOR_ROLE yet. */
+export function roleMemberSlot(role: `0x${string}`, account: `0x${string}`): `0x${string}` {
+  const roleDataSlot = keccak256(encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [role, 0n]));
+  return keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [account, roleDataSlot]));
+}
+
 /** The pool's two share tokens as the chain would produce them for `poolId`.
  *  - `read`: the pool already exists — the addresses are PINNED (read straight from poolManager).
- *  - `simulated`: the pool does not exist — created in-memory via eth_simulateV1 (from the adapter,
- *    which holds POOL_CREATOR_ROLE) then read back; rate-conditioned, unpinned until real creation.
- *  - `unavailable`: the RPC lacks eth_simulateV1 or the simulation reverted — cST/cPT unknown.
+ *  - `simulated`: the pool does not exist — created in-memory via eth_simulateV1 with a state
+ *    override granting the simulating account POOL_CREATOR_ROLE on the controller (the same
+ *    trick the read API uses over eth_call+Multicall3), then read back. For an order that
+ *    CARRIES its constraint the poolId — and hence these addresses once created — is pinned at
+ *    signing; before creation they are still conditioned on the oracle ADDRESS resolution.
+ *  - `unavailable`: the RPC lacks eth_simulateV1/state overrides or the simulation reverted.
  *  cST/cPT are deployed via plain `new PoolShare(...)` (nonce CREATE, NOT CREATE2 — see
- *  SharesFactory.sol), so there is no off-chain address derivation: simulation is the only predictor.
- *  Fees are NOT part of market identity, so any fee values yield the same tokens; callers that only
- *  want the tokens can pass 0. */
+ *  SharesFactory.sol), so there is no off-chain address derivation: simulation is the only
+ *  predictor. Fees are NOT part of market identity; callers that only want the tokens pass 0. */
 export interface PredictSharesResult {
   cst?: `0x${string}` | undefined;
   cpt?: `0x${string}` | undefined;
@@ -248,6 +362,10 @@ export async function predictShares(
     poolId: `0x${string}`;
     unwindSwapFeePercentage?: bigint;
     swapFeePercentage?: bigint;
+    /** Legs to run BEFORE createNewPool in the simulation — e.g. the permissionless
+     *  registry.deploy / deployFixedRateOracle the fill itself performs when the market's oracle
+     *  is not deployed yet. Mirrors the fill exactly, so prediction works pre-deploy. */
+    preCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[];
   },
 ): Promise<PredictSharesResult> {
   // 1. Direct read — a non-zero swapToken means the pool exists; both addresses are pinned.
@@ -264,32 +382,49 @@ export async function predictShares(
   } catch {
     /* pool does not exist yet — fall through to simulation */
   }
-  // 2. Simulate the creation the fill would perform, then read shares(poolId) in the same call.
+  // 2. Simulate the creation the fill would perform, granting the simulating account (the
+  //    adapter) POOL_CREATOR_ROLE via state override — role-grant-independent, so the
+  //    prediction works both before and after governance grants the real roles.
   try {
+    const pre = args.preCalls ?? [];
     const createData = buildCreatePoolCall(args.market, args.unwindSwapFeePercentage ?? 0n, args.swapFeePercentage ?? 0n);
     const simulated = await client.simulateCalls({
       account: args.adapter,
       calls: [
+        ...pre.map((c) => ({ to: c.to, data: c.data })),
         { to: args.controller, data: createData },
         { to: args.poolManager, data: buildSharesCall(args.poolId) },
       ],
+      stateOverrides: [
+        { address: args.controller, stateDiff: [{ slot: roleMemberSlot(POOL_CREATOR_ROLE, args.adapter), value: toHex(1n, { size: 32 }) }] },
+      ],
     });
-    const last = simulated.results[1];
-    if (last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {
+    const create = simulated.results[pre.length];
+    const last = simulated.results[pre.length + 1];
+    // The creation leg must have SUCCEEDED and the shares read must decode to a non-zero cST —
+    // a zero address here means the pool was not actually created in-memory (e.g. a pre-leg
+    // failed), and serving it as a prediction would be an invention.
+    if (create?.status === "success" && last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {
       const cpt = getAddress(`0x${last.data.slice(2 + 24, 2 + 64)}`);
       const cst = getAddress(`0x${last.data.slice(2 + 64 + 24, 2 + 128)}`);
-      return { cst, cpt, exists: false, status: "simulated" };
+      if (cst !== ZERO_ADDRESS) {
+        return { cst, cpt: cpt === ZERO_ADDRESS ? undefined : cpt, exists: false, status: "simulated" };
+      }
     }
   } catch {
-    /* eth_simulateV1 unsupported or the simulation reverted */
+    /* eth_simulateV1 / state overrides unsupported, or the simulation reverted */
   }
   return { exists: false, status: "unavailable" };
 }
 
-// ── JIT lifecycle events (adapter source, frozen signatures) ─────────────────
-export const JIT_MARKET_CREATED_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,string)");
+// ── JIT lifecycle events (adapter source, frozen signatures) ────────────────────────────────
+// 2.1.0 JITMarketCreated carries the RECIPE ADDRESS where the legacy event carried a mode
+// string — both topics stay decodable (receipts from either generation label correctly).
+export const JIT_MARKET_CREATED_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,address)");
 export const JIT_MINTED_TOPIC = toEventSelector("JITMinted(bytes32,address,uint256,uint256)");
+export const JIT_MARKET_CREATED_LEGACY_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,string)");
 export const JIT_EVENTS: Record<string, string> = {
   [JIT_MARKET_CREATED_TOPIC]: "JITMarketCreated",
   [JIT_MINTED_TOPIC]: "JITMinted",
+  [JIT_MARKET_CREATED_LEGACY_TOPIC]: "JITMarketCreated (legacy pre-2.1.0)",
 };

@@ -182,6 +182,7 @@ export async function runCli(
       .option("--json [json]", "with a value: tool input as JSON. Bare: print JSON instead of prose.")
       .option("--input <json>", "tool input as a JSON string (unambiguous form of --json <json>)")
       .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
+      .option("--enable-deprecated", "unlock DEPRECATED features (e.g. the pre-2.1.0 registry generation via legacy:true) — same effect as CORK_ENABLE_DEPRECATED=1; every result they produce is labelled")
       .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)");
 
     if (positional) cmd.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : `${positional} to act on`);
@@ -251,6 +252,9 @@ export async function runCli(
         }
       }
 
+      // --enable-deprecated maps onto the same env var the gate reads (deprecation.ts), so the
+      // CLI flag and MCP env configuration stay one mechanism.
+      if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
       const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
       try {
         const envelope = await runTool(tool.name, input, callCtx);

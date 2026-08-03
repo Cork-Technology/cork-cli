@@ -60,11 +60,13 @@ export const QueryInput = z.object({
       "registry-assets",
       "registry-oracle",
       "registry-recipes",
+      "registry-denominations",
+      "registry-feeds",
       "market-predict",
       "rfqs",
     ])
     .describe(
-      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets; registry-oracle=rate-oracle status for a pair (needs filters.collateralAsset+referenceAsset; returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one); registry-recipes=constraint recipe modes (percentage bands, 1e18=1%); market-predict=derive a market BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+mode): oracle{address,deployed,deployable,rate}, pool id, resolved bands, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs (Arbitrum One); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a market's on-chain struct is the same contract that registry-oracle/market-predict report under oracle{address}",
+      "markets=list all pools; market=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); flows=rollover orders/fills/contracts (filters.kind); limit-order-markets=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); market-predict=derive a market BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed (Arbitrum One); rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a market's on-chain struct is the same contract that registry-oracle/market-predict report under oracle{address}",
     ),
   chainId: ChainId.optional(),
   mode: DataMode.optional(),
@@ -72,7 +74,7 @@ export const QueryInput = z.object({
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & market-predict — ORDER MATTERS, collateral first), mode (registry-recipes/market-predict — exact case-sensitive string), expiry (market-predict — market expiry as unix seconds, decimal string), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers). Unknown keys are a teachable error",
+      "resource-specific filters. Known keys: poolId (market/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & market-predict — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / market-predict — the approved recipe CONTRACT ADDRESS), args (market-predict — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / market-predict FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (market-predict — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/market-predict: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (market-predict — market expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers). Unknown keys are a teachable error",
     ),
   cursor: z.string().optional().describe("opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"),
   pageSize: z.number().int().min(1).max(200).default(25).describe("items requested per venue page during traversal"),
@@ -136,12 +138,16 @@ export const ComputeParams = z.discriminatedUnion("kind", [
     }).describe("indicative RFQ quote for a market-type bucket (phase-gated)"),
   z.strictObject({
       kind: z.literal("resolve-recipe"),
-      mode: z.string().min(1).describe("registry recipe mode — EXACT case-sensitive string (e.g. 'liquidity', 'fixed')"),
-      rate: UintStr.optional().describe("18-decimal rate to resolve against (1e18 = 1.0). Omit and pass collateralAsset+referenceAsset to use the pair's LIVE oracle rate instead"),
-      collateralAsset: Address.optional(),
+      recipe: Address.optional().describe("the approved recipe CONTRACT ADDRESS (2.1.0: recipes are contracts, not mode strings) — discover with cork_query resource:'registry-recipes'"),
+      mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice. Pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string"),
+      collateralAsset: Address.optional().describe("the pair the constraint is for (order matters: collateral first)"),
       referenceAsset: Address.optional(),
+      args: Hex.optional().describe("the recipe's additionalData, raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)"),
+      rate: UintStr.optional().describe("FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against"),
+      rateOracle: Address.optional().describe("explicit rate-oracle override — used as given (live if deployed, else passed to the recipe as address(0), which is what lets the liquidity recipe fall back to the anchorRate in args)"),
+      legacy: z.boolean().optional().describe("route to the DEPRECATED pre-2.1.0 band math against the OLD registry (requires CORK_ENABLE_DEPRECATED=1 and `mode`)"),
     }).describe(
-      "resolve a MarketRegistry recipe's PERCENTAGE bands (1e18 = 1%) into ABSOLUTE rate constraints (1e18 = 1.0) — the exact math a JIT fill runs; bit-parity self-checked against the on-chain applyBands",
+      "ask a recipe CONTRACT what four rate limits it would impose on a pair — a staticcall to recipe.resolve, THE step that produces the constraint a JIT order carries and signs (fill the order's recipe/constraint/additionalData from ONE call so they agree). Constraint values are ABSOLUTE rates, 1e18 = 1.0",
     ),
 ]);
 export type ComputeParams = z.infer<typeof ComputeParams>;
@@ -356,19 +362,27 @@ export const OrdersAction = z.discriminatedUnion("type", [
         collateralAsset: Address,
         referenceAsset: Address,
         expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future at creation"),
-        mode: z.string().min(1).describe("registry recipe mode, EXACT case-sensitive string (see cork_query registry-recipes)"),
+        recipe: Address.optional().describe("the approved IMarketRecipe CONTRACT ADDRESS the order names — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used"),
+        mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string (required there)"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored"),
+        additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x"),
+        constraint: z
+          .strictObject({ rateMin: UintStr, rateMax: UintStr, rateChangePerDayMax: UintStr, rateChangeCapacityMax: UintStr })
+          .optional()
+          .describe("the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute resolve-recipe) for offline byte-building"),
         swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool"),
         unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
-        enableJitMint: z.boolean().default(false).describe("maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST)"),
+        enableJitMint: z.boolean().default(false).describe("maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"),
         permits: z
           .array(z.strictObject({ token: Address, value: UintStr, deadline: UnixSeconds, v: z.number().int().min(0).max(255), r: Bytes32, s: Bytes32 }))
           .max(8)
           .optional()
           .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
+        legacy: z.boolean().optional().describe("build against the DEPRECATED pre-2.1.0 adapter/registry generation (mode-string extraData, constraint derived at FILL time) — requires CORK_ENABLE_DEPRECATED=1 and `mode`. Kept because that adapter still holds the controller roles until governance grants the 2.1.0 ones"),
       })
       .optional()
       .describe(
-        "attach the Cork JIT adapter as the maker-side preInteraction hook: the fill derives the market from the registry recipe against the LIVE oracle rate, creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
+        "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
       ),
   }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then finalize-maker-order, then pass its submitInput verbatim to cork_submit); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
   A("finalize-maker-order", {
@@ -431,8 +445,16 @@ export const PrepareMarketInput = z.object({
   chainId: ChainId,
   clientRequestId: ClientRequestId,
   action: z.discriminatedUnion("type", [
-    A("deploy-wrapper", { collateralAsset: Address, referenceAsset: Address })
-      .describe("unsigned MarketRegistry.deploy(ca, ref) tx: create the pair's rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair just returns the recorded wrapper). Pair order matters: collateral first"),
+    A("deploy-wrapper", {
+      collateralAsset: Address,
+      referenceAsset: Address,
+      mode: z.enum(["price", "nav"]).optional().describe("which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"),
+    })
+      .describe("unsigned MarketRegistry.deploy(ca, ref, mode) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). Pair order matters: collateral first"),
+    A("deploy-fixed-oracle", {
+      rate: UintStr.describe("the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts"),
+    })
+      .describe("unsigned MarketRegistry.deployFixedRateOracle(rate) tx: create the fixed-rate oracle for a RATE (no pair — a fixed rate is not a fact about two assets). Permissionless and IDEMPOTENT; this is the oracle a FIXED-recipe JIT order's rateOverride will produce"),
   ]),
   format: Format,
 });

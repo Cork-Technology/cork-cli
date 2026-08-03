@@ -25,10 +25,12 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "fills", text: "fills executed trades trade history filled orders past swaps" },
     { variant: "limit-order-markets", text: "limit order markets trading pairs listed" },
     { variant: "protocol-config", text: "deployed contract addresses protocol config fees bounds" },
-    { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets" },
-    { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price feed exists" },
-    { variant: "registry-recipes", text: "recipes constraint bands risk presets modes liquidity fixed percentage" },
-    { variant: "market-predict", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate bands preview what pool would a fill create addresses" },
+    { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets price source nav source denomination" },
+    { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price nav mode fixed rate oracle exists" },
+    { variant: "registry-recipes", text: "recipes approved recipe contracts addresses constraint policy liquidity fixed constants args isRecipe" },
+    { variant: "registry-denominations", text: "denominations labels units USD ETH USDS label hash case sensitive currency" },
+    { variant: "registry-feeds", text: "conversion feeds chainlink aggregator edges base quote live answer decimals drift usd graph" },
+    { variant: "market-predict", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses" },
     { variant: "rfqs", text: "rfq request for quote list open requests answers underwriter discovery feed poll" },
   ],
   cork_compute: [
@@ -38,7 +40,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "rollover-premium-floor", text: "rollover premium floor minimum guaranteed" },
     { variant: "impairment-floor", text: "impairment floor worst case horizon rate limited depeg loss" },
     { variant: "rfq-quote", text: "rfq request for quote market maker" },
-    { variant: "resolve-recipe", text: "resolve recipe bands constraints absolute rate applyBands percentage mode" },
+    { variant: "resolve-recipe", text: "resolve recipe constraint four rate limits sign order staticcall anchor rate additionalData" },
   ],
   cork_decode: [
     { variant: "calldata", text: "decode calldata bytes hex explain transaction bundler3 multicall legs what does this do" },
@@ -66,7 +68,10 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "cancel", text: "cancel invalidate order remove resting" },
     { variant: "rollover-intent", text: "rollover intent erc-7683 settler roll position next expiry" },
   ],
-  cork_prepare_market: [{ variant: "deploy-wrapper", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent" }],
+  cork_prepare_market: [
+    { variant: "deploy-wrapper", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent price nav mode" },
+    { variant: "deploy-fixed-oracle", text: "deploy fixed rate oracle rateOverride create2 salted permissionless idempotent" },
+  ],
   cork_track: [
     { variant: "verify/marketRef", text: "verify pool market against chain rehash marketid check" },
     { variant: "verify/artifact", text: "digest pin artifact verify bundle handed" },

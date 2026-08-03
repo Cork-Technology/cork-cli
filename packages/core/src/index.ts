@@ -8,6 +8,10 @@ export * from "./marketid.ts";
 export * from "./create2.ts";
 export * from "./orders.ts";
 export * from "./market-registry.ts";
+// The DEPRECATED pre-2.1.0 generation, namespaced to avoid colliding with the 2.1.0 surface —
+// reachable at runtime only through the deprecation gate.
+export * as marketRegistryLegacy from "./market-registry-legacy.ts";
+export * from "./deprecation.ts";
 export * from "./rollover.ts";
 export * from "./rollover-verify.ts";
 export * from "./datasources/venue.ts";

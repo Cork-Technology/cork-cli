@@ -49,11 +49,32 @@ const RolloverDeploymentSchema = z
   .strip();
 export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
 
-// MarketRegistry stack (market-registry-api): the permanent registry + oracle factory, and the
-// JIT CorkLimitOrderAdapter. The adapter address is VOLATILE by team guidance (redeploys under
-// a single deployer are expected; roles may be split) — consumers re-verify its on-chain
-// bindings + role grants at prepare time rather than trusting this record.
+// MarketRegistry stack (market-registry-api, contracts release 2.1.0): the registry, the JIT
+// CorkLimitOrderAdapter, the two oracle factories (pair wrappers + fixed-rate), and named recipe
+// hints. Addresses are VOLATILE by team guidance (the whole set was redeployed from scratch for
+// 2.1.0, and an older generation still ANSWERS 2.1.0-shaped calls with misdecoded garbage) —
+// consumers re-verify the adapter's on-chain bindings (MARKET_REGISTRY() == registry) + role
+// grants at use time rather than trusting this record. `recipes` is a convenience map for the
+// deprecated mode sugar only; recipe membership is decided solely by isRecipe on chain.
 const MarketRegistrySchema = z
+  .object({
+    registry: Address,
+    adapter: Address.optional(),
+    controller: Address.optional(),
+    wrapperFactory: Address.optional(),
+    fixedRateOracleFactory: Address.optional(),
+    aggregatorAdapterFactory: Address.optional(),
+    recipes: z.record(z.string(), Address).optional(),
+    owner: Address.optional(),
+    contractsVersion: z.string().optional(),
+    deployedAtBlock: z.number().int().nonnegative().optional(),
+  })
+  .strip();
+export type CorkMarketRegistry = z.infer<typeof MarketRegistrySchema>;
+
+// The pre-2.1.0 registry generation, kept ONLY for the gated deprecated path (deprecation.ts).
+// Its interface is the old one (mode-keyed recipes, percentage bands, two-arg deploy).
+const MarketRegistryLegacySchema = z
   .object({
     registry: Address,
     oracleFactory: Address.optional(),
@@ -61,7 +82,7 @@ const MarketRegistrySchema = z
     controller: Address.optional(),
   })
   .strip();
-export type CorkMarketRegistry = z.infer<typeof MarketRegistrySchema>;
+export type CorkMarketRegistryLegacy = z.infer<typeof MarketRegistryLegacySchema>;
 
 const DefaultsSchema = z.object({
   schemaVersion: z.literal(1),
@@ -74,6 +95,9 @@ const DefaultsSchema = z.object({
     .record(z.string(), z.object({ current: Address, legacy: z.array(Address).default([]) }).strip())
     .optional(),
   marketRegistry: z.record(z.string(), MarketRegistrySchema).optional(),
+  // Pre-2.1.0 registry generation — served ONLY through resolveMarketRegistryLegacy, whose
+  // callers must first pass the deprecation gate (CORK_ENABLE_DEPRECATED=1).
+  marketRegistryLegacy: z.record(z.string(), MarketRegistryLegacySchema).optional(),
   // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
   // Arbitrum "arbitrum-legacy" pre-launch pair, kept so its calibration pools stay readable
   // after the 2026-07-22 promotion of the announced deployment to primary).
@@ -281,5 +305,16 @@ export async function resolveMarketRegistry(
 ): Promise<{ marketRegistry: CorkMarketRegistry | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
   const cfg = await resolveConfig(deps);
   const marketRegistry = cfg.defaults.marketRegistry?.[String(chainId)];
+  return { marketRegistry, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+}
+
+/** The DEPRECATED pre-2.1.0 registry stack. Callers must pass the deprecation gate
+ *  (deprecation.ts) BEFORE resolving this — it exists only for the gated legacy path. */
+export async function resolveMarketRegistryLegacy(
+  chainId: number,
+  deps?: ConfigDeps,
+): Promise<{ marketRegistry: CorkMarketRegistryLegacy | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  const cfg = await resolveConfig(deps);
+  const marketRegistry = cfg.defaults.marketRegistryLegacy?.[String(chainId)];
   return { marketRegistry, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
 }

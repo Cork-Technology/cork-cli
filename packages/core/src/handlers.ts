@@ -49,9 +49,11 @@ import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuilti
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
-import { accessControlAbi, applyBandsLocal, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, deriveJitMarket, encodeJitExtraData, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, POOL_CREATOR_ROLE, predictShares, type ConstraintBands, type PermitParams, type PredictSharesResult } from "./market-registry.ts";
+import { accessControlAbi, aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, POOL_CREATOR_ROLE, predictShares, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
+import * as legacyRegistry from "./market-registry-legacy.ts";
+import { deprecatedEnabled, deprecatedGateMessage } from "./deprecation.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
-import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveRollover } from "./config-remote.ts";
+import { resolveConfig, resolveDeployment as resolveDeploymentBuiltin, resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "./config-remote.ts";
 import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "./rollover.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncLog, type HyperSyncSource } from "./datasources/hypersync.ts";
@@ -450,60 +452,47 @@ async function handleCompute(input: ComputeInput, ctx: HandlerContext): Promise<
   }
 
   if (p.kind === "resolve-recipe") {
+    // 2.1.0: ask the recipe CONTRACT what four rate limits it would impose (a staticcall to
+    // recipe.resolve) — THE step that produces the constraint you sign into a JIT order. The
+    // registry's percentage-band math is gone from the public surface; p.legacy reaches the
+    // deprecated pre-2.1.0 bands behind the gate.
+    if (p.legacy) return handleComputeResolveRecipeLegacy(input, p, ctx, chainId);
+    if (!p.collateralAsset || !p.referenceAsset) {
+      return unavailable(chainId, "missing_filter", "resolve-recipe needs collateralAsset + referenceAsset (the pair the constraint is for), plus recipe (the approved recipe CONTRACT ADDRESS; mode survives as deprecated sugar). Optional: args (recipe additionalData hex), rate (FIXED recipes), rateOracle (explicit oracle)", ctx);
+    }
     const r = await getRegistry(ctx, chainId);
     if (r.gate) return r.gate;
     const { mr, resolved, warnings } = r;
     const client = resolved.client;
     const rpc = rpcProvenance(input.format, resolved);
-    const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
     try {
-      const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [p.mode] });
-      if (!found) {
-        const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
-        return unavailable(chainId, "recipe_not_found", `recipe mode '${p.mode}' is not in the registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
-      }
-      // Rate: caller-supplied, or the pair's LIVE oracle rate (deploy is idempotent — simulating
-      // it returns the wrapper whether or not it exists yet, matching what a fill would read).
-      let rate: bigint;
-      let oracle: `0x${string}` | undefined;
-      if (p.rate !== undefined) {
-        rate = BigInt(p.rate);
-      } else {
-        if (!p.collateralAsset || !p.referenceAsset) {
-          return unavailable(chainId, "missing_filter", "resolve-recipe needs either an explicit rate, or collateralAsset+referenceAsset to read the pair's live oracle rate", ctx);
-        }
-        const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [p.collateralAsset, p.referenceAsset] });
-        oracle = sim.result;
-        rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
-        if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — a JIT fill would revert RateUnavailable and the bands cannot be meaningfully resolved", ctx);
-      }
-      const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
-      // [C11] the local band-resolution throw (e.g. a rateMin band above 100%) is a domain
-      // violation, not a chain fault — give it its own envelope.
-      let local: ReturnType<typeof applyBandsLocal>;
-      try {
-        local = applyBandsLocal(bands, rate);
-      } catch (err) {
-        return localComputeFailed(chainId, err, warnings, ctx);
-      }
-      // Bit-parity self-check against the chain's own applyBands [K7-style: never serve math the
-      // contract would disagree with].
-      const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [p.mode, rate] });
-      const same = onChain.rateMin === local.rateMin && onChain.rateMax === local.rateMax && onChain.rateChangePerDayMax === local.rateChangePerDayMax && onChain.rateChangeCapacityMax === local.rateChangeCapacityMax;
-      if (!same) {
-        return envelope({ state: "conflict", data: { kind: p.kind, mode: p.mode, rate, local, onChain }, chainId, source: "chain", warnings: [{ code: "band_parity_mismatch", message: "local applyBands port disagrees with the on-chain view — trust the chain values and report this" }], ctx });
-      }
+      const res = await resolveRecipeOracleConstraint({
+        client,
+        ctx,
+        chainId,
+        mr,
+        recipe: p.recipe,
+        mode: p.mode,
+        collateralAsset: p.collateralAsset,
+        referenceAsset: p.referenceAsset,
+        fixedRate: p.rate !== undefined ? BigInt(p.rate) : undefined,
+        rateOracle: p.rateOracle,
+        additionalData: p.args,
+        wantConstraint: true,
+      });
+      warnings.push(...res.warnings);
+      if (res.gate) return res.gate;
+      const { recipe, source, oracle, constraint } = res;
       return envelope({
         state: "ok",
         data: {
           kind: p.kind,
-          mode: p.mode,
-          scales: { bands: "1e18 = 1% (percentage)", rateAndResolved: "1e18 = 1.0 (absolute)" },
-          bands,
-          rate,
-          ...(oracle ? { oracle, rateSource: "live oracle" } : { rateSource: "caller-supplied" }),
-          resolved: local,
-          parity: "verified against on-chain applyBands",
+          recipe,
+          source,
+          scales: { constraint: "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" },
+          constraint,
+          rateOracle: { address: oracle.address, status: oracle.deployed ? "live" : oracle.address ? "predicted" : "none", ...(oracle.mode ? { mode: oracle.mode } : {}), rate: oracle.rate, ...(oracle.reason ? { reason: oracle.reason } : {}) },
+          note: oracle.deployed ? "resolved against the LIVE oracle rate" : "no live oracle — the recipe resolved from its fallback (e.g. the anchorRate in args); the eventual fill deploys the oracle and re-checks with recipe.verify against the LIVE rate",
         },
         chainId,
         source: "chain",
@@ -852,6 +841,14 @@ interface QueryFilters {
   rfqId?: string;
   state?: "open" | "expired";
   withAnswers?: boolean;
+  recipe?: `0x${string}`;
+  args?: `0x${string}`;
+  rate?: bigint;
+  rateOracle?: `0x${string}`;
+  label?: string;
+  base?: `0x${string}`;
+  quote?: `0x${string}`;
+  legacy?: boolean;
 }
 
 /** Every filter key parseQueryFilters understands — unknown keys are a teachable error, as advertised.
@@ -875,6 +872,14 @@ export const KNOWN_FILTER_KEYS = [
   "rfqId",
   "state",
   "withAnswers",
+  "recipe",
+  "args",
+  "rate",
+  "rateOracle",
+  "label",
+  "base",
+  "quote",
+  "legacy",
 ] as const;
 
 function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilters {
@@ -961,6 +966,33 @@ function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilte
     if (typeof raw.withAnswers === "boolean") out.withAnswers = raw.withAnswers;
     else if (raw.withAnswers === "true" || raw.withAnswers === "false") out.withAnswers = raw.withAnswers === "true";
     else fail("withAnswers", "expected a boolean");
+  }
+  // 2.1.0 registry filters: a recipe is an approved CONTRACT ADDRESS; `args` is the recipe's raw
+  // additionalData hex; `rate` keys a fixed-rate oracle (18-decimal integer string); `rateOracle`
+  // overrides oracle resolution on resolve/predict; label/base/quote are the denominations/feeds
+  // point lookups; `legacy` selects the DEPRECATED pre-2.1.0 generation (gated).
+  for (const key of ["recipe", "rateOracle", "base", "quote"] as const) {
+    if (raw?.[key] !== undefined) {
+      const r = Address.safeParse(raw[key]);
+      if (!r.success) fail(key, "not a valid EVM address");
+      else out[key] = r.data;
+    }
+  }
+  if (raw?.args !== undefined) {
+    const v = String(raw.args);
+    if (!/^0x[0-9a-fA-F]*$/.test(v)) fail("args", "expected 0x-prefixed hex bytes (the recipe's additionalData, passed verbatim)");
+    else out.args = v as `0x${string}`;
+  }
+  if (raw?.rate !== undefined) {
+    const v = String(raw.rate);
+    if (!/^[0-9]+$/.test(v)) fail("rate", "expected an 18-decimal rate as a decimal integer string (1e18 = 1.0)");
+    else out.rate = BigInt(v);
+  }
+  if (raw?.label !== undefined) out.label = String(raw.label);
+  if (raw?.legacy !== undefined) {
+    if (typeof raw.legacy === "boolean") out.legacy = raw.legacy;
+    else if (raw.legacy === "true" || raw.legacy === "false") out.legacy = raw.legacy === "true";
+    else fail("legacy", "expected a boolean");
   }
   return out;
 }
@@ -1311,7 +1343,7 @@ async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Enve
   }
 
   // MarketRegistry reads (registry-*) — live chain views on the registry contract.
-  if (input.resource === "registry-assets" || input.resource === "registry-oracle" || input.resource === "registry-recipes") {
+  if (input.resource === "registry-assets" || input.resource === "registry-oracle" || input.resource === "registry-recipes" || input.resource === "registry-denominations" || input.resource === "registry-feeds") {
     return handleQueryRegistry(input, filters, chainId, ctx);
   }
   // market-predict — the registry+adapter derivation of a market that may not exist yet.
@@ -1564,79 +1596,606 @@ async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promise<
   return { mr, resolved, warnings: [...rpcWarn(resolved), ...(warning ? [warning] : [])] };
 }
 
-/** MarketRegistry chain views: approved assets, rate-oracle status for a pair, recipe bands. */
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as const;
+
+/** First line of a revert, with the custom error name when the ABI decoded it. */
+function revertReason(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  return (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0] ?? err.message).trim();
+}
+
+/** Best-effort 2.1.0 generation guard, cached per (chainId, adapter) for the process: the ONE
+ *  check that rules out the previous-generation hazard (an old registry ANSWERS 2.1.0-shaped
+ *  calls with misdecoded garbage) is the adapter's MARKET_REGISTRY() immutable matching the
+ *  configured registry (INTEGRATOR.md). Returns a conflict warning on mismatch; silence when
+ *  the adapter is unconfigured or the read fails (the prepare paths re-check hard). */
+const bindingGuardCache = new Map<string, boolean>();
+/** Test hook: clear the per-process binding-guard memo (mirrors resetConfigMemo). */
+export function resetRegistryBindingGuardCache(): void {
+  bindingGuardCache.clear();
+}
+async function registryBindingMismatch(client: ResolvedRpc["client"], chainId: ChainId, mr: { registry: `0x${string}`; adapter?: `0x${string}` | undefined }): Promise<{ code: string; message: string } | undefined> {
+  if (!mr.adapter) return undefined;
+  const key = `${chainId}:${mr.adapter.toLowerCase()}:${mr.registry.toLowerCase()}`;
+  const cached = bindingGuardCache.get(key);
+  if (cached === true) return undefined;
+  if (cached === undefined) {
+    try {
+      const bound = (await client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" })) as `0x${string}`;
+      bindingGuardCache.set(key, bound.toLowerCase() === mr.registry.toLowerCase());
+    } catch {
+      return undefined; // disclosed-by-omission: reads proceed; prepares re-check hard
+    }
+  }
+  if (bindingGuardCache.get(key) === false) {
+    return { code: "adapter_binding_mismatch", message: `the configured adapter's on-chain MARKET_REGISTRY() does not match the configured registry ${mr.registry} — one of them is a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage). Refresh cork-defaults.json; do not trust these reads` }; // conflict-grade
+  }
+  return undefined;
+}
+
+/** Shape an on-chain AssetSource into the API-parity object (absent slot ⇒ null). */
+function shapeAssetSource(s: { addr: `0x${string}`; sourceType: number; sourceInterface: number; denomination: string }): Record<string, unknown> | null {
+  if (s.addr === ZERO_ADDR) return null;
+  return { address: s.addr, sourceType: SOURCE_TYPE[s.sourceType] ?? s.sourceType, sourceInterface: SOURCE_INTERFACE[s.sourceInterface] ?? s.sourceInterface, denomination: s.denomination };
+}
+
+type RegistryClient = ResolvedRpc["client"];
+
+/** Best-effort ERC-20 self-description (symbol/name/decimals) — null when the token won't say. */
+async function tokenMeta(client: RegistryClient, addr: `0x${string}`): Promise<{ decimals: number; symbol: string; name: string } | null> {
+  try {
+    const [decimals, symbol, name] = await Promise.all([
+      client.readContract({ address: addr, abi: erc20MetadataAbi, functionName: "decimals" }),
+      client.readContract({ address: addr, abi: erc20MetadataAbi, functionName: "symbol" }),
+      client.readContract({ address: addr, abi: erc20MetadataAbi, functionName: "name" }),
+    ]);
+    return { decimals: Number(decimals), symbol: symbol as string, name: name as string };
+  } catch {
+    return null;
+  }
+}
+
+/** One recipe's live self-description: source()/description()/REGISTRY() + catalogued constants
+ *  (values always read live; a constant the contract no longer answers is silently dropped,
+ *  matching the read API). Catalog absence is not a gate — argsKnown:false, still resolvable. */
+async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, configuredRegistry: `0x${string}`): Promise<Record<string, unknown>> {
+  const r = { address: recipe, abi: recipeAbi } as const;
+  const [source, description, boundRegistry] = await Promise.all([
+    client.readContract({ ...r, functionName: "source" }),
+    client.readContract({ ...r, functionName: "description" }).catch(() => null),
+    client.readContract({ ...r, functionName: "REGISTRY" }).catch(() => null),
+  ]);
+  const catalog = RECIPE_CATALOG[recipe.toLowerCase()];
+  const constants: Record<string, string> = {};
+  if (catalog) {
+    await Promise.all(
+      catalog.constants.map(async (name) => {
+        try {
+          const v = (await client.readContract({ address: recipe, abi: constantGetterAbi(name), functionName: name })) as unknown as bigint;
+          constants[name] = v.toString();
+        } catch {
+          /* dropped: the contract no longer answers this getter */
+        }
+      }),
+    );
+  }
+  return {
+    address: recipe,
+    source: RECIPE_SOURCE[source as number] ?? source,
+    description,
+    constants,
+    registry: boundRegistry,
+    registryMatches: boundRegistry !== null && String(boundRegistry).toLowerCase() === configuredRegistry.toLowerCase(),
+    argsKnown: Boolean(catalog),
+    args: catalog?.args ?? null,
+  };
+}
+
+/** MarketRegistry chain views (contracts 2.1.0): approved assets (two named source slots),
+ *  recipes-as-contracts (self-described, live constants), denominations, conversion feeds, and
+ *  mode-keyed / fixed-rate oracle status. filters.legacy routes to the DEPRECATED pre-2.1.0
+ *  generation behind the deprecation gate. */
 async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+  if (filters.legacy) return handleQueryRegistryLegacy(input, filters, chainId, ctx);
   const r = await getRegistry(ctx, chainId);
   if (r.gate) return r.gate;
   const { mr, resolved, warnings } = r;
   const client = resolved.client;
   const rpc = rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
+  const version = mr.contractsVersion ? { contractsVersion: mr.contractsVersion } : {};
   try {
+    const bindingWarn = await registryBindingMismatch(client, chainId, mr);
+    if (bindingWarn) {
+      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...warnings, bindingWarn], ...rpc, ctx });
+    }
     if (input.resource === "registry-assets") {
-      // filters.address → single lookup by natural key (the registry keys assets by addr+chainId).
+      // filters.address → single lookup by natural key (an address keys exactly one asset per chain).
       if (filters.address) {
-        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address, BigInt(chainId)] });
+        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address] });
         if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a registry-approved asset on chainId ${chainId} — list them with cork_query resource:"registry-assets" (no filters)`, ctx);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        const item = { address: entry.addr, name: entry.name, kind: ASSET_KIND[entry.kind] ?? entry.kind, priceSource: shapeAssetSource(entry.priceSource), navSource: shapeAssetSource(entry.navSource), token: await tokenMeta(client, entry.addr) };
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} assets but this read returns the first ${page.length} — items are partial evidence` });
       }
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      const items = await Promise.all(
+        page.map(async (a) => ({ address: a.addr, name: a.name, kind: ASSET_KIND[a.kind] ?? a.kind, priceSource: shapeAssetSource(a.priceSource), navSource: shapeAssetSource(a.navSource), token: await tokenMeta(client, a.addr) })),
+      );
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     if (input.resource === "registry-recipes") {
-      if (filters.mode !== undefined) {
-        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [filters.mode] });
-        if (!found) {
-          const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
-          return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' is not in the registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
+      // A recipe is an approved CONTRACT ADDRESS in 2.1.0 — no modes, no stored bands, no
+      // applyBands. filters.recipe → single lookup; filters.mode survives as DEPRECATED sugar
+      // over the config's named-recipe hints.
+      let single: `0x${string}` | undefined = filters.recipe;
+      if (!single && filters.mode !== undefined) {
+        const hinted = mr.recipes?.[filters.mode];
+        if (!hinted) {
+          return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (filters.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx);
         }
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        warnings.push({ code: "deprecation_notice", message: `filters.mode is deprecated sugar: '${filters.mode}' resolved to recipe ${hinted} via this tool's config hints. Recipes are contract addresses in 2.1.0 — pass filters.recipe; mode will be removed in a later release` });
+        single = hinted;
       }
-      const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      if (single) {
+        const isRecipe = await client.readContract({ ...reg, functionName: "isRecipe", args: [single] });
+        if (!isRecipe) return unavailable(chainId, "recipe_not_found", `${single} is not an approved recipe on this registry (isRecipe is the only membership gate) — list them with cork_query resource:"registry-recipes"`, ctx);
+        const item = await readRecipeMeta(client, single, mr.registry);
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
+      const [page, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
       if (total > BigInt(page.length)) {
-        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} recipes but this read returns the first ${page.length} — items (and the modes list) are partial evidence; a mode absent here may still exist` });
+        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} recipes but this read returns the first ${page.length} — items are partial evidence; a recipe absent here may still exist` });
       }
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      const items = await Promise.all(page.map((addr) => readRecipeMeta(client, addr, mr.registry)));
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
-    // registry-oracle: lookupWrapper, and when absent a SIMULATED deploy tells the truth about
-    // deployability (the same probe the read API batches) — a non-deployable pair is a normal
-    // `ok` answer with deployable:false, not an error.
+    if (input.resource === "registry-denominations") {
+      // The registry stores the label HASH; display text comes from the unit's own symbol()
+      // (fiat/native pseudo-units from a fixed table). labelHash is the identity, label display.
+      if (filters.label !== undefined) {
+        const [found, unit] = await client.readContract({ ...reg, functionName: "lookupDenomination", args: [filters.label] });
+        if (!found) return unavailable(chainId, "denomination_not_found", `denomination '${filters.label}' is not registered on chainId ${chainId} — labels are EXACT BYTES and case-sensitive ('USD' and 'usd' are different denominations); list them with cork_query resource:"registry-denominations"`, ctx);
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [{ label: filters.label, unit }] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
+      const [page, total] = await client.readContract({ ...reg, functionName: "getDenominations", args: [0n, 500n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} denominations but this read returns the first ${page.length}` });
+      }
+      const items = await Promise.all(
+        page.map(async (d) => {
+          const pseudo = DENOMINATION_PSEUDO_UNITS[d.unit.toLowerCase()];
+          const label = pseudo ?? (await tokenMeta(client, d.unit))?.symbol ?? null;
+          return { labelHash: d.labelHash, unit: d.unit, label, labelSource: pseudo ? "pseudo-unit table" : label ? "unit symbol() — display only; labelHash is the identity" : null };
+        }),
+      );
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+    if (input.resource === "registry-feeds") {
+      // A feed is ONE DIRECTED edge of the graph proving an asset reaches US dollars — base→quote
+      // and quote→base are different records. `live` is the aggregator's current answer;
+      // comparing live.decimals against feedDecimals exposes decimals drift since registration.
+      const readLive = async (aggregator: `0x${string}`) => {
+        try {
+          const [decimals, round] = await Promise.all([
+            client.readContract({ address: aggregator, abi: aggregatorV3Abi, functionName: "decimals" }),
+            client.readContract({ address: aggregator, abi: aggregatorV3Abi, functionName: "latestRoundData" }),
+          ]);
+          const [, answer, , updatedAt] = round as unknown as readonly [bigint, bigint, bigint, bigint, bigint];
+          return { answer: answer.toString(), decimals: Number(decimals), updatedAt: updatedAt.toString() };
+        } catch {
+          return null;
+        }
+      };
+      if (filters.base || filters.quote) {
+        if (!filters.base || !filters.quote) return unavailable(chainId, "missing_filter", "a single-feed lookup needs BOTH filters.base and filters.quote (direction matters: base→quote and quote→base are different feeds)", ctx);
+        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupConversionFeed", args: [filters.base, filters.quote] });
+        if (!found) return unavailable(chainId, "feed_not_found", `no conversion feed registered for ${filters.base} → ${filters.quote} on chainId ${chainId} (direction matters); list them with cork_query resource:"registry-feeds"`, ctx);
+        const item = { base: entry.base, quote: entry.quote, aggregator: entry.aggregatorAddress, feedDecimals: entry.feedDecimals, live: await readLive(entry.aggregatorAddress) };
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
+      const [page, total] = await client.readContract({ ...reg, functionName: "getConversionFeeds", args: [0n, 500n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} conversion feeds but this read returns the first ${page.length}` });
+      }
+      const items = await Promise.all(page.map(async (f) => ({ base: f.base, quote: f.quote, aggregator: f.aggregatorAddress, feedDecimals: f.feedDecimals, live: await readLive(f.aggregatorAddress) })));
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+    // registry-oracle — two keying families, one resource:
+    //  · filters.rate → the FIXED-RATE oracle for that rate (keyed on the rate, not a pair);
+    //  · filters.collateralAsset+referenceAsset [+ filters.mode price|nav] → the pair's wrapper.
+    // The oracle:{address,deployed,deployable,…} shape is shared with market-predict +
+    // cork_prepare_market, so oracle.address is one reusable path across those tools.
+    if (filters.rate !== undefined) {
+      if (filters.collateralAsset || filters.referenceAsset) {
+        return unavailable(chainId, "missing_filter", "filters.rate keys a FIXED-RATE oracle (no pair) — pass either rate OR collateralAsset+referenceAsset, not both", ctx);
+      }
+      if (filters.rate === 0n) return unavailable(chainId, "invalid_state", "a zero fixed rate cannot have an oracle — the FixedRateOracle constructor reverts on 0", ctx);
+      const predicted = await client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [filters.rate] });
+      const code = await client.getCode({ address: predicted }).catch(() => undefined);
+      const deployed = code !== undefined && code !== "0x";
+      return envelope({
+        state: "ok",
+        data: { resource: input.resource, chainId, registry: mr.registry, ...version, rate: filters.rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", oracle: { address: predicted, deployed, deployable: true }, ...(deployed ? {} : { note: "not deployed yet; registry.deployFixedRateOracle(rate) is permissionless + idempotent (CREATE2-salted by the rate) — cork_prepare_market deploy-fixed-oracle builds that tx, and a JIT fill with rateOverride deploys it automatically" }) },
+        chainId,
+        source: "chain",
+        warnings,
+        ...rpc,
+        ctx,
+      });
+    }
     if (!filters.collateralAsset || !filters.referenceAsset) {
-      return unavailable(chainId, "missing_filter", "registry-oracle requires filters.collateralAsset AND filters.referenceAsset (order matters: collateral first — the reverse pair is a different oracle)", ctx);
+      return unavailable(chainId, "missing_filter", "registry-oracle requires filters.collateralAsset AND filters.referenceAsset (order matters: collateral first — the reverse pair is a different oracle), or filters.rate for a fixed-rate oracle", ctx);
     }
-    // The rate-oracle wrapper is surfaced under a single `oracle:{address,deployed,deployable,reason?}`
-    // shape shared with cork_query market-predict + cork_prepare_market, so `oracle.address` is one
-    // reusable path across those tools. `address` is the live wrapper when deployed, the predicted
-    // wrapper when only deployable, and null when the pair can't get an oracle.
-    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset] });
-    if (wrapper !== "0x0000000000000000000000000000000000000000") {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: wrapper, deployed: true, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
+    const modeName: OracleModeName = filters.mode === "nav" ? "nav" : "price";
+    if (filters.mode !== undefined && filters.mode !== "price" && filters.mode !== "nav") {
+      return unavailable(chainId, "missing_filter", `registry-oracle filters.mode must be 'price' or 'nav' (got '${filters.mode}') — one pair can hold BOTH wrappers at different addresses, so the mode is part of the key. For a fixed-rate oracle pass filters.rate instead`, ctx);
+    }
+    if (filters.mode === undefined) warnings.push({ code: "reserved_field_ignored", message: "no filters.mode given — defaulted to 'price'. One pair can hold a price AND a nav wrapper at different addresses; pass mode explicitly when you mean nav" });
+    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
+    const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName };
+    if (wrapper !== ZERO_ADDR) {
+      const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate } : {}) } }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     try {
-      const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset] });
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: sim.result, deployed: false, deployable: true }, note: "no oracle yet; registry.deploy(ca, ref) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx" }, chainId, source: "chain", warnings, ...rpc, ctx });
+      // Simulating the real deploy (not re-deriving CREATE2 off-chain) is deliberate: the salt
+      // includes the RESOLVED source addresses, so re-deriving would duplicate the registry's
+      // nav-fallback rules — the simulation cannot drift from what a fill will actually do.
+      const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: sim.result, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings, ...rpc, ctx });
     } catch (err) {
-      const reason = err instanceof Error ? (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0]) : String(err);
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: null, deployed: false, deployable: false, reason: reason?.trim() }, note: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill for it would revert" }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) }, note: `this pair cannot get a ${modeName} oracle as-registered (MissingSource / NavModeWithoutNavSource — an unregistered asset, a missing source slot, or no conversion path) — a JIT fill for it would revert` }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
   } catch (err) {
     return chainReadFailed(chainId, err, warnings, ctx, resolved);
   }
 }
 
+/** The DEPRECATED pre-2.1.0 resolve-recipe (percentage bands × live rate via the old registry's
+ *  applyBands, bit-parity self-checked) — preserved behind the deprecation gate. */
+async function handleComputeResolveRecipeLegacy(
+  input: { format: "concise" | "full" },
+  p: { kind: "resolve-recipe"; mode?: string | undefined; rate?: string | undefined; collateralAsset?: `0x${string}` | undefined; referenceAsset?: `0x${string}` | undefined },
+  ctx: HandlerContext,
+  chainId: ChainId,
+): Promise<Envelope> {
+  if (!deprecatedEnabled()) {
+    return unavailable(chainId, "deprecated_gated", deprecatedGateMessage("legacy resolve-recipe (pre-2.1.0 percentage-band math)", "In 2.1.0 a recipe resolves its own constraint — drop `legacy` and pass the recipe CONTRACT ADDRESS."), ctx);
+  }
+  if (p.mode === undefined) return unavailable(chainId, "missing_filter", "legacy resolve-recipe needs `mode` (the old registry's exact case-sensitive mode string)", ctx);
+  const { marketRegistry: mr, warning } = await resolveMarketRegistryLegacy(chainId);
+  if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
+  const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved), ...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 band math against the OLD registry (CORK_ENABLE_DEPRECATED is set) — 2.1.0 recipes resolve their own constraints" }];
+  const client = resolved.client;
+  const rpc = rpcProvenance(input.format, resolved);
+  const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
+  try {
+    const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [p.mode] });
+    if (!found) {
+      const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      return unavailable(chainId, "recipe_not_found", `recipe mode '${p.mode}' is not in the legacy registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
+    }
+    let rate: bigint;
+    let oracle: `0x${string}` | undefined;
+    if (p.rate !== undefined) {
+      rate = BigInt(p.rate);
+    } else {
+      if (!p.collateralAsset || !p.referenceAsset) {
+        return unavailable(chainId, "missing_filter", "legacy resolve-recipe needs either an explicit rate, or collateralAsset+referenceAsset to read the pair's live oracle rate", ctx);
+      }
+      const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [p.collateralAsset, p.referenceAsset] });
+      oracle = sim.result;
+      rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
+      if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — the bands cannot be meaningfully resolved", ctx);
+    }
+    const bands: legacyRegistry.ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
+    let local: ReturnType<typeof legacyRegistry.applyBandsLocal>;
+    try {
+      local = legacyRegistry.applyBandsLocal(bands, rate);
+    } catch (err) {
+      return localComputeFailed(chainId, err, warnings, ctx);
+    }
+    const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [p.mode, rate] });
+    const same = onChain.rateMin === local.rateMin && onChain.rateMax === local.rateMax && onChain.rateChangePerDayMax === local.rateChangePerDayMax && onChain.rateChangeCapacityMax === local.rateChangeCapacityMax;
+    if (!same) {
+      return envelope({ state: "conflict", data: { kind: p.kind, mode: p.mode, rate, local, onChain }, chainId, source: "chain", warnings: [...warnings, { code: "band_parity_mismatch", message: "local applyBands port disagrees with the on-chain view — trust the chain values and report this" }], ctx });
+    }
+    return envelope({
+      state: "ok",
+      data: { kind: p.kind, mode: p.mode, scales: { bands: "1e18 = 1% (percentage)", rateAndResolved: "1e18 = 1.0 (absolute)" }, bands, rate, ...(oracle ? { oracle, rateSource: "live oracle" } : { rateSource: "caller-supplied" }), resolved: local, parity: "verified against on-chain applyBands" },
+      chainId,
+      source: "chain",
+      warnings,
+      ...rpc,
+      ctx,
+    });
+  } catch (err) {
+    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+  }
+}
+
+/** The DEPRECATED pre-2.1.0 JIT extension build (mode-string extraData against the OLD adapter,
+ *  bands resolved at fill time) — preserved behind the deprecation gate because the OLD adapter
+ *  still holds both controller roles on-chain (verified 2026-08-03): until governance grants
+ *  them to the 2.1.0 adapter, this is the only FILLABLE JIT path. */
+async function prepareJitLegacy(args: {
+  chainId: ChainId;
+  ctx: HandlerContext;
+  lop: `0x${string}`;
+  jm: { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: string; mode?: string | undefined; swapFeePercentage: string; unwindSwapFeePercentage: string; enableJitMint: boolean; permits?: Array<{ token: `0x${string}`; value: string; deadline: string; v: number; r: `0x${string}`; s: `0x${string}` }> | undefined };
+  makerAsset: `0x${string}`;
+  takerAsset: `0x${string}`;
+}): Promise<{ gate: Envelope } | { gate?: undefined; extension: `0x${string}`; jitData: Record<string, unknown>; warnings: Array<{ code: string; message: string }> }> {
+  const { chainId, ctx, lop, jm } = args;
+  if (!deprecatedEnabled()) {
+    return { gate: unavailable(chainId, "deprecated_gated", deprecatedGateMessage("jitMarket.legacy (the pre-2.1.0 mode-string JIT flow against the old adapter)", "The 2.1.0 flow carries a recipe ADDRESS and the resolved constraint — drop `legacy`, pass jitMarket.recipe (+ constraint or an RPC to auto-resolve it)."), ctx) };
+  }
+  if (jm.mode === undefined) return { gate: unavailable(chainId, "missing_filter", "legacy JIT orders need jitMarket.mode (the old registry's exact case-sensitive mode string)", ctx) };
+  const mode = jm.mode;
+  const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistryLegacy(chainId);
+  if (!mr?.adapter) {
+    return { gate: unavailable(chainId, "unknown_deployment", `no LEGACY JIT CorkLimitOrderAdapter configured for chainId ${chainId}`, ctx) };
+  }
+  const warnings: Array<{ code: string; message: string }> = [
+    ...(mrWarn ? [mrWarn] : []),
+    { code: "deprecated", message: "this order targets the DEPRECATED pre-2.1.0 adapter/registry generation (CORK_ENABLE_DEPRECATED is set). It is currently the only path whose adapter holds the controller roles, but it derives the constraint at FILL time from the live rate — the pool id drifts with the rate, and the generation will be retired once the 2.1.0 adapter is granted its roles" },
+  ];
+  const jitParams: legacyRegistry.JITMarketParams = {
+    collateralAsset: jm.collateralAsset,
+    referenceAsset: jm.referenceAsset,
+    expiryTimestamp: BigInt(jm.expiryTimestamp),
+    mode,
+    swapFeePercentage: BigInt(jm.swapFeePercentage),
+    unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
+    enableJitMint: jm.enableJitMint,
+  };
+  const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+  const extension = legacyRegistry.buildJitExtension(mr.adapter, legacyRegistry.encodeJitExtraData(jitParams, permits));
+  let jitData: Record<string, unknown> = { generation: "legacy (pre-2.1.0)", adapter: mr.adapter, hook: "preInteraction (maker-side)", mode, enableJitMint: jm.enableJitMint };
+  warnings.push({ code: "rate_drift_notice", message: "LEGACY generation: market identity follows the LIVE oracle rate — the derived pool id is only stepwise-stable, and a drifted rate reverts the fill with OrderNotForPool (by design, as a staleness guard)" });
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) {
+    warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — legacy JIT pre-flights (adapter bindings, roles, recipe, oracle, derived pool, cST side-match) were SKIPPED; the extension is built but unverified" });
+    return { extension, jitData, warnings };
+  }
+  const client = resolved.client;
+  try {
+    const [boundLop, boundRegistry, boundController] = await Promise.all([
+      client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+      client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
+      client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "CONTROLLER" }),
+    ]);
+    if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
+      return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.json before signing anything" }], ctx }) };
+    }
+    const [hasCreator, hasConfigurator] = await Promise.all([
+      client.readContract({ address: boundController, abi: legacyRegistry.accessControlAbi, functionName: "hasRole", args: [legacyRegistry.POOL_CREATOR_ROLE, mr.adapter] }),
+      client.readContract({ address: boundController, abi: legacyRegistry.accessControlAbi, functionName: "hasRole", args: [legacyRegistry.CONFIGURATOR_ROLE, mr.adapter] }),
+    ]);
+    if (!hasCreator || !hasConfigurator) {
+      warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
+    }
+    const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
+    const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });
+    if (!found) {
+      return { gate: unavailable(chainId, "recipe_not_found", `recipe mode '${mode}' is not in the legacy registry — the fill would revert EntryNotFound`, ctx) };
+    }
+    const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [jm.collateralAsset, jm.referenceAsset] });
+    const oracle = sim.result;
+    const rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
+    if (rate === 0n) {
+      return { gate: unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — the fill would revert RateUnavailable", ctx) };
+    }
+    const bands: legacyRegistry.ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
+    const derived = legacyRegistry.deriveJitMarket({ params: jitParams, oracle, rate, bands });
+    jitData = { ...jitData, oracle, rateAtPrepare: rate, derivedPoolId: derived.poolId, resolvedConstraints: derived.resolved };
+    const { dep: jitDep } = await getDep(ctx, chainId);
+    if (jitDep?.poolManager && boundController) {
+      const pred = await legacyRegistry.predictShares(client, { adapter: mr.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: jitParams.unwindSwapFeePercentage, swapFeePercentage: jitParams.swapFeePercentage });
+      if (pred.cst) {
+        jitData = { ...jitData, predictedCorkSwapToken: pred.cst };
+        const cstLc = pred.cst.toLowerCase();
+        if (args.makerAsset.toLowerCase() !== cstLc && args.takerAsset.toLowerCase() !== cstLc) {
+          warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
+        }
+      }
+    }
+  } catch (err) {
+    warnings.push({ code: "chain_read_failed", message: `legacy JIT pre-flight reads failed (${revertReason(err)}) — the extension is built but unverified` });
+  }
+  return { extension, jitData, warnings };
+}
+
+/** The DEPRECATED pre-2.1.0 registry reads (mode-keyed recipes with PERCENTAGE bands, two-arg
+ *  deploy, chainId-keyed asset lookup), preserved verbatim behind the deprecation gate because
+ *  the old generation is still live on-chain. */
+async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+  if (!deprecatedEnabled()) {
+    return unavailable(chainId, "deprecated_gated", deprecatedGateMessage(`filters.legacy (the pre-2.1.0 registry generation)`, `The 2.1.0 registry is the default read path (drop filters.legacy).`), ctx);
+  }
+  if (input.resource === "registry-denominations" || input.resource === "registry-feeds") {
+    return unavailable(chainId, "missing_filter", `${input.resource} does not exist in the pre-2.1.0 generation — drop filters.legacy`, ctx);
+  }
+  const { marketRegistry: mr, warning } = await resolveMarketRegistryLegacy(chainId);
+  if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
+  const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved), ...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 registry generation (CORK_ENABLE_DEPRECATED is set) — its answers do not describe the 2.1.0 world" }];
+  const client = resolved.client;
+  const rpc = rpcProvenance(input.format, resolved);
+  const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
+  try {
+    if (input.resource === "registry-assets") {
+      if (filters.address) {
+        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address, BigInt(chainId)] });
+        if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a legacy-registry asset on chainId ${chainId}`, ctx);
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
+      const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+    if (input.resource === "registry-recipes") {
+      if (filters.mode !== undefined) {
+        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [filters.mode] });
+        if (!found) return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' is not in the legacy registry`, ctx);
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+      }
+      const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+    if (!filters.collateralAsset || !filters.referenceAsset) {
+      return unavailable(chainId, "missing_filter", "registry-oracle requires filters.collateralAsset AND filters.referenceAsset", ctx);
+    }
+    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset] });
+    if (wrapper !== ZERO_ADDR) {
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: wrapper, deployed: true, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+    try {
+      const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset] });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: sim.result, deployed: false, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
+    } catch (err) {
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) } }, chainId, source: "chain", warnings, ...rpc, ctx });
+    }
+  } catch (err) {
+    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+  }
+}
+
+/** Shared 2.1.0 recipe/oracle/constraint resolution — the exact sequence a fill's _resolveOracle
+ *  runs, and the one place its rules live so cork_compute resolve-recipe, cork_query
+ *  market-predict, and the JIT maker-order prepare can never disagree:
+ *  1. recipe from an explicit address, or DEPRECATED mode sugar over the config hints;
+ *  2. isRecipe — the only membership gate (no unverified path);
+ *  3. source() decides the oracle family (ENUM TRAP: RecipeSource ≠ OracleMode ordering —
+ *     oracleModeForSource does the inversion);
+ *  4. oracle: explicit override → fixed-rate (keyed on the rate) → pair wrapper (live, else the
+ *     simulated-deploy prediction);
+ *  5. optionally the constraint via recipe.resolve — the staticcall gets the LIVE oracle only
+ *     when one is deployed; a predicted/absent oracle is passed as address(0), which is what
+ *     lets the liquidity recipe fall back to the anchorRate in additionalData (API parity). */
+interface RecipeResolution {
+  gate?: Envelope;
+  recipe: `0x${string}`;
+  source: RecipeSourceName;
+  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; reason?: string };
+  constraint?: ResolvedConstraint;
+  warnings: Array<{ code: string; message: string }>;
+}
+
+async function resolveRecipeOracleConstraint(args: {
+  client: RegistryClient;
+  ctx: HandlerContext;
+  chainId: ChainId;
+  mr: { registry: `0x${string}`; recipes?: Record<string, `0x${string}`> | undefined };
+  recipe?: `0x${string}` | undefined;
+  mode?: string | undefined;
+  collateralAsset: `0x${string}`;
+  referenceAsset: `0x${string}`;
+  fixedRate?: bigint | undefined;
+  rateOracle?: `0x${string}` | undefined;
+  additionalData?: `0x${string}` | undefined;
+  wantConstraint: boolean;
+}): Promise<RecipeResolution> {
+  const { client, ctx, chainId, mr } = args;
+  const warnings: Array<{ code: string; message: string }> = [];
+  const bad = (g: Envelope): RecipeResolution => ({ gate: g, recipe: ZERO_ADDR, source: "price", oracle: { address: null, deployed: false, deployable: false, mode: null, rate: null }, warnings });
+  const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
+  // 1+2: the recipe address, and its membership.
+  let recipe = args.recipe;
+  if (!recipe) {
+    if (args.mode === undefined) {
+      return bad(unavailable(chainId, "missing_filter", "a recipe CONTRACT ADDRESS is required (recipes replaced mode strings in 2.1.0) — discover them with cork_query resource:\"registry-recipes\"", ctx));
+    }
+    const hinted = mr.recipes?.[args.mode];
+    if (!hinted) {
+      return bad(unavailable(chainId, "recipe_not_found", `recipe mode '${args.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now; known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}. Discover recipes with cork_query resource:"registry-recipes"`, ctx));
+    }
+    warnings.push({ code: "deprecation_notice", message: `mode is deprecated sugar: '${args.mode}' resolved to recipe ${hinted} via this tool's config hints — pass the recipe address directly; mode will be removed in a later release` });
+    recipe = hinted;
+  }
+  const isRecipe = await client.readContract({ ...reg, functionName: "isRecipe", args: [recipe] });
+  if (!isRecipe) {
+    return bad(unavailable(chainId, "recipe_not_found", `${recipe} is not an approved recipe on this registry (isRecipe is the only membership gate) — a fill would revert RecipeNotRegistered. List recipes with cork_query resource:"registry-recipes"`, ctx));
+  }
+  // 3: the recipe's source decides the oracle family.
+  const sourceOrdinal = (await client.readContract({ address: recipe, abi: recipeAbi, functionName: "source" })) as number;
+  const source = RECIPE_SOURCE[sourceOrdinal];
+  if (!source) return bad(unavailable(chainId, "chain_read_failed", `recipe ${recipe} reports unknown source ordinal ${sourceOrdinal}`, ctx));
+  // 4: oracle resolution.
+  let oracle: RecipeResolution["oracle"];
+  if (args.rateOracle) {
+    const code = await client.getCode({ address: args.rateOracle }).catch(() => undefined);
+    const deployed = code !== undefined && code !== "0x";
+    const rate = deployed ? ((await client.readContract({ address: args.rateOracle, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null) : null;
+    oracle = { address: args.rateOracle, deployed, deployable: true, mode: null, rate };
+  } else if (source === "fixed") {
+    if (args.fixedRate === undefined) {
+      oracle = { address: null, deployed: false, deployable: true, mode: null, rate: null, reason: "a FIXED recipe's oracle is keyed on the RATE — pass the rate (rateOverride) to predict it" };
+    } else {
+      const predicted = (await client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [args.fixedRate] })) as `0x${string}`;
+      const code = await client.getCode({ address: predicted }).catch(() => undefined);
+      const deployed = code !== undefined && code !== "0x";
+      oracle = { address: predicted, deployed, deployable: true, mode: null, rate: deployed ? args.fixedRate : null };
+    }
+  } else {
+    const modeName: OracleModeName = source;
+    const wrapper = (await client.readContract({ ...reg, functionName: "lookupWrapper", args: [args.collateralAsset, args.referenceAsset, ORACLE_MODE[modeName]] })) as `0x${string}`;
+    if (wrapper !== ZERO_ADDR) {
+      const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
+      oracle = { address: wrapper, deployed: true, deployable: true, mode: modeName, rate };
+    } else {
+      try {
+        const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [args.collateralAsset, args.referenceAsset, ORACLE_MODE[modeName]] });
+        oracle = { address: sim.result as `0x${string}`, deployed: false, deployable: true, mode: modeName, rate: null };
+      } catch (err) {
+        oracle = { address: null, deployed: false, deployable: false, mode: modeName, rate: null, reason: revertReason(err) };
+      }
+    }
+  }
+  const base: RecipeResolution = { recipe, source, oracle, warnings };
+  // 5: the constraint — recipe.resolve with the API's exact oracle-passing semantics.
+  if (args.wantConstraint) {
+    const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: args.collateralAsset, referenceAsset: args.referenceAsset, oracle, additionalData: args.additionalData });
+    if ("gate" in c) return { ...base, gate: c.gate };
+    base.constraint = c.constraint;
+  }
+  return base;
+}
+
+/** The recipe.resolve staticcall itself, shared by the resolution helper and the JIT prepare
+ *  (which needs its coherence checks BETWEEN oracle resolution and constraint resolution). The
+ *  call gets the LIVE oracle only when one is deployed; predicted/absent → address(0). */
+async function staticResolveConstraint(
+  client: RegistryClient,
+  ctx: HandlerContext,
+  chainId: ChainId,
+  args: { recipe: `0x${string}`; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; oracle: RecipeResolution["oracle"]; additionalData?: `0x${string}` | undefined },
+): Promise<{ constraint: ResolvedConstraint } | { gate: Envelope }> {
+  const oracleForCall = args.oracle.deployed && args.oracle.address ? args.oracle.address : ZERO_ADDR;
+  try {
+    const c = (await client.readContract({ address: args.recipe, abi: recipeAbi, functionName: "resolve", args: [args.collateralAsset, args.referenceAsset, oracleForCall, args.additionalData ?? "0x"] })) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+    return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
+  } catch (err) {
+    return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData`, ctx) };
+  }
+}
+
 /** market-predict: derive the market a JIT LOP fill would produce for (collateralAsset,
- *  referenceAsset, expiry, mode) BEFORE it exists — predicted rate oracle (+ live rate), pool id,
- *  resolved constraint bands, cST/cPT tokens, and whether the pool already exists. It composes the
- *  registry views + our verified computeMarketId + an eth_simulateV1 share prediction — the same
- *  derivation the adapter runs at fill time. Chain-native (no dependency on the read API); the pool
- *  id is computed LOCALLY, so it is returned even when the RPC lacks eth_simulateV1 (only cST/cPT
- *  need it — where the HTTP endpoint would 503). */
+ *  referenceAsset, expiry, recipe [+args/rate]) BEFORE it exists — the recipe's oracle (+ live
+ *  rate), the OFF-CHAIN-resolved constraint, pool id, cST/cPT tokens, and whether the pool
+ *  already exists. Composes the shared recipe resolution + our verified computeMarketId + a
+ *  state-override share simulation — the same derivation the adapter runs at fill time.
+ *  Chain-native (no dependency on the read API); the pool id is computed LOCALLY. Like the HTTP
+ *  endpoint, market/shares are null while the pair oracle is undeployed — without a live rate
+ *  the identity would be an invention. */
 async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
-  if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || filters.mode === undefined) {
-    return unavailable(chainId, "missing_filter", "market-predict requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.mode (exact case-sensitive recipe mode)", ctx);
+  if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || (filters.recipe === undefined && filters.mode === undefined)) {
+    return unavailable(chainId, "missing_filter", "market-predict requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
   }
   if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
     // Well-formed inputs that violate a domain rule → envelope (exit 3), not a throw — same class
@@ -1648,61 +2207,53 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
   const { mr, resolved, warnings } = r;
   const client = resolved.client;
   const rpc = rpcProvenance(input.format, resolved);
-  const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
-  const ca = filters.collateralAsset, ref = filters.referenceAsset, mode = filters.mode, expiry = filters.expiry;
-  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, mode }; // envelope's jsonSafe stringifies the bigint
+  const ca = filters.collateralAsset, ref = filters.referenceAsset, expiry = filters.expiry;
+  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, ...(filters.recipe ? { recipe: filters.recipe } : {}), ...(filters.mode ? { mode: filters.mode } : {}) };
   try {
-    // Recipe bands — an unknown mode would revert the fill with EntryNotFound.
-    const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });
-    if (!found) {
-      const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
-      return unavailable(chainId, "recipe_not_found", `recipe mode '${mode}' is not in the registry (modes are EXACT case-sensitive strings; available: ${modes.join(", ")})`, ctx);
+    const bindingWarn = await registryBindingMismatch(client, chainId, mr);
+    if (bindingWarn) {
+      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...warnings, bindingWarn], ...rpc, ctx });
     }
-    // Oracle: an existing wrapper, or the address a permissionless deploy would produce.
-    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [ca, ref] });
-    if (wrapper === "0x0000000000000000000000000000000000000000") {
-      try {
-        const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [ca, ref] });
-        // Deployable but not deployed: without a live rate the pool id/tokens cannot be derived.
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, oracle: { address: sim.result, deployed: false, deployable: true }, market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployed", message: `the pair's rate oracle is deployable but not yet deployed (predicted address ${sim.result}) — without a live rate the pool id and cST/cPT can't be derived. Deploy it first (cork_prepare_market deploy-wrapper), then re-run` }], ...rpc, ctx });
-      } catch (err) {
-        const reason = err instanceof Error ? (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0]) : String(err);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, oracle: { address: null, deployed: false, deployable: false, reason: reason?.trim() }, market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployable", message: "this pair cannot get a rate oracle as-registered (typically an unregistered asset or a missing conversion feed) — a JIT fill would revert; nothing further can be predicted" }], ...rpc, ctx });
-      }
+    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, additionalData: filters.args, wantConstraint: true });
+    warnings.push(...res.warnings);
+    if (res.gate) return res.gate;
+    const { recipe, source, oracle, constraint } = res;
+    const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate } : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
+    // Identity needs a DEPLOYED oracle with a live rate: the constraint may have resolved off an
+    // anchor fallback, but the Market struct hashes the oracle address AND the fill would read a
+    // live rate at creation — predicting an identity past an undeployed oracle would invent one
+    // (same rule as the HTTP endpoint).
+    if (!oracle.deployed || oracle.address === null) {
+      const why = oracle.deployable
+        ? { code: "oracle_not_deployed", message: `the recipe's rate oracle is not deployed yet${oracle.address ? ` (predicted address ${oracle.address})` : ""} — without a live rate the pool id and cST/cPT can't be derived. Deploy it first (cork_prepare_market ${source === "fixed" ? "deploy-fixed-oracle" : "deploy-wrapper"}), then re-run — or sign a JIT order, whose fill deploys it automatically` }
+        : { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` };
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, why], ...rpc, ctx });
     }
-    const oracle = wrapper;
-    const rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
-    if (rate === 0n) return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate (RateUnavailable) — the market cannot be derived", ctx);
-    // Resolved bands + pool id, computed locally then parity-checked against on-chain applyBands.
-    const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
-    // [C11] local derivation throws (band domain rules, ABI encoding bounds) get their own
-    // envelope instead of the misleading chain_read_failed guidance.
+    if (oracle.rate === 0n) return unavailable(chainId, "chain_read_failed", "the rate oracle reports a ZERO rate (RateUnavailable) — a fill creating this market would revert and the identity cannot be derived", ctx);
+    // Identity: constraint + oracle → Market struct → LOCAL poolId (verified computeMarketId).
+    if (!constraint) return unavailable(chainId, "recipe_refused", "the recipe did not resolve a constraint — the market identity cannot be derived", ctx);
     let derived: ReturnType<typeof deriveJitMarket>;
     try {
-      derived = deriveJitMarket({ params: { collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, mode }, oracle, rate, bands });
+      derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address });
     } catch (err) {
       return localComputeFailed(chainId, err, warnings, ctx);
     }
-    const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [mode, rate] });
-    if (onChain.rateMin !== derived.resolved.rateMin || onChain.rateMax !== derived.resolved.rateMax || onChain.rateChangePerDayMax !== derived.resolved.rateChangePerDayMax || onChain.rateChangeCapacityMax !== derived.resolved.rateChangeCapacityMax) {
-      return envelope({ state: "conflict", data: { resource: input.resource, chainId, input: inputEcho, poolId: derived.poolId, local: derived.resolved, onChain }, chainId, source: "chain", warnings: [...warnings, { code: "band_parity_mismatch", message: "the local applyBands port disagreed with the on-chain view — trust the chain; do not use this prediction" }], ...rpc, ctx });
-    }
-    // cST / cPT — pinned when the pool exists, else eth_simulateV1-predicted (poolId stands regardless).
+    // cST / cPT — pinned when the pool exists, else predicted via the state-override simulation.
     const { dep } = await getDep(ctx, chainId);
     let shares: PredictSharesResult = { exists: false, status: "unavailable" };
     if (dep?.poolManager && mr.controller && mr.adapter) {
       shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId });
     }
     const extra: Array<{ code: string; message: string }> = [];
-    if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1 unsupported, or the adapter lacks POOL_CREATOR_ROLE / config missing) — the pool id, oracle, and bands above are still valid" });
-    if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so pool id and cST/cPT are derived from TODAY's oracle rate and drift stepwise until the pool is created; once it exists they are pinned (INTEGRATOR.md)" });
+    if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the pool id, oracle, and constraint above are still valid" });
+    if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so this prediction is conditioned on TODAY's oracle rate and drifts stepwise until pinned. In 2.1.0 the pinning moment is EARLIER than pool creation: an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves (staleness then guards via recipe.verify, not a moving id)" });
     // T6: a prediction can be internally consistent yet describe an UNCREATABLE market — say so.
     const nowSecs = nowSecondsOf(ctx);
     if (!shares.exists && expiry <= nowSecs) {
       extra.push({ code: "would_revert", message: `expiry ${expiry} is not in the future (now ${nowSecs}) — createNewPool requires a future expiry, so a JIT fill for this market would revert; the identity below is for a market that cannot be created` });
     }
-    if (derived.resolved.rateMin <= 0n || derived.resolved.rateMin >= derived.resolved.rateMax) {
-      extra.push({ code: "would_revert", message: `the resolved constraints violate createNewPool's requirements (needs 0 < rateMin < rateMax; resolved rateMin=${derived.resolved.rateMin}, rateMax=${derived.resolved.rateMax}) — a JIT fill for this recipe/rate would revert InvalidParams` });
+    if (constraint.rateMin <= 0n || constraint.rateMin >= constraint.rateMax) {
+      extra.push({ code: "would_revert", message: `the resolved constraint violates createNewPool's requirements (needs 0 < rateMin < rateMax; rateMin=${constraint.rateMin}, rateMax=${constraint.rateMax}) — a JIT fill for this recipe would revert InvalidParams` });
     }
     return envelope({
       state: "ok",
@@ -1710,8 +2261,10 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
         resource: input.resource,
         chainId,
         input: inputEcho,
-        oracle: { address: oracle, deployed: true, deployable: true, rate },
-        market: { poolId: derived.poolId, exists: shares.exists, scale: "resolved constraints are ABSOLUTE rates, 1e18 = 1.0", resolved: derived.resolved },
+        recipe,
+        source,
+        oracle: oracleEcho,
+        market: { poolId: derived.poolId, exists: shares.exists, scale: "the constraint is ABSOLUTE rates, 1e18 = 1.0", constraint },
         shares: shares.cst || shares.cpt ? { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } : null,
       },
       chainId,
@@ -1725,9 +2278,15 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
   }
 }
 
-/** cork_prepare_market deploy-wrapper: an unsigned MarketRegistry.deploy(ca, ref) tx.
- *  Permissionless + idempotent on-chain; the pre-flight read is best-effort disclosure. */
-async function handlePrepareMarket(input: { chainId: ChainId; clientRequestId: string; action: { type: "deploy-wrapper"; collateralAsset: `0x${string}`; referenceAsset: `0x${string}` }; format: "concise" | "full" }, ctx: HandlerContext): Promise<Envelope> {
+/** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
+ *  deploy-wrapper = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
+ *  and a NAV wrapper at different addresses); deploy-fixed-oracle =
+ *  MarketRegistry.deployFixedRateOracle(rate) (keyed on the RATE, no pair). Both are
+ *  permissionless + idempotent on-chain; the pre-flight read is best-effort disclosure. */
+async function handlePrepareMarket(
+  input: { chainId: ChainId; clientRequestId: string; action: { type: "deploy-wrapper"; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; mode?: "price" | "nav" } | { type: "deploy-fixed-oracle"; rate: string }; format: "concise" | "full" },
+  ctx: HandlerContext,
+): Promise<Envelope> {
   const chainId = input.chainId;
   const { marketRegistry: mr, warning } = await resolveMarketRegistry(chainId);
   if (!mr) {
@@ -1735,33 +2294,64 @@ async function handlePrepareMarket(input: { chainId: ChainId; clientRequestId: s
   }
   const warnings: Array<{ code: string; message: string }> = warning ? [warning] : [];
   const a = input.action;
-  const calldata = buildDeployOracleCall(a.collateralAsset, a.referenceAsset);
+  const resolved = await getRpc(ctx, chainId);
+  if (resolved) warnings.push(...rpcWarn(resolved));
+  const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
+
+  if (a.type === "deploy-fixed-oracle") {
+    const rate = BigInt(a.rate);
+    if (rate === 0n) return unavailable(chainId, "invalid_order_terms", "a zero fixed rate cannot have an oracle — the FixedRateOracle constructor reverts on 0; sending this tx would revert", ctx);
+    const calldata = buildDeployFixedRateOracleCall(rate);
+    let status: Record<string, unknown> = {};
+    if (resolved) {
+      try {
+        const predicted = await resolved.client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [rate] });
+        const code = await resolved.client.getCode({ address: predicted }).catch(() => undefined);
+        const deployed = code !== undefined && code !== "0x";
+        status = { oracle: { address: predicted, deployed } };
+        if (deployed) warnings.push({ code: "oracle_already_deployed", message: `the fixed-rate oracle for rate ${rate} already exists at ${predicted} (CREATE2-salted by the rate: one oracle per rate per chain) — the tx is a safe no-op (deploy is idempotent)` });
+      } catch (err) {
+        warnings.push({ code: "chain_read_failed", message: `the predictFixedRateOracle pre-check failed (${revertReason(err)}) — the calldata is exact regardless` });
+      }
+    } else {
+      warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — the deployability pre-check was skipped; the calldata is exact regardless" });
+    }
+    return envelope({
+      state: "ok",
+      data: { kind: "deploy-fixed-oracle", to: mr.registry, calldata, value: "0", rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", ...status, clientRequestId: input.clientRequestId },
+      chainId,
+      source: resolved ? "chain" : "config",
+      warnings,
+      ctx,
+    });
+  }
+
+  const modeName: OracleModeName = a.mode ?? "price";
+  if (a.mode === undefined) warnings.push({ code: "reserved_field_ignored", message: "no mode given — defaulted to 'price'. Oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses); pass mode:'nav' when you mean nav" });
+  const calldata = buildDeployOracleCall(a.collateralAsset, a.referenceAsset, modeName);
 
   // Best-effort status read (calldata building is pure; the tx is safe either way).
-  const resolved = await getRpc(ctx, chainId);
   let status: Record<string, unknown> = {};
   if (resolved) {
-    warnings.push(...rpcWarn(resolved));
     try {
-      const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
-      const wrapper = await resolved.client.readContract({ ...reg, functionName: "lookupWrapper", args: [a.collateralAsset, a.referenceAsset] });
-      if (wrapper !== "0x0000000000000000000000000000000000000000") {
+      const wrapper = await resolved.client.readContract({ ...reg, functionName: "lookupWrapper", args: [a.collateralAsset, a.referenceAsset, ORACLE_MODE[modeName]] });
+      if (wrapper !== ZERO_ADDR) {
         // Same oracle:{address,deployed} shape as cork_query registry-oracle / market-predict.
         status = { oracle: { address: wrapper, deployed: true } };
-        warnings.push({ code: "oracle_already_deployed", message: `this pair's rate oracle already exists at ${wrapper} — the tx is a safe no-op (deploy is idempotent and returns the recorded address)` });
+        warnings.push({ code: "oracle_already_deployed", message: `this pair's ${modeName} oracle already exists at ${wrapper} — the tx is a safe no-op (deploy is idempotent and returns the recorded address)` });
       } else {
-        const sim = await resolved.client.simulateContract({ ...reg, functionName: "deploy", args: [a.collateralAsset, a.referenceAsset] });
+        const sim = await resolved.client.simulateContract({ ...reg, functionName: "deploy", args: [a.collateralAsset, a.referenceAsset, ORACLE_MODE[modeName]] });
         status = { oracle: { address: sim.result, deployed: false } };
       }
     } catch (err) {
-      warnings.push({ code: "oracle_not_deployable", message: `the deploy simulation reverted (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — typically an unregistered asset or missing conversion feed; sending this tx would revert. Check cork_query registry-assets / registry-oracle` });
+      warnings.push({ code: "oracle_not_deployable", message: `the deploy simulation reverted (${revertReason(err)}) — typically an unregistered asset, a missing source for this mode, or no conversion path; sending this tx would revert. Check cork_query registry-assets / registry-oracle` });
     }
   } else {
     warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — the deployability pre-check was skipped; the calldata is exact regardless" });
   }
   return envelope({
     state: "ok",
-    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, ...status, clientRequestId: input.clientRequestId },
+    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...status, clientRequestId: input.clientRequestId },
     chainId,
     source: resolved ? "chain" : "config",
     warnings,
@@ -1844,7 +2434,10 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
     const nowSecs = nowSecondsOf(ctx);
 
-    // ── optional JIT market block: build the adapter extension + best-effort pre-flights ──
+    // ── optional JIT market block (2.1.0): the order names a RECIPE CONTRACT and carries the
+    // OFF-CHAIN-resolved constraint — filled from one recipe.resolve call here, so the three
+    // coupled fields (recipe, constraint, additionalData) are guaranteed to agree. Pool id and
+    // share addresses are PINNED at signing; on-chain staleness protection is recipe.verify. ──
     let extension = action.extension;
     const warnings: Array<{ code: string; message: string }> = [];
     let jitData: Record<string, unknown> | undefined;
@@ -1853,107 +2446,165 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and jitMarket are mutually exclusive — jitMarket BUILDS the extension" }]);
       }
       const jm = action.jitMarket;
-      const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
-      if (!mr?.adapter) {
-        return unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT market orders are live on Arbitrum One (42161)`, ctx);
-      }
-      if (mrWarn) warnings.push(mrWarn);
-      const jitParams = {
-        collateralAsset: jm.collateralAsset,
-        referenceAsset: jm.referenceAsset,
-        expiryTimestamp: BigInt(jm.expiryTimestamp),
-        mode: jm.mode,
-        swapFeePercentage: BigInt(jm.swapFeePercentage),
-        unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
-        enableJitMint: jm.enableJitMint,
-      };
-      if (jitParams.swapFeePercentage > 5n * 10n ** 18n || jitParams.unwindSwapFeePercentage > 5n * 10n ** 18n) {
-        // Well-formed uint that breaks the protocol's 5% fee cap → domain-rule envelope (exit 3),
-        // not a format throw. (extension+jitMarket mutual-exclusion above stays a throw: that's a
-        // malformed request SHAPE, not a value-domain rule.)
+      // Value-domain checks shared by both generations (envelope, exit 3 — not format throws).
+      const swapFee = BigInt(jm.swapFeePercentage);
+      const unwindFee = BigInt(jm.unwindSwapFeePercentage);
+      if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {
         return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
       }
-      // Expiry sanity (F1): the chain checks only `expiry > block.timestamp` with NO upper bound,
-      // and a filled order mints the pool irreversibly — so mirror the lower bound here and flag
-      // implausibly long tenors (the schema's UnixSeconds bound already rejects ms-scale values).
-      if (jitParams.expiryTimestamp <= nowSecs) {
-        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${jitParams.expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
+      const expiryTimestamp = BigInt(jm.expiryTimestamp);
+      if (expiryTimestamp <= nowSecs) {
+        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
       }
       const FIVE_YEARS = 5n * 31_557_600n;
-      if (jitParams.expiryTimestamp > nowSecs + FIVE_YEARS) {
-        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${jitParams.expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
+      if (expiryTimestamp > nowSecs + FIVE_YEARS) {
+        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
       }
-      const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
-      extension = buildJitExtension(mr.adapter, encodeJitExtraData(jitParams, permits));
-      jitData = { adapter: mr.adapter, hook: "preInteraction (maker-side)", enableJitMint: jm.enableJitMint };
-      warnings.push({ code: "rate_drift_notice", message: "market identity follows the LIVE oracle rate: the derived pool id is only stepwise-stable, so this order is fillable only while the rate still resolves to the same constraints — a drifted rate reverts the fill with OrderNotForPool (by design, as a staleness guard)" });
 
-      // Best-effort chain pre-flights; every gap is disclosed, never guessed.
-      const resolved = await getRpc(ctx, chainId);
-      if (!resolved) {
-        warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — JIT pre-flights (adapter bindings, roles, recipe, oracle, derived pool, cST side-match) were SKIPPED; the extension is built but unverified" });
+      // DEPRECATED generation: mode-string extraData against the old adapter, behind the gate.
+      if (jm.legacy) {
+        const leg = await prepareJitLegacy({ chainId, ctx, lop, jm, makerAsset: action.makerAsset, takerAsset: action.takerAsset });
+        if (leg.gate) return leg.gate;
+        extension = leg.extension;
+        jitData = leg.jitData;
+        warnings.push(...leg.warnings);
       } else {
-        const client = resolved.client;
-        try {
-          // Adapter is volatile config: re-verify its bindings + role grants on every prepare.
-          const [boundLop, boundRegistry, boundController] = await Promise.all([
-            client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
-            client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
-            client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
-          ]);
-          if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-            return envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — the adapter address is volatile; refresh cork-defaults.json before signing anything" }], ctx });
-          }
-          const [hasCreator, hasConfigurator] = await Promise.all([
-            client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [POOL_CREATOR_ROLE, mr.adapter] }),
-            client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [CONFIGURATOR_ROLE, mr.adapter] }),
-          ]);
-          if (!hasCreator || !hasConfigurator) {
-            warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — a fill through it will revert until both are granted; the order is signable but not yet fillable` });
-          }
-          const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
-          const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [jm.mode] });
-          if (!found) {
-            const [, modes] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
-            return unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' is not in the registry — the fill would revert EntryNotFound. Modes are EXACT case-sensitive strings; available: ${modes.join(", ")}`, ctx);
-          }
-          const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [jm.collateralAsset, jm.referenceAsset] });
-          const oracle = sim.result;
-          const rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
-          if (rate === 0n) {
-            return unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — the fill would revert RateUnavailable", ctx);
-          }
-          const bands: ConstraintBands = { mode: entry.mode, rateMin: entry.rateMin, rateMax: entry.rateMax, rateChangePerDayMax: entry.rateChangePerDayMax, rateChangeCapacityMax: entry.rateChangeCapacityMax };
-          const derived = deriveJitMarket({ params: jitParams, oracle, rate, bands });
-          jitData = { ...jitData, oracle, rateAtPrepare: rate, derivedPoolId: derived.poolId, resolvedConstraints: derived.resolved };
-
-          // Predicted cST: direct read when the pool exists; otherwise simulate the creation
-          // (eth_simulateV1, from the adapter which holds POOL_CREATOR) and read shares(poolId).
-          // Same derivation the market-predict read exposes — see predictShares().
-          const { dep: jitDep } = await getDep(ctx, chainId);
-          const pred = await predictShares(client, {
-            adapter: mr.adapter,
-            controller: boundController,
-            poolManager: jitDep!.poolManager,
-            market: derived.market,
-            poolId: derived.poolId,
-            unwindSwapFeePercentage: jitParams.unwindSwapFeePercentage,
-            swapFeePercentage: jitParams.swapFeePercentage,
-          });
-          const cst = pred.cst;
-          if (pred.status === "unavailable") {
-            warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1 unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
-          }
-          if (cst) {
-            jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
-            const cstLc = cst.toLowerCase();
-            if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
-              warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
-            }
-          }
-        } catch (err) {
-          warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — the extension is built but unverified` });
+        const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
+        if (!mr?.adapter) {
+          return unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT market orders are live on Arbitrum One (42161)`, ctx);
         }
+        if (mrWarn) warnings.push(mrWarn);
+        // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,
+        // so the sugar also works offline).
+        let recipe = jm.recipe;
+        if (!recipe) {
+          if (jm.mode === undefined) {
+            throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"); `mode` survives only as deprecated sugar" }]);
+          }
+          const hinted = mr.recipes?.[jm.mode];
+          if (!hinted) {
+            return unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (jitMarket.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx);
+          }
+          warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} via this tool's config hints — pass jitMarket.recipe directly; mode will be removed in a later release` });
+          recipe = hinted;
+        }
+        const rateOverride = BigInt(jm.rateOverride ?? "0");
+        const additionalData = (jm.additionalData ?? "0x") as `0x${string}`;
+        let constraint: ResolvedConstraint | undefined = jm.constraint
+          ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
+          : undefined;
+        jitData = { adapter: mr.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint };
+
+        // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
+        const resolved = await getRpc(ctx, chainId);
+        if (!resolved) {
+          if (!constraint) {
+            return unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER. Either set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute resolve-recipe) for offline byte-building", ctx);
+          }
+          warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — JIT pre-flights (adapter bindings, roles, recipe membership, source/rateOverride coherence, oracle, verify, cST side-match) were SKIPPED; the extension is built from the caller-supplied constraint but unverified" });
+        } else {
+          const client = resolved.client;
+          try {
+            // Adapter is volatile config: re-verify its bindings + role grants on every prepare.
+            const [boundLop, boundRegistry, boundController] = await Promise.all([
+              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
+              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
+            ]);
+            if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
+              return envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before signing anything" }], ctx });
+            }
+            const [hasCreator, hasConfigurator] = await Promise.all([
+              client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [POOL_CREATOR_ROLE, mr.adapter] }),
+              client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [CONFIGURATOR_ROLE, mr.adapter] }),
+            ]);
+            if (!hasCreator || !hasConfigurator) {
+              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
+            }
+            const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
+            warnings.push(...res.warnings);
+            if (res.gate) return res.gate;
+            const { source, oracle } = res;
+            // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the
+            // caller gets the real rule, not a downstream recipe revert: the fill REJECTS a
+            // non-zero override on a price/nav recipe (UnexpectedRateOverride), and a fixed
+            // fill deploys FixedRateOracle(rateOverride), whose constructor reverts on 0.
+            if (source === "fixed" && rateOverride === 0n) {
+              return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx);
+            }
+            if (source !== "fixed" && rateOverride !== 0n) {
+              return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx);
+            }
+            if (!constraint) {
+              const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
+              if ("gate" in c) return c.gate;
+              constraint = c.constraint;
+            }
+            if (oracle.address === null) {
+              return unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx);
+            }
+            // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
+            // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside
+            // the window, so a predicted oracle can't answer yet (the fill deploys it first).
+            if (oracle.deployed) {
+              const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
+              if (ok === false) {
+                warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute resolve-recipe) and rebuild" });
+              } else if (ok === null) {
+                warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
+              }
+            } else {
+              warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
+            }
+            const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
+            jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.rate !== null ? { rate: oracle.rate } : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
+            warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
+
+            // Predicted cST: direct read when the pool exists; otherwise the state-override
+            // simulation (role granted in-memory — works before AND after the governance grant).
+            // When the oracle is not deployed, the simulation prepends the SAME permissionless
+            // deploy the fill performs, so the pool actually creates in-memory.
+            const { dep: jitDep } = await getDep(ctx, chainId);
+            const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
+            if (!oracle.deployed) {
+              preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+            }
+            const pred = await predictShares(client, {
+              adapter: mr.adapter,
+              controller: boundController,
+              poolManager: jitDep!.poolManager,
+              market: derived.market,
+              poolId: derived.poolId,
+              unwindSwapFeePercentage: unwindFee,
+              swapFeePercentage: swapFee,
+              preCalls,
+            });
+            const cst = pred.cst;
+            if (pred.status === "unavailable") {
+              warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1/state overrides unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
+            }
+            if (cst) {
+              jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
+              const cstLc = cst.toLowerCase();
+              if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
+                warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
+              }
+            }
+          } catch (err) {
+            if (!constraint) {
+              return unavailable(chainId, "chain_read_failed", `the JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER, so the extension cannot be built. Retry, or pass jitMarket.constraint from cork_compute resolve-recipe`, ctx);
+            }
+            warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${revertReason(err)}) — the extension is built from the caller-supplied constraint but unverified` });
+          }
+        }
+        const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+        extension = buildJitExtension(
+          mr.adapter,
+          encodeJitExtraData(
+            { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint: constraint!, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
+            permits,
+          ),
+        );
       }
     }
 

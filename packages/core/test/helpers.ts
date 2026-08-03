@@ -22,14 +22,20 @@ export function stubResolved(
  *  an empty result set unless opts.simulateCalls is given. */
 export function stubRpc(
   handler: (c: StubCall) => unknown,
-  opts: { source?: "explicit" | "default"; simulateCalls?: ((a: { account: string; calls: { to: string; data: string }[] }) => unknown) | undefined } = {},
+  opts: {
+    source?: "explicit" | "default";
+    simulateCalls?: ((a: { account: string; calls: { to: string; data: string }[]; stateOverrides?: unknown }) => unknown) | undefined;
+    /** eth_getCode answers, keyed by lowercased address; absent addresses answer "0x" (no code). */
+    code?: Record<string, string> | undefined;
+  } = {},
 ): NonNullable<HandlerContext["resolveRpc"]> {
   return async () =>
     stubResolved(
       {
         readContract: async (c: StubCall) => handler(c),
         simulateContract: async (c: StubCall) => ({ result: handler({ ...c, functionName: `simulate:${c.functionName}` }) }),
-        simulateCalls: async (a: { account: string; calls: { to: string; data: string }[] }) => (opts.simulateCalls ? opts.simulateCalls(a) : { results: [] }),
+        simulateCalls: async (a: { account: string; calls: { to: string; data: string }[]; stateOverrides?: unknown }) => (opts.simulateCalls ? opts.simulateCalls(a) : { results: [] }),
+        getCode: async ({ address }: { address: string }) => opts.code?.[address.toLowerCase()] ?? "0x",
       } as Record<string, (...args: never[]) => unknown>,
       opts.source ?? "explicit",
     );
