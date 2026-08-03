@@ -132,10 +132,12 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
 Arbitrum (chainId 42161) is a **full** deployment like mainnet (bindings verified on-chain): reads,
-bundle building, orders, and the MarketRegistry resources
-(registry-assets / registry-oracle / registry-recipes / market-predict, plus `cork_prepare_market`
-oracle deploys) all work there. `market-predict` derives the market a JIT LOP fill would create —
-predicted oracle, pool id, resolved bands, and cST/cPT tokens — before anything is deployed or signed.
+bundle building, orders, and the MarketRegistry 2.1.0 resources
+(registry-assets / registry-oracle / registry-recipes / registry-denominations / registry-feeds /
+market-predict, plus `cork_prepare_market` oracle deploys) all work there. `market-predict` derives
+the market a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved constraint,
+pool id, and cST/cPT tokens — before anything is deployed or signed; the identity is pinned the
+moment an order carrying that constraint is signed.
 
 The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, the RFQ discovery
 feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served from
@@ -286,8 +288,8 @@ Implemented + tested:
 - **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1),
   plus a plain-English `summary` of what those legs do; also LOP orders, single logs, and whole receipts.
 - **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
-  (chain-backed, block-pinnable); resolve-recipe (MarketRegistry band resolution, bit-parity
-  self-checked against the chain view).
+  (chain-backed, block-pinnable); resolve-recipe (2.1.0: the `recipe.resolve` staticcall — the step
+  that produces the constraint a JIT order carries and signs).
 - **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
   legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
   actions; **sweep-back legs** that return the unspent remainder of any funded slippage cap to
@@ -307,14 +309,15 @@ Implemented + tested:
   which keys on `(maker, nonce)` rather than order hash, so the nonce is derived per
   `clientRequestId`: give each order you want live at the same time its own id, or they share a bit
   and filling one invalidates the others.
-- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref)` oracle-wrapper txs
-  (permissionless, idempotent; Arbitrum).
+- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode)` oracle-wrapper txs and
+  `deployFixedRateOracle(rate)` fixed-rate oracle txs (permissionless, idempotent; Arbitrum).
 - **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
   spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
-  registry-recipes / market-predict — predict a market's oracle, pool id, bands, and cST/cPT before
-  it exists); venue-backed reads (markets, orderbook, fills, limit-order-markets, flows,
-  rfqs — incl. single-RFQ lookup via `filters.rfqId`); an event-derived subset (markets, fills,
-  flows) also serves `full-decentralized` mode over HyperSync.
+  registry-recipes / registry-denominations / registry-feeds / market-predict — predict a market's
+  oracle, pool id, constraint, and cST/cPT before it exists); venue-backed reads (markets,
+  orderbook, fills, limit-order-markets, flows, rfqs — incl. single-RFQ lookup via
+  `filters.rfqId`); an event-derived subset (markets, fills, flows) also serves
+  `full-decentralized` mode over HyperSync.
 - **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run
   on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt, orderHash /
   submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer [K7]).

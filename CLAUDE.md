@@ -29,7 +29,9 @@ Bun 1.3 is pinned in `mise.toml`.
 
 ## Install / verify as an MCP server
 
-Repo: `github.com/Cork-Technology/cork-cli` — `git clone git@github.com:Cork-Technology/cork-cli.git`,
+Repo: `github.com/Cork-Technology/cork-cli` — the **public tree**, which is this repo with `notes/`,
+`experiments/` and `rfc/` filtered out and `CORK_DEFAULTS_URL` repointed; work lands here first and
+is ported there. `git clone git@github.com:Cork-Technology/cork-cli.git`,
 then from the repo root:
 
 ```sh
@@ -293,7 +295,13 @@ contract (`deprecated_gated`/`deprecated`/`deprecation_notice`). The read API's 
 parity tests — never a committed runtime dependency; our reads are chain-native and were verified
 wei-for-wei against it (resolve, oracles, predict), with one deliberate capability difference:
 our share prediction also works pre-oracle-deploy (the simulation prepends the same permissionless
-deploy the fill performs, where the HTTP endpoint returns market/shares null).
+deploy the fill performs, where the HTTP endpoint returns market/shares null). The whole 2.1.0 fill
+path is proven END-TO-END on an Arbitrum fork (experiments/fork-harness/test/JitOrderRoundTrip210.t.sol
++ script/gen-jit-artifact-210.ts): tool-prepared order + embedded cST permit filled through the real
+1inch LOP — oracle deployed in-fill, pool created at the derived id, created cST EXACTLY equal to the
+tool's prediction, JITMarketCreated decoded against our frozen layout, roleMemberSlot validated by
+vm.store on the real controller — plus a negative control proving a signed out-of-window constraint
+reverts RecipeRejectedConstraint.
 
 ## Invariants that constrain how you use the tools
 

@@ -3,7 +3,7 @@
 // CARRIED constraint (pinned at signing — the 2.1.0 redesign), and the handler paths offline
 // via injected RPC stubs. Live parity runs env-gated in rpc-live.test.ts.
 import { beforeEach, describe, expect, it } from "vitest";
-import { decodeAbiParameters, encodeFunctionData, keccak256 } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, encodeFunctionData, keccak256 } from "viem";
 import {
   buildDeployFixedRateOracleCall,
   buildDeployOracleCall,
@@ -118,6 +118,25 @@ describe("deriveJitMarket (2.1.0): identity is a pure function of the CARRIED co
     expect(a.poolId).toBe(b.poolId);
     expect(a.poolId).not.toBe(c.poolId);
     expect(a.market.rateOracle).toBe(ACCT);
+  });
+
+  it("maps every constraint field to its OWN Market slot (mutation killer: the captured GT has perDay == capacity, so a field-cross was invisible to it)", () => {
+    // Four DISTINCT values — any crossed assignment changes both the struct echo and the id.
+    const distinct: ResolvedConstraint = { rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 3n, rateChangeCapacityMax: 4n };
+    const d = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 5n, constraint: distinct, oracle: ACCT });
+    expect(d.market.rateMin).toBe(1n);
+    expect(d.market.rateMax).toBe(2n);
+    expect(d.market.rateChangePerDayMax).toBe(3n);
+    expect(d.market.rateChangeCapacityMax).toBe(4n);
+    // Independent id: keccak256(abi.encode(Market)) authored here from the pinned field order,
+    // not via computeMarketId — kills any silent re-ordering inside the derivation path.
+    const independent = keccak256(
+      encodeAbiParameters(
+        [{ type: "address" }, { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "address" }],
+        [CA, REF, 5n, 1n, 2n, 3n, 4n, ACCT],
+      ),
+    );
+    expect(d.poolId).toBe(independent);
   });
 
   // The Market struct + hash are UNCHANGED across generations, so the ground truth captured
@@ -300,11 +319,11 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
       throw new Error(`unexpected ${c.functionName}`);
     }));
     expect(env.state).toBe("ok");
-    const d = env.data as { mode: string; oracle: { address: string; deployed: boolean; rate: string } };
+    const d = env.data as { mode: string; modeNote?: string; oracle: { address: string; deployed: boolean; rate: string } };
     expect(d.mode).toBe("price");
+    expect(d.modeNote).toContain("defaulted"); // the applied default is disclosed in data, not a warning
     expect(d.oracle.deployed).toBe(true);
     expect(BigInt(d.oracle.rate)).toBe(WAD);
-    expect(env.warnings.some((w) => w.code === "reserved_field_ignored")).toBe(true);
   });
 
   it("registry-oracle mode 'nav' keys a DIFFERENT wrapper (OracleMode.NAV = 1)", async () => {
@@ -515,13 +534,13 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
       }),
     });
     expect(env.state).toBe("ok");
-    const d = env.data as { calldata: string; mode: string; oracle: { deployed: boolean } };
+    const d = env.data as { calldata: string; mode: string; modeNote?: string; oracle: { deployed: boolean } };
     expect(d.calldata).toBe(buildDeployOracleCall(CA, REF, "price"));
     expect(d.calldata).toBe(encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [CA, REF, 0] }));
     expect(d.mode).toBe("price");
+    expect(d.modeNote).toContain("defaulted"); // disclosed in data, not a warning
     expect(d.oracle.deployed).toBe(true);
     expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
-    expect(env.warnings.some((w) => w.code === "reserved_field_ignored")).toBe(true);
   });
 
   it("deploy-wrapper mode 'nav' encodes ordinal 1; offline still builds with the gap disclosed", async () => {

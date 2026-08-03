@@ -2,8 +2,9 @@
 // the Cork protocol's verified ABI set and return NAMED args. Reconstructs from the bytes;
 // never trusts a caller-supplied parse [K3]. Coverage is exactly the declarations verified
 // verbatim against the pinned sources (phoenix-private, rollover-private @ 032d3e5a, 1inch
-// limit-order-protocol) — events whose INDEXED layout is not source-verified (the JIT adapter
-// pair, ERC-7683 Open) are labeled name-only with raw bytes preserved rather than guessed.
+// limit-order-protocol, market-registry-private tag 2.1.0) — events whose INDEXED layout is
+// not source-verified (the LEGACY pre-2.1.0 JITMarketCreated, ERC-7683 Open) are labeled
+// name-only with raw bytes preserved rather than guessed.
 import { decodeEventLog, parseAbi } from "viem";
 import { JIT_EVENTS } from "./market-registry.ts";
 
@@ -31,6 +32,12 @@ export const KNOWN_EVENTS_ABI = parseAbi([
   "event DefaulterResidualReclaimedWithSubFiller(bytes32 indexed orderId, address indexed defaulterFiller, bytes32 indexed subFiller, address recipientRolloverContract, uint256 amount)",
   "event FillerSettled(bytes32 indexed orderId, address indexed filler, bytes32 indexed subFiller, uint256 residual)",
   "event RolloverContractDeployed(address indexed user, address indexed rolloverContract)",
+  // market-registry-private tag 2.1.0 (CorkLimitOrderAdapter) — JIT fill lifecycle. MarketId is
+  // a bytes32 user type; the 2.1.0 JITMarketCreated carries the RECIPE ADDRESS (the legacy
+  // mode-string form has a different selector and stays name-only below). JITMinted's selector
+  // is shared with the legacy adapter — same field layout, so one declaration serves both.
+  "event JITMarketCreated(bytes32 indexed poolId, address indexed rateOracle, address collateralAsset, address referenceAsset, uint256 expiryTimestamp, address recipe)",
+  "event JITMinted(bytes32 indexed poolId, address indexed recipient, uint256 cstShares, uint256 collateralIn)",
   // 1inch LOP v4 (IOrderMixin) — fills (no indexed params)
   "event OrderFilled(bytes32 orderHash, uint256 remainingAmount)",
   // ERC-20 (universal layout) — makes receipt decodes show the token flows around Cork events
@@ -71,19 +78,20 @@ export function decodeKnownLog(log: RawLogLike): DecodedLogRow {
   if (!topic0) {
     return { known: false, event: null, ...addr, topic0: null, topics, data, note: "log has no topic0 (anonymous event) — cannot be matched against the known ABI set" };
   }
-  // Name-only labels first: events we can NAME from a frozen selector but whose indexed layout
-  // is not source-verified — label + raw bytes, never a guessed arg decode [K3-honest].
-  const nameOnly = JIT_EVENTS[topic0];
-  if (nameOnly) {
-    return { known: false, event: nameOnly, ...addr, topic0, topics, data, note: `recognized ${nameOnly} by selector, but its indexed layout is not source-verified here — args left as raw topics/data rather than guessed` };
-  }
+  // Full source-verified decode first; the name-only path below catches only selectors whose
+  // indexed layout is NOT pinned (the legacy pre-2.1.0 JITMarketCreated) — label + raw bytes,
+  // never a guessed arg decode [K3-honest].
   for (const abi of [KNOWN_EVENTS_ABI, LOP_CANCELLED_FALLBACK_ABI]) {
     try {
       const d = decodeEventLog({ abi, topics: topics as [Hex, ...Hex[]], data });
       return { known: true, event: d.eventName, args: argsSafe((d.args ?? {}) as Record<string, unknown>), ...addr, topic0 };
     } catch {
-      /* try the next ABI form, then fall through to the honest unknown row */
+      /* try the next ABI form, then fall through to name-only / the honest unknown row */
     }
+  }
+  const nameOnly = JIT_EVENTS[topic0];
+  if (nameOnly) {
+    return { known: false, event: nameOnly, ...addr, topic0, topics, data, note: `recognized ${nameOnly} by selector, but its indexed layout is not source-verified here — args left as raw topics/data rather than guessed` };
   }
   return { known: false, event: null, ...addr, topic0, topics, data, note: "topic0 does not match the known Cork/LOP/ERC-20 ABI set (or the body does not decode against it) — raw bytes preserved" };
 }

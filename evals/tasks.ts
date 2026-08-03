@@ -58,6 +58,22 @@ export const TASKS: EvalTask[] = [
   { id: "param-absolute-deadline", prompt: `Prepare an unsigned Cork swap on pool ${P}: exactly 1000000000000000000 collateral out, receiver ${A}, cap cST in at 2000000000000000000 and reference in at 2000000, pre-funded, request id "eval-dead-0001". The bundle must stop being valid exactly at unix timestamp 1795000000 and a later retry must be byte-identical.`, expect: { tool: "cork_prepare_phoenix", params: { deadlineAt: "1795000000", action: { type: "swap" } }, state: "ok", maxCalls: 2 } },
   { id: "param-scale-wholenumber", prompt: `What is the guaranteed minimum premium for a Cork rollover producing 1000 destination cST (an 18-decimals token) at a minimum premium per share of 0.02 (also 18 decimals)? Pure math.`, expect: { tool: "cork_compute", params: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } }, state: "ok", maxCalls: 2 } },
   { id: "prepare-rollover", prompt: `Build me a signable Cork rollover order on Arbitrum (chain 42161): roll 250e18 srcCST via the ExactSettler 0x983270AE48545665Cee4D7EF61C65fF3fdC8222D, my rollover clone is ${A}, src pool 0x1111111111111111111111111111111111111111111111111111111111111111, dst pool 0x2222222222222222222222222222222222222222222222222222222222222222, srcCST 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, dstCST 0x53E82ABbb12638F09d9e624578ccB666217a765e, premium token = srcCST, min premium per share 0.012e18, open by 1795000000, fill by 1795604800, request id "eval-roll-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "rollover-intent" } }, state: "ok", maxCalls: 2 } },
+  // ── registry 2.1.0 (recipes as contracts; the constraint an order signs) ──
+  {
+    id: "registry-recipes",
+    prompt: "List the approved recipe contracts on the Arbitrum Cork market registry (chain 42161) and tell me the argument shape the liquidity recipe takes.",
+    expect: { tool: "cork_query", params: { resource: "registry-recipes" }, state: "ok", answer: /anchorRate|\(uint256\)/i, maxCalls: 2 },
+  },
+  {
+    id: "resolve-constraint",
+    prompt: `Resolve the four rate limits that the approved liquidity recipe contract 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D would impose on collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on Arbitrum (chain 42161) — the values a JIT order carries.`,
+    expect: { tool: "cork_compute", params: { params: { kind: "resolve-recipe", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D" } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
+  },
+  {
+    id: "predict-market",
+    prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D. Report the derived pool id plus the cST and cPT contracts.`,
+    expect: { tool: "cork_query", params: { resource: "market-predict", filters: { recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
+  },
   // ── decode / track ─────────────────────────────────────────────────────
   { id: "decode-bundle", prompt: "Decode this Cork calldata and tell me which adapter action it performs: use the worked example bytes from the cork_decode tool's own example.", expect: { tool: "cork_capabilities", maxCalls: 3 } },
   { id: "track-digest", prompt: `Compute the content digest for this artifact so I can pin it: {"poolId":"${P}","note":"eval"}.`, expect: { tool: "cork_track", params: { mode: "verify", subject: { kind: "artifact" } }, state: "ok", maxCalls: 2 } },

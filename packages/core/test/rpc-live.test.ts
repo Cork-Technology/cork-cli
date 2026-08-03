@@ -95,6 +95,76 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(ourAddrs).toEqual(api.items.map((i) => i.address.toLowerCase()).sort());
   }, 60_000);
 
+  it("registry-recipes constants + args annotations match GET /v1/42161/recipes", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const ourItems = (ours.data as { items: Array<{ address: string; source: string; constants: Record<string, string>; args: { type: string } | null }> }).items;
+    const api = await apiGet<{ items: Array<{ address: string; source: string; constants: Record<string, { raw: string }>; args: { type: string } | null }> }>("/v1/42161/recipes");
+    if (!api) return;
+    for (const apiRow of api.items) {
+      const mine = ourItems.find((i) => i.address.toLowerCase() === apiRow.address.toLowerCase());
+      expect(mine, `recipe ${apiRow.address} missing from our read`).toBeDefined();
+      expect(mine!.source).toBe(apiRow.source);
+      expect(mine!.args?.type).toBe(apiRow.args?.type);
+      for (const [name, v] of Object.entries(apiRow.constants)) {
+        expect(mine!.constants[name], `constant ${name} on ${apiRow.address}`).toBe(v.raw);
+      }
+    }
+  }, 60_000);
+
+  it("registry-denominations labels/units match GET /v1/42161/denominations", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const ourItems = (ours.data as { items: Array<{ labelHash: string; unit: string; label: string | null }> }).items;
+    const api = await apiGet<{ items: Array<{ label_hash: string; unit: string; label: string }> }>("/v1/42161/denominations");
+    if (!api) return;
+    const mineByHash = Object.fromEntries(ourItems.map((i) => [i.labelHash.toLowerCase(), i]));
+    for (const apiRow of api.items) {
+      const mine = mineByHash[apiRow.label_hash.toLowerCase()];
+      expect(mine, `denomination ${apiRow.label} missing from our read`).toBeDefined();
+      expect(mine!.unit.toLowerCase()).toBe(apiRow.unit.toLowerCase());
+      expect(mine!.label).toBe(apiRow.label);
+    }
+  }, 60_000);
+
+  it("registry-feeds edges + live answers match GET /v1/42161/feeds (answers same block-ish)", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-feeds", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const ourItems = (ours.data as { items: Array<{ base: string; quote: string; aggregator: string; feedDecimals: number; live: { decimals: number } | null }> }).items;
+    const api = await apiGet<{ items: Array<{ base: string; quote: string; aggregator_address?: string; aggregator?: string; feed_decimals: number; live: { answer: { decimals: number } } | null }> }>("/v1/42161/feeds");
+    if (!api) return;
+    expect(ourItems.length).toBe(api.items.length);
+    for (const apiRow of api.items) {
+      const mine = ourItems.find((i) => i.base.toLowerCase() === apiRow.base.toLowerCase() && i.quote.toLowerCase() === apiRow.quote.toLowerCase());
+      expect(mine, `feed ${apiRow.base}→${apiRow.quote} missing from our read`).toBeDefined();
+      expect(mine!.aggregator.toLowerCase()).toBe(String(apiRow.aggregator_address ?? apiRow.aggregator).toLowerCase());
+      expect(mine!.feedDecimals).toBe(apiRow.feed_decimals);
+      // Live answers are block-conditioned; only the decimals (drift detector input) must agree.
+      if (mine!.live && apiRow.live) expect(mine!.live.decimals).toBe(apiRow.live.answer.decimals);
+    }
+  }, 60_000);
+
+  it("fixed-rate oracle prediction matches GET /v1/42161/oracles/fixed/{rate}", async () => {
+    const RATE = (10n ** 18n).toString();
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { rate: RATE }, format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
+    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/fixed/${RATE}`);
+    if (!api) return;
+    expect(od.address.toLowerCase()).toBe(api.oracle.toLowerCase());
+    expect(od.deployed).toBe(api.status === "live");
+  }, 60_000);
+
+  it("pair oracle prediction (price mode) matches GET /v1/42161/oracles/price/{ca}/{ref}", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
+    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/price/${CA}/${REF}`);
+    if (!api) return;
+    expect(od.address.toLowerCase()).toBe(api.oracle.toLowerCase());
+    expect(od.deployed).toBe(api.status === "live");
+  }, 60_000);
+
   it("resolve-recipe matches POST /v1/42161/resolve wei-for-wei (liquidity + anchor)", async () => {
     const ours = await runTool(
       "cork_compute",

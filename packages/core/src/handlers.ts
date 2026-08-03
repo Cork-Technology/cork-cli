@@ -1833,9 +1833,11 @@ async function handleQueryRegistry(input: QueryInput, filters: QueryFilters, cha
     if (filters.mode !== undefined && filters.mode !== "price" && filters.mode !== "nav") {
       return unavailable(chainId, "missing_filter", `registry-oracle filters.mode must be 'price' or 'nav' (got '${filters.mode}') — one pair can hold BOTH wrappers at different addresses, so the mode is part of the key. For a fixed-rate oracle pass filters.rate instead`, ctx);
     }
-    if (filters.mode === undefined) warnings.push({ code: "reserved_field_ignored", message: "no filters.mode given — defaulted to 'price'. One pair can hold a price AND a nav wrapper at different addresses; pass mode explicitly when you mean nav" });
     const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
-    const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName };
+    // The applied default is disclosed in DATA (not a warning: no caller field was ignored —
+    // reserved_field_ignored means something else) so the echoed mode is never mistaken for a
+    // caller choice.
+    const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
     if (wrapper !== ZERO_ADDR) {
       const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate } : {}) } }, chainId, source: "chain", warnings, ...rpc, ctx });
@@ -2037,6 +2039,9 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `legacy registry reports ${total} assets but this read returns the first ${page.length} — items are partial evidence` });
+      }
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     if (input.resource === "registry-recipes") {
@@ -2046,6 +2051,9 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
       }
       const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
+      if (total > BigInt(page.length)) {
+        warnings.push({ code: "pagination_incomplete", message: `legacy registry reports ${total} recipes but this read returns the first ${page.length} — items (and the modes list) are partial evidence; a mode absent here may still exist` });
+      }
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
     }
     if (!filters.collateralAsset || !filters.referenceAsset) {
@@ -2327,7 +2335,7 @@ async function handlePrepareMarket(
   }
 
   const modeName: OracleModeName = a.mode ?? "price";
-  if (a.mode === undefined) warnings.push({ code: "reserved_field_ignored", message: "no mode given — defaulted to 'price'. Oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses); pass mode:'nav' when you mean nav" });
+  const modeNote = a.mode === undefined ? { modeNote: "no mode given — defaulted to 'price'; oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses), pass mode:'nav' when you mean nav" } : {};
   const calldata = buildDeployOracleCall(a.collateralAsset, a.referenceAsset, modeName);
 
   // Best-effort status read (calldata building is pure; the tx is safe either way).
@@ -2351,7 +2359,7 @@ async function handlePrepareMarket(
   }
   return envelope({
     state: "ok",
-    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...status, clientRequestId: input.clientRequestId },
+    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, clientRequestId: input.clientRequestId },
     chainId,
     source: resolved ? "chain" : "config",
     warnings,

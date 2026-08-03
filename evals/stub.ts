@@ -11,6 +11,12 @@ const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
 const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
 const NOW = 1_790_000_000n;
 
+// MarketRegistry 2.1.0 fixture (Arbitrum, matches cork-defaults.json so the binding guard passes).
+const REGISTRY_210 = "0x47C3AF38435Db64D9400c30575E4c10482c0752D";
+export const LIQUIDITY_RECIPE = "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D";
+export const FIXED_RECIPE = "0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682";
+const WAD = 10n ** 18n;
+
 const MARKET = {
   collateralAsset: SUSDE,
   referenceAsset: VBUSDC,
@@ -53,6 +59,41 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     case "isGlobalWhitelisted":
     case "isMarketWhitelisted":
       return true; // matches the seeded whitelist events below — verification leg agrees
+    // ── MarketRegistry 2.1.0 surface (recipes as contracts; constraint via recipe.resolve) ──
+    case "MARKET_REGISTRY":
+      return REGISTRY_210; // adapter immutable — keeps the binding guard green
+    case "isRecipe": {
+      const a = String(args.args?.[0] ?? "").toLowerCase();
+      return a === LIQUIDITY_RECIPE.toLowerCase() || a === FIXED_RECIPE.toLowerCase();
+    }
+    case "getRecipes":
+      return [[LIQUIDITY_RECIPE, FIXED_RECIPE], 2n];
+    case "source":
+      return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? 2 : 1; // RecipeSource: PRICE=1, FIXED=2
+    case "description":
+      return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? "Fixed rate: a window of WINDOW_WIDTH around the fixed oracle rate." : "Liquidity: the widest rate window CorkPoolManager will accept.";
+    case "REGISTRY":
+      return REGISTRY_210;
+    case "RATE_MIN":
+    case "WINDOW_WIDTH":
+      return 1n;
+    case "RATE_MIN_PERCENTAGE":
+    case "RATE_MAX_PERCENTAGE":
+    case "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE":
+      return 100n * WAD;
+    case "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE":
+      return 300n * WAD;
+    case "lookupWrapper":
+      return ORACLE; // pair oracle deployed; its rate() is served above
+    case "resolve":
+      // The liquidity shape at rate 0.8e18: floor 1 wei, ceiling 2×rate, per-day rate, capacity 3×rate.
+      return { rateMin: 1n, rateMax: 1_600_000_000_000_000_000n, rateChangePerDayMax: 800_000_000_000_000_000n, rateChangeCapacityMax: 2_400_000_000_000_000_000n };
+    case "verify":
+      return true;
+    case "symbol":
+      return "sUSDe";
+    case "name":
+      return "Staked USDe";
     default:
       throw new Error(`stub has no fixture for ${args.functionName}`);
   }
