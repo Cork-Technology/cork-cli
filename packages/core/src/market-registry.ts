@@ -352,6 +352,25 @@ export function roleMemberSlot(role: `0x${string}`, account: `0x${string}`): `0x
   return keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [account, roleDataSlot]));
 }
 
+export const sharePoolIdAbi = parseAbi(["function poolId() view returns (bytes32)"]);
+
+/** Best-effort probe behind the stale_share_prediction diagnosis: when `addr` already hosts a
+ *  live PoolShare, report which pool it serves; undefined in every other case (silent on every
+ *  failure — this only decorates an existing jit_side_mismatch warning, never blocks a build).
+ *  Why it matters: cST/cPT deploy via plain nonce CREATE (see the predictShares note below), so
+ *  a prediction embedded in a resting order is consumed by ANY interleaving pool creation, after
+ *  which that order reverts OrderNotForPool forever. Empirically established 2026-08-04 on the
+ *  venue's first new-generation batch. */
+export async function readForeignSharePool(client: PublicClient, addr: `0x${string}`): Promise<`0x${string}` | undefined> {
+  try {
+    const code = await client.getCode({ address: addr });
+    if (!code || code === "0x") return undefined;
+    return (await client.readContract({ address: addr, abi: sharePoolIdAbi, functionName: "poolId" })) as `0x${string}`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The pool's two share tokens as the chain would produce them for `poolId`.
  *  - `read`: the pool already exists — the addresses are PINNED (read straight from poolManager).
  *  - `simulated`: the pool does not exist — created in-memory via eth_simulateV1 with a state

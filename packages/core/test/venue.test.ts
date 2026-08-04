@@ -930,7 +930,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const buyHash = hashLopOrder(42161, LOP, buyOrderT);
     const buyRow = { orderHash: buyHash, order: buyOrderWire, signature: SIG, extension: "0x" };
     const jm = { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: LIQ };
-    const rpcStub = (over?: (c: StubCall) => unknown) =>
+    const rpcStub = (over?: (c: StubCall) => unknown, code?: Record<string, string>) =>
       stubRpc(
         (c) => {
           const o = over?.(c);
@@ -948,13 +948,13 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
           if (c.functionName === "shares") return [ZERO, ZERO];
           throw new Error(`unexpected ${c.functionName}`);
         },
-        { simulateCalls: () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(CPT) + sharesWord(CST) }] }) },
+        { simulateCalls: () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(CPT) + sharesWord(CST) }] }), code },
       );
-    const fillJit = (extra: Record<string, unknown> = {}, over?: (c: StubCall) => unknown, row: Record<string, unknown> = buyRow) =>
+    const fillJit = (extra: Record<string, unknown> = {}, over?: (c: StubCall) => unknown, row: Record<string, unknown> = buyRow, code?: Record<string, string>) =>
       runTool(
         "cork_prepare_orders",
-        { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
-        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over) },
+        { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: (row["orderHash"] as string) ?? buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
+        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over, code) },
       );
 
     it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
@@ -972,6 +972,26 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       expect(String(d.jit["permitNote"])).toContain("TAKER as owner");
       expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(false); // order.takerAsset IS the derived cST
       expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false); // stub grants both roles — the live path stays silent
+    });
+
+    it("a resting order whose side is another pool's LIVE share contract → stale_share_prediction (the consumed-nonce diagnosis, mutation killer)", async () => {
+      // The 2026-08-04 live failure: the venue's first new-generation batch carried predicted
+      // cST addresses that interleaving pool creations had consumed — every fill reverted
+      // OrderNotForPool. The order here names a takerAsset with code that reports a FOREIGN
+      // poolId; the tool must say WHY the order is dead, not just that it is.
+      const FOREIGN = "0x000000000000000000000000000000000000f0e1" as const;
+      const FOREIGN_POOL = `0x${"deadbeef".repeat(8)}`;
+      const staleOrderT: LopOrder = { ...buyOrderT, takerAsset: FOREIGN };
+      const staleHash = hashLopOrder(42161, LOP, staleOrderT);
+      const staleRow = { orderHash: staleHash, order: { ...buyOrderWire, takerAsset: FOREIGN }, signature: SIG, extension: "0x" };
+      const env = await fillJit({}, (c) => (c.functionName === "poolId" ? FOREIGN_POOL : undefined), staleRow, { [FOREIGN]: "0x6080" });
+      expect(env.state).toBe("ok");
+      expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(true);
+      const w = env.warnings.find((x) => x.code === "stale_share_prediction");
+      expect(w).toBeDefined();
+      expect(w?.message).toContain("takerAsset");
+      expect(w?.message).toContain(FOREIGN_POOL);
+      expect(w?.message).toContain("consumed");
     });
 
     it("taker pre-flight: a PARTIAL role grant warns and names the missing role (mutation killer for the taker roles gate)", async () => {

@@ -178,6 +178,23 @@ const CATALOG: Mutant[] = [
     replace: "\n            if (false) {",
     tests: [T.mr],
   },
+  // ── stale_share_prediction: the consumed-nonce diagnosis (single shared emitter by design) ──
+  {
+    id: "stale-diagnosis-warn-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: "if (foreign && foreign.toLowerCase() !== derivedPoolId.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.mr, T.venue],
+  },
+  {
+    // Wrong getter name: the probe answers only for "poolId", so the mutant's read throws,
+    // the helper degrades to undefined, and the diagnosis silently vanishes — presence tests die.
+    id: "stale-diagnosis-getter-swapped",
+    file: "packages/core/src/market-registry.ts",
+    find: 'abi: sharePoolIdAbi, functionName: "poolId"',
+    replace: 'abi: sharePoolIdAbi, functionName: "poolId2" as never',
+    tests: [T.mr, T.venue],
+  },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {
     id: "invalidator-slot-shift",

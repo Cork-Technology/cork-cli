@@ -49,7 +49,7 @@ import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuilti
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
-import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, predictShares, readAdapterRoles, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
+import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, predictShares, readAdapterRoles, readForeignSharePool, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
 import * as legacyRegistry from "./market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "./deprecation.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
@@ -1981,6 +1981,27 @@ function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, un
   return undefined;
 }
 
+/** Decorates a jit_side_mismatch with the WHY, when knowable: an order side that already hosts
+ *  a live PoolShare of a DIFFERENT pool is a consumed nonce-based prediction (plain-CREATE share
+ *  deploys are first-come-first-served — see readForeignSharePool), and the order can never fill.
+ *  ONE shared emission site on purpose: duplicated identical conditionals defeat first-occurrence
+ *  mutation probes (the jitValueGate/readAdapterRoles lesson). Best-effort — silent on any read
+ *  failure; the jit_side_mismatch warning it decorates already stands. */
+async function diagnoseStaleSidePrediction(
+  client: Parameters<typeof readForeignSharePool>[0],
+  sides: ReadonlyArray<readonly [string, `0x${string}`]>,
+  derivedPoolId: `0x${string}`,
+  warnings: Array<{ code: string; message: string }>,
+  remedy: string,
+): Promise<void> {
+  for (const [label, side] of sides) {
+    const foreign = await readForeignSharePool(client, side);
+    if (foreign && foreign.toLowerCase() !== derivedPoolId.toLowerCase()) {
+      warnings.push({ code: "stale_share_prediction", message: `${label} ${side} already belongs to a DIFFERENT live pool (${foreign}) — a nonce-based cST prediction consumed by an interleaving pool creation (cST/cPT deploy via plain CREATE, first-come-first-served). ${remedy}` });
+    }
+  }
+}
+
 /** Build the TAKER interaction (`adapter ++ abi.encode(JITMarketParams, PermitParams[])`) for
  *  lifting a resting order — the walkthrough's canonical settle path: the underwriter-taker
  *  delivers a not-yet-minted cST via takerInteraction, which always mints (enableJitMint gates
@@ -2115,6 +2136,7 @@ async function buildTakerJitInteraction(args: {
         const cstLc = pred.cst.toLowerCase();
         if (args.order.makerAsset.toLowerCase() !== cstLc && args.order.takerAsset.toLowerCase() !== cstLc) {
           warnings.push({ code: "jit_side_mismatch", message: `NEITHER side of the resting order is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
+          await diagnoseStaleSidePrediction(client, [["the resting order's makerAsset", args.order.makerAsset], ["the resting order's takerAsset", args.order.takerAsset]], derived.poolId, warnings, "This resting order can never fill; it must be re-signed against a fresh share prediction.");
         }
       }
     } catch (err) {
@@ -2809,6 +2831,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
               const cstLc = cst.toLowerCase();
               if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
                 warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
+                await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run market-predict and set the order side to the FRESH predicted cST before signing.");
               }
             }
           } catch (err) {

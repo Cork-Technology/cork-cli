@@ -660,9 +660,10 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   // The roles pre-flight has three meaningful states, and each catches a different mutant class.
   // Both-missing is asserted above; the two below cover the branches that became load-bearing
   // when the grant landed on-chain (block 491025419, 2026-08-04).
-  const rolesStub = (hasRole: (c: StubCall) => boolean) =>
+  const rolesStub = (hasRole: (c: StubCall) => boolean, opts: { code?: Record<string, string>; poolIdOf?: (addr: string) => `0x${string}` } = {}) =>
     stubRpc(
       (c) => {
+        if (c.functionName === "poolId" && opts.poolIdOf) return opts.poolIdOf(c.address);
         if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
         if (c.functionName === "MARKET_REGISTRY") return REG;
         if (c.functionName === "CONTROLLER") return CONTROLLER;
@@ -678,6 +679,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
       },
       {
         simulateCalls: () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + "00".repeat(12) + "77db0b6c1d956865c2b3217f90be1a394ba08f4c" + "00".repeat(12) + "5d16b802b397dffced2468f63b936a835dc8bf10" }] }),
+        code: opts.code,
       },
     );
 
@@ -685,6 +687,27 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: rolesStub(() => true) });
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false);
+    // side-mismatch fires (sides are deliberately CA/REF) but neither side has code, so the
+    // consumed-prediction diagnosis stays SILENT — a plain user error, not a stale prediction.
+    expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(true);
+    expect(env.warnings.some((w) => w.code === "stale_share_prediction")).toBe(false);
+  });
+
+  it("a mismatched side that ALREADY hosts another pool's shares → stale_share_prediction names that pool (mutation killer for the diagnosis gate)", async () => {
+    // The exact live failure of 2026-08-04: the venue's predicted cST addresses were consumed
+    // by interleaving pool creations. Here the order's takerAsset (REF) has code and reports a
+    // FOREIGN poolId — the diagnosis must name the side and the foreign pool.
+    const FOREIGN_POOL = `0x${"deadbeef".repeat(8)}` as const;
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
+      nowSeconds: 1_790_000_000n,
+      resolveRpc: rolesStub(() => true, { code: { [REF.toLowerCase()]: "0x6080" }, poolIdOf: () => FOREIGN_POOL }),
+    });
+    expect(env.state).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "stale_share_prediction");
+    expect(w).toBeDefined();
+    expect(w?.message).toContain("takerAsset");
+    expect(w?.message).toContain(FOREIGN_POOL);
+    expect(w?.message).toContain("consumed");
   });
 
   it("a PARTIAL grant still warns and names which role is missing (mutation killer: && vs ||, swapped role args)", async () => {
