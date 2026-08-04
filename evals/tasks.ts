@@ -7,11 +7,16 @@ import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
 export interface Expectation {
   /** The tool the agent should reach for first. */
   tool: string;
-  /** Deep-subset match against the FIRST call to that tool (checks discriminators + key params). */
+  /** First-call tools that ALSO count as a correct pick — e.g. a cork_capabilities discovery
+   *  hop before the target tool. The target `tool` is still what params/state grade against. */
+  prelude?: string[];
+  /** Deep-subset match against SOME schema-valid call to `tool` (discriminators + key params). */
   params?: Record<string, unknown>;
-  /** Envelope state the tool returned for that call. */
+  /** Envelope state SOME schema-valid call to `tool` must have reached (same call must also
+   *  match `params` when given — outcome grading, not first-attempt grading: a recovered miss
+   *  is a pass here and shows up in the `efficient`/`recovered` axes instead). */
   state?: "ok" | "unavailable" | "conflict";
-  /** warnings[0].code expected on a gated outcome. */
+  /** warnings[0].code expected on a gated outcome (checked on the same call as `state`). */
   code?: string;
   /** Regex the agent's final text answer must match. */
   answer?: RegExp;
@@ -75,7 +80,9 @@ export const TASKS: EvalTask[] = [
     expect: { tool: "cork_query", params: { resource: "market-predict", filters: { recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
-  { id: "decode-bundle", prompt: "Decode this Cork calldata and tell me which adapter action it performs: use the worked example bytes from the cork_decode tool's own example.", expect: { tool: "cork_capabilities", maxCalls: 3 } },
+  // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the
+  // efficient correct path; fetching them via cork_capabilities first is an acceptable prelude.
+  { id: "decode-bundle", prompt: "Decode this Cork calldata and tell me which adapter action it performs: use the worked example bytes from the cork_decode tool's own example.", expect: { tool: "cork_decode", prelude: ["cork_capabilities"], params: { kind: "calldata" }, state: "ok", answer: /safeSwap|swap/i, maxCalls: 3 } },
   { id: "track-digest", prompt: `Compute the content digest for this artifact so I can pin it: {"poolId":"${P}","note":"eval"}.`, expect: { tool: "cork_track", params: { mode: "verify", subject: { kind: "artifact" } }, state: "ok", maxCalls: 2 } },
   { id: "track-receipt", prompt: "Reconcile transaction 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa on mainnet — did it succeed?", expect: { tool: "cork_track", params: { mode: "reconcile", subject: { kind: "txHash" } }, state: "ok", answer: /success/i, maxCalls: 2 } },
   { id: "verify-pool", prompt: `Verify that Cork pool ${P} on chain matches its market id (re-hash check).`, expect: { tool: "cork_track", params: { mode: "verify", subject: { kind: "marketRef", poolId: P } }, state: "ok", maxCalls: 2 } },

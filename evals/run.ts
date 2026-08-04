@@ -99,10 +99,15 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
 
   const e = task.expect;
   const first = trace[0];
-  const toolPick = first?.tool === e.tool;
-  const targetCall = trace.find((c) => c.tool === e.tool && !c.invalid) ?? trace.find((c) => c.tool === e.tool);
-  const paramsOk = e.params ? !!targetCall && subsetMatch(e.params, targetCall.input) : true;
-  const statePass = e.state ? targetCall?.state === e.state && (e.code ? targetCall?.code === e.code : true) : true;
+  const toolPick = first?.tool === e.tool || (first !== undefined && (e.prelude?.includes(first.tool) ?? false));
+  // Grade the OUTCOME, not the first attempt: some schema-valid call to the target tool must
+  // have matched. A recovered miss (e.g. missing_filter then ok) passes here and is charged on
+  // the `efficient` axis instead — that split is what the two axes claim to measure.
+  const validCalls = trace.filter((c) => c.tool === e.tool && !c.invalid);
+  const paramsOk = e.params ? validCalls.some((c) => subsetMatch(e.params, c.input)) : true;
+  const statePass = e.state
+    ? validCalls.some((c) => c.state === e.state && (e.code ? c.code === e.code : true) && (!e.params || subsetMatch(e.params, c.input)))
+    : true;
   const answerPass = e.answer ? e.answer.test(finalText) : true;
   const efficient = trace.length <= e.maxCalls;
   // Error recovery: after an invalid call to a tool, did a later call to the SAME tool validate?
