@@ -36,6 +36,11 @@ jobs:
           CORK_CONFIG_NO_FETCH: "1"
         run: bun run test
 
+      - name: Mutation probes (bytes-critical logic — every catalogued mutant must be CAUGHT)
+        env:
+          CORK_CONFIG_NO_FETCH: "1"
+        run: bun run test:mutation
+
   # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   agent-evals:

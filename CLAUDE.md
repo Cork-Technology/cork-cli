@@ -25,7 +25,12 @@ Bun 1.3 is pinned in `mise.toml`.
     `CORK_EXPLAIN_JSON=1`. Renderer: `packages/cli/src/explain.ts`.
   - `--rpc-url <url>` overrides RPC resolution for chain-backed commands.
 - Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip without env) ·
-  `bun run test:unit` (offline only) · `bun run test:live` (vnet/live suites; need `CORK_TEST_RPC` / `CORK_RPC_LIVE=1`)
+  `bun run test:unit` (offline only) · `bun run test:live` (vnet/live suites; need `CORK_TEST_RPC` / `CORK_RPC_LIVE=1`) ·
+  `bun run test:mutation` (scripts/mutation-probes.ts: applies each catalogued semantic mutant to the
+  bytes-critical core logic — struct/tuple field order, enum ordinals, bit flags, hash inputs,
+  rounding directions, boundary comparators, storage-slot math — and FAILS unless the focused
+  offline suite catches every one; also fails on pattern rot so probes can't silently stop aiming
+  at moved code. When a mutant survives: write a killer test, keep the probe)
 
 ## Install / verify as an MCP server
 

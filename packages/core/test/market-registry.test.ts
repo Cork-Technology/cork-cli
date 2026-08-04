@@ -711,6 +711,20 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     expect(envlp.warnings[0]?.code).toBe("invalid_order_terms");
   });
 
+  it("fee of EXACTLY 5e18 (the cap) is accepted — the chain rule is <= 5%, not < 5% (boundary killer)", async () => {
+    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, swapFeePercentage: "5000000000000000000", unwindSwapFeePercentage: "5000000000000000000" }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    expect(envlp.state).toBe("ok");
+    const decoded = decodeJitExtension((envlp.data as { extension: `0x${string}` }).extension);
+    expect(decoded.params.swapFeePercentage).toBe(5n * 10n ** 18n);
+  });
+
+  it("expiry EXACTLY equal to now is rejected — pool creation requires strictly-future expiry (boundary killer)", async () => {
+    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, expiryTimestamp: "1790000000" }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    expect(envlp.state).toBe("unavailable");
+    expect(envlp.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(envlp.warnings[0]?.message).toContain("not in the future");
+  });
+
   it("no adapter configured on mainnet → unknown_deployment naming 42161", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, chainId: 1, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE }) }, { nowSeconds: 1n, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");

@@ -72,6 +72,23 @@ describe("decodeKnownLog — 2.1.0 JIT events (source-verified, full arg decode)
     expect(row.data).toBe("0x1234");
   });
 
+  it("OrderCancelled disambiguates by TOPIC COUNT: settler form (indexed orderId) vs LOP fallback (hash in data)", () => {
+    // Same selector, two layouts. The settler's `OrderCancelled(bytes32 indexed orderId)` puts
+    // the id in topics[1]; the LOP's `OrderCancelled(bytes32 orderHash)` puts it in data. The
+    // fallback ABI is what decodes the LOP form — dropping it would leave LOP cancels unknown.
+    const sel = toEventSelector("OrderCancelled(bytes32)");
+    const settler = decodeKnownLog({ topics: [sel, POOL_ID], data: "0x" });
+    expect(settler.known).toBe(true);
+    if (!settler.known) throw new Error("unreachable");
+    expect(settler.args["orderId"]).toBe(POOL_ID);
+
+    const lop = decodeKnownLog({ topics: [sel], data: POOL_ID });
+    expect(lop.known).toBe(true);
+    if (!lop.known) throw new Error("unreachable");
+    expect(lop.event).toBe("OrderCancelled");
+    expect(lop.args["orderHash"]).toBe(POOL_ID);
+  });
+
   it("regression: phoenix MarketCreated still fully decodes after the ABI-first reorder", () => {
     // id + referenceAsset + collateralAsset indexed; tail = (expiry, rateOracle, principalToken, swapToken).
     const sel = toEventSelector("MarketCreated(bytes32,address,address,uint256,address,address,address)");

@@ -82,6 +82,19 @@ describe("buildMakerOrder", () => {
     expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).not.toBe(0n);
   });
 
+  it("an extension with data but EMPTY interaction fields sets NEITHER interaction flag (boundary: equal cumulative offsets mean empty)", () => {
+    // Field 0 holds 4 bytes; every later field is EMPTY, so ALL eight cumulative END offsets are
+    // 4 — off(6) == off(5) must read as "no preInteraction". A >= comparison here would set the
+    // PRE flag and make OrderMixin call an interaction target parsed from an empty span.
+    let offsets = 0n;
+    for (let k = 0n; k < 8n; k++) offsets |= 4n << (32n * k);
+    const extension = (`0x${offsets.toString(16).padStart(64, "0")}deadbeef`) as `0x${string}`;
+    const o = buildMakerOrder({ ...base, clientRequestId: "req-ext-0003", extension });
+    expect(o.order.makerTraits & HAS_EXTENSION_FLAG).not.toBe(0n);
+    expect(o.order.makerTraits & PRE_INTERACTION_CALL_FLAG).toBe(0n);
+    expect(o.order.makerTraits & POST_INTERACTION_CALL_FLAG).toBe(0n);
+  });
+
   it("rejects an extension whose offsets header is NOT monotonically non-decreasing", () => {
     // field 6 ends at 8 but field 7 ends at 4 (< 8): a decreasing cumulative offset is a malformed
     // 1inch v4 extension that signs fine and only misparses/reverts at fill — refuse at bind time.
