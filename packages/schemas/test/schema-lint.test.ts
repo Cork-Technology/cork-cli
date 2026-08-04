@@ -44,6 +44,7 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_submit :: action<oneOf2>.validUntil": "venue RFQ field: absolute unix int, bounded <= year 2100 + future check",
   // Tiny fixed-width protocol values.
   "cork_prepare_orders :: action<oneOf0>.jitMarket.permits[].v": "ECDSA recovery byte 0..255",
+  "cork_prepare_orders :: action<oneOf2>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (taker-fill jitMarket)",
   "cork_prepare_orders :: action<oneOf4>.premiumPaymentMode<anyOf0>": "literal 0|1",
   "cork_prepare_orders :: action<oneOf4>.premiumPaymentMode<anyOf1>": "literal 0|1",
   "cork_submit :: action<oneOf0>.order.premiumPaymentMode<anyOf0>": "literal 0|1",

@@ -425,26 +425,42 @@ describe("cork_query market-predict (2.1.0: recipe contract + off-chain constrai
     expect(drift?.message).toContain("signing");
   });
 
-  it("deployable-but-undeployed oracle → market/shares null (API parity) with deploy-first guidance; constraint may still resolve from the anchor", async () => {
+  it("deployable-but-undeployed oracle → FULL identity from the predicted address + anchor constraint (the walkthrough's intended shape — the HTTP endpoint still nulls here)", async () => {
+    // The pool id's only oracle-derived input is the ADDRESS (already predicted); the constraint
+    // resolves from the anchor in args; the share simulation prepends the same permissionless
+    // deploy the fill performs. Nothing has to be deployed first.
     const anchorArgs = `0x${WAD.toString(16).padStart(64, "0")}`;
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx((c) => {
-      if (c.functionName === "isRecipe") return true;
-      if (c.functionName === "source") return 1;
-      if (c.functionName === "lookupWrapper") return ZERO;
-      if (c.functionName === "simulate:deploy") return ORACLE;
-      if (c.functionName === "resolve") {
-        expect(c.args?.[2]).toBe(ZERO); // predicted oracle is passed as address(0) — the anchor fallback
-        expect(c.args?.[3]).toBe(anchorArgs);
-        return GT.constraint;
-      }
-      throw new Error(`unexpected ${c.functionName}`);
-    }));
+    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx(
+      (c) => {
+        if (c.functionName === "isRecipe") return true;
+        if (c.functionName === "source") return 1;
+        if (c.functionName === "lookupWrapper") return ZERO;
+        if (c.functionName === "simulate:deploy") return GT.oracle;
+        if (c.functionName === "resolve") {
+          expect(c.args?.[2]).toBe(ZERO); // predicted oracle is passed as address(0) — the anchor fallback
+          expect(c.args?.[3]).toBe(anchorArgs);
+          return GT.constraint;
+        }
+        if (c.functionName === "shares") return [ZERO, ZERO]; // pool does not exist
+        throw new Error(`unexpected ${c.functionName}`);
+      },
+      {
+        simulateCalls: (a) => {
+          expect(a.calls.length).toBe(3); // deploy prepended before createNewPool + shares
+          return { results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(GT.cpt) + sharesWord(GT.cst) }] };
+        },
+      },
+    ));
     expect(env.state).toBe("ok");
-    const d = env.data as { market: unknown; shares: unknown; constraint: { rateMin: string } };
-    expect(d.market).toBeNull();
-    expect(d.shares).toBeNull();
-    expect(BigInt(d.constraint.rateMin)).toBe(GT.constraint.rateMin);
-    expect(env.warnings.some((w) => w.code === "oracle_not_deployed")).toBe(true);
+    const d = env.data as { oracle: { deployed: boolean }; market: { poolId: string; exists: boolean }; shares: { corkSwapToken: string; source: string }; constraint?: unknown };
+    expect(d.oracle.deployed).toBe(false);
+    expect(d.market.poolId).toBe(GT.poolId); // same identity as the deployed-oracle case: address + constraint are identical
+    expect(d.market.exists).toBe(false);
+    expect(d.shares.corkSwapToken.toLowerCase()).toBe(GT.cst);
+    expect(d.shares.source).toBe("simulated");
+    const note = env.warnings.find((w) => w.code === "oracle_not_deployed");
+    expect(note?.message).toContain("does not need to be");
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false); // anchor-derived identity does not drift with the rate
   });
 
   it("a refusing recipe → recipe_refused naming the contract's own error", async () => {
@@ -639,6 +655,38 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     expect(env.warnings.some((w) => w.code === "constraint_window_notice")).toBe(true);
     expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(true);
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false); // the drift world ended at signing
+  });
+
+  it("online auto-resolve with an UNDEPLOYED oracle: the share simulation prepends the fill's own deploy (mutation killer for the preCalls branch)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, additionalData: `0x${WAD.toString(16).padStart(64, "0")}` }) }, {
+      nowSeconds: 1_790_000_000n,
+      resolveRpc: stubRpc(
+        (c) => {
+          if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
+          if (c.functionName === "MARKET_REGISTRY") return REG;
+          if (c.functionName === "CONTROLLER") return CONTROLLER;
+          if (c.functionName === "hasRole") return true;
+          if (c.functionName === "isRecipe") return true;
+          if (c.functionName === "source") return 1;
+          if (c.functionName === "lookupWrapper") return ZERO; // NOT deployed
+          if (c.functionName === "simulate:deploy") return ORACLE;
+          if (c.functionName === "resolve") return CONSTRAINT;
+          if (c.functionName === "shares") return [ZERO, ZERO];
+          throw new Error(`unexpected ${c.functionName}`);
+        },
+        {
+          simulateCalls: (a) => {
+            expect(a.calls.length).toBe(3); // deploy prepended before createNewPool + shares
+            return { results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" }, { status: "success", data: "0x" + "00".repeat(12) + "77db0b6c1d956865c2b3217f90be1a394ba08f4c" + "00".repeat(12) + "5d16b802b397dffced2468f63b936a835dc8bf10" }] };
+          },
+        },
+      ),
+    });
+    expect(env.state).toBe("ok");
+    const d = env.data as { jit: { predictedCorkSwapToken: string; oracle: { deployed: boolean } } };
+    expect(d.jit.oracle.deployed).toBe(false);
+    expect(d.jit.predictedCorkSwapToken.toLowerCase()).toBe("0x5d16b802b397dffced2468f63b936a835dc8bf10");
+    expect(env.warnings.some((w) => w.code === "oracle_not_deployed")).toBe(true);
   });
 
   it("a stale explicit constraint failing recipe.verify → would_revert naming RecipeRejectedConstraint", async () => {

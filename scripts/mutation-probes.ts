@@ -43,6 +43,7 @@ const T = {
   encoders: "packages/core/test/action-encoders.test.ts",
   funding: "packages/core/test/funding.test.ts",
   events: "packages/core/test/event-decode.test.ts",
+  venue: "packages/core/test/venue.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
 };
 
@@ -98,6 +99,44 @@ const CATALOG: Mutant[] = [
     find: "t |= p.nonce << 120n;",
     replace: "t |= p.nonce << 121n;",
     tests: [T.orders, T.invalidator],
+  },
+  {
+    id: "orders-taker-interaction-offset",
+    file: "packages/core/src/orders.ts",
+    find: "const TAKER_ARGS_INTERACTION_LENGTH_OFFSET = 200n;",
+    replace: "const TAKER_ARGS_INTERACTION_LENGTH_OFFSET = 201n;",
+    tests: [T.orders],
+  },
+  {
+    id: "taker-interaction-concat-order",
+    file: "packages/core/src/handlers.ts",
+    find: "const interaction = `0x${mr.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;",
+    replace: "const interaction = `0x${extraData.slice(2)}${mr.adapter.slice(2)}` as `0x${string}`;",
+    tests: [T.venue],
+  },
+  {
+    id: "predict-precalls-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: 'preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });',
+    replace: "void 0;",
+    tests: [T.mr],
+  },
+  {
+    // NOTE: the maker and taker builders contain BYTE-IDENTICAL preCalls lines; the finds below
+    // disambiguate by indentation (maker sits deeper inside handlePrepareOrders). A refactor
+    // that equalizes the indentation will surface here as pattern rot — re-aim, don't delete.
+    id: "makerjit-precalls-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: '\n              preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    replace: "\n              void 0;",
+    tests: [T.mr],
+  },
+  {
+    id: "takerjit-precalls-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: '\n        preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    replace: "\n        void 0;",
+    tests: [T.venue],
   },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {

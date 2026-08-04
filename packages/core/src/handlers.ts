@@ -49,7 +49,7 @@ import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuilti
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
-import { accessControlAbi, aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, POOL_CREATOR_ROLE, predictShares, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
+import { accessControlAbi, aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, POOL_CREATOR_ROLE, predictShares, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
 import * as legacyRegistry from "./market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "./deprecation.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
@@ -716,6 +716,52 @@ function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerCon
       /* not an auction order (or malformed auction bytes) — no label; the raw fields still decode */
     }
   }
+  // JIT labeling (best-effort, same decode-only rule): when the extension's preInteraction field
+  // carries a Cork JIT payload, unpack it so a taker can see what filling this order DOES —
+  // which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it commits to, and
+  // whether permits ride along. Tried 2.1.0-first; the legacy shape is labeled as such. A
+  // non-JIT extension just skips the label [K3: reconstructed from the bytes, never guessed].
+  let jit: Record<string, unknown> | undefined;
+  if (extension !== undefined && extension !== "0x" && fusion === undefined) {
+    try {
+      const d = decodeJitExtension(extension);
+      jit = {
+        generation: "2.1.0",
+        adapter: d.adapter,
+        collateralAsset: d.params.collateralAsset,
+        referenceAsset: d.params.referenceAsset,
+        expiryTimestamp: d.params.expiryTimestamp,
+        recipe: d.params.recipe,
+        rateOverride: d.params.rateOverride,
+        constraint: { ...d.params.constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" },
+        additionalData: d.params.additionalData,
+        swapFeePercentage: d.params.swapFeePercentage,
+        unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
+        enableJitMint: d.params.enableJitMint,
+        permits: d.permits.length,
+        note: "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
+      };
+    } catch {
+      try {
+        const d = legacyRegistry.decodeJitExtension(extension);
+        jit = {
+          generation: "legacy (pre-2.1.0)",
+          adapter: d.adapter,
+          collateralAsset: d.params.collateralAsset,
+          referenceAsset: d.params.referenceAsset,
+          expiryTimestamp: d.params.expiryTimestamp,
+          mode: d.params.mode,
+          swapFeePercentage: d.params.swapFeePercentage,
+          unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
+          enableJitMint: d.params.enableJitMint,
+          permits: d.permits.length,
+          note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
+        };
+      } catch {
+        /* not a JIT extension either — no label; the raw fields still decode */
+      }
+    }
+  }
   const base = {
     kind: "order" as const,
     chainId,
@@ -725,6 +771,7 @@ function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerCon
     orderHash,
     ...(extension !== undefined ? { extension } : {}),
     ...(fusion ? { fusion } : {}),
+    ...(jit ? { jit } : {}),
   };
   // Extension binding: OrderLib enforces salt.low160 == keccak256(extension).low160 at fill.
   if (extension !== undefined && extension !== "0x") {
@@ -1921,6 +1968,174 @@ async function handleComputeResolveRecipeLegacy(
   }
 }
 
+/** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction): the
+ *  protocol's fee cap and strictly-future expiry, in one place so a boundary rule can never
+ *  drift between the two paths. Returns the gate envelope, or undefined when the values pass. */
+function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint): Envelope | undefined {
+  if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {
+    return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
+  }
+  if (expiryTimestamp <= nowSecs) {
+    return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
+  }
+  return undefined;
+}
+
+/** Build the TAKER interaction (`adapter ++ abi.encode(JITMarketParams, PermitParams[])`) for
+ *  lifting a resting order — the walkthrough's canonical settle path: the underwriter-taker
+ *  delivers a not-yet-minted cST via takerInteraction, which always mints (enableJitMint gates
+ *  only the maker-side twin). Reuses the SAME primitives as the maker-side prepare (recipe
+ *  resolution, constraint staticcall, verify pre-flight, state-override share prediction), so
+ *  every protocol rule stays single-sourced; only the orchestration differs — including one
+ *  taker-specific guard: when the RESTING order carries its own JIT extension, the taker's
+ *  params must derive the SAME pool id, or the two hooks would fight (conflict, no bytes). */
+async function buildTakerJitInteraction(args: {
+  ctx: HandlerContext;
+  chainId: ChainId;
+  lop: `0x${string}`;
+  jm: {
+    collateralAsset: `0x${string}`;
+    referenceAsset: `0x${string}`;
+    expiryTimestamp: string;
+    recipe?: `0x${string}` | undefined;
+    mode?: string | undefined;
+    rateOverride: string;
+    additionalData?: `0x${string}` | undefined;
+    constraint?: { rateMin: string; rateMax: string; rateChangePerDayMax: string; rateChangeCapacityMax: string } | undefined;
+    swapFeePercentage: string;
+    unwindSwapFeePercentage: string;
+    enableJitMint: boolean;
+    permits?: Array<{ token: `0x${string}`; value: string; deadline: string; v: number; r: `0x${string}`; s: `0x${string}` }> | undefined;
+  };
+  taker: `0x${string}`;
+  order: LopOrder;
+  orderExtension: `0x${string}` | undefined;
+}): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: Record<string, unknown>; warnings: Array<{ code: string; message: string }> }> {
+  const { ctx, chainId, lop, jm } = args;
+  const warnings: Array<{ code: string; message: string }> = [];
+  const nowSecs = nowSecondsOf(ctx);
+  const swapFee = BigInt(jm.swapFeePercentage);
+  const unwindFee = BigInt(jm.unwindSwapFeePercentage);
+  const expiryTimestamp = BigInt(jm.expiryTimestamp);
+  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
+  if (valueGate) return { gate: valueGate };
+  const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
+  if (!mr?.adapter) {
+    return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT fills are live on Arbitrum One (42161)`, ctx) };
+  }
+  if (mrWarn) warnings.push(mrWarn);
+  let recipe = jm.recipe;
+  if (!recipe) {
+    if (jm.mode === undefined) {
+      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS); `mode` survives only as deprecated sugar" }]);
+    }
+    const hinted = mr.recipes?.[jm.mode];
+    if (!hinted) {
+      return { gate: unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (jitMarket.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx) };
+    }
+    warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} — pass jitMarket.recipe directly` });
+    recipe = hinted;
+  }
+  const rateOverride = BigInt(jm.rateOverride ?? "0");
+  const additionalData = (jm.additionalData ?? "0x") as `0x${string}`;
+  let constraint: ResolvedConstraint | undefined = jm.constraint
+    ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
+    : undefined;
+  let jit: Record<string, unknown> = { adapter: mr.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
+
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) {
+    if (!constraint) {
+      return { gate: unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute resolve-recipe)", ctx) };
+    }
+    warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — taker-side JIT pre-flights (adapter bindings, roles, recipe, oracle, verify, cST side-match) were SKIPPED; the interaction is built from the caller-supplied constraint but unverified" });
+  } else {
+    const client = resolved.client;
+    try {
+      const [boundLop, boundRegistry, boundController] = await Promise.all([
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
+      ]);
+      if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
+        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — refresh cork-defaults.json before broadcasting anything" }], ctx }) };
+      }
+      const [hasCreator, hasConfigurator] = await Promise.all([
+        client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [POOL_CREATOR_ROLE, mr.adapter] }),
+        client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [CONFIGURATOR_ROLE, mr.adapter] }),
+      ]);
+      if (!hasCreator || !hasConfigurator) {
+        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — this fill will revert until both are granted (a governance action)` });
+      }
+      const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
+      warnings.push(...res.warnings);
+      if (res.gate) return { gate: res.gate };
+      const { source, oracle } = res;
+      if (source === "fixed" && rateOverride === 0n) {
+        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: rateOverride must carry the rate its FixedRateOracle is deployed at — zero reverts the fill`, ctx) };
+      }
+      if (source !== "fixed" && rateOverride !== 0n) {
+        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride)`, ctx) };
+      }
+      if (!constraint) {
+        const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
+        if ("gate" in c) return { gate: c.gate };
+        constraint = c.constraint;
+      }
+      if (oracle.address === null) {
+        return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — the fill would revert`, ctx) };
+      }
+      if (oracle.deployed) {
+        const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
+        if (ok === false) warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint; re-resolve and rebuild" });
+      }
+      const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
+      jit = { ...jit, source, oracle: { address: oracle.address, deployed: oracle.deployed }, derivedPoolId: derived.poolId, constraint };
+      // Consistency with the MAKER's signed intent: a resting order carrying its own JIT
+      // extension pins the market the maker signed for — the taker's params must re-derive it.
+      if (args.orderExtension && args.orderExtension !== "0x") {
+        try {
+          const makerJit = decodeJitExtension(args.orderExtension);
+          const makerDerived = deriveJitMarket({ collateralAsset: makerJit.params.collateralAsset, referenceAsset: makerJit.params.referenceAsset, expiryTimestamp: makerJit.params.expiryTimestamp, constraint: makerJit.params.constraint, oracle: oracle.address });
+          if (makerDerived.poolId !== derived.poolId) {
+            return { gate: envelope({ state: "conflict", data: { takerDerivedPoolId: derived.poolId, makerDerivedPoolId: makerDerived.poolId }, chainId, source: "chain", warnings: [{ code: "marketid_mismatch", message: "the taker's jitMarket params derive a DIFFERENT pool id than the resting order's own JIT extension — the two hooks would target different markets and the fill would revert OrderNotForPool. Copy the params from `ch decode order` (jit label) of the resting order" }], ctx }) };
+          }
+        } catch {
+          /* the order's extension is not a JIT payload (e.g. Fusion) — nothing to cross-check */
+        }
+      }
+      const { dep: jitDep } = await getDep(ctx, chainId);
+      const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
+      if (!oracle.deployed) {
+        preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+      }
+      const pred = await predictShares(client, { adapter: mr.adapter, controller: boundController, poolManager: jitDep!.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls });
+      if (pred.status === "unavailable") {
+        warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
+      }
+      if (pred.cst) {
+        jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — the LOP pulls the just-minted cST from the taker" };
+        const cstLc = pred.cst.toLowerCase();
+        if (args.order.makerAsset.toLowerCase() !== cstLc && args.order.takerAsset.toLowerCase() !== cstLc) {
+          warnings.push({ code: "jit_side_mismatch", message: `NEITHER side of the resting order is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
+        }
+      }
+    } catch (err) {
+      if (!constraint) {
+        return { gate: unavailable(chainId, "chain_read_failed", `taker-side JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the interaction cannot be built. Retry, or pass jitMarket.constraint`, ctx) };
+      }
+      warnings.push({ code: "chain_read_failed", message: `taker-side JIT pre-flight reads failed (${revertReason(err)}) — the interaction is built from the caller-supplied constraint but unverified` });
+    }
+  }
+  const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+  const extraData = encodeJitExtraData(
+    { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint: constraint!, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
+    permits,
+  );
+  const interaction = `0x${mr.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;
+  return { interaction, jit, warnings };
+}
+
 /** The DEPRECATED pre-2.1.0 JIT extension build (mode-string extraData against the OLD adapter,
  *  bands resolved at fill time) — preserved behind the deprecation gate because the OLD adapter
  *  still holds both controller roles on-chain (verified 2026-08-03): until governance grants
@@ -2227,17 +2442,17 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
     if (res.gate) return res.gate;
     const { recipe, source, oracle, constraint } = res;
     const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate } : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
-    // Identity needs a DEPLOYED oracle with a live rate: the constraint may have resolved off an
-    // anchor fallback, but the Market struct hashes the oracle address AND the fill would read a
-    // live rate at creation — predicting an identity past an undeployed oracle would invent one
-    // (same rule as the HTTP endpoint).
-    if (!oracle.deployed || oracle.address === null) {
-      const why = oracle.deployable
-        ? { code: "oracle_not_deployed", message: `the recipe's rate oracle is not deployed yet${oracle.address ? ` (predicted address ${oracle.address})` : ""} — without a live rate the pool id and cST/cPT can't be derived. Deploy it first (cork_prepare_market ${source === "fixed" ? "deploy-fixed-oracle" : "deploy-wrapper"}), then re-run — or sign a JIT order, whose fill deploys it automatically` }
-        : { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` };
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, why], ...rpc, ctx });
+    // Identity needs an oracle ADDRESS, not a deployed oracle: the pool id's only oracle-derived
+    // input is the address (already predicted via the simulated deploy — the same one the fill
+    // will run), and the constraint can resolve from the recipe's anchor fallback. Nothing has to
+    // be deployed first — the fill deploys the oracle inside the transaction that needs it. This
+    // deliberately EXCEEDS today's HTTP endpoint, which still nulls market/shares whenever the
+    // oracle has no code and forces agents to deploy the wrapper just to learn the share
+    // addresses (the walkthrough calls that behavior out as a caveat).
+    if (oracle.address === null) {
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` }], ...rpc, ctx });
     }
-    if (oracle.rate === 0n) return unavailable(chainId, "chain_read_failed", "the rate oracle reports a ZERO rate (RateUnavailable) — a fill creating this market would revert and the identity cannot be derived", ctx);
+    if (oracle.deployed && oracle.rate === 0n) return unavailable(chainId, "chain_read_failed", "the rate oracle reports a ZERO rate (RateUnavailable) — a fill creating this market would revert and the identity cannot be derived", ctx);
     // Identity: constraint + oracle → Market struct → LOCAL poolId (verified computeMarketId).
     if (!constraint) return unavailable(chainId, "recipe_refused", "the recipe did not resolve a constraint — the market identity cannot be derived", ctx);
     let derived: ReturnType<typeof deriveJitMarket>;
@@ -2247,14 +2462,24 @@ async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters
       return localComputeFailed(chainId, err, warnings, ctx);
     }
     // cST / cPT — pinned when the pool exists, else predicted via the state-override simulation.
+    // With an UNDEPLOYED oracle the simulation prepends the same permissionless deploy the fill
+    // performs, so the pool creates in-memory and the share addresses come back real.
     const { dep } = await getDep(ctx, chainId);
     let shares: PredictSharesResult = { exists: false, status: "unavailable" };
     if (dep?.poolManager && mr.controller && mr.adapter) {
-      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId });
+      const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
+      if (!oracle.deployed) {
+        preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });
+      }
+      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls });
     }
     const extra: Array<{ code: string; message: string }> = [];
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the pool id, oracle, and constraint above are still valid" });
-    if (!shares.exists) extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so this prediction is conditioned on TODAY's oracle rate and drifts stepwise until pinned. In 2.1.0 the pinning moment is EARLIER than pool creation: an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves (staleness then guards via recipe.verify, not a moving id)" });
+    if (!shares.exists && !oracle.deployed) {
+      extra.push({ code: "oracle_not_deployed", message: "the oracle is not deployed and does not need to be: the fill deploys it (permissionless, idempotent) at this PREDICTED address inside the same transaction, and the pool id's only oracle-derived input is that address. The identity above is stable unless the pair's registered sources change before the fill (a re-registration shifts the predicted address → OrderNotForPool)" });
+    } else if (!shares.exists) {
+      extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so this prediction is conditioned on TODAY's oracle rate and drifts stepwise until pinned. In 2.1.0 the pinning moment is EARLIER than pool creation: an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves (staleness then guards via recipe.verify, not a moving id)" });
+    }
     // T6: a prediction can be internally consistent yet describe an UNCREATABLE market — say so.
     const nowSecs = nowSecondsOf(ctx);
     if (!shares.exists && expiry <= nowSecs) {
@@ -2454,16 +2679,13 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and jitMarket are mutually exclusive — jitMarket BUILDS the extension" }]);
       }
       const jm = action.jitMarket;
-      // Value-domain checks shared by both generations (envelope, exit 3 — not format throws).
+      // Value-domain checks shared by both generations AND both hook sides (envelope, exit 3 —
+      // not format throws): one gate, so the boundary rules cannot drift between paths.
       const swapFee = BigInt(jm.swapFeePercentage);
       const unwindFee = BigInt(jm.unwindSwapFeePercentage);
-      if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {
-        return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
-      }
       const expiryTimestamp = BigInt(jm.expiryTimestamp);
-      if (expiryTimestamp <= nowSecs) {
-        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
-      }
+      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
+      if (valueGate) return valueGate;
       const FIVE_YEARS = 5n * 31_557_600n;
       if (expiryTimestamp > nowSecs + FIVE_YEARS) {
         warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
@@ -2791,6 +3013,20 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
       if (signed.order.makingAmount === 0n) {
         return unavailable(chainId, "invalid_service_response", `venue returned a resting order with makingAmount 0 for ${action.orderHash} — a malformed row; no fill bytes were built`, ctx);
       }
+      // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.
+      let interaction = action.interaction;
+      let jitData: Record<string, unknown> | undefined;
+      const jitWarnings: Array<{ code: string; message: string }> = [];
+      if (action.jitMarket) {
+        if (action.interaction !== undefined) {
+          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "interaction"], message: "interaction and jitMarket are mutually exclusive — jitMarket BUILDS the interaction" }]);
+        }
+        const built = await buildTakerJitInteraction({ ctx, chainId, lop, jm: action.jitMarket, taker: input.account, order: signed.order, orderExtension: signed.extension });
+        if (built.gate) return built.gate;
+        interaction = built.interaction;
+        jitData = built.jit;
+        jitWarnings.push(...built.warnings);
+      }
       let fill: TakerFillResult;
       try {
         fill = buildTakerFill({
@@ -2802,6 +3038,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           ...(action.receiver ? { receiver: action.receiver } : {}),
           ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
           ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
+          ...(interaction ? { interaction } : {}),
         });
       } catch (err) {
         return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "the resting order cannot be filled by this variant", ctx);
@@ -2821,12 +3058,13 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           requiredMakingAmount: fill.requiredMakingAmount,
           requiredTakingAmount: fill.requiredTakingAmount,
           takerTraits: fill.takerTraits,
+          ...(jitData ? { jit: jitData } : {}),
           simulationRequired: true,
           clientRequestId: input.clientRequestId,
         },
         chainId,
         source: "service",
-        warnings: [{ code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }],
+        warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }],
         ctx,
       });
     } catch (err) {
@@ -3489,16 +3727,19 @@ async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<En
         }
         const declaredScaled = decimalToScaled(String(action.premium));
         const expectedPercentScaled = fractionScaled * 100n; // fraction -> percent
-        // Exact thresholds: declared >= 100x expected, or declared <= expected/100.
-        if (declaredScaled !== null && (declaredScaled >= expectedPercentScaled * 100n || declaredScaled * 100n <= expectedPercentScaled)) {
+        // Exact thresholds, matched to the BOOK's own acceptance band: the venue rejects a
+        // declared premium outside 10x/0.1x of the cited option (wide enough for an honest
+        // re-price, narrow enough that a scale mistake cannot pass) — enforcing the same band
+        // here fails the bad relay EARLY with teaching instead of a venue 4xx.
+        if (declaredScaled !== null && (declaredScaled >= expectedPercentScaled * 10n || declaredScaled * 10n <= expectedPercentScaled)) {
           const expectedPercent = Number(option.premium_annualized) * 100;
-          const high = declaredScaled >= expectedPercentScaled * 100n;
+          const high = declaredScaled >= expectedPercentScaled * 10n;
           return envelope({
             state: "conflict",
             data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
             chainId,
             source: "service",
-            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=100" : "<=1/100"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — a scale mistake; NOT relayed (the venue rejects the same way)` }],
+            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=10" : "<=1/10"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — outside the venue's own 10x acceptance band, so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036")` }],
             ctx,
           });
         }

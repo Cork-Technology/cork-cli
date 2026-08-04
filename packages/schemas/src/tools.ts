@@ -402,8 +402,35 @@ export const OrdersAction = z.discriminatedUnion("type", [
     fillMakingAmount: TokenAmount.optional().describe("making amount to receive; omit for the full remaining order"),
     maximumTakingAmount: TokenAmount.optional().describe("hard cap on taking amount paid (slippage guard); omit to use the exact rounded-up signed ratio"),
     receiver: Address.optional().describe("recipient of the maker asset; defaults to account"),
+    interaction: Hex.optional().describe("RAW taker interaction calldata (`adapter address ++ extraData`), invoked via takerInteraction DURING the fill — after the maker asset moves, before the taker asset is pulled. Prefer `jitMarket`, which BUILDS these bytes with pre-flights; pass raw hex only when you assembled the payload yourself. Rides in args after the extension; length packed at takerTraits bits 200-223"),
+    jitMarket: z
+      .strictObject({
+        collateralAsset: Address,
+        referenceAsset: Address,
+        expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future at creation"),
+        recipe: Address.optional().describe("the approved IMarketRecipe CONTRACT ADDRESS (discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used"),
+        mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only (ABSOLUTE, 1e18 = 1.0; zero reverts); MUST stay 0 for price/nav recipes — rejected by the fill, not ignored"),
+        additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against. Defaults to 0x"),
+        constraint: z
+          .strictObject({ rateMin: UintStr, rateMax: UintStr, rateChangePerDayMax: UintStr, rateChangeCapacityMax: UintStr })
+          .optional()
+          .describe("the four rate limits (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY: they must derive the pool whose cST one side of the RESTING ORDER names, or the fill reverts OrderNotForPool. Omit to auto-resolve via recipe.resolve (needs an RPC); when the resting order carries its own JIT extension, the derived pool id is cross-checked against it"),
+        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool"),
+        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
+        enableJitMint: z.boolean().default(false).describe("encoded because the struct layout requires it, but IGNORED on the taker path — takerInteraction ALWAYS mints (attaching the hook to the taker side IS the opt-in)"),
+        permits: z
+          .array(z.strictObject({ token: Address, value: UintStr, deadline: UnixSeconds, v: z.number().int().min(0).max(255), r: Bytes32, s: Bytes32 }))
+          .max(8)
+          .optional()
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
+      })
+      .optional()
+      .describe(
+        "build the taker interaction FOR this fill (2.1.0): lifting a BUY-cover resting order, the underwriter-taker delivers a not-yet-minted cST — takerInteraction deploys the oracle if needed, verifies the carried constraint, creates the pool, mints the cST to the taker (funded by the taker's collateral; approve the adapter for the collateral pull), and executes the permits, all between the maker asset moving and the taker asset being pulled. Mutually exclusive with raw `interaction`",
+      ),
     maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"),
-  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver args layout when needed — never signs or broadcasts"),
+  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — never signs or broadcasts"),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
     .describe("on-chain cancel calldata for a resting LOP order you made"),
   A("rollover-intent", {
@@ -591,7 +618,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
       notBefore: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"),
       notAfter: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"),
     }),
-    marketTemplate: z.record(z.string(), z.unknown()).optional(),
+    marketTemplate: z.record(z.string(), z.unknown()).optional().describe("venue market template: either {market_template_id} or {inline:{oracle_recipe, …}}. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"),
     notionalAssets: TokenAmount,
     validUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"),
     signature: Hex,

@@ -5,8 +5,10 @@
 import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { computeOrderDigest, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
+import { decodeFunctionData, parseAbi } from "viem";
+import { buildJitExtension, computeOrderDigest, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
+import { stubRpc, type StubCall } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 
@@ -502,6 +504,25 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     expect(seen.filter((s) => s.method === "POST").length).toBe(0);
   });
 
+  it("quote_ref band matches the BOOK's 10x acceptance: exactly-10x conflicts, ~9x (an honest re-price) relays", async () => {
+    const lopBase = await lopBaseP;
+    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
+    const at10x = await runTool(
+      "cork_submit",
+      { ...lopBase, action: { ...lopBase.action, premium: 36, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
+    );
+    expect(at10x.state).toBe("conflict"); // 36% vs 3.6% = 10x — the venue's own rejection band, enforced early
+    expect(at10x.warnings[0]?.code).toBe("premium_scale_mismatch");
+
+    const rePrice = await runTool(
+      "cork_submit",
+      { ...lopBase, action: { ...lopBase.action, premium: 32, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]),
+    );
+    expect(rePrice.state).toBe("ok"); // inside the band: tolerated as a re-price, exactly like the book
+  });
+
   it("quote_ref with a consistent premium relays cleanly", async () => {
     const lopBase = await lopBaseP;
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
@@ -888,5 +909,125 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [bad], hasMore: false } }]);
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_service_response");
+  });
+
+  // ── taker-side JIT: the walkthrough's canonical settle path (underwriter lifts a BUY order,
+  // takerInteraction mints the cST into the fill gap) ──────────────────────────────────────
+  describe("jitMarket on taker-fill", () => {
+    const REG = "0x47C3AF38435Db64D9400c30575E4c10482c0752D";
+    const ADAPTER = "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B";
+    const CONTROLLER = "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172";
+    const LIQ = "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D";
+    const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
+    const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
+    const ORACLE = "0x00000000000000000000000000000000000000fe";
+    const WAD = 10n ** 18n;
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    const sharesWord = (a: string) => "000000000000000000000000" + a.replace(/^0x/, "").toLowerCase();
+    // A BUY-cover resting order: maker pays sUSDe premium, receives the (predicted) cST.
+    const buyOrderT: LopOrder = { salt: 7n, maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: CST.toLowerCase() as `0x${string}`, makingAmount: 100n, takingAmount: 200n, makerTraits: 0n };
+    const buyOrderWire = { salt: "7", maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: CST.toLowerCase(), makingAmount: "100", takingAmount: "200", makerTraits: "0" };
+    const buyHash = hashLopOrder(42161, LOP, buyOrderT);
+    const buyRow = { orderHash: buyHash, order: buyOrderWire, signature: SIG, extension: "0x" };
+    const jm = { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: LIQ };
+    const rpcStub = (over?: (c: StubCall) => unknown) =>
+      stubRpc(
+        (c) => {
+          const o = over?.(c);
+          if (o !== undefined) return o;
+          if (c.functionName === "LIMIT_ORDER_PROTOCOL") return LOP;
+          if (c.functionName === "MARKET_REGISTRY") return REG;
+          if (c.functionName === "CONTROLLER") return CONTROLLER;
+          if (c.functionName === "hasRole") return true;
+          if (c.functionName === "isRecipe") return true;
+          if (c.functionName === "source") return 1;
+          if (c.functionName === "lookupWrapper") return ORACLE;
+          if (c.functionName === "rate") return WAD;
+          if (c.functionName === "resolve") return { rateMin: 1n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: 3n * WAD };
+          if (c.functionName === "verify") return true;
+          if (c.functionName === "shares") return [ZERO, ZERO];
+          throw new Error(`unexpected ${c.functionName}`);
+        },
+        { simulateCalls: () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(CPT) + sharesWord(CST) }] }) },
+      );
+    const fillJit = (extra: Record<string, unknown> = {}, over?: (c: StubCall) => unknown, row: Record<string, unknown> = buyRow) =>
+      runTool(
+        "cork_prepare_orders",
+        { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
+        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over) },
+      );
+
+    it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
+      const env = await fillJit();
+      expect(env.state).toBe("ok");
+      const d = env.data as { fillFunction: string; takerTraits: string; calldata: string; jit: Record<string, unknown> };
+      expect(d.fillFunction).toBe("fillOrderArgs");
+      expect((BigInt(d.takerTraits) >> 200n) & 0xffffffn).toBeGreaterThan(0n);
+      // The interaction is args verbatim (no extension on this order) and its FIRST 20 bytes must
+      // be the adapter — the fill dispatches to whatever address leads these bytes.
+      const decodedArgs = decodeFunctionData({ abi: parseAbi(["function fillOrderArgs((uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256) o, bytes32 r, bytes32 vs, uint256 a, uint256 t, bytes args)"]), data: d.calldata as `0x${string}` });
+      expect(String(decodedArgs.args[5]).slice(0, 42).toLowerCase()).toBe(ADAPTER.toLowerCase());
+      expect(String(d.jit["hook"])).toContain("takerInteraction");
+      expect(String(d.jit["predictedCorkSwapToken"]).toLowerCase()).toBe(CST.toLowerCase());
+      expect(String(d.jit["permitNote"])).toContain("TAKER as owner");
+      expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(false); // order.takerAsset IS the derived cST
+    });
+
+    it("UNDEPLOYED oracle on the taker path: the share simulation prepends the fill's own deploy (mutation killer for the taker preCalls branch)", async () => {
+      const env = await fillJit({ additionalData: `0x${WAD.toString(16).padStart(64, "0")}` }, (c) => {
+        if (c.functionName === "lookupWrapper") return ZERO; // NOT deployed
+        if (c.functionName === "simulate:deploy") return ORACLE;
+        return undefined;
+      });
+      // rpcStub's simulateCalls returns only 2 results — with the deploy prepended the SHARES leg
+      // sits at index 2 and is absent, so the prediction must degrade honestly (never misread
+      // the create-leg data as share addresses).
+      expect(env.state).toBe("ok");
+      const d = env.data as { jit: Record<string, unknown> };
+      expect(String(d.jit["oracle"] && (d.jit["oracle"] as Record<string, unknown>)["deployed"])).toBe("false");
+      expect(d.jit["predictedCorkSwapToken"]).toBeUndefined();
+      expect(env.warnings.some((w) => w.code === "share_prediction_unavailable")).toBe(true);
+    });
+
+    it("rejects jitMarket + raw interaction together (mutually exclusive)", async () => {
+      await expect(
+        runTool(
+          "cork_prepare_orders",
+          { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0002", action: { type: "taker-fill", orderHash: buyHash, interaction: "0xdeadbeef", jitMarket: jm }, format: "concise" },
+          { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub() },
+        ),
+      ).rejects.toThrow(/invalid input/);
+    });
+
+    it("a resting order carrying its OWN jit extension pins the market: mismatched taker params → conflict marketid_mismatch", async () => {
+      // The maker signed for a DIFFERENT expiry; the taker's params derive a different pool id.
+      const makerExt = buildJitExtension(ADAPTER, encodeJitExtraData({ collateralAsset: jm.collateralAsset as `0x${string}`, referenceAsset: jm.referenceAsset as `0x${string}`, expiryTimestamp: 1_796_000_000n, recipe: LIQ, rateOverride: 0n, constraint: { rateMin: 1n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: 3n * WAD }, additionalData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n, enableJitMint: false }));
+      const rowWithExt = { ...buyRow, extension: makerExt };
+      const env = await fillJit({}, undefined, rowWithExt);
+      expect(env.state).toBe("conflict");
+      expect(env.warnings[0]?.code).toBe("marketid_mismatch");
+      expect(env.warnings[0]?.message).toContain("decode order");
+    });
+
+    it("offline with an explicit constraint: interaction still builds, skipped pre-flights disclosed", async () => {
+      const env = await runTool(
+        "cork_prepare_orders",
+        { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0003", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, constraint: { rateMin: "1", rateMax: (2n * WAD).toString(), rateChangePerDayMax: WAD.toString(), rateChangeCapacityMax: (3n * WAD).toString() } } }, format: "concise" },
+        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
+      );
+      expect(env.state).toBe("ok");
+      expect((env.data as { jit: unknown }).jit).toBeDefined();
+      expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
+    });
+
+    it("offline WITHOUT a constraint → requires_rpc teaching where the constraint comes from", async () => {
+      const env = await runTool(
+        "cork_prepare_orders",
+        { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0004", action: { type: "taker-fill", orderHash: buyHash, jitMarket: jm }, format: "concise" },
+        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
+      );
+      expect(env.state).toBe("unavailable");
+      expect(env.warnings[0]?.code).toBe("requires_rpc");
+    });
   });
 });
