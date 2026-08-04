@@ -127,6 +127,30 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
     expect((BigInt(fill.takerTraits) >> 224n) & 0xffffffn).toBe(20n);
   });
 
+  it("taker interaction rides in args AFTER the extension, length at bits 200-223 (OrderMixin._parseArgs order — the walkthrough's canonical settle path)", () => {
+    // Lifting a BUY-cover order: the taker delivers a not-yet-minted cST by packing the JIT
+    // adapter as a taker interaction — invoked after the maker asset moves, before the taker
+    // asset is pulled. args = extension ++ interaction; two independent length fields.
+    const extension = `0x${"ab".repeat(20)}` as const;
+    const interaction = `0x${"cd".repeat(52)}` as const; // adapter (20B) ++ 32B payload stand-in
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, extension, interaction });
+    expect(fill.functionName).toBe("fillOrderArgs");
+    const { args } = decodeFunctionData({ abi: parseAbi([`function fillOrderArgs(${UINT8} o, bytes32 r, bytes32 vs, uint256 a, uint256 t, bytes args)`]), data: fill.calldata });
+    expect(args[5]).toBe(`0x${"ab".repeat(20)}${"cd".repeat(52)}`);
+    const traits = BigInt(fill.takerTraits);
+    expect((traits >> 224n) & 0xffffffn).toBe(20n); // extension length
+    expect((traits >> 200n) & 0xffffffn).toBe(52n); // interaction length
+  });
+
+  it("interaction alone (no extension) still routes through fillOrderArgs with only the interaction length set", () => {
+    const interaction = `0x${"cd".repeat(52)}` as const;
+    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, interaction });
+    expect(fill.functionName).toBe("fillOrderArgs");
+    const traits = BigInt(fill.takerTraits);
+    expect((traits >> 224n) & 0xffffffn).toBe(0n);
+    expect((traits >> 200n) & 0xffffffn).toBe(52n);
+  });
+
   it("packs MAKER_AMOUNT flag (bit 255) and the exact taking-amount cap by default", () => {
     const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
     const traits = BigInt(fill.takerTraits);

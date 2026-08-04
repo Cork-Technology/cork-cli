@@ -393,6 +393,7 @@ const fillAbi = parseAbi([
 const TAKER_MAKER_AMOUNT_FLAG = 1n << 255n; // `amount` is denominated in the maker asset
 const TAKER_ARGS_HAS_RECEIVER_FLAG = 1n << 251n; // args is prefixed with a 20-byte receiver
 const TAKER_ARGS_EXTENSION_LENGTH_OFFSET = 224n; // extension byte length packed at bits [224,248)
+const TAKER_ARGS_INTERACTION_LENGTH_OFFSET = 200n; // taker-interaction byte length at bits [200,224)
 const TAKER_THRESHOLD_MAX = (1n << 185n) - 1n; // low 185 bits carry the taking-amount cap
 
 type OrderUintTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
@@ -413,6 +414,14 @@ export interface TakerFillArgs {
   maximumTakingAmount?: bigint;
   /** Extension bytes the maker order was signed with (verbatim; required for JIT/hook orders). */
   extension?: `0x${string}`;
+  /** TAKER interaction calldata: `adapter address ++ extraData`, invoked via takerInteraction
+   *  DURING the fill (after the maker asset moves, before the taker asset is pulled). This is
+   *  how a taker delivers a not-yet-minted asset — e.g. lifting a BUY-cover order by packing the
+   *  Cork JIT adapter here, whose takerInteraction mints the cST into exactly that gap
+   *  (unconditionally — enableJitMint gates only the maker-side hook). Rides in args AFTER the
+   *  extension, length packed at takerTraits bits [200,224) (OrderMixin._parseArgs order:
+   *  target?, extension, interaction). */
+  interaction?: `0x${string}`;
 }
 
 export interface TakerFillResult {
@@ -461,6 +470,13 @@ export function buildTakerFill(a: TakerFillArgs): TakerFillResult {
   if (extension) {
     takerTraits |= BigInt(size(extension)) << TAKER_ARGS_EXTENSION_LENGTH_OFFSET;
     argParts.push(extension);
+  }
+  const interaction = a.interaction && a.interaction !== "0x" ? a.interaction : undefined;
+  if (interaction) {
+    const len = BigInt(size(interaction));
+    if (len >= 1n << 24n) throw new Error("buildTakerFill: interaction exceeds the 24-bit args-length field");
+    takerTraits |= len << TAKER_ARGS_INTERACTION_LENGTH_OFFSET;
+    argParts.push(interaction);
   }
   const args = argParts.length > 0 ? concatHex(argParts) : undefined;
 
