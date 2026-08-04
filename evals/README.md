@@ -52,7 +52,7 @@ expect scores close to the active set; a gap means the active set has leaked int
 ### Running
 
 ```sh
-bun run eval                                   # needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN
+bun run eval                                   # ANTHROPIC_API_KEY/AUTH_TOKEN recommended; else ambient auth (e.g. ANTHROPIC_BASE_URL gateway) — fails loud, never skips
 CORK_EVAL_MODEL=claude-opus-4-8 bun run eval   # heavier tier (default: claude-sonnet-5 — owner ruling 2026-07-28: never haiku)
 CORK_EVAL_TRIALS=3 bun run eval                # stable numbers
 EVAL_HELD_OUT=1 bun run eval                   # include held-out set

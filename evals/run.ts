@@ -3,7 +3,8 @@
 // in-process `runTool` with a stubbed chain (evals/stub.ts) — the LLM API is the only network.
 // Grading is programmatic over the tool-call trace: tool selection, variant/parameter accuracy,
 // outcome state, call efficiency, error-recovery, token cost. Run: `bun run eval`
-// (needs ANTHROPIC_API_KEY or an `ant auth login` profile; self-skips otherwise).
+// (ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN recommended; without one, auth is expected from the
+// environment — e.g. an ANTHROPIC_BASE_URL gateway — and the run fails loud, never skips).
 //
 // Env knobs: CORK_EVAL_MODEL (default claude-sonnet-5 — owner ruling 2026-07-28: evals ALWAYS run
 // on sonnet, never haiku; haiku's raw-SDK loop has a params-as-string artifact that grades the
@@ -116,11 +117,16 @@ function pct(n: number, d: number): string {
 }
 
 async function main() {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN && !process.env.CORK_EVAL_FORCE) {
-    console.log("agent evals: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN in env — skipping (set one, or CORK_EVAL_FORCE=1 to use an `ant auth login` profile).");
-    return;
+  // Credentials are RECOMMENDED, not required: there are many ways to reach the Claude API now
+  // (gateway/base-URL auth, ambient session plumbing, cloud-provider bindings). Without an
+  // explicit key we omit the auth headers — the SDK's documented escape hatch — and let
+  // whatever ANTHROPIC_BASE_URL points at supply auth; a genuinely unauthenticated setup
+  // fails on the first request with the provider's own error instead of silently skipping.
+  const hasExplicitCreds = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  if (!hasExplicitCreds) {
+    console.log("agent evals: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN — proceeding via ambient auth (gateway/base-URL). Setting a key explicitly is recommended for reproducible runs.");
   }
-  const client = new Anthropic();
+  const client = new Anthropic(hasExplicitCreds ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
   const only = process.env.CORK_EVAL_ONLY;
   const tasks = TASKS.filter((t) => (only ? t.id === only : process.env.EVAL_HELD_OUT ? true : !t.heldOut));
 
