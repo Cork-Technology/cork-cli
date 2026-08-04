@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
-import { buildJitExtension, computeOrderDigest, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
+import { buildJitExtension, computeOrderDigest, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
 import { stubRpc, type StubCall } from "./helpers.ts";
 
@@ -971,6 +971,18 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       expect(String(d.jit["predictedCorkSwapToken"]).toLowerCase()).toBe(CST.toLowerCase());
       expect(String(d.jit["permitNote"])).toContain("TAKER as owner");
       expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(false); // order.takerAsset IS the derived cST
+      expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false); // stub grants both roles — the live path stays silent
+    });
+
+    it("taker pre-flight: a PARTIAL role grant warns and names the missing role (mutation killer for the taker roles gate)", async () => {
+      // Creator granted, configurator missing — keyed on the role hash so a swapped-constant
+      // mutant flips the per-role truth and a dropped-warning mutant goes silent. Both die here.
+      const env = await fillJit({}, (c) => (c.functionName === "hasRole" ? c.args?.[0] === POOL_CREATOR_ROLE : undefined));
+      expect(env.state).toBe("ok");
+      const w = env.warnings.find((x) => x.code === "roles_not_granted");
+      expect(w).toBeDefined();
+      expect(w?.message).toContain("POOL_CREATOR: true");
+      expect(w?.message).toContain("CONFIGURATOR: false");
     });
 
     it("UNDEPLOYED oracle on the taker path: the share simulation prepends the fill's own deploy (mutation killer for the taker preCalls branch)", async () => {

@@ -290,9 +290,11 @@ OFF-CHAIN at signing (cork_compute resolve-recipe) and CARRIED in the order, so 
 addresses are pinned at signing (no more rate-driven identity drift); oracles are mode-keyed
 (price|nav) per pair plus fixed-rate oracles keyed on the rate. Scales: everything is 1e18 = 1.0
 except `_PERCENTAGE`-named recipe constants and the two adapter fee fields (1e18 = 1%). The fill
-path needs the adapter granted POOL_CREATOR_ROLE + CONFIGURATOR_ROLE on the controller — NOT yet
-granted as of 2026-08-03 (`roles_not_granted`: signable, unfillable; a governance action). The
-OLD adapter still HOLDS both roles, so the pre-2.1.0 flow is preserved intact behind the general
+path is LIVE: POOL_CREATOR_ROLE + CONFIGURATOR_ROLE were granted to the adapter on the controller
+2026-08-04 (verified block 491025419; the `roles_not_granted` pre-flight now stays silent — the
+gate logic lives in `readAdapterRoles` in market-registry.ts, one comparator shared by all three
+call sites, mutation-probed). The OLD adapter's roles were NOT revoked, so BOTH generations are
+fillable in parallel; the pre-2.1.0 flow is preserved intact behind the general
 deprecation gate: `marketRegistryLegacy` config + `legacy:true` inputs + `CORK_ENABLE_DEPRECATED=1`
 (CLI `--enable-deprecated`) — see `packages/core/src/deprecation.ts` for the warning-code
 contract (`deprecated_gated`/`deprecated`/`deprecation_notice`). The read API's sandbox

@@ -630,7 +630,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
           if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
           if (c.functionName === "MARKET_REGISTRY") return REG;
           if (c.functionName === "CONTROLLER") return CONTROLLER;
-          if (c.functionName === "hasRole") return false; // roles NOT granted yet (live state today)
+          if (c.functionName === "hasRole") return false; // both roles missing (pre-2026-08-04 state)
           if (c.functionName === "isRecipe") return true;
           if (c.functionName === "source") return 1;
           if (c.functionName === "lookupWrapper") return ORACLE;
@@ -655,6 +655,48 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     expect(env.warnings.some((w) => w.code === "constraint_window_notice")).toBe(true);
     expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(true);
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false); // the drift world ended at signing
+  });
+
+  // The roles pre-flight has three meaningful states, and each catches a different mutant class.
+  // Both-missing is asserted above; the two below cover the branches that became load-bearing
+  // when the grant landed on-chain (block 491025419, 2026-08-04).
+  const rolesStub = (hasRole: (c: StubCall) => boolean) =>
+    stubRpc(
+      (c) => {
+        if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
+        if (c.functionName === "MARKET_REGISTRY") return REG;
+        if (c.functionName === "CONTROLLER") return CONTROLLER;
+        if (c.functionName === "hasRole") return hasRole(c);
+        if (c.functionName === "isRecipe") return true;
+        if (c.functionName === "source") return 1;
+        if (c.functionName === "lookupWrapper") return ORACLE;
+        if (c.functionName === "rate") return WAD;
+        if (c.functionName === "resolve") return CONSTRAINT;
+        if (c.functionName === "verify") return true;
+        if (c.functionName === "shares") return [ZERO, ZERO];
+        throw new Error(`unexpected ${c.functionName}`);
+      },
+      {
+        simulateCalls: () => ({ results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + "00".repeat(12) + "77db0b6c1d956865c2b3217f90be1a394ba08f4c" + "00".repeat(12) + "5d16b802b397dffced2468f63b936a835dc8bf10" }] }),
+      },
+    );
+
+  it("BOTH roles granted → no roles_not_granted warning (the live path since 2026-08-04)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: rolesStub(() => true) });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false);
+  });
+
+  it("a PARTIAL grant still warns and names which role is missing (mutation killer: && vs ||, swapped role args)", async () => {
+    // hasRole keyed on the ROLE HASH: creator granted, configurator missing — the state a
+    // half-executed governance action produces. An &&→|| mutant reports granted; a swapped
+    // role-constant mutant flips the per-role truth in the message. Both die here.
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: rolesStub((c) => c.args?.[0] === POOL_CREATOR_ROLE) });
+    expect(env.state).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "roles_not_granted");
+    expect(w).toBeDefined();
+    expect(w?.message).toContain("POOL_CREATOR: true");
+    expect(w?.message).toContain("CONFIGURATOR: false");
   });
 
   it("online auto-resolve with an UNDEPLOYED oracle: the share simulation prepends the fill's own deploy (mutation killer for the preCalls branch)", async () => {

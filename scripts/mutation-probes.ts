@@ -138,6 +138,46 @@ const CATALOG: Mutant[] = [
     replace: "\n        void 0;",
     tests: [T.venue],
   },
+  // ── Adapter roles pre-flight: signable-but-unfillable is exactly the silent-defect class ──
+  // The comparator lives in ONE helper (readAdapterRoles) on purpose — a && → || mutant
+  // reports a half-granted adapter as fillable. Killed by the PARTIAL-grant tests, which key
+  // the hasRole stub on the role hash (creator granted, configurator missing).
+  {
+    id: "roles-gate-comparator",
+    file: "packages/core/src/market-registry.ts",
+    find: "return { hasCreator, hasConfigurator, granted: hasCreator && hasConfigurator };",
+    replace: "return { hasCreator, hasConfigurator, granted: hasCreator || hasConfigurator };",
+    tests: [T.mr, T.venue],
+  },
+  {
+    // Swapped role constant: both reads become CONFIGURATOR, so the mixed-state stub reports
+    // POOL_CREATOR: false — the killer asserts the per-role truth in the warning message.
+    id: "roles-gate-creator-arg-swapped",
+    file: "packages/core/src/market-registry.ts",
+    find: 'args: [roles.creator ?? POOL_CREATOR_ROLE, adapter]',
+    replace: 'args: [roles.creator ?? CONFIGURATOR_ROLE, adapter]',
+    tests: [T.mr],
+  },
+  // Per-site warning emission (maker vs taker disambiguated by indentation, same convention as
+  // the precalls probes above — indentation drift surfaces as pattern rot, re-aim, don't delete).
+  // Site map, verified by enclosing function: the 6-space site is buildTakerJitInteraction (a
+  // top-level helper, shallow body), the 12-space site is the maker branch nested inside
+  // handlePrepareOrders — SHALLOWER indent = TAKER here, the opposite of a naive reading.
+  // (The first version of these probes had the labels swapped; the survivors exposed it.)
+  {
+    id: "takerjit-roles-warn-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: "\n      if (!adapterRoles.granted) {",
+    replace: "\n      if (false) {",
+    tests: [T.venue],
+  },
+  {
+    id: "makerjit-roles-warn-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: "\n            if (!adapterRoles.granted) {",
+    replace: "\n            if (false) {",
+    tests: [T.mr],
+  },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {
     id: "invalidator-slot-shift",

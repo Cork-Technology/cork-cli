@@ -49,7 +49,7 @@ import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuilti
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
-import { accessControlAbi, aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, CONFIGURATOR_ROLE, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, POOL_CREATOR_ROLE, predictShares, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
+import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, predictShares, readAdapterRoles, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
 import * as legacyRegistry from "./market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "./deprecation.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, type CorkDeployment } from "./config.ts";
@@ -2060,12 +2060,9 @@ async function buildTakerJitInteraction(args: {
       if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
         return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — refresh cork-defaults.json before broadcasting anything" }], ctx }) };
       }
-      const [hasCreator, hasConfigurator] = await Promise.all([
-        client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [POOL_CREATOR_ROLE, mr.adapter] }),
-        client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [CONFIGURATOR_ROLE, mr.adapter] }),
-      ]);
-      if (!hasCreator || !hasConfigurator) {
-        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — this fill will revert until both are granted (a governance action)` });
+      const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
+      if (!adapterRoles.granted) {
+        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — this fill will revert until both are granted (a governance action)` });
       }
       const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
       warnings.push(...res.warnings);
@@ -2190,12 +2187,9 @@ async function prepareJitLegacy(args: {
     if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
       return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.json before signing anything" }], ctx }) };
     }
-    const [hasCreator, hasConfigurator] = await Promise.all([
-      client.readContract({ address: boundController, abi: legacyRegistry.accessControlAbi, functionName: "hasRole", args: [legacyRegistry.POOL_CREATOR_ROLE, mr.adapter] }),
-      client.readContract({ address: boundController, abi: legacyRegistry.accessControlAbi, functionName: "hasRole", args: [legacyRegistry.CONFIGURATOR_ROLE, mr.adapter] }),
-    ]);
-    if (!hasCreator || !hasConfigurator) {
-      warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
+    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, configurator: legacyRegistry.CONFIGURATOR_ROLE });
+    if (!adapterRoles.granted) {
+      warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
     }
     const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
     const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });
@@ -2744,12 +2738,9 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
             if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
               return envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before signing anything" }], ctx });
             }
-            const [hasCreator, hasConfigurator] = await Promise.all([
-              client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [POOL_CREATOR_ROLE, mr.adapter] }),
-              client.readContract({ address: boundController, abi: accessControlAbi, functionName: "hasRole", args: [CONFIGURATOR_ROLE, mr.adapter] }),
-            ]);
-            if (!hasCreator || !hasConfigurator) {
-              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${hasCreator}, CONFIGURATOR: ${hasConfigurator}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
+            const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
+            if (!adapterRoles.granted) {
+              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
             }
             const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
             warnings.push(...res.warnings);

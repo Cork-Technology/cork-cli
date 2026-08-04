@@ -116,6 +116,24 @@ export const controllerCreatePoolAbi = parseAbi([
 export const POOL_CREATOR_ROLE = "0x4066b03ab177190abcd4de6384e71f7a60f56b879537b65d43a0523ade6cfe52" as const;
 export const CONFIGURATOR_ROLE = "0x3b49a237fe2d18fa4d9642b8a0e065923cceb71b797783b619a030a61d848bf0" as const;
 
+/** Controller-role pre-flight shared by every JIT prepare site (maker, taker-fill, legacy).
+ *  The granted/missing decision lives in exactly this one comparator so a single mutation
+ *  probe covers every call site — duplicated identical conditionals defeat first-occurrence
+ *  probes. Role hashes are identical across registry generations; pass overrides if that
+ *  ever diverges. */
+export async function readAdapterRoles(
+  client: PublicClient,
+  controller: `0x${string}`,
+  adapter: `0x${string}`,
+  roles: { creator?: `0x${string}`; configurator?: `0x${string}` } = {},
+): Promise<{ hasCreator: boolean; hasConfigurator: boolean; granted: boolean }> {
+  const [hasCreator, hasConfigurator] = await Promise.all([
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [roles.creator ?? POOL_CREATOR_ROLE, adapter] }),
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [roles.configurator ?? CONFIGURATOR_ROLE, adapter] }),
+  ]);
+  return { hasCreator, hasConfigurator, granted: hasCreator && hasConfigurator };
+}
+
 // ── Recipe constants catalog (mirrors the read API's hand-maintained annotation layer) ──────
 // Keyed by lowercased recipe address (CREATE2 ⇒ chain-stable). Supplies only the constant getter
 // NAMES + the additionalData arg annotation; every VALUE is read live off the recipe. Catalog
