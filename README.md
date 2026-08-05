@@ -96,6 +96,36 @@ config outside the repo). `-s user` makes it available in every project. **Avoid
 that the RPC endpoint value never enters git. Share via `-s project` using variant A only, and let
 each teammate configure their own endpoint locally. To uninstall: `claude mcp remove cork-defi`.
 
+### Remote / HTTP transport (`ch mcp --http`)
+
+The same server also speaks **Streamable HTTP** — the shape a hosted deployment serves:
+
+```sh
+ch mcp --http                # serves on :8080 — endpoint /mcp, health /healthz, docs /docs/signing
+ch mcp --http --port 9090    # custom port
+
+# connect a client to a running HTTP deployment:
+claude mcp add --transport http cork-defi http://localhost:8080/mcp
+# with bearer auth (deployments that set CORK_MCP_TOKEN):
+claude mcp add --transport http cork-defi https://your-deployment/mcp --header "Authorization: Bearer <token>"
+```
+
+**Server env contract** (all read server-side at process start; clients cannot override any of
+these per-call — that is deliberate: server reads run on the server's own RPC configuration, and
+signing/broadcasting are always client-side, see `cork_capabilities topic:"signing"`):
+
+| Env | Effect |
+|---|---|
+| `CORK_MCP_TOKEN` | When set, the `/mcp` endpoint requires `Authorization: Bearer <token>`; unset = open (put auth/rate-limits at your ingress). Never logged. |
+| `CORK_RPC_URL` | Explicit RPC endpoint override for chain reads (else built-in defaults + chainlist fallback). |
+| `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). |
+| `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech/v1). |
+| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs (see "Address config" in CLAUDE.md). |
+
+`GET /docs/signing` serves the sign-and-broadcast guide as markdown — the same constant that backs
+`cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the three
+surfaces cannot drift.
+
 ### 3. Check it's working
 
 ```sh

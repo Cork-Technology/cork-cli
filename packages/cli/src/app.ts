@@ -299,7 +299,9 @@ export async function runCli(
 
   program
     .command("mcp")
-    .description("start the Cork MCP stdio server (all 9 tools) — e.g. `claude mcp add cork-defi -- ch mcp`")
+    .description("start the Cork MCP server (all 9 tools): stdio by default (`claude mcp add cork-defi -- ch mcp`), or Streamable HTTP with --http [--port 8080] (endpoint /mcp, health /healthz, docs /docs/signing; bearer auth via CORK_MCP_TOKEN)")
+    .option("--http", "serve Streamable HTTP instead of stdio")
+    .option("--port <port>", "HTTP port (default 8080)")
     .action(() => {
       // The real server must own stdio from process start, so the binary entrypoint (bin.ts)
       // intercepts `mcp` before commander ever parses. Reaching this action means runCli was

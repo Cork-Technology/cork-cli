@@ -12,11 +12,28 @@ const ctx = {
 // server module is shared with the `cork-mcp` dev entrypoint (packages/mcp/src/bin.ts): one
 // core, two thin shells (RFC 011).
 if (argv[0] === "mcp") {
-  const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
-  const { createCorkServer } = await import("../../mcp/src/server.ts");
-  const server = createCorkServer(ctx);
-  await server.connect(new StdioServerTransport());
-  // The open stdin stream keeps the process alive until the client closes it.
+  if (argv.includes("--http")) {
+    // `ch mcp --http [--port 8080]` — the Streamable HTTP projection (container entrypoint is
+    // /usr/bin/ch, so a compose command of ["mcp","--http"] serves it). Same server factory,
+    // stateless per-request transports; logs go to stderr only (never the token).
+    const portIdx = argv.indexOf("--port");
+    const port = portIdx !== -1 ? Number(argv[portIdx + 1]) : 8080;
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      process.stderr.write(`ch mcp --http: invalid --port value '${argv[portIdx + 1]}'\n`);
+      process.exit(2);
+    }
+    const { startHttpServer } = await import("../../mcp/src/http.ts");
+    const token = process.env.CORK_MCP_TOKEN;
+    const server = startHttpServer(port, { ctx, ...(token !== undefined && token !== "" ? { token } : {}) });
+    process.stderr.write(`cork-mcp: Streamable HTTP on :${server.port} — endpoint /mcp, health /healthz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    // Bun.serve keeps the process alive until stopped.
+  } else {
+    const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+    const { createCorkServer } = await import("../../mcp/src/server.ts");
+    const server = createCorkServer(ctx);
+    await server.connect(new StdioServerTransport());
+    // The open stdin stream keeps the process alive until the client closes it.
+  }
 } else if (argv[0] === "__update-check") {
   // Hidden: the detached refresh half of the update notifier. Not registered in --help.
   const { refreshUpdateCache } = await import("./update-notify.ts");
