@@ -1,0 +1,27 @@
+# Phala Cloud CVM compose — deployed by the `phala-deploy` job in .github/workflows/apk-repo.yml.
+#
+# VERIFICATION CONTRACT (packaging/VERIFY.md): the CVM measures the SHA256 of the effective
+# app-compose.json (this file + metadata) into RTMR3 via a hardware event chain, so what this file
+# says IS what a third party can prove is running:
+#   - The image MUST stay pinned by @sha256 digest. A floating tag would make the measurement
+#     meaningless (the hash would no longer identify the code). ${DIGEST} is substituted by CI
+#     with the exact digest apko-publish pushed and attested (gh attestation).
+#   - Secrets (ENVIO tokens, CORK_MCP_TOKEN, a private CORK_RPC_URL) are set as ENCRYPTED CVM
+#     secrets in the Phala dashboard and referenced here — values NEVER enter this file or git.
+#     Empty/unset values are harmless: the server treats them as absent.
+services:
+  cork-mcp:
+    image: ghcr.io/cork-technology/cork-cli@${DIGEST}
+    command: ["mcp", "--http"]
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      # Bearer gate for /mcp; unset = open (Phala's ingress fronts the CVM).
+      - CORK_MCP_TOKEN=${CORK_MCP_TOKEN}
+      # Server-side RPC override; unset = built-in defaults + chainlist fallback.
+      - CORK_RPC_URL=${CORK_RPC_URL}
+      # HyperSync/HyperRPC access for event-derived reads (full-decentralized mode).
+      - ENVIO_API_TOKEN=${ENVIO_API_TOKEN}
+      # Venue API base override; unset = api-phoenix.cork.tech/v1.
+      - CORK_VENUE_URL=${CORK_VENUE_URL}

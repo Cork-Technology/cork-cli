@@ -148,6 +148,9 @@ jobs:
       packages: write # ghcr push
       id-token: write
       attestations: write
+    outputs:
+      # The pushed image digest, for phala-deploy (and anyone else downstream).
+      digest: ${{ steps.publish.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: aquaproj/aqua-installer@v4
@@ -167,7 +170,19 @@ jobs:
           done
           echo "Pages never served ${TAG#v}" >&2; exit 1
 
+      - name: Pin the apk version in the apko spec
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # An independent `apko build` of this spec must resolve the SAME package as this run —
+          # pin cork-cli to the exact version-revision instead of floating on the index head.
+          # (epoch is 0 in melange.yaml; a future epoch bump must be mirrored here.)
+          PIN="cork-cli=${TAG#v}-r0" \
+          yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
+          yq '.contents.packages' packaging/cork-cli.apko.yaml
+
       - name: Build + push the image from the published repo
+        id: publish
         env:
           TAG: ${{ github.event.release.tag_name }}
           GH_OWNER: ${{ github.repository_owner }}
@@ -178,8 +193,10 @@ jobs:
             "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
             --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation.
-          echo "IMAGE_DIGEST=$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)" >> "$GITHUB_ENV"
+          digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest the image digest
         uses: actions/attest-build-provenance@v3
@@ -187,3 +204,38 @@ jobs:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
+
+  # Phala Cloud attestable deploy (Phase 2b of the remote-MCP plan): a CVM running the EXACT
+  # attested image digest, name-keyed so re-deploys update in place. The compose is digest-pinned
+  # (verification breaks on tags) and its runtime secrets live as encrypted CVM secrets in the
+  # Phala dashboard — never in the compose or this workflow. Third-party verification:
+  # packaging/VERIFY.md + scripts/verify-deployment.ts (six checks: quote signature, RTMR3
+  # replay, compose-hash, digest pinning, gh attestation link to source).
+  # Requires the PHALA_CLOUD_API_KEY secret; the determinism gate already ran before this
+  # workflow's trigger (release.yml publishes only byte-identical, attested builds).
+  phala-deploy:
+    needs: apko-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Substitute the attested digest into the compose
+        env:
+          DIGEST: ${{ needs.apko-publish.outputs.digest }}
+        run: |
+          test -n "$DIGEST" || { echo "no image digest from apko-publish" >&2; exit 1; }
+          sed "s|\${DIGEST}|$DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
+          grep -q "@sha256:[0-9a-f]\{64\}" phala-compose.deploy.yml || { echo "compose image is not digest-pinned after substitution" >&2; exit 1; }
+          grep "image:" phala-compose.deploy.yml
+
+      - name: Deploy the CVM (name-keyed in-place update)
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: |
+          test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY secret is not set — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
+          npm install -g phala
+          phala deploy -c phala-compose.deploy.yml -n cork-mcp --wait
