@@ -19,6 +19,13 @@ const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
 const DEMO_MULTICALL =
   "0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000";
 
+// The SAME demo multicall SIGNED as an EIP-1559 tx to the mainnet Bundler3 by a throwaway key
+// (Anvil dev account #1, 0x70997970C51812dc3A010C7d01b50e0d17dc79C8) — the decode kind:"tx"
+// fixture: recovered signer + named target + the identical labeled legs. Regenerate with viem
+// signTransaction (see packages/core/test/decode-tx.test.ts) if the demo bytes ever change.
+const DEMO_SIGNED_TX =
+  "0x02f902720107843b9aca008506fc23ac0083061a80946566194141eefa99af43bb5aa71460ca2dc9024580b90204374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000c080a03f1e02aab6f5035aa44fe1a05c3305a27f14079b3577b3d42e7d5219fc22e8aaa0457efc4d172aa72d297fb0ba25382f5b23091d4297711c4f58d4859b4f0e8f71";
+
 export interface ToolExample {
   title: string;
   input: Record<string, unknown>;
@@ -44,6 +51,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   ],
   cork_decode: [
     { title: "Decode a Bundler3 multicall to labeled Cork legs", input: { kind: "calldata", data: DEMO_MULTICALL } },
+    { title: "Validate a SIGNED raw tx BEFORE broadcasting: recovered signer, named target, labeled legs", input: { kind: "tx", data: DEMO_SIGNED_TX } },
     { title: "Decode a LOP v4 order: makerTraits breakdown + recomputed orderHash", input: { kind: "order", data: { salt: "1", maker: DEMO_ACCOUNT, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" } } },
     { title: "Decode one event log to named args (settler OrderSettled)", input: { kind: "event", data: { topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84"], data: "0x" } } },
     { title: "Label every log in a tx receipt", input: { kind: "receipt", data: { status: "0x1", logs: [{ address: SUSDE, topics: ["0xd4250d6114a611e75d68b1c6f14c61e967863d8ac20bc8ebfa4e5f28f6647366", "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84"], data: "0x" }] } } },
@@ -51,6 +59,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_capabilities: [
     { title: "Find the right tool/variant for 'unwind'", input: { search: "unwind" } },
     { title: "Full doc for one tool", input: { topic: "compute" } },
+    { title: "How to sign & broadcast a prepared artifact (doc topic; aliases: execute, broadcast)", input: { topic: "signing" } },
     { title: "Re-derive deployed addresses via CREATE2", input: { topic: "verify" } },
   ],
   cork_prepare_phoenix: [
@@ -137,6 +146,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       calldata: { status: "activated" },
+      tx: { status: "activated", reason: "pure local: a SIGNED raw transaction (legacy RLP or typed envelope) → recovered signer + to/value/chainId/nonce/gas, target named against known Cork deployments, inner calldata decoded to the same labeled legs [K3] — the validate-before-broadcast step" },
       order: { status: "activated", reason: "pure local: LOP v4 order (hex tuple or JSON fields) → full makerTraits breakdown + recomputed EIP-712 orderHash; caller-claimed hashes are cross-checked, never trusted [K3]" },
       event: { status: "activated", reason: "pure local: one log {topics,data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set; unverified layouts are labeled raw, never guessed" },
       receipt: { status: "activated", reason: "pure local: labels every log in a receipt against the known ABI set; receipt claims (status, gas) are echoed as claims" },

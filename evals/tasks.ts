@@ -34,6 +34,11 @@ export interface EvalTask {
 const P = DEMO_POOL_ID;
 const A = DEMO_ACCOUNT;
 
+// The decode kind:"tx" fixture from packages/core/test/decode-tx.test.ts: the demo safeSwap
+// multicall signed as an EIP-1559 tx to the mainnet Bundler3 by Anvil dev account #1.
+const SIGNED_TX =
+  "0x02f902720107843b9aca008506fc23ac0083061a80946566194141eefa99af43bb5aa71460ca2dc9024580b90204374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000c080a03f1e02aab6f5035aa44fe1a05c3305a27f14079b3577b3d42e7d5219fc22e8aaa0457efc4d172aa72d297fb0ba25382f5b23091d4297711c4f58d4859b4f0e8f71";
+
 export const TASKS: EvalTask[] = [
   // ── reads ──────────────────────────────────────────────────────────────
   { id: "read-market", prompt: `Read the current on-chain state of Cork pool ${P} and tell me the swap rate.`, expect: { tool: "cork_query", params: { resource: "market" }, state: "ok", answer: /0\.8|800000000000000000/, maxCalls: 2 } },
@@ -88,6 +93,15 @@ export const TASKS: EvalTask[] = [
   { id: "verify-pool", prompt: `Verify that Cork pool ${P} on chain matches its market id (re-hash check).`, expect: { tool: "cork_track", params: { mode: "verify", subject: { kind: "marketRef", poolId: P } }, state: "ok", maxCalls: 2 } },
   // ── discovery ──────────────────────────────────────────────────────────
   { id: "discover-unwind", prompt: "I'm new to these Cork tools. Which tool and variant do I use to undo a covered position, and what does an invocation look like?", expect: { tool: "cork_capabilities", params: { search: "unwind" }, state: "ok", maxCalls: 2 } },
+  // ── sign-and-broadcast teaching (the remote-deployment story: the server never signs; clients
+  //    complete artifacts client-side and broadcast through their OWN RPC) ──
+  { id: "signing-topic", prompt: "I have a prepared Cork bundle from cork_prepare_phoenix. How do I actually execute it on-chain from here? Walk me through the exact steps.", expect: { tool: "cork_capabilities", state: "ok", answer: /signTypedData|eth_sendRawTransaction|sign.*client/i, maxCalls: 3 } },
+  { id: "decode-before-broadcast", prompt: `I signed my Cork bundle locally. Before I broadcast, validate these signed transaction bytes and tell me who signed them and what contract they target: ${SIGNED_TX}`, expect: { tool: "cork_decode", prelude: ["cork_capabilities"], params: { kind: "tx" }, state: "ok", answer: /70997970C51812dc3A010C7d01b50e0d17dc79C8|6566194141eefa99Af43Bb5Aa71460Ca2Dc90245|bundler3/i, maxCalls: 3 } },
+  // Negative side-effect probe: there IS no broadcast tool — the correct behavior is to validate
+  // the bytes (decode kind:"tx") and hand back the raw JSON-RPC HTTP request for the client's
+  // own endpoint, never to hunt for a server-side relay.
+  { id: "broadcast-construction", prompt: `Give me the exact HTTP request I should send to broadcast these already-signed Cork transaction bytes on mainnet through a public RPC endpoint: ${SIGNED_TX}`, expect: { tool: "cork_decode", prelude: ["cork_capabilities"], params: { kind: "tx" }, state: "ok", answer: /eth_sendRawTransaction[\s\S]*params|params[\s\S]*eth_sendRawTransaction/i, maxCalls: 3 } },
+  { id: "execution-block-consumption", prompt: `Build an unsigned bundle depositing 1000000000000000000 collateral into Cork pool ${P}, receiver ${A}, minimum 1 share out, pre-funded, request id "eval-exec-0001" — and then tell me precisely what happens next: how does this unsigned artifact become an executed on-chain transaction?`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "deposit" } }, state: "ok", answer: /(?=[\s\S]*sign)(?=[\s\S]*(broadcast|sendRawTransaction))/i, maxCalls: 3 } },
 
   // ── HELD OUT (never tune descriptions against these) ───────────────────
   { id: "ho-mode-reject", heldOut: true, prompt: `Read Cork pool ${P} state using the centralized data mode.`, expect: { tool: "cork_query", params: { mode: "centralized" }, state: "unavailable", code: "mode_unavailable", maxCalls: 3 } },

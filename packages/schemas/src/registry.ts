@@ -65,7 +65,7 @@ export const REGISTRY = [
     cliPath: ["decode"],
     phase: 1,
     description:
-      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3].",
+      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3].",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: DecodeInput,
     output: Envelope,
@@ -76,7 +76,7 @@ export const REGISTRY = [
     cliPath: ["capabilities"],
     phase: 1,
     description:
-      "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs; search → keyword to exact tool+variant+filled template. Progressive disclosure [C13].",
+      "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure [C13].",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: CapabilitiesInput,
     output: Envelope,
