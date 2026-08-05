@@ -7,7 +7,9 @@ import { decodeJitExtension } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
-import { envelope, type HandlerContext, ToolInputError } from "./shared.ts";
+import { decodeBundle } from "../bundle/decode.ts";
+import { summarizeBundle } from "../bundle/summary.ts";
+import { envelope, getDep, type HandlerContext, ToolInputError } from "./shared.ts";
 
 
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
@@ -249,4 +251,27 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
     source: "config",
     ctx,
   });
+}
+
+/** Kind router for cork_decode — order/event/receipt to their handlers, calldata inline. */
+export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId ?? 1;
+  if (input.kind === "order") return handleDecodeOrder(input, chainId, ctx);
+  if (input.kind === "event") return handleDecodeEvent(input, chainId, ctx);
+  if (input.kind === "receipt") return handleDecodeReceipt(input, chainId, ctx);
+  if (typeof input.data !== "string") {
+    throw new ToolInputError("cork_decode", "calldata decode requires a hex string");
+  }
+  let legs;
+  try {
+    legs = decodeBundle(input.data as `0x${string}`);
+  } catch (err) {
+    // Malformed top-level bytes are invalid INPUT (exit 2, teachable) — not an internal error.
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: err instanceof Error ? err.message : "calldata does not decode as a Bundler3 multicall" }]);
+  }
+  // Plain-English rendering alongside the structured legs: these bytes usually arrive from
+  // somewhere else, and "what will this DO" is the question being asked of them.
+  const adapter = (await getDep(ctx, chainId)).dep?.corkAdapter;
+  // Summary before the leg dump: a reader scanning the prose output wants the intent first.
+  return envelope({ state: "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", ctx });
 }

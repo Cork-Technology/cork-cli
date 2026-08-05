@@ -260,6 +260,22 @@ const CATALOG: Mutant[] = [
     replace: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
     tests: [T.fusion],
   },
+  // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
+  // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──
+  {
+    id: "dispatch-track-routed-to-submit",
+    file: "packages/core/src/handlers.ts",
+    find: 'return handleTrack(parsed.data as TrackInput, ctx);',
+    replace: 'return handleSubmit(parsed.data as never, ctx);',
+    tests: [T.handlers, T.venue],
+  },
+  {
+    id: "decode-kind-order-misrouted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'if (input.kind === "order") return handleDecodeOrder(input, chainId, ctx);',
+    replace: 'if (input.kind === "order") return handleDecodeEvent(input, chainId, ctx);',
+    tests: [T.fusion],
+  },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {
     id: "invalidator-slot-shift",
