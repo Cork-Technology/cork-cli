@@ -1,6 +1,6 @@
 // Split from handlers.ts (2026-08-05): phoenix handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { Envelope, type PhoenixAction, PreparePhoenixInput } from "@cork/schemas";
+import { Envelope, executionEthTransaction, type PhoenixAction, PreparePhoenixInput } from "@cork/schemas";
 import { corkActionCall } from "../bundle/actions.ts";
 import { type Call } from "../bundle/bundler3.ts";
 import { type AuthorityAction, buildAuthorityTx, spenderRoleOf } from "../bundle/authority.ts";
@@ -89,6 +89,7 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
       unlimited: tx.unlimited,
       spenderRole: spenderRoleOf(a.spender, dep.corkAdapter, PERMIT2_ADDRESS),
       note: "a direct tx from the token owner (an ERC-20 allowance is keyed to msg.sender, so this cannot ride inside a Bundler3 bundle); current allowances are readable via cork_query account-state",
+      execution: executionEthTransaction(),
       clientRequestId: input.clientRequestId,
     },
     chainId: input.chainId,
@@ -236,7 +237,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   const summary = summarizeBundle(decodeBundle(multicall), { tokenRoles, account: input.account, adapter: corkAdapter });
   return envelope({
     state: "ok",
-    data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, clientRequestId: input.clientRequestId },
+    data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId: input.chainId,
     source: ctx.rpcUrl && funding.length ? "chain" : "config",
     warnings,

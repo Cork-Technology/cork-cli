@@ -1,6 +1,6 @@
 // Split from handlers.ts (2026-08-05): prepare-market handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { type ChainId, Envelope } from "@cork/schemas";
+import { type ChainId, Envelope, executionEthTransaction } from "@cork/schemas";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, marketRegistryAbi, ORACLE_MODE, type OracleModeName } from "../market-registry.ts";
 import { resolveMarketRegistry } from "../config-remote.ts";
 import { envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
@@ -46,7 +46,7 @@ export async function handlePrepareMarket(
     }
     return envelope({
       state: "ok",
-      data: { kind: "deploy-fixed-oracle", to: mr.registry, calldata, value: "0", rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", ...status, clientRequestId: input.clientRequestId },
+      data: { kind: "deploy-fixed-oracle", to: mr.registry, calldata, value: "0", rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
       chainId,
       source: resolved ? "chain" : "config",
       warnings,
@@ -79,7 +79,7 @@ export async function handlePrepareMarket(
   }
   return envelope({
     state: "ok",
-    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, clientRequestId: input.clientRequestId },
+    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId,
     source: resolved ? "chain" : "config",
     warnings,

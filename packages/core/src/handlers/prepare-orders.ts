@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual } from "viem";
-import { Envelope, PrepareOrdersInput } from "@cork/schemas";
+import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, decodeExtensionFields, encodeExtensionFields, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, type TakerFillResult } from "../orders.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, type PermitParams, predictShares, readAdapterRoles, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -351,6 +351,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         nonce: built.nonce,
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
+        execution: executionMakerOrder(),
         clientRequestId: input.clientRequestId,
       },
       chainId,
@@ -364,7 +365,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
     const cancel = buildCancelOrder(BigInt(action.makerTraits), action.orderHash);
-    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash }, chainId, source: "config", ctx });
+    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash, execution: executionEthTransaction() }, chainId, source: "config", ctx });
   }
 
   if (action.type === "rollover-intent") {
@@ -433,6 +434,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         rolloverIntentHash: built.rolloverIntentHash,
         orderDataType: built.orderDataType,
         venuePost: built.venuePost,
+        execution: executionRolloverIntent(),
         clientRequestId: input.clientRequestId,
       },
       chainId,
@@ -587,6 +589,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           ...(jitData ? { jit: jitData } : {}),
           ...(auctionData ? { auction: auctionData } : {}),
           simulationRequired: true,
+          execution: executionEthTransaction(),
           clientRequestId: input.clientRequestId,
         },
         chainId,
