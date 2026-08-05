@@ -371,7 +371,8 @@ surface change: edit → run Layer B → regenerate the drift fixture.
 ## Layout
 
 `packages/schemas` (zod v4 source of truth + registry, examples/maturity/teaching) · `packages/core`
-(math ports, chain reads, Bundler3 encode/decode, remote config, `runTool` dispatch) · `packages/mcp`
+(math ports, chain reads, Bundler3 encode/decode, remote config, `runTool` dispatch —
+handlers split per tool under `src/handlers/`, `handlers.ts` is the thin dispatch + public re-exports) · `packages/mcp`
 (stdio server) · `packages/cli` (commander projection) · `evals/` (agent-eval suite). Tests:
 `packages/core/test/` (unit + `fork-parity`/`bundle-sim` vnet suites), `packages/mcp/test/`
 (integration + surface-drift gate), `packages/schemas/test/`.

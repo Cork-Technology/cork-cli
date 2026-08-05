@@ -109,14 +109,14 @@ const CATALOG: Mutant[] = [
   },
   {
     id: "taker-interaction-concat-order",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: "const interaction = `0x${mr.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;",
     replace: "const interaction = `0x${extraData.slice(2)}${mr.adapter.slice(2)}` as `0x${string}`;",
     tests: [T.venue],
   },
   {
     id: "predict-precalls-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/registry.ts",
     find: 'preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });',
     replace: "void 0;",
     tests: [T.mr],
@@ -126,14 +126,14 @@ const CATALOG: Mutant[] = [
     // disambiguate by indentation (maker sits deeper inside handlePrepareOrders). A refactor
     // that equalizes the indentation will surface here as pattern rot — re-aim, don't delete.
     id: "makerjit-precalls-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/prepare-orders.ts",
     find: '\n              preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
     replace: "\n              void 0;",
     tests: [T.mr],
   },
   {
     id: "takerjit-precalls-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: '\n        preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
     replace: "\n        void 0;",
     tests: [T.venue],
@@ -166,14 +166,14 @@ const CATALOG: Mutant[] = [
   // (The first version of these probes had the labels swapped; the survivors exposed it.)
   {
     id: "takerjit-roles-warn-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: "\n      if (!adapterRoles.granted) {",
     replace: "\n      if (false) {",
     tests: [T.venue],
   },
   {
     id: "makerjit-roles-warn-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/prepare-orders.ts",
     find: "\n            if (!adapterRoles.granted) {",
     replace: "\n            if (false) {",
     tests: [T.mr],
@@ -181,7 +181,7 @@ const CATALOG: Mutant[] = [
   // ── stale_share_prediction: the consumed-nonce diagnosis (single shared emitter by design) ──
   {
     id: "stale-diagnosis-warn-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: "if (foreign && foreign.toLowerCase() !== derivedPoolId.toLowerCase()) {",
     replace: "if (false) {",
     tests: [T.mr, T.venue],
@@ -236,7 +236,7 @@ const CATALOG: Mutant[] = [
   // ── F2 fill side: a floor-based default cap makes the auction-fill artifact dead bytes ────
   {
     id: "takerfill-auction-cap-default-dropped",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/prepare-orders.ts",
     find: " : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),",
     replace: " : {}),",
     tests: [T.venue],
@@ -246,7 +246,7 @@ const CATALOG: Mutant[] = [
     // under-caps and the fill reverts whenever the curve rises. Killed by the byte-patched
     // foreign-curve test.
     id: "takerfill-auction-maxbump-ignores-points",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/prepare-orders.ts",
     find: "const maxBump = auctionDec.auction.points.reduce((m, p) => (p.rateBump > m ? p.rateBump : m), auctionDec.auction.initialRateBump);",
     replace: "const maxBump = auctionDec.auction.initialRateBump;",
     tests: [T.venue],
@@ -255,7 +255,7 @@ const CATALOG: Mutant[] = [
     // The fusion and jit labels are NOT exclusive since F2 composed them — re-adding the old
     // guard hides the JIT commitment on exactly the rows where a taker most needs it.
     id: "decode-order-labels-exclusive-again",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/decode.ts",
     find: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x") {',
     replace: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
     tests: [T.fusion],
@@ -354,21 +354,21 @@ const CATALOG: Mutant[] = [
   // ── handler guards: boundary comparators around fund-moving reverts ───────────────────────
   {
     id: "jit-fee-cap-boundary",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: "if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {",
     replace: "if (swapFee >= 5n * 10n ** 18n || unwindFee >= 5n * 10n ** 18n) {",
     tests: [T.mr],
   },
   {
     id: "jit-expiry-boundary",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/jit.ts",
     find: "if (expiryTimestamp <= nowSecs) {",
     replace: "if (expiryTimestamp < nowSecs) {",
     tests: [T.mr],
   },
   {
     id: "binding-guard-inverted",
-    file: "packages/core/src/handlers.ts",
+    file: "packages/core/src/handlers/registry.ts",
     find: "bindingGuardCache.set(key, bound.toLowerCase() === mr.registry.toLowerCase());",
     replace: "bindingGuardCache.set(key, bound.toLowerCase() !== mr.registry.toLowerCase());",
     tests: [T.mr],
