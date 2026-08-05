@@ -5,7 +5,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { ChainId, descriptionExample, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
+import { ChainId, descriptionExample, DOC_TOPICS, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
 import { BUILD_VERSION, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 
 // All tools return the same envelope; advertise it once so clients can rely on structuredContent.
@@ -18,7 +18,14 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
   // schema version stays SCHEMA_VERSION on every result — two different contracts.
   const server = new Server(
     { name: "cork-mcp", version: BUILD_VERSION },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: { tools: {} },
+      // The signing topic's summary IS the server instructions — one constant, three surfaces
+      // (initialize instructions, cork_capabilities topic:"signing", HTTP /docs/signing), so
+      // drift between them is impossible by construction. Clients of a REMOTE deployment learn
+      // in-band that every prepared artifact is unsigned and completed client-side [K1].
+      instructions: DOC_TOPICS.signing!.summary,
+    },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

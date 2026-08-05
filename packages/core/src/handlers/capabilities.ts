@@ -1,6 +1,6 @@
 // Split from handlers.ts (2026-08-05): cork_capabilities — discovery/introspection + the
 // CREATE2 verify topic. Pure config, no chain reads.
-import { inputJsonSchema, MATURITY, REGISTRY, SCHEMA_VERSION, searchTools, TOOL_EXAMPLES, toolByName } from "@cork/schemas";
+import { findDocTopic, inputJsonSchema, MATURITY, REGISTRY, SCHEMA_VERSION, searchTools, TOOL_EXAMPLES, toolByName } from "@cork/schemas";
 import { verifyCreate2 } from "../create2.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER } from "../config.ts";
 import { envelope, type HandlerContext, unavailable } from "./shared.ts";
@@ -32,6 +32,12 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
   if (input.search) {
     const ranked = searchTools(input.search);
     const matches = ranked.map((r) => {
+      // A doc-topic hit (e.g. "how do I sign/broadcast this?") returns the topic card inline —
+      // summary + the exact lookup — rather than pretending to be a tool.
+      if (r.topic !== undefined) {
+        const topic = findDocTopic(r.topic)!;
+        return { topic: topic.name, aliases: topic.aliases, summary: topic.summary, reference: `cork_capabilities topic:"${topic.name}"` };
+      }
       const t = toolByName(r.name)!;
       const variantMaturity = r.variant ? MATURITY[r.name]?.variants?.[r.variant] : undefined;
       return {
@@ -45,11 +51,22 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
     return envelope({ state: "ok", data: { query: input.search, matches }, chainId: 1, source: "config", ctx });
   }
 
-  // topic: a tool name (with or without cork_ prefix) or cli leaf -> that tool's full doc.
+  // topic: a DOC TOPIC (guidance about using the surface, e.g. "signing" — resolved first, by
+  // name or alias), else a tool name (with or without cork_ prefix) or cli leaf -> full doc.
   if (input.topic) {
+    const doc = findDocTopic(input.topic);
+    if (doc) {
+      return envelope({
+        state: "ok",
+        data: { topic: doc.name, aliases: doc.aliases, summary: doc.summary, body: doc.body },
+        chainId: 1,
+        source: "config",
+        ctx,
+      });
+    }
     const key = input.topic.toLowerCase();
     const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key);
-    if (!t) return unavailable(1, "unknown_topic", `no tool matches topic '${input.topic}'; try search or omit args for the full list`, ctx);
+    if (!t) return unavailable(1, "unknown_topic", `no tool or doc topic matches '${input.topic}'; doc topics: signing (aliases: execute, broadcast, sign-and-broadcast) — else try search or omit args for the full list`, ctx);
     return envelope({ state: "ok", data: { ...card(t), examples: TOOL_EXAMPLES[t.name], inputSchema: inputJsonSchema(t.name), output: "Envelope" }, chainId: 1, source: "config", ctx });
   }
 

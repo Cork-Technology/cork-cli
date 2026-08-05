@@ -5,6 +5,7 @@
 // "bundle" ⊂ "Bundler3") without a stemmer.
 import { REGISTRY, type ToolName } from "./registry.ts";
 import { TOOL_EXAMPLES } from "./examples.ts";
+import { DOC_TOPICS } from "./doc-topics.ts";
 
 export interface SearchHint {
   /** Variant this phrase points at (a resource / kind / action.type, or a mode/subject path). */
@@ -44,6 +45,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   ],
   cork_decode: [
     { variant: "calldata", text: "decode calldata bytes hex explain transaction bundler3 multicall legs what does this do" },
+    { variant: "tx", text: "signed raw transaction validate before broadcast recover signer sendrawtransaction check signed bytes rlp envelope" },
     { variant: "order", text: "decode limit order struct makertraits" },
     { variant: "event", text: "decode event log topics" },
     { variant: "receipt", text: "decode classify receipt outcome" },
@@ -108,6 +110,9 @@ export interface ToolSearchResult {
   score: number;
   /** Present when the best evidence came from a variant-level hint. */
   variant?: string;
+  /** Present when this hit is a DOC TOPIC (served by cork_capabilities topic:"<topic>"), not a
+   *  tool — `name` is then always "cork_capabilities", the tool that serves it. */
+  topic?: string;
 }
 
 /** Rank tools (and their best-matching variant) for a natural-language query. */
@@ -140,5 +145,15 @@ export function searchTools(query: string, limit = 5): ToolSearchResult[] {
       results.push({ name: t.name, score, ...(bestVariant ? { variant: bestVariant.variant } : {}) });
     }
   }
+
+  // Doc topics ride in the same ranked list: a query like "sign" / "broadcast" should surface the
+  // signing GUIDE, not only the tools whose descriptions happen to contain the word. Weighted like
+  // variant evidence — a topic is a capability-specific answer, not a generic description match.
+  for (const topic of Object.values(DOC_TOPICS)) {
+    const corpus = [topic.name, ...topic.aliases, topic.summary, topic.searchText].join(" ").toLowerCase();
+    const s = hits(tokens, corpus);
+    if (s > 0) results.push({ name: "cork_capabilities", score: s * 2, topic: topic.name });
+  }
+
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
 }

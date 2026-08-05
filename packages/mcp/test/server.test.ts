@@ -17,6 +17,14 @@ async function connectedClient() {
 }
 
 describe("MCP server in-memory roundtrip", () => {
+  it("initialize carries the signing instructions (derived from DOC_TOPICS — one constant, no drift)", async () => {
+    const client = await connectedClient();
+    const instructions = client.getInstructions();
+    expect(instructions).toContain("UNSIGNED");
+    expect(instructions).toContain("never signs");
+    expect(instructions).toContain('cork_capabilities topic:"signing"');
+  });
+
   it("advertises 9 tools with JSON input schemas", async () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();
