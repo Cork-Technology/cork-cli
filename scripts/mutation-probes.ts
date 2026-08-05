@@ -233,6 +233,33 @@ const CATALOG: Mutant[] = [
     replace: "offsets |= end << (32n * BigInt(i + 1 > 7 ? 7 : i + 1));",
     tests: [T.fusion],
   },
+  // ── F2 fill side: a floor-based default cap makes the auction-fill artifact dead bytes ────
+  {
+    id: "takerfill-auction-cap-default-dropped",
+    file: "packages/core/src/handlers.ts",
+    find: " : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),",
+    replace: " : {}),",
+    tests: [T.venue],
+  },
+  {
+    // Foreign curves may put a point ABOVE initialRateBump — a ceiling folded from initial only
+    // under-caps and the fill reverts whenever the curve rises. Killed by the byte-patched
+    // foreign-curve test.
+    id: "takerfill-auction-maxbump-ignores-points",
+    file: "packages/core/src/handlers.ts",
+    find: "const maxBump = auctionDec.auction.points.reduce((m, p) => (p.rateBump > m ? p.rateBump : m), auctionDec.auction.initialRateBump);",
+    replace: "const maxBump = auctionDec.auction.initialRateBump;",
+    tests: [T.venue],
+  },
+  {
+    // The fusion and jit labels are NOT exclusive since F2 composed them — re-adding the old
+    // guard hides the JIT commitment on exactly the rows where a taker most needs it.
+    id: "decode-order-labels-exclusive-again",
+    file: "packages/core/src/handlers.ts",
+    find: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x") {',
+    replace: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
+    tests: [T.fusion],
+  },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {
     id: "invalidator-slot-shift",

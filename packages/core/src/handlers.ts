@@ -58,7 +58,7 @@ import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_T
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncLog, type HyperSyncSource } from "./datasources/hypersync.ts";
 import { decodeKnownLog, type RawLogLike } from "./event-decode.ts";
-import { buildAuctionAmountData, decodeFusionOrder, FUSION_BASE_POINTS, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder, type DecodedFusionOrder } from "./fusion.ts";
+import { buildAuctionAmountData, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder, type DecodedFusionOrder } from "./fusion.ts";
 import { envioToken } from "./datasources/envio.ts";
 import {
   getLopFills,
@@ -721,8 +721,10 @@ function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerCon
   // which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it commits to, and
   // whether permits ride along. Tried 2.1.0-first; the legacy shape is labeled as such. A
   // non-JIT extension just skips the label [K3: reconstructed from the bytes, never guessed].
+  // NOT exclusive with the fusion label: a Cork-native auction order composes BOTH (amount
+  // getters + JIT preInteraction in one blob) and a taker needs to see both commitments.
   let jit: Record<string, unknown> | undefined;
-  if (extension !== undefined && extension !== "0x" && fusion === undefined) {
+  if (extension !== undefined && extension !== "0x") {
     try {
       const d = decodeJitExtension(extension);
       jit = {
@@ -2885,18 +2887,6 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         takingAmountData: amountData.takingAmountData,
         ...(jitPre !== "0x" ? { preInteractionData: jitPre } : {}),
       });
-      const bumpNow = fusionRateBump(auction, nowSecs, null);
-      const taking = BigInt(action.takingAmount);
-      const ceil = (a: bigint, b: bigint) => (a + b - 1n) / b;
-      fusionData = {
-        settlement: amountData.settlement,
-        role: "amount getter ONLY — no postInteraction, so any taker fills at the decayed price through the plain LOP fill path (no resolver, no whitelist)",
-        auction: { startTime: String(startTime), durationSeconds: String(auction.duration), initialRateBump: String(auction.initialRateBump), points: auction.points.map((p) => ({ rateBump: String(p.rateBump), timeDelta: String(p.timeDelta) })), scale: "rate bump base 1e7 = +100% above the signed floor" },
-        phase: nowSecs < startTime ? "pre-start" : nowSecs >= startTime + auction.duration ? "floor" : "decaying",
-        takerPaysCeiling: String(ceil(taking * (FUSION_BASE_POINTS + auction.initialRateBump), FUSION_BASE_POINTS)),
-        takerPaysNow: String(fusionTakerPays(BigInt(action.makingAmount), taking, BigInt(action.makingAmount), 0n, bumpNow.effective)),
-        floorTakingAmount: String(taking),
-      };
       warnings.push({ code: "decaying_price_notice", message: `the taker price DECAYS from +${auction.initialRateBump} (base 1e7) above the signed takingAmount down to the signed floor over ${auction.duration}s from ${startTime} — the signed takingAmount is the WORST case for the maker, not the expected price. The venue book lists a static premium (a decaying listing convention is an open venue question): list it honestly, and takers should re-price with cork_compute dutch-auction-price + simulate before filling` });
     }
 
@@ -2920,6 +2910,28 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
       // Well-formed values that violate an order-construction domain rule (malformed extension
       // shape, a trait slot overflow) → envelope, not an internal error.
       return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "maker order construction failed", ctx);
+    }
+    if (action.auction) {
+      // The fusion echo is derived from the BUILT BYTES, not the input struct [K3]: decode the
+      // signed-artifact extension with the same decoder every consumer uses, so an encode bug
+      // can never produce an echo that disagrees with what the maker actually signs.
+      let dec: DecodedFusionOrder;
+      try {
+        dec = decodeFusionOrder(built.order, built.extension, chainId);
+      } catch (err) {
+        return unavailable(chainId, "invalid_order_terms", `self-check failed: the built auction extension did not decode back as a Fusion order (${err instanceof Error ? err.message : String(err)}) — this is a tool bug, do not sign; please report it`, ctx);
+      }
+      const bumpNow = fusionRateBump(dec.auction, nowSecs, null);
+      const finish = dec.auction.startTime + dec.auction.duration;
+      fusionData = {
+        settlement: dec.settlement,
+        role: "amount getter ONLY — no postInteraction, so any taker fills at the decayed price through the plain LOP fill path (no resolver, no whitelist)",
+        auction: { startTime: String(dec.auction.startTime), durationSeconds: String(dec.auction.duration), initialRateBump: String(dec.auction.initialRateBump), points: dec.auction.points.map((p) => ({ rateBump: String(p.rateBump), timeDelta: String(p.timeDelta) })), scale: "rate bump base 1e7 = +100% above the signed floor" },
+        phase: nowSecs < dec.auction.startTime ? "pre-start" : nowSecs >= finish ? "floor" : "decaying",
+        takerPaysCeiling: String(fusionTakerPays(built.order.makingAmount, built.order.takingAmount, built.order.makingAmount, 0n, dec.auction.initialRateBump)),
+        takerPaysNow: String(fusionTakerPays(built.order.makingAmount, built.order.takingAmount, built.order.makingAmount, 0n, bumpNow.effective)),
+        floorTakingAmount: String(built.order.takingAmount),
+      };
     }
     return envelope({
       state: "ok",
@@ -3090,6 +3102,52 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         jitData = built.jit;
         jitWarnings.push(...built.warnings);
       }
+      // Auction-priced resting order (fusion F2): the amount getter charges the DECAYED price,
+      // not the signed floor — so buildTakerFill's default slippage cap (the signed ratio, i.e.
+      // the floor) would make the artifact revert TakingAmountTooHigh for the entire decay
+      // window. Default the cap to the curve's CEILING instead: valid at ANY broadcast time
+      // (the getter only ever charges less; the cap is a threshold, not a payment), with the
+      // current/floor prices reported so the taker sees what they are agreeing to.
+      let auctionData: Record<string, unknown> | undefined;
+      let auctionCap: bigint | undefined;
+      if (signed.extension !== undefined && signed.extension !== "0x") {
+        let auctionDec: DecodedFusionOrder | undefined;
+        try {
+          auctionDec = decodeFusionOrder(signed.order, signed.extension, chainId);
+        } catch {
+          /* not auction-priced — the plain signed-ratio cap is correct */
+        }
+        if (auctionDec) {
+          const nowSecs = nowSecondsOf(ctx);
+          const fillMaking = action.fillMakingAmount ? BigInt(action.fillMakingAmount) : signed.order.makingAmount;
+          const whitelisted = isGetterWhitelisted(auctionDec.fees, input.account);
+          const fee = fusionTotalFee(auctionDec.fees, whitelisted);
+          const bumpNow = fusionRateBump(auctionDec.auction, nowSecs, null);
+          // Foreign curves may put a point ABOVE initialRateBump (our own encoder refuses, the
+          // parser does not) — the safe ceiling is the curve's MAXIMUM bump, wherever it sits.
+          const maxBump = auctionDec.auction.points.reduce((m, p) => (p.rateBump > m ? p.rateBump : m), auctionDec.auction.initialRateBump);
+          const M = signed.order.makingAmount;
+          const T = signed.order.takingAmount;
+          const currentTakerPays = fusionTakerPays(M, T, fillMaking, fee, bumpNow.effective);
+          const ceilingTakerPays = fusionTakerPays(M, T, fillMaking, fee, maxBump);
+          const finish = auctionDec.auction.startTime + auctionDec.auction.duration;
+          if (action.maximumTakingAmount === undefined) auctionCap = ceilingTakerPays;
+          auctionData = {
+            settlement: auctionDec.settlement,
+            phase: nowSecs < auctionDec.auction.startTime ? "pre-start" : nowSecs >= finish ? "floor" : "decaying",
+            currentTakerPays: String(currentTakerPays),
+            ceilingTakerPays: String(ceilingTakerPays),
+            floorTakerPays: String(fusionTakerPays(M, T, fillMaking, fee, 0n)),
+            decayEndsAt: String(finish),
+            takerIsGetterWhitelisted: whitelisted,
+            priceBasis: "basefee-independent upper bound — the gas bump can only LOWER the charge",
+          };
+          jitWarnings.push({ code: "decaying_price_notice", message: `this resting order is AUCTION-priced: the getter charges the DECAYED price (currently ${currentTakerPays}, floor at ${fusionTakerPays(M, T, fillMaking, fee, 0n)}, decay ends at ${finish})${action.maximumTakingAmount === undefined ? ` — the slippage cap was defaulted to the curve ceiling ${ceilingTakerPays} so the artifact stays valid at any broadcast time` : ""}. Re-price with cork_compute dutch-auction-price at broadcast time and simulate first` });
+          if (action.maximumTakingAmount !== undefined && BigInt(action.maximumTakingAmount) < currentTakerPays) {
+            jitWarnings.push({ code: "would_revert", message: `your maximumTakingAmount ${action.maximumTakingAmount} is BELOW the current decayed price ${currentTakerPays} — the fill reverts until the price decays under your cap (a resting-bid strategy; fine if intended, dead bytes if not; decay ends at ${finish})` });
+          }
+        }
+      }
       let fill: TakerFillResult;
       try {
         fill = buildTakerFill({
@@ -3100,7 +3158,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           extension: signed.extension,
           ...(action.receiver ? { receiver: action.receiver } : {}),
           ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
-          ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
+          ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),
           ...(interaction ? { interaction } : {}),
         });
       } catch (err) {
@@ -3122,6 +3180,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
           requiredTakingAmount: fill.requiredTakingAmount,
           takerTraits: fill.takerTraits,
           ...(jitData ? { jit: jitData } : {}),
+          ...(auctionData ? { auction: auctionData } : {}),
           simulationRequired: true,
           clientRequestId: input.clientRequestId,
         },

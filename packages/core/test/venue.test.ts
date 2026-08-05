@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
-import { buildJitExtension, computeOrderDigest, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
+import { buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
 import { stubRpc, type StubCall } from "./helpers.ts";
 
@@ -1061,5 +1061,81 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       expect(env.state).toBe("unavailable");
       expect(env.warnings[0]?.code).toBe("requires_rpc");
     });
+  });
+});
+
+// ── auction-priced resting orders on taker-fill (fusion F2, the fill side) ───────────────────
+// The amount getter charges the DECAYED price, so the default slippage cap must be the curve's
+// CEILING — a floor-based cap (the plain signed ratio) reverts TakingAmountTooHigh for the whole
+// decay window, making the default artifact dead bytes.
+describe("taker-fill of an auction-priced resting order", () => {
+  const LOP = LOP_ADDRESSES[42161]!;
+  const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
+  const NOW2 = 1_790_000_000n;
+  const THRESHOLD_MASK = (1n << 185n) - 1n;
+  const auction = { gasBumpEstimate: 0n, gasPriceEstimate: 0n, startTime: NOW2 - 600n, duration: 3600n, initialRateBump: 1_000_000n, points: [] as { rateBump: bigint; timeDelta: bigint }[] };
+  const mkRow = (ext: `0x${string}`) => {
+    const built = buildMakerOrder({ chainId: 42161, lop: LOP, maker: "0x00000000000000000000000000000000000000a1", makerAsset: "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2", takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", makingAmount: 10n ** 18n, takingAmount: 1_000_000n, clientRequestId: "auction-row-0001", extension: ext });
+    const o = built.order;
+    const wire = { salt: o.salt.toString(), maker: o.maker, receiver: o.receiver, makerAsset: o.makerAsset, takerAsset: o.takerAsset, makingAmount: o.makingAmount.toString(), takingAmount: o.takingAmount.toString(), makerTraits: o.makerTraits.toString() };
+    return { built, row: { orderHash: built.orderHash, order: wire, signature: SIG, extension: built.extension } };
+  };
+  const fill = (row: Record<string, unknown>, orderHash: string, extra: Record<string, unknown> = {}) =>
+    runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-fill-0001", action: { type: "taker-fill", orderHash, ...extra }, format: "concise" },
+      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2 },
+    );
+
+  it("defaults the slippage cap to the curve CEILING (not the floor) and reports current/floor prices", async () => {
+    const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
+    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const env = await fill(row, built.orderHash);
+    expect(env.state).toBe("ok");
+    const d = env.data as { takerTraits: string; auction: Record<string, unknown> };
+    // ceiling = ceil(1_000_000 * (1e7 + 1e6) / 1e7) = 1_100_000 — NOT the signed floor 1_000_000.
+    expect((BigInt(d.takerTraits) & THRESHOLD_MASK).toString()).toBe("1100000");
+    expect(d.auction["ceilingTakerPays"]).toBe("1100000");
+    expect(d.auction["floorTakerPays"]).toBe("1000000");
+    expect(d.auction["phase"]).toBe("decaying");
+    // current at 600s into 3600s: bump 833333 → ceil(1_000_000 * 10833333 / 1e7) = 1083334.
+    expect(d.auction["currentTakerPays"]).toBe("1083334");
+    expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(true);
+  });
+
+  it("an explicit cap BELOW the current decayed price is respected but disclosed as would_revert-for-now", async () => {
+    const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
+    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const env = await fill(row, built.orderHash, { maximumTakingAmount: "1000001" });
+    expect(env.state).toBe("ok");
+    const d = env.data as { takerTraits: string };
+    expect((BigInt(d.takerTraits) & THRESHOLD_MASK).toString()).toBe("1000001");
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(true);
+  });
+
+  it("a FOREIGN curve with a point ABOVE initialRateBump: the ceiling uses the curve MAXIMUM (mutation killer for the maxBump fold)", async () => {
+    // Our own encoder refuses non-decaying points, so patch the bytes: point 0x0ABCDE (703710)
+    // → 0x1ABCDE (1752286) > initial 1_000_000. The parser accepts it; the safe cap must too.
+    const withPoint = { ...auction, points: [{ rateBump: 0x0abcden, timeDelta: 600n }] };
+    const { makingAmountData } = buildAuctionAmountData(42161, withPoint);
+    expect(makingAmountData).toContain("0abcde");
+    const patched = makingAmountData.replace("0abcde", "1abcde") as `0x${string}`;
+    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData: patched, takingAmountData: patched }));
+    const env = await fill(row, built.orderHash);
+    expect(env.state).toBe("ok");
+    const d = env.data as { takerTraits: string; auction: Record<string, unknown> };
+    // ceiling = ceil(1_000_000 * (1e7 + 1_752_286) / 1e7) = 1_175_229 — the POINT's bump, not initial's.
+    expect((BigInt(d.takerTraits) & THRESHOLD_MASK).toString()).toBe("1175229");
+    expect(d.auction["ceilingTakerPays"]).toBe("1175229");
+  });
+
+  it("a plain (non-auction) resting order gets NO auction block and keeps the signed-ratio cap", async () => {
+    const { built, row } = mkRow("0x");
+    const env = await fill(row, built.orderHash);
+    expect(env.state).toBe("ok");
+    const d = env.data as { takerTraits: string; auction?: unknown };
+    expect(d.auction).toBeUndefined();
+    expect((BigInt(d.takerTraits) & THRESHOLD_MASK).toString()).toBe("1000000");
+    expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(false);
   });
 });

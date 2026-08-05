@@ -361,3 +361,38 @@ describe("runTool: cork_prepare_orders maker-order + auction (offline, pure loca
     expect(dec.saltBoundToExtension).toBe(true);
   });
 });
+
+describe("decode order on a COMPOSED extension (auction + JIT): BOTH labels", () => {
+  it("a taker inspecting a composed venue row sees the auction AND the JIT commitment", async () => {
+    const constraint = { rateMin: "1", rateMax: "2000000000000000000", rateChangePerDayMax: "1000000000000000000", rateChangeCapacityMax: "3000000000000000000" };
+    const prep = await runTool(
+      "cork_prepare_orders",
+      {
+        chainId: 42161,
+        account: "0xc0ffee0000000000000000000000000000000001",
+        clientRequestId: "fusion-jit-decode-0001",
+        action: {
+          type: "maker-order",
+          poolId: `0x${"11".repeat(32)}`,
+          side: "SELL",
+          makerAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
+          takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610",
+          makingAmount: "1000000000000000000",
+          takingAmount: "1000000",
+          auction: { durationSeconds: 3600, initialRateBump: "500000" },
+          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", constraint },
+        },
+      },
+      { nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
+    );
+    expect(prep.state).toBe("ok");
+    const pd = prep.data as { extension: `0x${string}`; typedData: { message: Record<string, string> } };
+    const env = await runTool("cork_decode", { chainId: 42161, kind: "order", data: { ...pd.typedData.message, extension: pd.extension } }, { nowSeconds: 1_790_000_000n });
+    expect(env.state).toBe("ok");
+    const d = env.data as { fusion?: Record<string, unknown>; jit?: Record<string, unknown> };
+    expect(d.fusion).toBeDefined();
+    expect(d.jit).toBeDefined();
+    expect(String(d.jit!["recipe"]).toLowerCase()).toBe("0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d");
+    expect(d.fusion!["postInteractionGated"]).toBe(false);
+  });
+});
