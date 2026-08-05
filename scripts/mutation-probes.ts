@@ -195,6 +195,44 @@ const CATALOG: Mutant[] = [
     replace: 'abi: sharePoolIdAbi, functionName: "poolId2" as never',
     tests: [T.mr, T.venue],
   },
+  // ── Fusion auction ENCODE (F2): wrong bytes here become a SIGNED order priced wrong ───────
+  {
+    id: "fusion-encode-start-duration-swapped",
+    file: "packages/core/src/fusion.ts",
+    find: '    fit(a.startTime, 4, "startTime"),\n    fit(a.duration, 3, "duration"),',
+    replace: '    fit(a.duration, 3, "duration"),\n    fit(a.startTime, 4, "startTime"),',
+    tests: [T.fusion],
+  },
+  {
+    id: "fusion-encode-point-fields-swapped",
+    file: "packages/core/src/fusion.ts",
+    find: 'parts.push(fit(p.rateBump, 3, `point ${i} rateBump`), fit(p.timeDelta, 2, `point ${i} timeDelta`));',
+    replace: 'parts.push(fit(p.timeDelta, 2, `point ${i} timeDelta`), fit(p.rateBump, 3, `point ${i} rateBump`));',
+    tests: [T.fusion],
+  },
+  {
+    id: "fusion-encode-fee-section-width",
+    file: "packages/core/src/fusion.ts",
+    find: "parts.push(toHex(0n, { size: 7 }));",
+    replace: "parts.push(toHex(0n, { size: 6 }));",
+    tests: [T.fusion],
+  },
+  {
+    // taking must equal making byte-for-byte (fusion-sdk invariant our own decoder enforces) —
+    // a divergent mutant produces orders every Fusion consumer rejects.
+    id: "fusion-encode-taking-diverges",
+    file: "packages/core/src/fusion.ts",
+    find: "return { makingAmountData: data, takingAmountData: data, settlement };",
+    replace: "return { makingAmountData: data, takingAmountData: concatHex([settlement, encodeAuctionGetterData({ ...auction, initialRateBump: auction.initialRateBump + 1n })]), settlement };",
+    tests: [T.fusion],
+  },
+  {
+    id: "extension-encode-offset-index",
+    file: "packages/core/src/orders.ts",
+    find: "offsets |= end << (32n * BigInt(i));",
+    replace: "offsets |= end << (32n * BigInt(i + 1 > 7 ? 7 : i + 1));",
+    tests: [T.fusion],
+  },
   // ── LOP bit invalidator: shared bits are how one fill killed every other order ────────────
   {
     id: "invalidator-slot-shift",

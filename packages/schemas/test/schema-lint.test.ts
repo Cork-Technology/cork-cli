@@ -34,6 +34,8 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_compute :: params<oneOf5>.durationSeconds": "relative duration (phase-gated rfq-quote)",
   "cork_prepare_phoenix :: deadlineSeconds": "relative duration, bounded 1..86400",
   "cork_prepare_orders :: action<oneOf0>.expirySeconds": "relative duration, bounded <= 10y (traits slot is 40-bit)",
+  "cork_prepare_orders :: action<oneOf0>.auction.durationSeconds": "relative duration, bounded to the 3-byte wire field (~194 days)",
+  "cork_prepare_orders :: action<oneOf0>.auction.points[].timeDelta": "relative duration, bounded to the 2-byte wire field (65535s)",
   // Venue-defined wire numerics (the venue's own JSON contract), bounded in schema.
   "cork_prepare_orders :: action<oneOf1>.listing.premium": "venue book field: PERCENT float, bounded 0..1000",
   "cork_prepare_orders :: action<oneOf1>.listing.expiry": "venue book field: absolute unix int, bounded <= year 2100",

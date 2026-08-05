@@ -48,7 +48,7 @@ import { readPoolState, resolvePoolTokens, type CorkAddresses } from "./chain/re
 import { isTransportError, reportEndpointFailure, resolveRpc as resolveRpcBuiltin, hostOf, RpcChainMismatchError, type ResolvedRpc } from "./chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, rateOracleAbi, whitelistManagerAbi } from "./chain/abis.ts";
 import { verifyCreate2 } from "./create2.ts";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeMakerTraits, decodeOrderTuple, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, decodeMakerTraits, decodeOrderTuple, encodeExtensionFields, finalizeMakerOrder, hashLopOrder, lopDomain, lopInvalidatorAbi, lopInvalidatorPlan, LOP_ADDRESSES, type LopOrder, type TakerFillResult } from "./orders.ts";
 import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, constantGetterAbi, decodeJitExtension, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, encodeJitExtraData, erc20MetadataAbi, JIT_EVENTS, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, predictShares, readAdapterRoles, readForeignSharePool, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, SOURCE_INTERFACE, SOURCE_TYPE, type OracleModeName, type PermitParams, type PredictSharesResult, type RecipeSourceName, type ResolvedConstraint } from "./market-registry.ts";
 import * as legacyRegistry from "./market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "./deprecation.ts";
@@ -58,7 +58,7 @@ import { buildRolloverIntent, computeOrderDigest, intentStructHash, ORDER_DATA_T
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent, verificationDigest } from "./rollover-verify.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, type HyperSyncLog, type HyperSyncSource } from "./datasources/hypersync.ts";
 import { decodeKnownLog, type RawLogLike } from "./event-decode.ts";
-import { decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder, type DecodedFusionOrder } from "./fusion.ts";
+import { buildAuctionAmountData, decodeFusionOrder, FUSION_BASE_POINTS, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder, type DecodedFusionOrder } from "./fusion.ts";
 import { envioToken } from "./datasources/envio.ts";
 import {
   getLopFills,
@@ -2852,6 +2852,54 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
       }
     }
 
+    // ── optional Cork-native decaying-premium auction (fusion plan F2): the deployed Fusion
+    // settlement rides as a pure AMOUNT GETTER (no postInteraction → fills stay permissionless);
+    // the signed takingAmount is the FLOOR and the price decays down to it. Composes with the
+    // JIT extension above: one blob, one salt binding. Pure local byte-building — no RPC. ──
+    let fusionData: Record<string, unknown> | undefined;
+    if (action.auction) {
+      if (action.extension !== undefined && action.extension !== "0x") {
+        throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and auction are mutually exclusive — auction BUILDS the amount-getter extension fields" }]);
+      }
+      const au = action.auction;
+      const startTime = au.startTime !== undefined ? BigInt(au.startTime) : nowSecs;
+      const auction = {
+        gasBumpEstimate: 0n,
+        gasPriceEstimate: 0n,
+        startTime,
+        duration: BigInt(au.durationSeconds),
+        initialRateBump: BigInt(au.initialRateBump),
+        points: (au.points ?? []).map((p) => ({ rateBump: BigInt(p.rateBump), timeDelta: BigInt(p.timeDelta) })),
+      };
+      let amountData: ReturnType<typeof buildAuctionAmountData>;
+      try {
+        amountData = buildAuctionAmountData(chainId, auction);
+      } catch (err) {
+        // Well-formed values breaking a curve/width rule (over-wide bump, non-decaying points,
+        // no settlement for the chain) → envelope, exit 3, with the encoder's own teaching.
+        return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "auction encoding failed", ctx);
+      }
+      const jitPre = extension !== undefined && extension !== "0x" ? decodeExtensionFields(extension).preInteractionData : "0x";
+      extension = encodeExtensionFields({
+        makingAmountData: amountData.makingAmountData,
+        takingAmountData: amountData.takingAmountData,
+        ...(jitPre !== "0x" ? { preInteractionData: jitPre } : {}),
+      });
+      const bumpNow = fusionRateBump(auction, nowSecs, null);
+      const taking = BigInt(action.takingAmount);
+      const ceil = (a: bigint, b: bigint) => (a + b - 1n) / b;
+      fusionData = {
+        settlement: amountData.settlement,
+        role: "amount getter ONLY — no postInteraction, so any taker fills at the decayed price through the plain LOP fill path (no resolver, no whitelist)",
+        auction: { startTime: String(startTime), durationSeconds: String(auction.duration), initialRateBump: String(auction.initialRateBump), points: auction.points.map((p) => ({ rateBump: String(p.rateBump), timeDelta: String(p.timeDelta) })), scale: "rate bump base 1e7 = +100% above the signed floor" },
+        phase: nowSecs < startTime ? "pre-start" : nowSecs >= startTime + auction.duration ? "floor" : "decaying",
+        takerPaysCeiling: String(ceil(taking * (FUSION_BASE_POINTS + auction.initialRateBump), FUSION_BASE_POINTS)),
+        takerPaysNow: String(fusionTakerPays(BigInt(action.makingAmount), taking, BigInt(action.makingAmount), 0n, bumpNow.effective)),
+        floorTakingAmount: String(taking),
+      };
+      warnings.push({ code: "decaying_price_notice", message: `the taker price DECAYS from +${auction.initialRateBump} (base 1e7) above the signed takingAmount down to the signed floor over ${auction.duration}s from ${startTime} — the signed takingAmount is the WORST case for the maker, not the expected price. The venue book lists a static premium (a decaying listing convention is an open venue question): list it honestly, and takers should re-price with cork_compute dutch-auction-price + simulate before filling` });
+    }
+
     let built: ReturnType<typeof buildMakerOrder>;
     try {
       built = buildMakerOrder({
@@ -2885,6 +2933,7 @@ async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContex
         // against what the signed makerTraits encode and refuses to relay a mismatch.
         nonce: built.nonce,
         ...(jitData ? { jit: jitData } : {}),
+        ...(fusionData ? { fusion: fusionData } : {}),
         clientRequestId: input.clientRequestId,
       },
       chainId,

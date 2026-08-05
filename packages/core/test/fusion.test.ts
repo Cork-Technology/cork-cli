@@ -5,8 +5,13 @@
 // wei-exactly (validate-real-order.ts). If these constants ever need "fixing", suspect the port.
 import { describe, expect, it } from "vitest";
 import {
+  buildAuctionAmountData,
   decodeExtensionFields,
   decodeFusionOrder,
+  decodeJitExtension,
+  encodeAuctionGetterData,
+  encodeExtensionFields,
+  FUSION_SETTLEMENTS,
   fusionMakerGives,
   fusionRateBump,
   fusionTakerPays,
@@ -217,5 +222,142 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     expect(f?.classification).toBe("current");
     expect(f?.postInteractionGated).toBe(true);
     expect(f?.auction.points).toBe(1);
+  });
+});
+
+// ── F2: the BUILD side (Cork-native decaying-premium orders) ─────────────────────────────────
+
+describe("encodeAuctionGetterData: exact inverse of the parser", () => {
+  it("round-trips the pinned probe auction (points included) with a ZEROED fee section", () => {
+    const { auction, fees } = parseAuctionGetterData(encodeAuctionGetterData(AUCTION));
+    expect(auction).toEqual(AUCTION);
+    expect(fees).toEqual({ integratorFee: 0n, integratorShare: 0n, resolverFee: 0n, whitelistDiscountNumerator: 0n, whitelist: [] });
+  });
+
+  it("buildAuctionAmountData: settlement-prefixed, taking == making byte-for-byte", () => {
+    const { makingAmountData, takingAmountData, settlement } = buildAuctionAmountData(1, AUCTION);
+    expect(takingAmountData).toBe(makingAmountData);
+    expect(settlement.toLowerCase()).toBe(FUSION_SETTLEMENTS[1]!.current.toLowerCase());
+    expect(makingAmountData.toLowerCase().startsWith(settlement.toLowerCase())).toBe(true);
+  });
+
+  it("width guards throw with the field named, never truncate", () => {
+    expect(() => encodeAuctionGetterData({ ...AUCTION, initialRateBump: 1n << 24n })).toThrow(/initialRateBump.*3 byte/);
+    expect(() => encodeAuctionGetterData({ ...AUCTION, duration: 1n << 24n })).toThrow(/duration/);
+    expect(() => encodeAuctionGetterData({ ...AUCTION, startTime: 1n << 32n })).toThrow(/startTime/);
+  });
+
+  it("curve guards: zero duration, non-decaying point, overlong tail all refuse", () => {
+    expect(() => encodeAuctionGetterData({ ...AUCTION, duration: 0n })).toThrow(/zero duration/);
+    expect(() => encodeAuctionGetterData({ ...AUCTION, points: [{ rateBump: AUCTION.initialRateBump + 1n, timeDelta: 60n }] })).toThrow(/decay/);
+    expect(() => encodeAuctionGetterData({ ...AUCTION, points: [{ rateBump: 1n, timeDelta: 3000n }, { rateBump: 0n, timeDelta: 3000n }] })).toThrow(/past the/);
+  });
+});
+
+describe("encodeExtensionFields: inverse of decodeExtensionFields", () => {
+  it("round-trips a composed extension (amount getters + preInteraction) and the empty case", () => {
+    const fields = { makingAmountData: "0xaabb" as const, takingAmountData: "0xaabb" as const, preInteractionData: "0x112233" as const };
+    const back = decodeExtensionFields(encodeExtensionFields(fields));
+    expect(back.makingAmountData).toBe("0xaabb");
+    expect(back.takingAmountData).toBe("0xaabb");
+    expect(back.preInteractionData).toBe("0x112233");
+    expect(back.postInteractionData).toBe("0x");
+    expect(encodeExtensionFields({})).toBe("0x");
+  });
+});
+
+describe("runTool: cork_prepare_orders maker-order + auction (offline, pure local)", () => {
+  const base = {
+    chainId: 1 as const,
+    account: "0xc0ffee0000000000000000000000000000000001",
+    clientRequestId: "fusion-build-0001",
+    action: {
+      type: "maker-order",
+      poolId: `0x${"11".repeat(32)}`,
+      side: "SELL",
+      makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
+      takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e",
+      makingAmount: "1000000000000000000",
+      takingAmount: "1000000",
+    },
+  };
+  const NOW = 1_790_000_000n;
+
+  it("builds a salt-bound auction order our own decoder + pricer accept (build→price parity)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, auction: { durationSeconds: 3600, initialRateBump: "1000000" } } }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { extension: `0x${string}`; typedData: { message: Record<string, string> }; fusion: Record<string, unknown> };
+    expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(true);
+    // Self-decode: the built bytes ARE a Fusion order, permissionless (no postInteraction).
+    const m = d.typedData.message;
+    const order: LopOrder = { salt: BigInt(m.salt!), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount!), takingAmount: BigInt(m.takingAmount!), makerTraits: BigInt(m.makerTraits!) };
+    const dec = decodeFusionOrder(order, d.extension, 1);
+    expect(dec.saltBoundToExtension).toBe(true);
+    expect(dec.postInteraction).toBeNull();
+    expect(dec.classification).toBe("current");
+    expect(dec.auction.initialRateBump).toBe(1_000_000n);
+    // fusion echo: phase decaying at start; ceiling = floor * 1.1 (bump 1e6/1e7 = +10%), floor = takingAmount.
+    expect(d.fusion["phase"]).toBe("decaying");
+    expect(d.fusion["floorTakingAmount"]).toBe("1000000");
+    expect(d.fusion["takerPaysCeiling"]).toBe("1100000");
+    expect(d.fusion["takerPaysNow"]).toBe("1100000"); // t == startTime → full bump
+    // Build→price parity with the ACTIVATED pricer on the same bytes.
+    const priced = await runTool("cork_compute", { chainId: 1, params: { kind: "dutch-auction-price", order: { ...m, extension: d.extension } } }, { nowSeconds: NOW });
+    expect(priced.state).toBe("ok");
+    const pd = priced.data as { price: { takerPays: string } } & Record<string, unknown>;
+    expect(JSON.stringify(pd)).toContain("1100000");
+  });
+
+  it("the price decays to the signed floor after the window (phase: floor)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "fusion-build-0002", action: { ...base.action, auction: { startTime: String(NOW - 4000n), durationSeconds: 3600, initialRateBump: "1000000" } } }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { fusion: Record<string, unknown> };
+    expect(d.fusion["phase"]).toBe("floor");
+    expect(d.fusion["takerPaysNow"]).toBe("1000000");
+  });
+
+  it("auction + raw extension are mutually exclusive (format throw)", async () => {
+    await expect(
+      runTool("cork_prepare_orders", { ...base, action: { ...base.action, extension: "0x" + "00".repeat(33), auction: { durationSeconds: 3600, initialRateBump: "1000000" } } }, { nowSeconds: NOW }),
+    ).rejects.toThrow(ToolInputError);
+  });
+
+  it("a curve rule violation returns invalid_order_terms (envelope, exit-3 class), not a crash", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "fusion-build-0003", action: { ...base.action, auction: { durationSeconds: 3600, initialRateBump: String(1n << 24n) } } }, { nowSeconds: NOW });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(env.warnings[0]?.message).toContain("initialRateBump");
+  });
+
+  it("composes with jitMarket: ONE extension carries the JIT preInteraction AND the auction getters, one salt binding", async () => {
+    const constraint = { rateMin: "1", rateMax: "2000000000000000000", rateChangePerDayMax: "1000000000000000000", rateChangeCapacityMax: "3000000000000000000" };
+    const env = await runTool(
+      "cork_prepare_orders",
+      {
+        chainId: 42161,
+        account: "0xc0ffee0000000000000000000000000000000001",
+        clientRequestId: "fusion-jit-0001",
+        action: {
+          ...base.action,
+          makerAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
+          takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610",
+          auction: { durationSeconds: 3600, initialRateBump: "500000" },
+          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", constraint },
+        },
+      },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { extension: `0x${string}`; typedData: { message: Record<string, string> }; jit: unknown; fusion: unknown };
+    expect(d.jit).toBeDefined();
+    expect(d.fusion).toBeDefined();
+    // BOTH decoders read the same composed blob.
+    const jit = decodeJitExtension(d.extension);
+    expect(jit.params.recipe.toLowerCase()).toBe("0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d");
+    const m = d.typedData.message;
+    const order: LopOrder = { salt: BigInt(m.salt!), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount!), takingAmount: BigInt(m.takingAmount!), makerTraits: BigInt(m.makerTraits!) };
+    const dec = decodeFusionOrder(order, d.extension, 42161);
+    expect(dec.auction.initialRateBump).toBe(500_000n);
+    expect(dec.saltBoundToExtension).toBe(true);
   });
 });

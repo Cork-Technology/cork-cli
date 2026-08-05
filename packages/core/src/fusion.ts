@@ -10,7 +10,7 @@
 // 2026-07-28) — both rounding directions, interpolation, fee/whitelist-discount, boundaries.
 // Known deployed-getter gotchas carried from the spike: the on-chain selectors use the
 // all-uint256 Order tuple, and public-node eth_call runs with block.basefee = 0.
-import { keccak256, size, sliceHex } from "viem";
+import { concatHex, keccak256, size, sliceHex, toHex } from "viem";
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 import { decodeExtensionFields, type LopExtensionFields, type LopOrder } from "./orders.ts";
 
@@ -133,6 +133,53 @@ export function parseAuctionGetterData(extraData: Hex): { auction: FusionAuction
       whitelist,
     },
   };
+}
+
+// ── auction ENCODE (the build side of F2: Cork-native decaying-premium orders) ───────────────
+
+function fit(value: bigint, bytes: number, what: string): Hex {
+  if (value < 0n) throw new Error(`Fusion ${what}: negative values cannot be encoded`);
+  const max = (1n << BigInt(8 * bytes)) - 1n;
+  if (value > max) throw new Error(`Fusion ${what}: ${value} does not fit ${bytes} byte(s) (max ${max}) — the v3.1 layout is fixed-width`);
+  return toHex(value, { size: bytes });
+}
+
+/** Encode the amount-getter extraData — the exact inverse of parseAuctionGetterData, with the
+ *  fee section ZEROED and the getter whitelist EMPTY (the Cork-native shape: L1+L2 only, any
+ *  taker fills at the decayed price through the plain LOP fill path; §2.4 of the fusion plan
+ *  proved the deployed getters answer standalone with exactly this shape). Field widths are the
+ *  v3.1 layout's — over-wide values throw with the width named, never truncate. */
+export function encodeAuctionGetterData(a: FusionAuction): Hex {
+  if (a.points.length > 255) throw new Error(`Fusion auction: ${a.points.length} points do not fit the 1-byte count (max 255)`);
+  if (a.duration === 0n) throw new Error("Fusion auction: zero duration — the price would be at the floor from the first block; use a plain order instead");
+  const parts: Hex[] = [
+    fit(a.gasBumpEstimate, 3, "gasBumpEstimate"),
+    fit(a.gasPriceEstimate, 4, "gasPriceEstimate"),
+    fit(a.startTime, 4, "startTime"),
+    fit(a.duration, 3, "duration"),
+    fit(a.initialRateBump, 3, "initialRateBump"),
+    fit(BigInt(a.points.length), 1, "point count"),
+  ];
+  let cumulative = 0n;
+  for (const [i, p] of a.points.entries()) {
+    if (p.rateBump > a.initialRateBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds initialRateBump ${a.initialRateBump} — the curve must decay (the getters interpolate DOWN between points)`);
+    parts.push(fit(p.rateBump, 3, `point ${i} rateBump`), fit(p.timeDelta, 2, `point ${i} timeDelta`));
+    cumulative += p.timeDelta;
+  }
+  if (cumulative > a.duration) throw new Error(`Fusion auction: point timeDeltas sum to ${cumulative}s, past the ${a.duration}s duration — the tail would never be reached`);
+  parts.push(toHex(0n, { size: 7 })); // zeroed fee section: integratorFee(2) integratorShare(1) resolverFee(2) whitelistDiscount(1) whitelistSize(1)
+  return concatHex(parts);
+}
+
+/** The two amount-getter extension fields of a Cork-native auction order: the CURRENT Fusion
+ *  settlement (used purely as an amount getter — no postInteraction, so fills stay
+ *  permissionless) followed by the auction blob; taking == making byte-for-byte (the fusion-sdk
+ *  invariant decodeFusionOrder enforces). */
+export function buildAuctionAmountData(chainId: number, auction: FusionAuction): { makingAmountData: Hex; takingAmountData: Hex; settlement: Hex } {
+  const settlement = FUSION_SETTLEMENTS[chainId]?.current;
+  if (!settlement) throw new Error(`no known Fusion settlement (amount getter) for chainId ${chainId} — cork-defaults.json fusionSettlements has no entry`);
+  const data = concatHex([settlement, encodeAuctionGetterData(auction)]);
+  return { makingAmountData: data, takingAmountData: data, settlement };
 }
 
 /** Parse the post-interaction extraData (after the 20-byte settlement address): fee recipients,

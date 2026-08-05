@@ -356,7 +356,20 @@ export const OrdersAction = z.discriminatedUnion("type", [
     expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"),
     allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId — the invalidator bit is derived from it, and orders sharing an id would share a bit, so filling one would invalidate the others"),
     usePermit2: z.boolean().default(false),
-    extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket, which BUILDS the extension"),
+    extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket and auction, which BUILD the extension"),
+    auction: z
+      .strictObject({
+        startTime: UnixSeconds.optional().describe("when the price starts decaying, absolute unix SECONDS — omitted = prepare time (the price then decays from the first moment the order can rest)"),
+        durationSeconds: z.number().int().min(60).max(16_777_215).describe("how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"),
+        initialRateBump: UintStr.describe("the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor"),
+        points: z
+          .array(z.strictObject({ rateBump: UintStr.describe("bump at this point, base 1e7; must not exceed initialRateBump (curves decay)"), timeDelta: z.number().int().min(1).max(65_535).describe("seconds since the previous point (2-byte wire field)") }))
+          .max(255)
+          .optional()
+          .describe("piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"),
+      })
+      .optional()
+      .describe("Cork-native DECAYING-PREMIUM order (the modeled-quote-free answer to rfq-quote): the deployed 1inch Fusion settlement is used purely as an AMOUNT GETTER — no postInteraction, so ANY taker fills at the current decayed price through the plain LOP fill path; the auction discovers the premium instead of a pricing model. Composes with jitMarket (one extension, one salt binding). Mutually exclusive with raw `extension`. Price the resting order any time with cork_compute dutch-auction-price"),
     jitMarket: z
       .strictObject({
         collateralAsset: Address,

@@ -10,6 +10,7 @@ import {
   keccak256,
   pad,
   parseAbi,
+  toHex,
   parseSignature,
   recoverAddress,
   signatureToCompactSignature,
@@ -92,6 +93,29 @@ export interface LopExtensionFields {
   preInteractionData: `0x${string}`;
   postInteractionData: `0x${string}`;
   customData: `0x${string}`;
+}
+
+/** Field order of the offsets header — index IS the on-chain field id (ExtensionLib). */
+const EXTENSION_FIELD_ORDER = ["makerAssetSuffix", "takerAssetSuffix", "makingAmountData", "takingAmountData", "predicate", "makerPermit", "preInteractionData", "postInteractionData"] as const;
+
+/** Encode the eight ExtensionLib fields (+ customData tail) into a LOP v4 extension blob — the
+ *  exact inverse of decodeExtensionFields, and the ONE place the offsets header is written for
+ *  composed extensions (e.g. a Cork-native auction order that carries amount-getter data AND a
+ *  JIT preInteraction in the same blob, bound by one salt). All-empty fields = "0x" (no
+ *  extension). Round-trip with decodeExtensionFields is test-pinned. */
+export function encodeExtensionFields(fields: Partial<LopExtensionFields>): `0x${string}` {
+  let offsets = 0n;
+  let concat: `0x${string}` = "0x";
+  let end = 0n;
+  for (const [i, name] of EXTENSION_FIELD_ORDER.entries()) {
+    const value = fields[name] ?? "0x";
+    end += BigInt(size(value));
+    offsets |= end << (32n * BigInt(i));
+    if (value !== "0x") concat = concatHex([concat, value]);
+  }
+  const custom = fields.customData ?? "0x";
+  if (end === 0n && custom === "0x") return "0x";
+  return concatHex([toHex(offsets, { size: 32 }), concat, custom]);
 }
 
 /**
