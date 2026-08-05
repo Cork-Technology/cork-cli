@@ -1,0 +1,49 @@
+{
+  "checksums": [
+    {
+      "id": "github_release/github.com/chainguard-dev/apko/v1.2.30/apko_1.2.30_darwin_amd64.tar.gz",
+      "checksum": "8909DBD7607EC91B29D916FFD62332603F6D6996FA6CC26D93BA6D437146CB9D",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/apko/v1.2.30/apko_1.2.30_darwin_arm64.tar.gz",
+      "checksum": "C622023DB8DF5192BBD8F64687B9D4A47371D806C53BEF86978567A52354B36C",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/apko/v1.2.30/apko_1.2.30_linux_amd64.tar.gz",
+      "checksum": "486FF1121CCA1F0EFDAAD0FCC2C31649E58849E7257B23D1DC22BD5FA2F66746",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/apko/v1.2.30/apko_1.2.30_linux_arm64.tar.gz",
+      "checksum": "4929C0447DBBCE88F8A000493A1E088DAC6246F527CADF05351609BFAB9FD24B",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/melange/v0.56.4/melange_0.56.4_darwin_amd64.tar.gz",
+      "checksum": "F86ED4249769C0C94F98162A86B8B67CEA872C5085009FA20584C3483A8F5C29",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/melange/v0.56.4/melange_0.56.4_darwin_arm64.tar.gz",
+      "checksum": "F9541958B3F9A946AD63DCAF67B4D9A4EB9FCE126A71631C288EBCE31A154592",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/melange/v0.56.4/melange_0.56.4_linux_amd64.tar.gz",
+      "checksum": "EBB54361EF1D853002841F279776FA2EE3019AE2490C3184045BC1B9AEB3D7D8",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/chainguard-dev/melange/v0.56.4/melange_0.56.4_linux_arm64.tar.gz",
+      "checksum": "D77448BC73F1AFDB905037C3347B7DB4AACEA39F5BCC899CF07F8FE5880E6AE0",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "registries/github_content/github.com/aquaproj/aqua-registry/v4.431.0/registry.yaml",
+      "checksum": "6417157258E77C7792BFB6AE93C745EDC6E67931F3FFB3F6A1E72250B8F9A778933C9B802D2D054ADCB5BE096E4E4A40F0D9E640888890230B255F72AAF3A45C",
+      "algorithm": "sha512"
+    }
+  ]
+}

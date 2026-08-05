@@ -9,4 +9,4 @@ packages:
   - name: chainguard-dev/apko@v1.2.30
 checksum:
   enabled: true
-  require_checksum: false # registry cosign/slsa verification still applies; flip on once aqua-checksums.json is committed
+  require_checksum: true # aqua-checksums.json committed 2026-08-05 (aqua v2.53.8, all platforms)
