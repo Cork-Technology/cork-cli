@@ -165,12 +165,12 @@ export type ComputeInput = z.infer<typeof ComputeInput>;
 // ────────────────────────────────────────────────────────────────────────────
 export const DecodeInput = z.object({
   kind: z
-    .enum(["calldata", "order", "event", "receipt"])
+    .enum(["calldata", "tx", "order", "event", "receipt"])
     .describe(
-      "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
+      "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01/0x02) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
     ),
   data: z.union([
-    Hex.describe("raw bytes to decode — tx calldata for kind 'calldata', or the 8-word order tuple for kind 'order'"),
+    Hex.describe("raw bytes to decode — tx calldata for kind 'calldata', the SIGNED raw transaction bytes for kind 'tx', or the 8-word order tuple for kind 'order'"),
     z
       .record(z.string(), z.unknown())
       .describe("an already-structured payload to label: the order's JSON struct fields (kind 'order'), ONE log object {address?, topics[], data} (kind 'event'), or a receipt {logs:[...]} (kind 'receipt')"),

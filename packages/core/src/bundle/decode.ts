@@ -52,6 +52,13 @@ function decodeCall(c: Call, depth: number): DecodedLeg {
   return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert };
 }
 
+/** Decode ONE call (any target) into a labeled leg — a Bundler3 multicall nests as kind
+ *  "bundle", a known adapter/ERC-20 call labels, anything else surfaces raw with its selector.
+ *  Used by the signed-tx decoder, where the tx's single (to, data, value) is the call. */
+export function decodeSingleCall(c: Call): DecodedLeg {
+  return decodeCall(c, 0);
+}
+
 /** Decode top-level Bundler3.multicall calldata into a tree of legs. */
 export function decodeBundle(multicallData: `0x${string}`): DecodedLeg[] {
   if (!isBundlerMulticall(multicallData)) {

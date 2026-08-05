@@ -45,6 +45,7 @@ const T = {
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
+  decodeTx: "packages/core/test/decode-tx.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -469,6 +470,26 @@ const CATALOG: Mutant[] = [
     find: "for (const abi of [KNOWN_EVENTS_ABI, LOP_CANCELLED_FALLBACK_ABI]) {",
     replace: "for (const abi of [KNOWN_EVENTS_ABI]) {",
     tests: [T.events],
+  },
+  // ── decode kind:"tx": the validate-before-broadcast step — its two comparators are what a
+  //    client trusts before eth_sendRawTransaction ────────────────────────────────────────────
+  {
+    // Signer-recovery wiring: a decoder that stops recovering (echoing something plausible
+    // instead) would let a wrong-key signature pass the pre-broadcast check.
+    id: "decodetx-signer-not-recovered",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "const signer = await recoverTransactionAddress({ serializedTransaction: raw as TransactionSerialized });",
+    replace: "const signer = ZERO_ADDR as `0x${string}`;",
+    tests: [T.decodeTx],
+  },
+  {
+    // Target cross-check: inverting the address comparator mislabels every target (and silences
+    // the unknown-target warning), defeating the "is `to` the contract I expect" question.
+    id: "decodetx-target-label-inverted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())",
+    replace: "candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() !== to.toLowerCase())",
+    tests: [T.decodeTx],
   },
 ];
 

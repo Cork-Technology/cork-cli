@@ -1,15 +1,16 @@
 // Split from handlers.ts (2026-08-05): decode handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { keccak256 } from "viem";
+import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, type ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../orders.ts";
 import { decodeJitExtension } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
-import { decodeBundle } from "../bundle/decode.ts";
+import { decodeBundle, type DecodedLeg, decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { envelope, getDep, type HandlerContext, ToolInputError } from "./shared.ts";
+import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { envelope, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
 
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
@@ -253,9 +254,110 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
   });
 }
 
+/** decode kind:"tx" — a SIGNED raw transaction (legacy RLP or typed envelope 0x01/0x02): recover
+ *  the signer from the signature, name the target against the chain's known Cork deployment
+ *  addresses (warn plainly when unknown), and decode the inner calldata to the same labeled legs
+ *  + summary as kind:"calldata". This is the validate-before-broadcast step [K3]: everything is
+ *  reconstructed from the bytes; a supplied chainId that contradicts the tx's own is a conflict. */
+export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
+  if (typeof input.data !== "string") {
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "tx decode takes the SIGNED raw transaction bytes as 0x hex (legacy RLP or typed envelope 0x01/0x02) — the parse is reconstructed from the bytes, never supplied [K3]" }]);
+  }
+  const raw = input.data as `0x${string}`;
+  let parsed: ReturnType<typeof parseTransaction>;
+  try {
+    parsed = parseTransaction(raw as TransactionSerialized);
+  } catch (err) {
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `not a decodable Ethereum transaction (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — kind 'tx' takes the SIGNED serialized transaction; for inner calldata alone use kind 'calldata'` }]);
+  }
+  if (parsed.r === undefined || parsed.s === undefined) {
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "this transaction is UNSIGNED (no signature fields) — kind 'tx' validates signed bytes before broadcast; for unsigned bytes decode the inner calldata with kind 'calldata'" }]);
+  }
+  const signer = await recoverTransactionAddress({ serializedTransaction: raw as TransactionSerialized });
+  const txChainId = parsed.chainId;
+  // Which chain the address book resolves against: the tx's own chainId outranks the input's;
+  // a legacy pre-EIP-155 tx (no chainId of its own) falls back to the supplied one.
+  const chainId = (txChainId ?? input.chainId ?? 1) as ChainId;
+
+  const warnings: Array<{ code: string; message: string }> = [];
+  // Known-address book for the chain (best-effort config reads; every entry optional).
+  const { dep, depWarn } = await getDep(ctx, chainId);
+  warnings.push(...depWarn);
+  const [{ marketRegistry: mr }, { rollover }] = await Promise.all([resolveMarketRegistry(chainId), resolveRollover(chainId)]);
+  const candidates: Array<[string, string | undefined]> = [
+    ["bundler3", dep?.bundler3],
+    ["corkAdapter", dep?.corkAdapter],
+    ["poolManager", dep?.poolManager],
+    ["constraintAdapter", dep?.constraintAdapter],
+    ["whitelistManager", dep?.whitelistManager],
+    ["1inch LOP v4", LOP_ADDRESSES[chainId]],
+    ["marketRegistry", mr?.registry],
+    ["corkLimitOrderAdapter (JIT)", mr?.adapter],
+    ["exactSettler", rollover?.exactSettler],
+    ["partialSettler", rollover?.partialSettler],
+    ["rolloverFactory", rollover?.factory],
+  ];
+  const to = parsed.to ?? null;
+  const toLabel = to === null ? null : (candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())?.[0] ?? null);
+  if (to === null) {
+    warnings.push({ code: "unknown_target", message: "this transaction has NO `to` (contract creation) — no Cork prepare path produces a deployment tx; do not broadcast unless you built it yourself" });
+  } else if (toLabel === null) {
+    warnings.push({ code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract on chainId ${chainId}. For a token approve (authority-onboard/revoke) the target is the TOKEN itself — verify it is the token you intend; for anything else, do not broadcast until you have identified the target` });
+  }
+
+  // Inner calldata → the SAME labeled legs + summary as kind:"calldata" (a Bundler3 multicall
+  // unwraps recursively; any other single call labels via the known ABI set or surfaces raw).
+  const data = parsed.data;
+  let legs: DecodedLeg[] | undefined;
+  if (data !== undefined && data !== "0x") {
+    try {
+      legs = decodeBundle(data);
+    } catch {
+      legs = [decodeSingleCall({ to: to ?? ZERO_ADDR, data, value: parsed.value ?? 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })];
+    }
+  }
+  const adapter = dep?.corkAdapter;
+  const summary = legs ? summarizeBundle(legs, { adapter, ...(signer ? { account: signer } : {}) }) : ["(no calldata — a plain value transfer)"];
+
+  const base = {
+    kind: "tx" as const,
+    txHash: keccak256(raw),
+    type: parsed.type,
+    chainId,
+    txChainId: txChainId ?? null,
+    signer,
+    to,
+    toLabel,
+    value: parsed.value ?? 0n,
+    nonce: parsed.nonce,
+    gas: {
+      ...(parsed.gas !== undefined ? { gas: parsed.gas } : {}),
+      ...("gasPrice" in parsed && parsed.gasPrice !== undefined ? { gasPrice: parsed.gasPrice } : {}),
+      ...("maxFeePerGas" in parsed && parsed.maxFeePerGas !== undefined ? { maxFeePerGas: parsed.maxFeePerGas } : {}),
+      ...("maxPriorityFeePerGas" in parsed && parsed.maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas: parsed.maxPriorityFeePerGas } : {}),
+    },
+    summary,
+    ...(legs ? { legs } : {}),
+  };
+  // A supplied chainId that contradicts the tx's own is a conflict: broadcasting these bytes on
+  // the requested chain is impossible (the signature commits to the tx's chainId).
+  if (input.chainId !== undefined && txChainId !== undefined && input.chainId !== txChainId) {
+    return envelope({
+      state: "conflict",
+      data: base,
+      chainId,
+      source: "config",
+      warnings: [...warnings, { code: "chainid_mismatch", message: `the supplied chainId ${input.chainId} contradicts the transaction's own chainId ${txChainId} — the signature commits to ${txChainId}; these bytes cannot land on chainId ${input.chainId}` }],
+      ctx,
+    });
+  }
+  return envelope({ state: "ok", data: base, chainId, source: "config", warnings, ctx });
+}
+
 /** Kind router for cork_decode — order/event/receipt to their handlers, calldata inline. */
 export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
+  if (input.kind === "tx") return handleDecodeTx(input, ctx);
   if (input.kind === "order") return handleDecodeOrder(input, chainId, ctx);
   if (input.kind === "event") return handleDecodeEvent(input, chainId, ctx);
   if (input.kind === "receipt") return handleDecodeReceipt(input, chainId, ctx);
