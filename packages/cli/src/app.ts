@@ -61,6 +61,8 @@ interface SchemaNode {
   required?: string[];
   $ref?: string;
   $defs?: Record<string, SchemaNode>;
+  anyOf?: SchemaNode[];
+  oneOf?: SchemaNode[];
 }
 
 /**
@@ -75,6 +77,20 @@ function resolveNode(node: SchemaNode, defs: Record<string, SchemaNode>, depth =
   if (!target) return node;
   const { $ref: _drop, ...local } = node;
   return resolveNode({ ...target, ...local }, defs, depth + 1);
+}
+
+/**
+ * Does the schema admit a plain string for this field? Judged by the schema, not by how a value
+ * looks: union fields like decode's `data` (hex-string-or-object, the string side behind a $ref)
+ * accept a raw flag value, while object-only fields (`--filters`, `--action`) keep the loud
+ * JSON-parse error — the actionable message when a structure was clearly intended.
+ */
+function admitsString(node: SchemaNode, defs: Record<string, SchemaNode>, depth = 0): boolean {
+  if (depth >= 4) return false;
+  const n = resolveNode(node, defs);
+  const t = Array.isArray(n.type) ? n.type : n.type ? [n.type] : [];
+  if (t.includes("string")) return true;
+  return [...(n.anyOf ?? []), ...(n.oneOf ?? [])].some((b) => admitsString(b, defs, depth + 1));
 }
 
 /** Flag spelling for a schema property: lowercased, so `chainId` answers to `--chainid`. */
@@ -262,12 +278,10 @@ export async function runCli(
         try {
           input[name] = parseJsonPrecise(String(supplied));
         } catch (e) {
-          // A value that never LOOKED like JSON (no {, [ or " lead) is a plain string for a
-          // union-typed field — e.g. `--data 0xdeadbeef` on decode, whose schema is hex-or-object.
-          // Pass it through and let schema validation judge it; only a malformed attempt at a
-          // JSON structure keeps the parse error, which is the more actionable message there.
-          const lead = String(supplied).trimStart()[0];
-          if (lead !== "{" && lead !== "[" && lead !== '"') {
+          // Not parseable as JSON: if the SCHEMA admits a string for this field (union-typed,
+          // e.g. `--data 0xdeadbeef` on decode: hex-or-object), pass the raw value through and
+          // let schema validation judge it. Object-only fields keep the loud parse error.
+          if (admitsString(node, defs)) {
             input[name] = String(supplied);
             continue;
           }

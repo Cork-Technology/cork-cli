@@ -17,6 +17,10 @@ Bun 1.3 is pinned in `mise.toml`.
     plus flags named after the schema's own fields (`ch query registry-assets --chainid 42161`).
     Flags override keys in a JSON blob. Spelling is normalised, so `--chainid`, `--chain-id` and
     `--chainId` are one flag; object-valued fields (`--filters`, `--params`) take a JSON string.
+    Flag typing is schema-judged ($refs resolved): $ref'd string fields are plain flags
+    (`--account 0x…`), union-typed fields accept a raw string when JSON parsing fails
+    (`--data 0x…`), and object-ONLY fields reject non-JSON loud (`invalid_json`) — mutation-probed
+    (`cli-*` probes), positionals pinned by test.
   - **Output** is prose by default, JSON on request: a bare `--json`, or `CORK_JSON=1`. Passing input
     as `--json '<object>'` also yields JSON, which is why every pre-existing scripted example works.
     Results/errors render via `packages/cli/src/render.ts`.

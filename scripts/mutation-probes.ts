@@ -47,6 +47,7 @@ const T = {
   handlers: "packages/core/test/handlers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
+  cli: "packages/cli/test/cli.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -577,6 +578,45 @@ const CATALOG: Mutant[] = [
     find: "const wrongDigest = images.filter((i) => /@sha256:[0-9a-f]{64}$/.test(i) && !i.toLowerCase().endsWith(`@${expectedDigest.toLowerCase()}`));",
     replace: "const wrongDigest: string[] = [];",
     tests: [T.phala],
+  },
+
+  // ── CLI flag layer: $ref resolution + schema-judged string fallback (2026-08-06) ──────────
+  // Not signed bytes, but the layer that decides WHAT input reaches runTool — a silent defect
+  // here turns a valid invocation into a rejected one (or vice versa) across every tool.
+  {
+    // Resolution disabled: $ref string fields (account) reclassify as JSON flags and
+    // `--account 0x…` dies with invalid_json again.
+    id: "cli-ref-resolution-disabled",
+    file: "packages/cli/src/app.ts",
+    find: "if (!node.$ref || depth >= 3) return node;",
+    replace: "if (!node.$ref || depth >= 0) return node;",
+    tests: [T.cli],
+  },
+  {
+    // Merge order swapped: the $defs description clobbers the property's own — --help loses
+    // the field-specific text ("the initiating account" becomes Address's generic line).
+    id: "cli-ref-merge-order-swapped",
+    file: "packages/cli/src/app.ts",
+    find: "return resolveNode({ ...target, ...local }, defs, depth + 1);",
+    replace: "return resolveNode({ ...local, ...target }, defs, depth + 1);",
+    tests: [T.cli],
+  },
+  {
+    // Fallback for everything: object-only fields (--filters) silently accept garbage strings
+    // instead of failing loud with the parse error.
+    id: "cli-admits-string-always",
+    file: "packages/cli/src/app.ts",
+    find: "return [...(n.anyOf ?? []), ...(n.oneOf ?? [])].some((b) => admitsString(b, defs, depth + 1));",
+    replace: "return true;",
+    tests: [T.cli],
+  },
+  {
+    // Fallback for nothing: union fields (decode --data) reject raw hex with invalid_json.
+    id: "cli-admits-string-never",
+    file: "packages/cli/src/app.ts",
+    find: 'if (t.includes("string")) return true;',
+    replace: 'if (t.includes("string")) return false;',
+    tests: [T.cli],
   },
 ];
 

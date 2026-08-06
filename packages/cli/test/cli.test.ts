@@ -124,6 +124,49 @@ describe("ch CLI", () => {
     expect(r.stderr).toContain("expects JSON");
   });
 
+  it("an object-ONLY field rejects any non-JSON value — the fallback is schema-judged, not value-shaped", async () => {
+    // filters admits no string anywhere in its schema, so even an innocent-looking bare word
+    // must keep the actionable parse error instead of silently degrading to a type error.
+    const r = await runCli(["query", "rfqs", "--filters", "notjson", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("invalid_json");
+  });
+
+  it("a union field's JSON-looking garbage falls through to SCHEMA validation, not the parse error", async () => {
+    // decode's data admits a string, so '{bad' is passed through raw and the schema judges it —
+    // the failure is invalid_input (teaching), never the flag layer's invalid_json.
+    const r = await runCli(["decode", "tx", "--data", "{bad", "--chainid", "1", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("invalid_input");
+    expect(r.stderr).not.toContain("invalid_json");
+  });
+
+  it("$ref resolution keeps the property's own description over the $defs one in --help", async () => {
+    // account is {$ref: Address, description: "the initiating account…"} — the LOCAL description
+    // must win the merge (a swapped spread would show Address's generic "EVM address" instead).
+    const r = await runCli(["prepare", "phoenix", "--help"], { nowSeconds: NOW });
+    expect(r.stdout).toContain("--account <value>");
+    expect(r.stdout).toContain("the initiating account");
+  });
+
+  it("positionals are stable across every leaf — $ref resolution must never move them", async () => {
+    const expected: Array<[string[], string]> = [
+      [["capabilities"], "Usage: ch capabilities [options]"],
+      [["query"], "Usage: ch query [options] [resource]"],
+      [["compute"], "Usage: ch compute [options]"],
+      [["decode"], "Usage: ch decode [options] [kind]"],
+      [["track"], "Usage: ch track [options] [mode]"],
+      [["submit"], "Usage: ch submit [options] [chainId]"],
+      [["prepare", "phoenix"], "Usage: ch prepare phoenix [options] [chainId]"],
+      [["prepare", "orders"], "Usage: ch prepare orders [options] [chainId]"],
+      [["prepare", "market"], "Usage: ch prepare market [options] [chainId]"],
+    ];
+    for (const [path, usage] of expected) {
+      const r = await runCli([...path, "--help"], { nowSeconds: NOW });
+      expect(r.stdout, path.join(" ")).toContain(usage);
+    }
+  });
+
   it("invalid JSON input → exit 2", async () => {
     const r = await runCli(["decode", "--json", "{not json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.invalid);
