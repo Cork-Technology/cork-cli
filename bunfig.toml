@@ -3,3 +3,11 @@
 # so a compromised patch release cannot enter through a routine reinstall. `bun add`
 # saves exact versions; upgrades are deliberate edits reviewed like code.
 exact = true
+
+[install.security]
+# Socket scan on every resolution that would write new packages to disk — the moment a
+# compromise could actually enter, given the exact pins above. Keyless free mode (no
+# account; SOCKET_API_TOKEN optional for org policies). Deliberately fail-closed: an
+# unreachable Socket API blocks the install rather than under-reporting. Full-lockfile
+# sweep on demand: `bun pm scan`.
+scanner = "@socketsecurity/bun-security-scanner"

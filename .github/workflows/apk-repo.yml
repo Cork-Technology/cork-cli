@@ -38,11 +38,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - uses: aquaproj/aqua-installer@v4
+      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
           aqua_version: v2.53.5
 
@@ -71,7 +71,7 @@ jobs:
           rm -f melange.rsa
           ls -l "packages/${{ matrix.arch }}/"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: apk-${{ matrix.arch }}
           path: packages/${{ matrix.arch }}/*.apk*
@@ -85,8 +85,8 @@ jobs:
     permissions:
       contents: write # pushes the gh-pages branch
     steps:
-      - uses: actions/checkout@v4 # main: for packaging/{aqua.yaml,melange.rsa.pub}
-      - uses: aquaproj/aqua-installer@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 — main: for packaging/{aqua.yaml,melange.rsa.pub}
+      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
           aqua_version: v2.53.5
 
@@ -99,11 +99,11 @@ jobs:
           }
           mkdir -p site/apk/x86_64 site/apk/aarch64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: apk-x86_64
           path: incoming/x86_64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: apk-aarch64
           path: incoming/aarch64
@@ -152,8 +152,8 @@ jobs:
       # The pushed image digest, for phala-deploy (and anyone else downstream).
       digest: ${{ steps.publish.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aquaproj/aqua-installer@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
           aqua_version: v2.53.5
 
@@ -199,7 +199,7 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest the image digest
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
@@ -218,8 +218,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
