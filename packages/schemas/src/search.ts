@@ -71,7 +71,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "rollover-intent", text: "rollover intent erc-7683 settler roll position next expiry" },
   ],
   cork_prepare_market: [
-    { variant: "deploy-wrapper", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent price nav mode" },
+    { variant: "deploy-oracle", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent price nav mode" },
     { variant: "deploy-fixed-oracle", text: "deploy fixed rate oracle rateOverride create2 salted permissionless idempotent" },
   ],
   cork_track: [

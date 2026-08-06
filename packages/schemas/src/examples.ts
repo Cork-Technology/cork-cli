@@ -80,7 +80,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Signable rollover order (Arbitrum, ExactSettler, all-or-nothing)", input: { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "demo-roll-0001", action: { type: "rollover-intent", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", rolloverContract: DEMO_ACCOUNT, srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1795000000", fillDeadline: "1795604800" } } },
   ],
   cork_prepare_market: [
-    { title: "Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-wrapper", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", mode: "price" } } },
+    { title: "Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-oracle", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", mode: "price" } } },
     { title: "Unsigned fixed-rate-oracle deploy tx (keyed on the RATE, no pair; the oracle a FIXED order's rateOverride produces)", input: { chainId: 42161, clientRequestId: "demo-market-0002", action: { type: "deploy-fixed-oracle", rate: "1000000000000000000" } } },
   ],
   cork_track: [
@@ -178,8 +178,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   },
   cork_prepare_market: {
     status: "activated",
-    reason: "MarketRegistry 2.1.0 verified on-chain 2026-08-03 (Arbitrum One, full redeploy — every address changed): deploy-wrapper builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
-    variants: { "deploy-wrapper": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" } },
+    reason: "MarketRegistry 2.1.0 verified on-chain 2026-08-03 (Arbitrum One, full redeploy — every address changed): deploy-oracle builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
+    variants: { "deploy-oracle": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" } },
   },
   cork_track: {
     status: "activated",

@@ -52,7 +52,7 @@ plain reads — you sign/broadcast with your own stack.
 | 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare phoenix` → `exercise` / `exercise-other` |
 
 One piece of one-time prep per CA/REF pair comes before step 1: deploying the pair's rate oracle
-(`ch prepare market` → `deploy-wrapper`). It is permissionless, idempotent, and optional — a JIT
+(`ch prepare market` → `deploy-oracle`). It is permissionless, idempotent, and optional — a JIT
 fill deploys a missing oracle itself. After step 4 (or instead of it, near expiry) comes
 **rollover** — see "After the flow" below.
 
@@ -380,7 +380,7 @@ ch query market-predict --chainid 42161 --json \
 ```
 What to check:
 - **`oracle.deployed`** — if `false` the prediction still works (the fill deploys it itself), but you
-  can pre-deploy with `ch prepare market` → `deploy-wrapper` (permissionless, idempotent).
+  can pre-deploy with `ch prepare market` → `deploy-oracle` (permissionless, idempotent).
 - **`market.exists`** — `false` means the first fill creates the market; `true` means it's live.
 - **`corkSwapToken`** is the **cST** you'll buy; **`corkPrincipalToken`** is the cPT.
 - **`constraint`** — the four rate limits. These are literally what gets embedded in a signed order;

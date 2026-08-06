@@ -7,12 +7,12 @@ import { envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailab
 
 
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
- *  deploy-wrapper = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
+ *  deploy-oracle = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
  *  and a NAV wrapper at different addresses); deploy-fixed-oracle =
  *  MarketRegistry.deployFixedRateOracle(rate) (keyed on the RATE, no pair). Both are
  *  permissionless + idempotent on-chain; the pre-flight read is best-effort disclosure. */
 export async function handlePrepareMarket(
-  input: { chainId: ChainId; clientRequestId: string; action: { type: "deploy-wrapper"; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; mode?: "price" | "nav" } | { type: "deploy-fixed-oracle"; rate: string }; format: "concise" | "full" },
+  input: { chainId: ChainId; clientRequestId: string; action: { type: "deploy-oracle"; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; mode?: "price" | "nav" } | { type: "deploy-fixed-oracle"; rate: string }; format: "concise" | "full" },
   ctx: HandlerContext,
 ): Promise<Envelope> {
   const chainId = input.chainId;
@@ -81,7 +81,7 @@ export async function handlePrepareMarket(
   }
   return envelope({
     state: "ok",
-    data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
+    data: { kind: "deploy-oracle", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId,
     source: resolved ? "chain" : "config",
     warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings],

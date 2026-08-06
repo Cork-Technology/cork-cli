@@ -76,9 +76,9 @@
     },
     {
       "name": "cork_prepare_market",
-      "description": "Build an unsigned market-infrastructure tx. deploy-wrapper = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-wrapper\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
-      "descriptionTokensApprox": 178,
-      "inputSchemaSha256": "6646b82a7a1266bc38b25162584ee1645c5f41ec82505fde5ba6eac88abf0646",
+      "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
+      "descriptionTokensApprox": 177,
+      "inputSchemaSha256": "f9c7e3c228d2175521a835c883249f632e39c07387a857c6a4bfc1acb9ca3c72",
       "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
       "annotations": {
         "title": "Cork: build market-infrastructure tx",

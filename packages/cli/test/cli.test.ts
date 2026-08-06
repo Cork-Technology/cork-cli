@@ -159,8 +159,8 @@ describe("ch CLI", () => {
       [["decode"], "Usage: ch decode [options] [kind]"],
       [["track"], "Usage: ch track [options] [command] [mode]"],
       [["submit"], "Usage: ch submit [options] [command] [chainId]"],
-      [["prepare", "phoenix"], "Usage: ch prepare phoenix [options] [command] [chainId]"],
-      [["prepare", "orders"], "Usage: ch prepare orders [options] [command] [chainId]"],
+      [["prepare", "phoenix"], "Usage: ch prepare phoenix|pool [options] [command] [chainId]"],
+      [["prepare", "orders"], "Usage: ch prepare orders|order [options] [command] [chainId]"],
       [["prepare", "market"], "Usage: ch prepare market [options] [command] [chainId]"],
     ];
     for (const [path, usage] of expected) {
@@ -304,6 +304,32 @@ describe("variant subcommands (English-first grammar, 2026-08-06)", () => {
     expect(r.stderr).toBe("");
     expect(r.code).toBe(EXIT.ok);
     expect(JSON.parse(r.stdout).data.kind).toBe("authority-revoke"); // token from blob, type from subcommand
+  });
+
+  it("leaf aliases route: `prepare pool` is phoenix, `prepare order` is orders", async () => {
+    const r = await runCli(
+      ["prepare", "pool", "authority-revoke", "--chainid", "1", "--account", RCV, "--clientrequestid", "alias-0001", "--token", RCV, "--spender", RCV, "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.kind).toBe("authority-revoke");
+    const h = await runCli(["prepare", "order", "taker-fill", "--help"], { nowSeconds: NOW });
+    expect(h.stdout).toContain("Usage: ch prepare orders taker-fill");
+  });
+
+  it("the typo guard also covers alias paths", async () => {
+    const r = await runCli(["prepare", "pool", "exercize", "--chainid", "42161"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("did you mean 'exercise'");
+  });
+
+  it("the renamed deploy-oracle keeps its old CLI spelling as an alias", async () => {
+    const r = await runCli(
+      ["prepare", "market", "deploy-wrapper", "--chainid", "42161", "--clientrequestid", "alias-0002", "--collateral-asset", RCV, "--reference-asset", "0xc0ffee0000000000000000000000000000000002", "--json"],
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.kind).toBe("deploy-oracle");
   });
 
   it("chainId accepts network names — `--chainid arbitrum` means 42161", async () => {

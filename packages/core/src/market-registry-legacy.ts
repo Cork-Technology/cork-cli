@@ -203,7 +203,7 @@ export function deriveJitMarket(args: {
 }
 
 /** Unsigned MarketRegistry.deploy(ca, ref) calldata — permissionless + idempotent (an existing
- *  pair just returns the recorded wrapper). The `deploy-wrapper` prepare_market variant. */
+ *  pair just returns the recorded wrapper). The `deploy-oracle` prepare_market variant. */
 export function buildDeployOracleCall(ca: `0x${string}`, ref: `0x${string}`): `0x${string}` {
   return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [ca, ref] });
 }

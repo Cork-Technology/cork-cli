@@ -154,6 +154,12 @@ function levenshtein(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
+/** Friendlier leaf spellings: the codename-free / singular forms. Help shows both. */
+const LEAF_ALIASES: Record<string, string> = { phoenix: "pool", orders: "order" };
+
+/** Old variant spellings kept routable after a rename (schema advertises only the new name). */
+const VARIANT_ALIASES: Record<string, string[]> = { "deploy-oracle": ["deploy-wrapper"] };
+
 /** Network-name shorthand for chainId values: arbitrum → 42161. */
 const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbitrum: "42161", base: "8453", sepolia: "11155111" };
 
@@ -371,6 +377,8 @@ export async function runCli(
     };
 
     const cmd = baseOptions(parent.command(leafName(tool)).description(`[phase ${tool.phase}] ${tool.description}`));
+    const leafAlias = LEAF_ALIASES[leafName(tool)];
+    if (leafAlias !== undefined) cmd.alias(leafAlias);
     if (positional) cmd.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : `${positional} to act on`);
     const cmdRegistered = new Set<string>();
     for (const [name, node] of Object.entries(props)) {
@@ -539,9 +547,12 @@ export async function runCli(
     if (union) {
       {
         const variantNames = union.variants.map((v) => kebab(v.value));
+        const variantCanon = new Set([...variantNames, ...variantNames.flatMap((v) => VARIANT_ALIASES[v] ?? [])].map(canonicalise));
+        const specPaths = [[...tool.cliPath], ...(leafAlias !== undefined ? [[...tool.cliPath.slice(0, -1), leafAlias]] : [])];
+        for (const specPath of specPaths)
         unionSpecs.push({
-          path: [...tool.cliPath],
-          variants: new Set(variantNames.map(canonicalise)),
+          path: specPath,
+          variants: variantCanon,
           variantNames,
           ...(positional && props[positional]?.enum?.length
             ? {
@@ -562,6 +573,7 @@ export async function runCli(
             .command(kebab(v.value))
             .description(firstSentence(v.description ?? `${v.value} (see --explain)`)),
         );
+        for (const alias of VARIANT_ALIASES[kebab(v.value)] ?? []) sub.alias(alias);
         const subRegistered = new Set<string>();
         // Top-level fields ride as flags here (chainId included — the variant owns the slot).
         for (const [name, node] of Object.entries(props)) {

@@ -538,8 +538,8 @@ describe("cork_compute resolve-recipe (2.1.0: the recipe resolves its own constr
 });
 
 describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
-  it("deploy-wrapper defaults to PRICE mode (ordinal 0 in the calldata, disclosed) and flags an existing wrapper", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0001", action: { type: "deploy-wrapper", collateralAsset: CA, referenceAsset: REF } }, {
+  it("deploy-oracle defaults to PRICE mode (ordinal 0 in the calldata, disclosed) and flags an existing wrapper", async () => {
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0001", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF } }, {
       nowSeconds: 1n,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "lookupWrapper") {
@@ -559,8 +559,8 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
     expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
   });
 
-  it("deploy-wrapper mode 'nav' encodes ordinal 1; offline still builds with the gap disclosed", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0002", action: { type: "deploy-wrapper", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, { nowSeconds: 1n, resolveRpc: async () => null });
+  it("deploy-oracle mode 'nav' encodes ordinal 1; offline still builds with the gap disclosed", async () => {
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0002", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, { nowSeconds: 1n, resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     expect((env.data as { calldata: string }).calldata).toBe(encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [CA, REF, 1] }));
     expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);

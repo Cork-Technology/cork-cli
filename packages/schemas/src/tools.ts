@@ -500,7 +500,7 @@ export const PrepareMarketInput = z.object({
   chainId: ChainId,
   clientRequestId: ClientRequestId,
   action: z.discriminatedUnion("type", [
-    A("deploy-wrapper", {
+    A("deploy-oracle", {
       collateralAsset: Address,
       referenceAsset: Address,
       mode: z.enum(["price", "nav"]).optional().describe("which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"),
