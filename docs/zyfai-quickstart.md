@@ -111,7 +111,10 @@ Your user holds **cST** (the cover); Bond holds **cPT** (the underwriter's leg).
 ### Step 1 — Zyfai selects the asset and submits an RFQ (off-chain — only available via CLI or MCP)
 
 This step is entirely off-chain: choosing what to cover, deriving the market those choices name, and
-asking the supply side to price it. There is no UI for RFQs — the CLI/MCP is the way in.
+asking the supply side to price it. There is no UI for RFQs — the CLI/MCP is the way in. Or take the
+code route: fork the repository, or cherry-pick a subset of the typed per-tool handlers from
+[`packages/core/src/handlers`](https://github.com/Cork-Technology/cork-cli/tree/main/packages/core/src/handlers)
+straight into your own stack.
 
 Sections 1a–1d below are the fast path. If you want to understand *why* those four choices are the
 whole selection — and how the registry decides which markets are even possible — take the slower
