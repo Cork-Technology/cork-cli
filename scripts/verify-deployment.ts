@@ -1,11 +1,17 @@
 // Third-party verifier for the Phala Cloud deployment (packaging/VERIFY.md): proves that the CVM
 // answering at --cvm runs EXACTLY the attested image built from the tagged source — without
-// trusting Cork's word for any link in the chain. Six checks:
-//   (a) fetch the CVM's /attestation quote + event log (and /info app_compose)
-//   (b) verify the quote signature via Phala's verify API (dcap-qvl locally for trustless)
-//   (c) replay RTMR3: SHA384 chain from 48 zero bytes over the imr==3 events
-//   (d) SHA256 the served app_compose, compare to the event log's compose-hash event
-//   (e) assert every compose image is @sha256-pinned and equals the expected digest
+// trusting Cork's word for any link in the chain. Thin shell: all verdict logic lives in
+// packages/core/src/phala-attest.ts (unit- and mutation-tested); this file only does I/O.
+//
+// The six checks:
+//   (a) fetch the CVM's /attestation quote + event log, and /info app_compose
+//       (documented shapes: {quote, event_log, report_data}; tcb_info.app_compose)
+//   (b) quote signature via Phala's verify API — success is result.quote.verified, nothing
+//       weaker (dcap-qvl locally for the trustless alternative)
+//   (c) replay RTMR3 (SHA384 chain, 48 zero bytes, imr==3 events) and compare against the
+//       RTMR3 parsed LOCALLY from the signed quote bytes — no service response in this loop
+//   (d) SHA256 the served app_compose vs the event log's compose-hash event
+//   (e) every compose image @sha256-pinned and equal to the expected released digest
 //   (f) gh attestation verify oci://…@digest --repo <repo> (digest → tagged commit → source)
 //
 // Run:  bun scripts/verify-deployment.ts --cvm https://<cvm-host> --digest sha256:<64 hex> \
@@ -14,15 +20,11 @@
 // HONEST BOUNDARY: attestation proves the CODE. Runtime inputs are NOT attested — the remote
 // cork-defaults.json (zod-validated; the file lives in the attested repo), RPC responses, and
 // venue responses can all vary independently of the measured image.
-//
-// NOTE (pre-rehearsal): nothing has ever been deployed, so the exact wire shapes of the CVM
-// /attestation and Phala verify-API responses are parsed DEFENSIVELY with named failures — the
-// first rc rehearsal is expected to tighten them.
-import { createHash } from "node:crypto";
+import { checkComposeHash, checkImagePins, extractDockerComposeFile, parseTdxQuote, replayRtmr3, type RtmrEvent } from "../packages/core/src/phala-attest.ts";
 
 interface Args {
   cvm: string;
-  digest: string;
+  digest: `sha256:${string}`;
   repo: string;
   verifyApi: string;
 }
@@ -40,7 +42,7 @@ function parseArgs(): Args {
   }
   return {
     cvm: cvm.replace(/\/$/, ""),
-    digest,
+    digest: digest as `sha256:${string}`,
     repo: get("--repo") ?? "Cork-Technology/cork-cli",
     verifyApi: get("--verify-api") ?? "https://cloud-api.phala.com/api/v1/attestations/verify",
   };
@@ -52,30 +54,10 @@ function report(check: string, ok: boolean, detail: string) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${check} — ${detail}`);
 }
 
-function sha384(buf: Uint8Array): Buffer {
-  return createHash("sha384").update(buf).digest();
-}
-function hexToBytes(hex: string): Buffer {
-  return Buffer.from(hex.replace(/^0x/, ""), "hex");
-}
-
-/** Walk an unknown JSON value for the first string value under any of the given keys. */
-function findKey(v: unknown, keys: string[]): string | undefined {
-  if (v === null || typeof v !== "object") return undefined;
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (keys.includes(k) && typeof val === "string" && val.length > 0) return val;
-    const nested = findKey(val, keys);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
-}
-
-interface RawEvent {
-  imr: number;
-  event_type?: number;
-  digest: string;
-  event?: string;
-  event_payload?: string;
+async function getJson(url: string): Promise<Record<string, unknown>> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}`);
+  return (await res.json()) as Record<string, unknown>;
 }
 
 async function main() {
@@ -83,28 +65,31 @@ async function main() {
 
   // ── (a) fetch the CVM attestation + info ─────────────────────────────────────────────────
   let quote: string | undefined;
-  let events: RawEvent[] = [];
+  let events: RtmrEvent[] = [];
   let appCompose: string | undefined;
   try {
-    const att = (await (await fetch(`${args.cvm}/attestation`)).json()) as Record<string, unknown>;
-    quote = findKey(att, ["quote", "tdx_quote"]);
-    const rawLog = att.event_log ?? att.eventlog ?? findKey(att, ["event_log"]);
-    const parsedLog = typeof rawLog === "string" ? JSON.parse(rawLog) : rawLog;
-    if (Array.isArray(parsedLog)) events = parsedLog as RawEvent[];
-    report("a. attestation fetch", quote !== undefined && events.length > 0, `quote ${quote ? `${quote.length} hex chars` : "MISSING"}, ${events.length} event-log entries`);
+    const att = await getJson(`${args.cvm}/attestation`);
+    if (typeof att.quote === "string" && att.quote.length > 0) quote = att.quote;
+    // Documented: event_log is a JSON-encoded array (some builds inline it as an array).
+    const rawLog = att.event_log;
+    const parsedLog: unknown = typeof rawLog === "string" ? JSON.parse(rawLog) : rawLog;
+    if (Array.isArray(parsedLog)) events = parsedLog as RtmrEvent[];
+    report("a. attestation fetch", quote !== undefined && events.length > 0, `quote ${quote ? `${quote.length} hex chars` : "MISSING (.quote)"}, ${events.length} event-log entries`);
   } catch (err) {
-    report("a. attestation fetch", false, `GET ${args.cvm}/attestation failed: ${err instanceof Error ? err.message : String(err)}`);
+    report("a. attestation fetch", false, `${args.cvm}/attestation: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
-    const info = (await (await fetch(`${args.cvm}/info`)).json()) as Record<string, unknown>;
-    appCompose = typeof info.app_compose === "string" ? info.app_compose : findKey(info, ["app_compose"]);
-    if (appCompose === undefined) report("a2. /info app_compose", false, "no app_compose field in /info response");
+    const info = await getJson(`${args.cvm}/info`);
+    // Documented path: tcb_info.app_compose — tcb_info arrives as an object or a JSON string.
+    const tcb: unknown = typeof info.tcb_info === "string" ? JSON.parse(info.tcb_info) : info.tcb_info;
+    const compose = (tcb as Record<string, unknown> | null | undefined)?.app_compose;
+    if (typeof compose === "string" && compose.length > 0) appCompose = compose;
+    if (appCompose === undefined) report("a2. /info app_compose", false, "no tcb_info.app_compose in the /info response");
   } catch (err) {
-    report("a2. /info app_compose", false, `GET ${args.cvm}/info failed: ${err instanceof Error ? err.message : String(err)}`);
+    report("a2. /info app_compose", false, `${args.cvm}/info: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── (b) quote signature via Phala's verify API (dcap-qvl locally for trustless) ──────────
-  let attestedRtmr3: string | undefined;
+  // ── (b) quote signature via Phala's verify API ───────────────────────────────────────────
   if (quote !== undefined) {
     try {
       const res = await fetch(args.verifyApi, {
@@ -112,53 +97,41 @@ async function main() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ hex: quote.startsWith("0x") ? quote : `0x${quote}` }),
       });
-      const body = (await res.json()) as Record<string, unknown>;
-      // Defensive: the API reports signature validity + the parsed TD report (rtmr values).
-      const okFlag = body.success === true || body.verified === true || findKey(body, ["status"]) === "UpToDate" || res.ok;
-      attestedRtmr3 = findKey(body, ["rtmr3", "rt_mr3"])?.replace(/^0x/, "");
-      report("b. quote signature (Phala verify API)", okFlag && attestedRtmr3 !== undefined, okFlag ? `verified; rtmr3 ${attestedRtmr3 ?? "NOT FOUND in response — cannot anchor the replay"}` : `verify API HTTP ${res.status}`);
+      const body = (await res.json()) as { quote?: { verified?: unknown } };
+      // The documented success signal — and ONLY it. (HTTP 200 alone proves the API answered,
+      // not that the signature verified; treating it as success was a bug this rewrite fixes.)
+      const verified = body.quote?.verified === true;
+      report("b. quote signature (Phala verify API)", verified, verified ? "quote.verified = true" : `quote.verified was ${JSON.stringify(body.quote?.verified)} (HTTP ${res.status}); trustless alternative: dcap-qvl verify`);
     } catch (err) {
-      report("b. quote signature (Phala verify API)", false, `POST ${args.verifyApi} failed: ${err instanceof Error ? err.message : String(err)} (trustless alternative: dcap-qvl verify)`);
+      report("b. quote signature (Phala verify API)", false, `POST ${args.verifyApi}: ${err instanceof Error ? err.message : String(err)} (trustless alternative: dcap-qvl verify)`);
     }
   } else {
     report("b. quote signature (Phala verify API)", false, "no quote to verify");
   }
 
-  // ── (c) RTMR3 replay: SHA384 chain from 48 zero bytes over imr==3 events ─────────────────
-  if (events.length > 0) {
-    let rtmr = Buffer.alloc(48, 0);
-    let count = 0;
-    for (const e of events) {
-      if (e.imr !== 3) continue;
-      rtmr = sha384(Buffer.concat([rtmr, hexToBytes(e.digest)]));
-      count++;
+  // ── (c) RTMR3 replay vs the register parsed LOCALLY from the signed quote bytes ──────────
+  if (quote !== undefined && events.length > 0) {
+    try {
+      const parsed = parseTdxQuote(quote);
+      const replayed = replayRtmr3(events);
+      const ok = replayed === parsed.rtmr3.toLowerCase();
+      report("c. RTMR3 replay", ok, ok ? `event log replays to the quote's RTMR3 (${replayed.slice(0, 16)}…)` : `replayed ${replayed.slice(0, 16)}… ≠ quote rtmr3 ${parsed.rtmr3.slice(0, 16)}…`);
+    } catch (err) {
+      report("c. RTMR3 replay", false, err instanceof Error ? err.message : String(err));
     }
-    const replayed = rtmr.toString("hex");
-    const ok = attestedRtmr3 !== undefined && replayed === attestedRtmr3.toLowerCase();
-    report("c. RTMR3 replay", ok, `${count} imr==3 events → ${replayed.slice(0, 16)}… ${ok ? "matches the quote" : `does NOT match attested ${attestedRtmr3?.slice(0, 16) ?? "?"}…`}`);
   } else {
-    report("c. RTMR3 replay", false, "no event log");
+    report("c. RTMR3 replay", false, "needs both the quote and the event log");
   }
 
-  // ── (d) compose-hash: SHA256(served app_compose) == the event log's compose-hash event ───
+  // ── (d) compose-hash + (e) image digest pinning ──────────────────────────────────────────
   if (appCompose !== undefined) {
-    const served = createHash("sha256").update(appCompose).digest("hex");
-    const ev = events.find((e) => e.event === "compose-hash");
-    const logged = ev?.event_payload?.replace(/^0x/, "").toLowerCase();
-    const ok = logged !== undefined && served === logged;
-    report("d. compose-hash", ok, ok ? `sha256(app_compose) ${served.slice(0, 16)}… matches the measured event` : `served ${served.slice(0, 16)}… vs logged ${logged?.slice(0, 16) ?? "(no compose-hash event)"}…`);
-
-    // ── (e) every compose image digest-pinned and equal to the expected digest ─────────────
+    const ch = checkComposeHash(appCompose, events);
+    report("d. compose-hash", ch.ok, ch.ok ? `sha256(app_compose) matches the measured event (${ch.served.slice(0, 16)}…)` : `served ${ch.served.slice(0, 16)}… vs logged ${ch.logged?.slice(0, 16) ?? "(no compose-hash event)"}…`);
     try {
-      const composeDoc = JSON.parse(appCompose) as Record<string, unknown>;
-      const dockerCompose = findKey(composeDoc, ["docker_compose_file"]) ?? appCompose;
-      const images = [...dockerCompose.matchAll(/image:\s*["']?([^\s"']+)/g)].map((m) => m[1]!);
-      const unpinned = images.filter((i) => !/@sha256:[0-9a-f]{64}$/.test(i));
-      const wrong = images.filter((i) => /@sha256:/.test(i) && !i.endsWith(`@${args.digest}`));
-      const ok2 = images.length > 0 && unpinned.length === 0 && wrong.length === 0;
-      report("e. image digest pinning", ok2, ok2 ? `${images.length} image(s), all pinned to ${args.digest.slice(0, 23)}…` : `images=${JSON.stringify(images)} unpinned=${unpinned.length} wrong-digest=${wrong.length} (expected ${args.digest})`);
+      const pins = checkImagePins(extractDockerComposeFile(appCompose), args.digest);
+      report("e. image digest pinning", pins.ok, pins.ok ? `${pins.images.length} image(s), all pinned to ${args.digest.slice(0, 23)}…` : `images=${JSON.stringify(pins.images)} unpinned=${pins.unpinned.length} wrong-digest=${pins.wrongDigest.length} (expected ${args.digest})`);
     } catch (err) {
-      report("e. image digest pinning", false, `could not parse app_compose: ${err instanceof Error ? err.message : String(err)}`);
+      report("e. image digest pinning", false, err instanceof Error ? err.message : String(err));
     }
   } else {
     report("d. compose-hash", false, "no app_compose served");

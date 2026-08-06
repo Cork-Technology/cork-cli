@@ -22,7 +22,10 @@ bun scripts/verify-deployment.ts \
   --repo Cork-Technology/cork-cli
 ```
 
-The script performs the six checks below and exits non-zero if any fails.
+The script performs the six checks below and exits non-zero if any fails. It is a thin I/O shell:
+every verdict computation (RTMR3 replay, TDX quote parsing, compose-hash, digest-pin checks)
+lives in `packages/core/src/phala-attest.ts`, unit-tested against a real dstack CVM quote and
+covered by mutation probes (`bun run test:mutation`).
 
 ## The six checks
 
@@ -30,13 +33,17 @@ The script performs the six checks below and exits non-zero if any fails.
    runtime event log; `GET <cvm>/info` returns the effective `app_compose` (docker-compose +
    metadata) the CVM booted with.
 2. **Verify the quote signature** — POST the quote to Phala's verify API
-   (`https://cloud-api.phala.com/api/v1/attestations/verify`). Trust-minimized alternative:
+   (`https://cloud-api.phala.com/api/v1/attestations/verify`, body `{"hex": quote}`); success is
+   `result.quote.verified === true` and nothing weaker. Trust-minimized alternative:
    [dcap-qvl](https://github.com/Phala-Network/dcap-qvl) locally against Intel's PCS — no Phala
    service in the loop.
 3. **Replay RTMR3** — the CVM measures boot-time facts into RTMR3 via a hardware event chain:
-   starting from 48 zero bytes, `RTMR3 = SHA384(RTMR3 || event.digest)` over every event with
-   `imr == 3` (`compose-hash`, `instance-id`, `key-provider`, …). The replayed value must equal
-   the RTMR3 inside the signed quote — proving the event log is the one the hardware measured.
+   starting from 48 zero bytes, `RTMR3 = SHA384(RTMR3 || event.digest)` (digest right-padded to
+   48 bytes if shorter) over every event with `imr == 3` (`compose-hash`, `instance-id`,
+   `key-provider`, …), in log order. The replayed value must equal the RTMR3 **parsed locally
+   from the signed quote bytes** (TDX DCAP v4/v5 layout; `packages/core/src/phala-attest.ts`,
+   anchored to a real dstack CVM quote and mutation-tested) — no verification service sits in
+   this comparison, so a lying service cannot vouch for a doctored event log.
 4. **Compose hash** — `SHA256(app_compose)` as served by `/info` must equal the event log's
    `compose-hash` event payload. Together with (3), this proves the served compose is the
    measured compose.
