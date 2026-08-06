@@ -202,8 +202,8 @@ ch capabilities
 ch query protocol-config
 ch query registry-assets --chainid 42161
 
-# the canonical wire shape still works, and still answers in JSON
-ch query --json '{"resource":"protocol-config"}'
+# the same fields can ride in one JSON blob (flags override blob keys); bare --json = JSON output
+ch query protocol-config --input '{"chainId":42161}' --json
 
 ch compute --explain          # plain English: every parameter, unions unfolded
 ch compute --explain --json   # the same contract as JSON Schema
@@ -230,7 +230,8 @@ ch query market --chainid 42161 --filters '{"poolId":"0xd68978…fe259"}'
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
 spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag. Object-valued
-fields (`--filters`, `--params`, `--action`) take a JSON string.
+fields (`--filters`, `--params`, `--action`) take a JSON string; union-typed fields accept a raw
+string too (`ch decode tx --data 0x…` — no quoting gymnastics).
 
 Every tool accepts an optional `"format"` — `"concise"` (the default) or `"full"` for the verbose
 envelope. Exit codes map the envelope state so scripts can branch: `0` ok · `2` invalid input · `3`

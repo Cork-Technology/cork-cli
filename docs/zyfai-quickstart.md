@@ -86,9 +86,15 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   **sUSDe / dUSDC** market derived in step 1c — that market doesn't exist yet, so run the derivation
   yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real and
   runnable today.
-- Passing input via **`--json`** is what makes `ch` emit JSON (already indented — the `| jq .`
-  pipes are cosmetic; drop them if you don't have `jq`). A bare command without `--json` prints a
-  human-readable prose rendering instead.
+- **Input goes in as flags named after the tool's own schema fields.** The first required scalar
+  can be a positional (`ch query market-predict …`, `ch prepare phoenix 42161 …`), scalars are
+  plain flags (`--chainid 42161` — spelling is normalised, so `--chain-id` works too), and
+  object-valued fields take a JSON string as the flag value (`--filters '{…}'`, `--action '{…}'`).
+  Every command below also shows a second, **alternative style**: scalars as flags plus the
+  remaining fields in one `--input '{…}'` blob (flags override blob keys, so a blob is reusable).
+- **Output is human-readable prose by default.** Add a bare `--json` to get the raw result envelope
+  instead — the commands below do that wherever the walkthrough dissects the response, and the
+  shown responses are that JSON (trimmed).
 
 The pair used throughout, for reference:
 
@@ -113,19 +119,29 @@ List the assets the registry approves. Each entry self-describes its price/NAV s
 metadata:
 
 ```sh
-ch query --json '{"resource":"registry-assets","chainId":42161}' | jq .
+ch query registry-assets --chainid 42161
+# alternative — same fields, non-positionals as one blob:
+ch query registry-assets --input '{"chainId":42161}'
 ```
-```jsonc
-{ "state": "ok", "data": {
-  "registry": "0x47C3AF38435Db64D9400c30575E4c10482c0752D", "contractsVersion": "2.1.0",
-  "count": 11, "items": [
-    { "address": "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", "name": "sUSDe",
-      "priceSource": { "sourceType": "PRICE", "sourceInterface": "AGGREGATOR_V3", "denomination": "USD" },
-      "token": { "decimals": 18, "symbol": "sUSDe" } },
-    { "address": "0x444868B6e8079ac2c55eea115250f92C2b2c4D14", "name": "dUSDC",
-      "token": { "decimals": 6, "symbol": "dUSDC" } }
-    // …11 total: sUSDS, weETH, wstETH, dWETH, fUSDT, USDACM, fWETH, arbUSD, sUSDai, …
-] } }
+```text
+OK  ·  ch query  ·  chain 42161
+
+resource               registry-assets
+registry               0x47C3AF38435Db64D9400c30575E4c10482c0752D
+contractsVersion       2.1.0
+count                  11
+items
+  [2]  sUSDe
+    address            0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2
+    priceSource
+      sourceType       PRICE
+      sourceInterface  AGGREGATOR_V3
+      denomination     USD
+    token
+      decimals         18
+      symbol           sUSDe
+  …                    (11 total: sUSDS, weETH, wstETH, dWETH, fUSDT, USDACM, dUSDC [6 dec],
+                        fWETH, arbUSD, sUSDai — dUSDC at 0x444868B6e8079ac2c55eea115250f92C2b2c4D14)
 ```
 Pick an asset your users actually hold. This walkthrough uses **dUSDC** — the pair the live RFQ flow
 covers today. (If an asset isn't on this list it isn't coverable yet — registering it is a Cork-side
@@ -137,15 +153,26 @@ The recipe sets how the market's rate may move, which is what defines the cover.
 recipe is an **approved contract address** that self-reports its rules:
 
 ```sh
-ch query --json '{"resource":"registry-recipes","chainId":42161}' | jq .
+ch query registry-recipes --chainid 42161
+# alternative — same fields, non-positionals as one blob:
+ch query registry-recipes --input '{"chainId":42161}'
 ```
-```jsonc
-{ "state": "ok", "data": { "contractsVersion": "2.1.0", "count": 2, "items": [
-  { "address": "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", "source": "price",
-    "description": "Liquidity: the widest rate window CorkPoolManager will accept. rateMin is 1 wei always, rateMax is twice the anchor rate, rateChangePerDayMax is the whole anchor rate…" },
-  { "address": "0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682", "source": "fixed",
-    "description": "Fixed rate: the market's rate is whatever immutable FixedRateOracle the order names, and it can never move.…" }
-] } }
+```text
+OK  ·  ch query  ·  chain 42161
+
+resource               registry-recipes
+contractsVersion       2.1.0
+count                  2
+items
+  [1]  0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D
+    source             price
+    description        Liquidity: the widest rate window CorkPoolManager will accept. rateMin is
+                       1 wei always, rateMax is twice the anchor rate, rateChangePerDayMax is the
+                       whole anchor rate…
+  [2]  0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682
+    source             fixed
+    description        Fixed rate: the market's rate is whatever immutable FixedRateOracle the
+                       order names, and it can never move.…
 ```
 - **liquidity** (`0xA39d…1234D`) — the rate follows the price oracle, but only inside wide speed
   limits. **This is what the live RFQ flow uses** (RFQ mode `liquidity_only`).
@@ -162,7 +189,11 @@ cST/cPT addresses, oracle, and resolved constraint — before anything exists on
 
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
-ch query --json "{\"resource\":\"market-predict\",\"chainId\":42161,\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}}" | jq .
+ch query market-predict --chainid 42161 --json \
+  --filters "{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}"
+# alternative — non-scalars in one blob (--json here is the bare OUTPUT flag on both):
+ch query market-predict --chainid 42161 --json \
+  --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}}"
 ```
 ```jsonc
 { "state": "ok", "data": {
@@ -198,7 +229,11 @@ envelope (pair, mode, size, acceptable expiry window) that underwriters answer a
 
 ```sh
 VU=$(date -u -d '+1 hour' +%s)
-ch submit --json "{\"chainId\":42161,\"clientRequestId\":\"rfq-0001\",\"action\":{\"type\":\"rfq-open\",\"requester\":\"0xYOUR_SAFE\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"collateralAsset\":{\"exact\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\"},\"modes\":[\"liquidity_only\"],\"packageIds\":[\"balanced-v1\"],\"expiryWindow\":{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP},\"marketTemplate\":{\"inline\":{\"oracle_recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}},\"notionalAssets\":\"…\",\"validUntil\":$VU,\"signature\":\"0x…\"}}" | jq .
+ch submit 42161 --clientrequestid rfq-0001 --json \
+  --action "{\"type\":\"rfq-open\",\"requester\":\"0xYOUR_SAFE\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"collateralAsset\":{\"exact\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\"},\"modes\":[\"liquidity_only\"],\"packageIds\":[\"balanced-v1\"],\"expiryWindow\":{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP},\"marketTemplate\":{\"inline\":{\"oracle_recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}},\"notionalAssets\":\"…\",\"validUntil\":$VU,\"signature\":\"0x…\"}"
+# alternative — the whole remainder in one blob behind the positional chainId:
+ch submit 42161 --clientrequestid rfq-0001 --json \
+  --input "{\"action\":{ …the same action object… }}"
 ```
 Conventions the live flow uses (all visible in today's open RFQs):
 - **`modes: ["liquidity_only"]`** and **`packageIds: ["balanced-v1"]`** — the live package. Confirm
@@ -212,8 +247,10 @@ Conventions the live flow uses (all visible in today's open RFQs):
 Then watch for answers — this is also how you'd browse what others are asking:
 
 ```sh
-ch query --json '{"resource":"rfqs","chainId":42161}' | jq .                       # all open RFQs (17 open right now)
-ch query --json '{"resource":"rfqs","chainId":42161,"filters":{"rfqId":"rfq_…"}}'  # one RFQ with all its answers
+ch query rfqs --chainid 42161                                    # all open RFQs (17 open right now)
+ch query rfqs --chainid 42161 --filters '{"rfqId":"rfq_…"}'      # one RFQ with all its answers
+# alternative — filters in the blob instead of a flag:
+ch query rfqs --chainid 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
 ```
 
 ---
@@ -247,7 +284,11 @@ commit — `decode order` unpacks the adapter, recipe, carried constraint, and p
 order's own bytes:
 
 ```sh
-ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}}' | jq .
+ch query orderbook --chainid 42161 --json \
+  --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
+# alternative:
+ch query orderbook --chainid 42161 --json \
+  --input '{"filters":{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}}'
 ```
 ```jsonc
 { "items": [ {   // a live SELL row from today's book, trimmed
@@ -266,7 +307,9 @@ The venue row carries the order's own struct fields (`salt`/`maker`/…/`extensi
 them straight to the decoder:
 
 ```sh
-ch decode --json '{"kind":"order","chainId":42161,"data":{…the signed order row…}}' | jq .
+ch decode order --chainid 42161 --data '{…the signed order row…}' --json
+# alternative:
+ch decode order --chainid 42161 --input '{"data":{…the signed order row…}}' --json
 ```
 ```jsonc
 { "state": "ok", "data": { "jit": {          // decoded live from the row above
@@ -288,13 +331,20 @@ for you. Three commands: re-verify, build, dry-run.
 
 ```sh
 # 1. re-verify the market on-chain (the book is discovery only)
-ch query --json '{"resource":"market","chainId":42161,"filters":{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}}' | jq .
+ch query market --chainid 42161 --json \
+  --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
-ch prepare orders --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05","fillMakingAmount":"100000000000000"}}' | jq .
+ch prepare orders 42161 --account 0xYOUR_SAFE --clientrequestid buy-0001 --json \
+  --action '{"type":"taker-fill","orderHash":"0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05","fillMakingAmount":"100000000000000"}'
+#    (alternative — remainder in one blob behind the positional chainId:)
+ch prepare orders 42161 --json \
+  --input '{"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3…df05","fillMakingAmount":"100000000000000"}}'
 
 # 3. dry-run: does it revert at current state? (paste the artifact object from step 2's output)
-ch track --json '{"mode":"simulate","chainId":42161,"subject":{"kind":"artifact","artifact":{…}}}' | jq .
+ch track simulate --chainid 42161 --subject '{"kind":"artifact","artifact":{…}}' --json
+#    (alternative:)
+ch track simulate --chainid 42161 --input '{"subject":{"kind":"artifact","artifact":{…}}}' --json
 ```
 Then **sign the calldata with your own Safe stack and broadcast.** The fill is atomic: the adapter
 creates the market if it's new and mints the cST to your Safe, pulling the CA premium from you in
@@ -329,7 +379,11 @@ counterparty needed, so it works exactly when the market is stressed.
 
 ```sh
 # replace 0xYOUR_SAFE (used for both account and receiver); REF (dUSDC) is 6-dec, CA (sUSDe) 18-dec
-ch prepare phoenix --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}' | jq .
+ch prepare phoenix 42161 --account 0xYOUR_SAFE --clientrequestid exercise-0001 --json \
+  --action '{"type":"exercise","poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}'
+# alternative — remainder in one blob behind the positional chainId:
+ch prepare phoenix 42161 --json \
+  --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x6b02…7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}'
 ```
 Sign with your Safe stack, and route the call through your `*ForSelf` adapter so `receiver` is forced
 to the Safe (§5, item A). Run it with `--rpc-url <your node>` so the funding legs resolve — without
@@ -356,10 +410,18 @@ a two-party trade, and the roles are easy to mix up:
 Find open rollover orders:
 
 ```sh
-ch query --json '{"resource":"flows","chainId":42161,"filters":{"kind":"orders"}}' | jq .
+ch query flows --chainid 42161 --filters '{"kind":"orders"}'
+# alternative:
+ch query flows --chainid 42161 --input '{"filters":{"kind":"orders"}}'
 ```
-```jsonc
-{ "state": "ok", "data": { "kind": "orders", "count": 0, "items": [] } }  // none open right now — a normal result
+```text
+OK  ·  ch query  ·  chain 42161
+
+resource               flows
+kind                   orders
+count                  0          # none open right now — a normal result
+items
+  (none)
 ```
 To fill one, a single atomic settler call does three things:
 1. **Fronts the user's expiring srcCST** (pulled from the user's Safe).
@@ -405,8 +467,10 @@ claude mcp add cork-defi -- "$(which bun)" /path/to/cork-helper-cli/packages/mcp
 # health check — a good install returns exactly 9 tools:
 #   call cork_capabilities with no args
 ```
-**CLI:** put `bin/` on PATH → `ch <command> [--json '<input>'] [--rpc-url <url>] [--explain]`.
-Runtime is **Bun** (pinned), not Node.
+**CLI:** put `bin/` on PATH → `ch <command> [positional] [--flags…] [--json] [--rpc-url <url>]
+[--explain]`. Input goes in as flags named after the schema's own fields (objects as JSON-string
+flag values), or as one blob via `--input '{…}'`; a bare `--json` switches the output from prose to
+the raw envelope. Runtime is **Bun** (pinned), not Node.
 
 **The 9 tools:** `capabilities` (searchable manual + maturity map — start here), `query` (state
 reads), `compute` (deterministic math: swap/unwind rate, impairment floor, recipe resolution),
@@ -417,7 +481,7 @@ orders, rollover orders, and the RFQ open/answer pair from step 1d).
 
 **Every prepared artifact tells you how to finish it.** Prepare results carry a `data.execution`
 block — sign method (`eth_signTransaction` vs `eth_signTypedData_v4`), the ordered next steps, and a
-pointer to the full guide: `ch capabilities --json '{"topic":"signing"}'` covers client-side signing,
+pointer to the full guide: `ch capabilities --topic signing` covers client-side signing,
 validating signed bytes with `ch decode` (kind `tx` recovers the signer and labels the target before
 you broadcast), and broadcasting through your own RPC.
 
@@ -559,7 +623,7 @@ description plus a per-parameter breakdown with variants unfolded — then exits
 
 ```sh
 ch compute --explain            # human-readable contract
-ch compute --explain --json | jq .   # the raw JSON schema
+ch compute --explain --json          # the raw JSON schema
 ```
 ```jsonc
 {
@@ -587,10 +651,12 @@ decimal string), so you rarely have to guess a value's shape.
 
 ```sh
 ch capabilities                                          # human summary; add --json for the machine-readable map
-ch capabilities --json | jq .                            # maturity of every tool + variant (what's live vs gated)
-ch capabilities --json '{"topic":"compute"}' | jq .      # full docs for one tool
-ch capabilities --json '{"topic":"signing"}' | jq .      # the sign→validate→broadcast guide for prepared artifacts
-ch capabilities --json '{"search":"swap rate"}' | jq .   # keywords -> matching tool/variant + ready-to-run examples
+ch capabilities --json                                   # maturity of every tool + variant, as JSON
+ch capabilities --topic compute                          # full docs for one tool
+ch capabilities --topic signing                          # the sign→validate→broadcast guide for prepared artifacts
+ch capabilities --search "swap rate" --json              # keywords -> matching tool/variant + ready-to-run examples
+# alternative — the same fields as one blob:
+ch capabilities --input '{"search":"swap rate"}' --json
 ```
 The `search` result hands you example inputs you can paste straight into the command:
 ```jsonc
@@ -602,7 +668,8 @@ The `search` result hands you example inputs you can paste straight into the com
     // …more examples
   ] } ] } }
 ```
-Copy the `input` object directly into `ch compute --json '<that object>'`.
+Lift the `input` object's fields straight onto the command line (`ch compute --chainid 42161
+--params '{…}'`) — or run the object verbatim with `ch compute --input '<that object>'`.
 
 ### 7c. Install the MCP server into Claude Code
 
@@ -626,23 +693,24 @@ Because the MCP tools and the CLI commands are the same core with identical inpu
 follow:
 1. You can ask Claude Code in plain language and it will call the right tool with the right
    parameters.
-2. **An MCP tool's input *is* the CLI `--json` payload.** So Claude Code can also hand you the exact
-   `ch … --json '…'` line to drop into a script — and any `--json` you have will run verbatim as an
-   MCP call.
+2. **An MCP tool's input fields *are* the CLI's flags.** The flag names are the schema's own field
+   names, and an MCP input object runs verbatim via `--input '<object>'` — so Claude Code can hand
+   you the exact `ch …` line (flags or blob form) to drop into a script, and any input blob you
+   have works as an MCP call unchanged.
 
 Example prompts, with the `cork-defi` server installed:
 
 > "Using cork-defi, derive the sUSDe / dUSDC market on Arbitrum that expires in 7 days, and give
 > me the poolId and cST address."
 
-> "What's the `ch` command with `--json` to build an unsigned exercise bundle — 1000 cST out of pool
+> "What's the `ch` command to build an unsigned exercise bundle — 1000 cST out of pool
 > `0x…`, receiver my Safe `0x…`?"
 
 > "List the Cork registry recipes on Arbitrum and explain the difference between the fixed and
 > liquidity recipes for my cover."
 
 Claude Code will call `cork_query` / `cork_compute` / `cork_prepare_phoenix` as needed, and can print
-the equivalent `ch … --json` line because the payloads are identical. When in doubt, start it with
+the equivalent `ch` line because the payloads are identical. When in doubt, start it with
 *"call `cork_capabilities` first"* so it grounds itself in the live tool/variant list before acting.
 
 ---
