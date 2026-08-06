@@ -1,6 +1,6 @@
 // Split from handlers.ts (2026-08-05): cork_capabilities — discovery/introspection + the
 // CREATE2 verify topic. Pure config, no chain reads.
-import { findDocTopic, inputJsonSchema, MATURITY, REGISTRY, SCHEMA_VERSION, searchTools, TOOL_EXAMPLES, toolByName } from "@cork/schemas";
+import { DOC_TOPICS, findDocTopic, inputJsonSchema, MATURITY, REGISTRY, SCHEMA_VERSION, searchTools, TOOL_EXAMPLES, toolByName } from "@cork/schemas";
 import { verifyCreate2 } from "../create2.ts";
 import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER } from "../config.ts";
 import { envelope, type HandlerContext, unavailable } from "./shared.ts";
@@ -66,7 +66,12 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
     }
     const key = input.topic.toLowerCase();
     const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key);
-    if (!t) return unavailable(1, "unknown_topic", `no tool or doc topic matches '${input.topic}'; doc topics: signing (aliases: execute, broadcast, sign-and-broadcast) — else try search or omit args for the full list`, ctx);
+    if (!t) {
+      // The teaching list is DERIVED from DOC_TOPICS — a hardcoded copy here would drift the
+      // moment a topic is added, in the one message whose job is naming what exists.
+      const topics = Object.values(DOC_TOPICS).map((d) => `${d.name} (aliases: ${d.aliases.join(", ")})`).join("; ");
+      return unavailable(1, "unknown_topic", `no tool or doc topic matches '${input.topic}'; doc topics: ${topics} — else try search or omit args for the full list`, ctx);
+    }
     return envelope({ state: "ok", data: { ...card(t), examples: TOOL_EXAMPLES[t.name], inputSchema: inputJsonSchema(t.name), output: "Envelope" }, chainId: 1, source: "config", ctx });
   }
 

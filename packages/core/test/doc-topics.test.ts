@@ -29,10 +29,13 @@ describe("doc topic: signing", () => {
     expect(topic!.reference).toBe('cork_capabilities topic:"signing"');
   });
 
-  it("an unknown topic's teaching message names the doc topics", async () => {
+  it("an unknown topic's teaching message names every doc topic + alias (derived, not hardcoded)", async () => {
     const env = await runTool("cork_capabilities", { topic: "nonexistent" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]!.message).toContain("signing");
+    for (const t of Object.values(DOC_TOPICS)) {
+      expect(env.warnings[0]!.message).toContain(t.name);
+      for (const a of t.aliases) expect(env.warnings[0]!.message).toContain(a);
+    }
   });
 });
 
