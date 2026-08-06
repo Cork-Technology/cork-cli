@@ -2,11 +2,11 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { hashTypedData, isAddressEqual, keccak256, recoverAddress } from "viem";
 import { Envelope, SubmitInput } from "@cork/schemas";
-import { LOP_ADDRESSES, lopDomain } from "../orders.ts";
+import { ERC1271_MAGIC, erc1271Abi, LOP_ADDRESSES, lopDomain } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
-import { envelope, type HandlerContext, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getRpc, type HandlerContext, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
 
 const U160 = (1n << 160n) - 1n;
@@ -257,9 +257,36 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           });
         }
       }
+      const lopWarnings: Array<{ code: string; message: string }> = [];
       // [F3/K3] For an EOA maker, prove the signature is the maker's over THIS order before
-      // relaying (ERC-1271 contract signatures cannot be checked locally; the venue/chain do).
-      if (action.makerAccountType !== "ERC1271") {
+      // relaying. A contract maker (ERC-1271) cannot be ecrecovered — verify it with the SAME
+      // isValidSignature staticcall the fill performs, whenever an RPC resolves (best-effort:
+      // a missing RPC downgrades to a disclosed gap, a definitive rejection blocks the relay).
+      if (action.makerAccountType === "ERC1271") {
+        const resolved = await getRpc(ctx, chainId);
+        if (resolved) {
+          let magic: string | null | undefined;
+          try {
+            magic = await resolved.client.readContract({ address: orderMsg.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [orderHash, action.signature] });
+          } catch {
+            magic = undefined; // read failed (reverted/unreachable) — distinguished below
+          }
+          if (magic === undefined) {
+            lopWarnings.push({ code: "chain_read_failed", message: `the maker ${orderMsg.maker}'s isValidSignature staticcall failed (reverted or unreachable) — the ERC-1271 signature could not be pre-verified; the fill path runs this exact check, so an invalid signature would rest on the book unfillable` });
+          } else if (magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
+            return envelope({
+              state: "conflict",
+              data: { orderHash, maker: orderMsg.maker, isValidSignatureAnswer: magic },
+              chainId,
+              source: "chain",
+              warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the contract maker ${orderMsg.maker} rejected this signature (isValidSignature did not answer the ERC-1271 magic value) — NOT relayed; the fill path runs this exact staticcall, so the order could rest on the book but never fill` }],
+              ctx,
+            });
+          }
+        } else {
+          lopWarnings.push({ code: "chain_read_failed", message: "no RPC resolved — the ERC-1271 contract-maker signature was NOT pre-verified locally (an EOA signature would have been ecrecovered); the venue and the fill path still check it" });
+        }
+      } else {
         try {
           const recovered = await recoverAddress({ hash: orderHash, signature: action.signature });
           if (!isAddressEqual(recovered, orderMsg.maker)) {
@@ -287,7 +314,6 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // (4.1 = 4.1%), RFQ premiums are FRACTION strings ("0.041"). A sub-0.1% premium is the
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
       // orders can be legitimately tiny).
-      const lopWarnings: Array<{ code: string; message: string }> = [];
       if (action.premium > 0 && action.premium < 0.1) {
         lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present` });
       }

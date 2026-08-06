@@ -338,6 +338,14 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   // moment a leg referenced the signer (caught empirically 2026-08-06).
   const adapter = dep?.corkAdapter;
   const summary = legs ? summarizeBundle(legs, { adapter }) : ["(no calldata — a plain value transfer)"];
+  // A ForSelf adapter is INTEGRATOR-deployed, so its address can never be in the Cork book —
+  // when the calldata itself is a recognized ForSelf call, say so instead of a bare unknown.
+  if (legs && legs.length === 1 && legs[0]!.kind === "forself" && to !== null) {
+    const idx = warnings.findIndex((w) => w.code === "unknown_target");
+    if (idx >= 0) {
+      warnings[idx] = { code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract — but the calldata IS a Cork ForSelf adapter call ('${(legs[0] as { action: string }).action}'). ForSelf adapters are deployed by the INTEGRATOR, not Cork, so an unknown target is expected here: verify ${to} is your integrator's audited adapter (its CORK()/LOP() bindings must name the real protocols) before broadcasting` };
+    }
+  }
 
   const base = {
     kind: "tx" as const,

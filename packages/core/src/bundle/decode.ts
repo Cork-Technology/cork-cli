@@ -4,10 +4,12 @@
 import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
 import { bundlerLegAbi } from "./legs.ts";
+import { forSelfAbi } from "../forself.ts";
 import { decodeMulticall, isBundlerMulticall, type Call } from "./bundler3.ts";
 
 export type DecodedLeg =
   | { kind: "cork"; to: `0x${string}`; action: string; params: unknown; value: bigint; skipRevert: boolean }
+  | { kind: "forself"; to: `0x${string}`; action: string; params: unknown; value: bigint; skipRevert: boolean }
   | { kind: "leg"; to: `0x${string}`; fn: string; args: readonly unknown[]; value: bigint; skipRevert: boolean }
   | { kind: "bundle"; to: `0x${string}`; legs: DecodedLeg[]; value: bigint; skipRevert: boolean }
   | { kind: "unknown"; to: `0x${string}`; selector: `0x${string}`; data: `0x${string}`; value: bigint; skipRevert: boolean; note?: string };
@@ -26,6 +28,11 @@ const selectorMap = (abi: readonly unknown[]): Map<string, string> =>
 // selector -> name, computed once from each ABI.
 const CORK_SELECTORS = selectorMap(corkAdapterAbi);
 const LEG_SELECTORS = selectorMap(bundlerLegAbi);
+// The ForSelf example-adapter surface (integrator-deployed): selector-recognized so a caged
+// wallet's *ForSelf / fillOrderForSelf tx labels in validate-before-broadcast instead of
+// surfacing as UNREADABLE. Selector-based — the adapter ADDRESS is integrator config the
+// decoder cannot know.
+const FORSELF_SELECTORS = selectorMap(forSelfAbi);
 
 function decodeCall(c: Call, depth: number): DecodedLeg {
   const selector = c.data.slice(0, 10).toLowerCase() as `0x${string}`;
@@ -46,8 +53,12 @@ function decodeCall(c: Call, depth: number): DecodedLeg {
       const { functionName, args } = decodeFunctionData({ abi: bundlerLegAbi, data: c.data });
       return { kind: "leg", to: c.to, fn: functionName, args: args as readonly unknown[], value: c.value, skipRevert: c.skipRevert };
     }
+    if (FORSELF_SELECTORS.has(selector)) {
+      const { functionName, args } = decodeFunctionData({ abi: forSelfAbi, data: c.data });
+      return { kind: "forself", to: c.to, action: functionName, params: args[0], value: c.value, skipRevert: c.skipRevert };
+    }
   } catch (err) {
-    return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
+    return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
   }
   return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert };
 }

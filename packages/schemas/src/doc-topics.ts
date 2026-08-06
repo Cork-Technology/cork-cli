@@ -82,7 +82,10 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
   plain-English statement of what the bytes do, leg by leg.
 - Allowance prerequisites: a taker-fill needs the taker-asset allowance to the LOP;
   permit2-funded bundles need BOTH Permit2 layers in place (\`cork_query\`
-  resource:"account-state" shows both).
+  resource:"account-state" shows both). ForSelf-mode artifacts (\`forSelf\` on
+  \`cork_prepare_phoenix\` / taker-fill — for parameter-blind session-key wallets) invert
+  this: every allowance is granted to the INTEGRATOR-DEPLOYED ForSelf adapter itself, never
+  to the LOP or pool manager, and outputs are structurally delivered to the calling account.
 - The server reads chains through its own server-side RPC configuration; there is no per-call
   RPC override on the tool surface, and broadcasting is always client-side.`,
     searchText:

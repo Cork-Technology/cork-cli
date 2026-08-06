@@ -374,7 +374,11 @@ export interface FinalizedMakerOrder {
   recoveredSigner: `0x${string}`;
 }
 
-export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<FinalizedMakerOrder> {
+/** The signature-independent half of finalization: re-derive the hash from the exact order
+ *  bytes and check the salt↔extension binding OrderLib enforces at fill. Shared by the EOA
+ *  (ecrecover) and ERC-1271 (isValidSignature staticcall) verification paths, so the
+ *  reconstruction rules cannot drift between maker kinds. */
+export function reconstructMakerOrder(a: Omit<FinalizeMakerOrderArgs, "signature">): { orderHash: `0x${string}` } {
   const orderHash = hashLopOrder(a.chainId, a.lop, a.order);
   if (orderHash.toLowerCase() !== a.claimedOrderHash.toLowerCase()) {
     throw new Error(`reconstructed order hash ${orderHash} does not match the prepared orderHash ${a.claimedOrderHash}`);
@@ -385,12 +389,22 @@ export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<Fin
     const extLow = BigInt(keccak256(a.extension)) & U160;
     if (saltLow !== extLow) throw new Error("salt's low 160 bits are not bound to keccak256(extension) — this order would revert InvalidExtension at fill");
   }
+  return { orderHash };
+}
+
+export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<FinalizedMakerOrder> {
+  const { orderHash } = reconstructMakerOrder(a);
   const recoveredSigner = await recoverAddress({ hash: orderHash, signature: a.signature });
   if (!isAddressEqual(recoveredSigner, a.order.maker)) {
     throw new Error(`signature recovers to ${recoveredSigner}, not the order maker ${a.order.maker}`);
   }
   return { order: a.order, orderHash, signature: a.signature, extension: a.extension, recoveredSigner };
 }
+
+/** ERC-1271 magic value for `isValidSignature(bytes32,bytes)` — what OrderMixin's contract-
+ *  maker fill path requires the maker to answer. */
+export const ERC1271_MAGIC = "0x1626ba7e" as const;
+export const erc1271Abi = parseAbi(["function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4 magicValue)"]);
 
 const lopAbi = parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orderHash)"]);
 

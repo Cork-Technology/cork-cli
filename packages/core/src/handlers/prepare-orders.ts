@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, decodeExtensionFields, encodeExtensionFields, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, type TakerFillResult } from "../orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, type PermitParams, predictShares, readAdapterRoles, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
@@ -12,6 +12,7 @@ import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, jitValueGate, prepareJitLegacy } from "./jit.ts";
+import { prepareForSelfTakerFill } from "./forself.ts";
 import { resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
@@ -35,14 +36,46 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     }
     const m = p.typedData.message;
     try {
-      const finalized = await finalizeMakerOrder({
+      const orderArgs = {
         chainId,
         lop,
         order: { salt: BigInt(m.salt), maker: m.maker, receiver: m.receiver, makerAsset: m.makerAsset, takerAsset: m.takerAsset, makingAmount: BigInt(m.makingAmount), takingAmount: BigInt(m.takingAmount), makerTraits: BigInt(m.makerTraits) },
         claimedOrderHash: p.orderHash,
-        signature: action.signature,
         extension: p.extension,
-      });
+      };
+      // Maker kind decides the verification path: a CONTRACT maker (a Safe, the Zyfai shape)
+      // cannot be ecrecovered — the fill validates it with an isValidSignature staticcall, so
+      // finalization performs the SAME call. Code detection is an RPC read; without one, a
+      // contract maker's finalization fails honestly in the ecrecover branch below.
+      const { orderHash: reconstructedHash } = reconstructMakerOrder(orderArgs);
+      const finalizeWarnings: Array<{ code: string; message: string }> = [];
+      let makerAccountType: "EOA" | "ERC1271" = "EOA";
+      let recoveredSigner: `0x${string}` | null = null;
+      const resolved = await getRpc(ctx, chainId);
+      const makerCode = resolved ? await resolved.client.getCode({ address: m.maker }).catch(() => undefined) : undefined;
+      if (makerCode !== undefined && makerCode !== "0x") {
+        const magic = await resolved!.client
+          .readContract({ address: m.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [reconstructedHash, action.signature] })
+          .catch(() => null);
+        if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
+          return envelope({
+            state: "conflict",
+            data: { orderHash: reconstructedHash, maker: m.maker, makerAccountType: "ERC1271", isValidSignatureAnswer: typeof magic === "string" ? magic : null },
+            chainId,
+            source: "chain",
+            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the maker ${m.maker} is a CONTRACT account and its isValidSignature(orderHash, signature) did not answer the ERC-1271 magic value — the fill path runs this exact staticcall, so the order could rest on the book but never fill. NOT finalized. (For a Safe, the hash must have been approved/signed per its own ERC-1271 scheme.)` }],
+            ctx,
+          });
+        }
+        makerAccountType = "ERC1271";
+      } else {
+        const eoaFinalized = await finalizeMakerOrder({ ...orderArgs, signature: action.signature });
+        recoveredSigner = eoaFinalized.recoveredSigner;
+        if (makerCode === undefined) {
+          finalizeWarnings.push({ code: "chain_read_failed", message: "no RPC resolved to check whether the maker has code — the signature ecrecovers to the maker, so it is finalized as an EOA order; if the maker is actually a contract account, resubmit with an RPC available" });
+        }
+      }
+      const finalized = { order: orderArgs.order, orderHash: reconstructedHash, signature: action.signature, extension: p.extension };
       const submitInput = {
         chainId,
         clientRequestId: input.clientRequestId,
@@ -56,7 +89,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           expiry: action.listing.expiry,
           nonce: action.listing.nonce,
           allowsPartialFills: action.listing.allowsPartialFills,
-          makerAccountType: "EOA" as const,
+          makerAccountType,
           makerPermit2: "0x" as const,
           ...(action.listing.quoteRef ? { quoteRef: action.listing.quoteRef } : {}),
         },
@@ -64,22 +97,32 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       };
       // The gate-facing artifact is content-addressed so an independent policy gate can pin
       // exactly what it admitted before submit.
-      const artifact = { kind: "signed-maker-order", orderHash: finalized.orderHash, recoveredSigner: finalized.recoveredSigner, signature: finalized.signature, extension: finalized.extension, submitInput };
+      const artifact = { kind: "signed-maker-order", orderHash: finalized.orderHash, recoveredSigner, makerAccountType, signature: finalized.signature, extension: finalized.extension, submitInput };
       return envelope({
         state: "ok",
         data: { ...artifact, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
         chainId,
-        source: "config",
-        warnings: [{ code: "caller_signed_artifact", message: "signature verified and recovered, not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact" }],
+        source: makerAccountType === "ERC1271" ? "chain" : "config",
+        warnings: [
+          {
+            code: "caller_signed_artifact",
+            message:
+              makerAccountType === "ERC1271"
+                ? "contract-maker signature verified via the ERC-1271 isValidSignature staticcall (the same check the fill performs), not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact"
+                : "signature verified and recovered, not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact",
+          },
+          ...finalizeWarnings,
+        ],
         ctx,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : "maker order finalization failed";
       return envelope({
         state: "conflict",
         data: null,
         chainId,
         source: "config",
-        warnings: [{ code: "signature_or_reconstruction_mismatch", message: err instanceof Error ? err.message : "maker order finalization failed" }],
+        warnings: [{ code: "signature_or_reconstruction_mismatch", message: message.includes("recovers to") ? `${message}. If the maker is a CONTRACT account (ERC-1271, e.g. a Safe), finalization verifies it with an on-chain isValidSignature staticcall — make sure an RPC resolves (CORK_RPC_URL) so the maker's code can be detected` : message }],
         ctx,
       });
     }
@@ -495,6 +538,45 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (signed.order.makingAmount === 0n) {
         return unavailable(chainId, "invalid_service_response", `venue returned a resting order with makingAmount 0 for ${action.orderHash} — a malformed row; no fill bytes were built`, ctx);
       }
+      // Liveness pre-flight [K7]: the venue can list rows whose on-chain invalidator already
+      // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
+      // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
+      // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
+      // resolved RPC or a failed read builds as before (this tool never claimed liveness).
+      {
+        const resolved = await getRpc(ctx, chainId);
+        if (resolved) {
+          try {
+            const plan = lopInvalidatorPlan(signed.order.makerTraits);
+            const status =
+              plan.mode === "bit"
+                ? classifyBitInvalidator((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [signed.order.maker, plan.slot] })) as bigint, plan.mask)
+                : classifyRemainingRaw((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [signed.order.maker, localOrderHash] })) as bigint);
+            if (status.status === "filled-or-cancelled") {
+              return envelope({
+                state: "conflict",
+                data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
+                chainId,
+                source: "chain",
+                warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue [K7]; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
+                ctx,
+              });
+            }
+          } catch {
+            /* liveness could not be read — build as before; the fill's own check decides */
+          }
+        }
+      }
+      // ForSelf mode contradictions are teaching errors BEFORE any building: the wrapper
+      // structurally forces the target to the caller and cannot carry taker interactions.
+      if (action.forSelf) {
+        if (action.receiver !== undefined) {
+          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "receiver"], message: "forSelf and receiver are mutually exclusive — the ForSelf wrapper structurally delivers the bought asset to the CALLING account (that is its whole point); drop receiver, or drop forSelf to route a custom receiver through the raw LOP path" }]);
+        }
+        if (action.interaction !== undefined || action.jitMarket !== undefined) {
+          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.interaction !== undefined ? "interaction" : "jitMarket"], message: "forSelf cannot carry a taker interaction — the wrapper zeroes the interaction-length bits by design (a mid-fill callee while it holds a live allowance would defeat its custody model). Lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path" }]);
+        }
+      }
       // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.
       let interaction = action.interaction;
       let jitData: Record<string, unknown> | undefined;
@@ -554,6 +636,24 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             jitWarnings.push({ code: "would_revert", message: `your maximumTakingAmount ${action.maximumTakingAmount} is BELOW the current decayed price ${currentTakerPays} — the fill reverts until the price decays under your cap (a resting-bid strategy; fine if intended, dead bytes if not; decay ends at ${finish})` });
           }
         }
+      }
+      // ForSelf mode: the same fill, emitted as a call to the integrator-deployed wrapper.
+      if (action.forSelf) {
+        return await prepareForSelfTakerFill({
+          ctx,
+          chainId,
+          account: input.account,
+          clientRequestId: input.clientRequestId,
+          lop,
+          forSelf: action.forSelf,
+          signed,
+          localOrderHash,
+          ...(action.fillMakingAmount !== undefined ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+          ...(action.maximumTakingAmount !== undefined ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
+          ...(auctionCap !== undefined ? { auctionCap } : {}),
+          ...(auctionData !== undefined ? { auctionData } : {}),
+          priorWarnings: jitWarnings,
+        });
       }
       let fill: TakerFillResult;
       try {

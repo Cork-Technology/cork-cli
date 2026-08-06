@@ -13,6 +13,7 @@ import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, unavailable } from "./shared.ts";
 import { PERMIT2_ADDRESS } from "./submit.ts";
+import { preparePhoenixForSelf } from "./forself.ts";
 
 
 // PhoenixAction.type -> CorkAdapter action name.
@@ -101,6 +102,11 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
 
 /** cork_prepare_phoenix — bundle assembly: funding legs, action leg, sweep-back, pre-flights. */
 export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: HandlerContext): Promise<Envelope> {
+  // ForSelf mode: the action as a DIRECT call to an integrator-deployed ForSelf adapter —
+  // no Bundler3, no funding/sweep legs (the adapter pulls and sweeps itself).
+  if (input.forSelf) {
+    return preparePhoenixForSelf(input, ctx);
+  }
   const { dep, depWarn } = await getDep(ctx, input.chainId);
   if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const { corkAdapter, bundler3 } = dep;

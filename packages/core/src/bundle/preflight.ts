@@ -50,8 +50,13 @@ export interface PreflightInput {
   poolManager: `0x${string}`;
   /** Omit to skip the whitelist guard (partial deployment). */
   whitelistManager?: `0x${string}` | undefined;
-  /** The adapter the bundle routes through — the address the POOL MANAGER sees as msg.sender. */
+  /** The adapter the call routes through — the address the POOL MANAGER sees as msg.sender. */
   corkAdapter?: `0x${string}` | undefined;
+  /** Which call path the adapter belongs to — alters only the whitelist WORDING, never the
+   *  check: "bundler3" (default) is the CorkAdapter behind Bundler3; "for-self" is an
+   *  integrator-deployed ForSelf adapter called directly (no initiator check exists there,
+   *  so `account` should be omitted on that route). */
+  route?: "bundler3" | "for-self" | undefined;
   poolId: `0x${string}`;
   actionType: PhoenixAction["type"];
   /** The declared initiator — the address the ADAPTER checks against the whitelist. */
@@ -125,7 +130,10 @@ export async function poolPreflightWarnings(input: PreflightInput): Promise<Pref
   if (adapterOk === false) {
     out.push({
       code: "not_whitelisted",
-      message: `the corkAdapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks msg.sender, which for a bundled call is the ADAPTER, not you. Even a whitelisted user cannot reach this pool through Bundler3 until the adapter itself is whitelisted`,
+      message:
+        input.route === "for-self"
+          ? `the ForSelf adapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks its direct caller, which on this path is the ADAPTER; nobody can reach this gated pool through it until the adapter itself is whitelisted (and whitelisting a SHARED adapter opens the pool to every account on chain — see the adapter package README)`
+          : `the corkAdapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks msg.sender, which for a bundled call is the ADAPTER, not you. Even a whitelisted user cannot reach this pool through Bundler3 until the adapter itself is whitelisted`,
     });
   }
 

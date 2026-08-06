@@ -70,6 +70,13 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
           return `call ${leg.fn}() on ${who(leg.to, o)}`;
       }
     }
+    case "forself": {
+      // The whole point of a ForSelf call is that no destination exists in the calldata —
+      // the summary states the structural fact a reader would otherwise go looking for.
+      const p = leg.params as Record<string, unknown> | undefined;
+      const pool = p && typeof p.poolId === "string" ? ` for pool ${short(p.poolId)}` : "";
+      return `run '${leg.action}' on the ForSelf adapter ${who(leg.to, o)}${pool} — inputs are pulled from the caller, every output goes back to the CALLER (no receiver parameter exists); verify the adapter address is your integrator's deployment`;
+    }
     case "bundle":
       return `a nested bundle on ${who(leg.to, o)} (${leg.legs.length} leg${leg.legs.length === 1 ? "" : "s"}):`;
     case "unknown":

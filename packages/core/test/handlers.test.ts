@@ -466,8 +466,10 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
   // The wire form the caller round-trips back (amounts as decimal strings).
   const prepared = { kind: "maker-order", lop: LOP, typedData: { domain: { chainId: 1, verifyingContract: LOP }, message: { salt: "5", maker: acct.address, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" } }, orderHash, extension: "0x", clientRequestId: "final-int-01" };
   const listing = { side: "SELL", premium: 4.1, expiry: 0, nonce: "0", allowsPartialFills: true };
+  // resolveRpc pinned to null: finalize now checks whether the maker has code (the ERC-1271
+  // path) whenever an RPC resolves — offline tests must not attempt the built-in endpoints.
   const call = (over: Record<string, unknown>, crid = "final-int-01") =>
-    runTool("cork_prepare_orders", { chainId: 1, account: acct.address, clientRequestId: crid, action: { type: "finalize-maker-order", prepared, listing, ...over }, format: "concise" }, { nowSeconds: NOW });
+    runTool("cork_prepare_orders", { chainId: 1, account: acct.address, clientRequestId: crid, action: { type: "finalize-maker-order", prepared, listing, ...over }, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null });
 
   it("verifies the signer and emits a verbatim cork_submit lop-order artifact (never signs)", async () => {
     const signature = await acct.sign({ hash: orderHash });
@@ -496,6 +498,53 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
     const env = await call({ signature }, "different-crid-99");
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("prepared_context_mismatch");
+  });
+
+  // ── ERC-1271 contract makers (the Zyfai Safe shape): verified with the SAME staticcall the
+  // fill performs, never ecrecovered ────────────────────────────────────────────────────────
+  const contractMakerRpc = (magic: string | Error) => async () =>
+    stubResolved({
+      getCode: async () => "0x60806040" as const, // the maker has code
+      readContract: async (a: { functionName: string }) => {
+        if (a.functionName !== "isValidSignature") throw new Error(`no stub for ${a.functionName}`);
+        if (magic instanceof Error) throw magic;
+        return magic;
+      },
+    });
+
+  it("a CONTRACT maker that answers the ERC-1271 magic finalizes with makerAccountType ERC1271", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: acct.address, clientRequestId: "final-int-01", action: { type: "finalize-maker-order", prepared, listing, signature: "0xdeadbeef" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: contractMakerRpc("0x1626ba7e") },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { makerAccountType: string; recoveredSigner: string | null; submitInput: { action: { makerAccountType: string } } };
+    expect(d.makerAccountType).toBe("ERC1271");
+    expect(d.recoveredSigner).toBeNull(); // nothing was (or could be) ecrecovered
+    expect(d.submitInput.action.makerAccountType).toBe("ERC1271");
+    expect(env.warnings[0]?.code).toBe("caller_signed_artifact");
+    expect(env.warnings[0]?.message).toContain("isValidSignature");
+  });
+
+  it("a CONTRACT maker that rejects the signature → conflict (the fill would never succeed)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: acct.address, clientRequestId: "final-int-01", action: { type: "finalize-maker-order", prepared, listing, signature: "0xdeadbeef" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: contractMakerRpc("0xffffffff") },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    expect(env.warnings[0]?.message).toContain("ERC-1271");
+  });
+
+  it("without an RPC a contract maker fails in the ecrecover branch WITH the ERC-1271 hint", async () => {
+    // The signature is opaque contract bytes; recovery cannot yield the maker. The conflict
+    // must teach the fix (an RPC) instead of a bare mismatch.
+    const sig = await privateKeyToAccount(`0x${"05".repeat(32)}`).sign({ hash: orderHash });
+    const env = await call({ signature: sig });
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.message).toContain("ERC-1271");
   });
 });
 

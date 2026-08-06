@@ -311,6 +311,12 @@ export const PreparePhoenixInput = z.object({
   // call, so a retry produces different bytes; pin deadlineAt to make same-id retries BYTE-STABLE
   // [K2 §9 deadline-basis].
   deadlineAt: UnixSeconds.optional(),
+  forSelf: z
+    .strictObject({
+      adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf pool adapter (example/contracts shape) — not a Cork deployment; its CORK() binding is verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address token allowances"),
+    })
+    .optional()
+    .describe("emit the action as a DIRECT call to a Cork ForSelf ADAPTER (the *ForSelf twin of the action — e.g. exercise → exerciseForSelf) instead of a Bundler3 bundle — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The adapter's entrypoints carry NO receiver/owner parameters: outputs are structurally delivered to the calling account, inputs are pulled from it against allowances granted TO THE ADAPTER, and any unspent cap returns in the same transaction (custody-free). The action's receiver (and owner) must therefore equal `account`. fundingMode is ignored on this path — there are no funding or sweep legs to build. Not applicable to the authority ops"),
   action: PhoenixAction,
   format: Format,
 });
@@ -442,8 +448,17 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .describe(
         "build the taker interaction FOR this fill (2.1.0): lifting a BUY-cover resting order, the underwriter-taker delivers a not-yet-minted cST — takerInteraction deploys the oracle if needed, verifies the carried constraint, creates the pool, mints the cST to the taker (funded by the taker's collateral; approve the adapter for the collateral pull), and executes the permits, all between the maker asset moving and the taker asset being pulled. Mutually exclusive with raw `interaction`",
       ),
+    forSelf: z
+      .strictObject({
+        adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf fill adapter (example/contracts shape) — not a Cork deployment; its CORK()/LOP() bindings are verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address an allowance"),
+        poolId: MarketId.describe("the Cork market this fill must belong to — the wrapper binds the order's asset pair to this pool ON-CHAIN (checked after the fill, so a just-in-time order whose market is created during the fill still passes) and reverts OrderAssetsNotInMarket otherwise"),
+        deadlineSeconds: z.number().int().min(1).max(86400).default(1800).describe("RELATIVE deadline for the wrapper's own deadline check, seconds from now — re-anchors to the clock on every call; pass deadlineAt for byte-stable retries"),
+        deadlineAt: UnixSeconds.optional().describe("absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes [K2]"),
+      })
+      .optional()
+      .describe("emit the unsigned fill as a call to a Cork ForSelf ADAPTER (fillOrderForSelf) instead of raw LOP calldata — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The wrapper structurally forces the bought asset to the CALLER, disables taker interactions and Permit2 sourcing, pulls the taker asset from the caller up to the slippage cap and sweeps back the unspent remainder, and binds the fill to `poolId`. Approve the ORDER's taker asset to the ADAPTER (not the LOP). Mutually exclusive with receiver, interaction, and jitMarket — lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path"),
     maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"),
-  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — never signs or broadcasts"),
+  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
     .describe("on-chain cancel calldata for a resting LOP order you made"),
   A("rollover-intent", {

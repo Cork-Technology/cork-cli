@@ -46,6 +46,7 @@ const T = {
   venue: "packages/core/test/venue.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
+  forself: "packages/core/test/forself.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
 };
@@ -626,6 +627,71 @@ const CATALOG: Mutant[] = [
     find: "return filters.orderHash ? { ...list, items: list.items.filter((r) => String((r as { orderHash?: unknown }).orderHash ?? \"\").toLowerCase() === filters.orderHash!.toLowerCase()) } : list;",
     replace: "return list;",
     tests: [T.venue],
+  },
+  // ── ForSelf adapter surface: calldata a caged wallet signs — struct field order, traits
+  //    bits, the pull-cap bound, and the market-binding comparator (cast-fixture gated) ──────
+  {
+    // Two same-typed uint256 fields transposed in the VALUE mapping: the cap becomes the floor
+    // and vice versa — silently signable, caught only by byte-exact cast parity.
+    id: "forself-exercise-value-transposition",
+    file: "packages/core/src/forself.ts",
+    find: "args = [{ poolId: p.poolId, cstSharesIn: b(p.cstSharesIn), maxReferenceAssetsIn: b(p.maxReferenceAssetsIn), minCollateralAssetsOut: b(p.minCollateralAssetsOut), deadline }];",
+    replace: "args = [{ poolId: p.poolId, cstSharesIn: b(p.cstSharesIn), maxReferenceAssetsIn: b(p.minCollateralAssetsOut), minCollateralAssetsOut: b(p.maxReferenceAssetsIn), deadline }];",
+    tests: [T.forself],
+  },
+  {
+    // The same defect one layer down: the ABI declaration's struct field order IS the wire
+    // order (selector unchanged — the types don't move — so only byte parity can see it).
+    id: "forself-abi-struct-order",
+    file: "packages/core/src/forself.ts",
+    find: "function exerciseForSelf((bytes32 poolId, uint256 cstSharesIn, uint256 maxReferenceAssetsIn, uint256 minCollateralAssetsOut, uint256 deadline) params)",
+    replace: "function exerciseForSelf((bytes32 poolId, uint256 cstSharesIn, uint256 minCollateralAssetsOut, uint256 maxReferenceAssetsIn, uint256 deadline) params)",
+    tests: [T.forself],
+  },
+  {
+    // A drifted parameter TYPE changes the selector — the wrapper's dispatcher would fall
+    // through to the fallback and the tx would revert; caught by forge-inspect selector parity.
+    id: "forself-selector-type-drift",
+    file: "packages/core/src/forself.ts",
+    find: "function depositForSelf((bytes32 poolId, uint256 collateralAssetsIn, uint256 minCptAndCstSharesOut, uint256 deadline) params)",
+    replace: "function depositForSelf((bytes32 poolId, uint128 collateralAssetsIn, uint256 minCptAndCstSharesOut, uint256 deadline) params)",
+    tests: [T.forself],
+  },
+  {
+    // Wrong amount-mode bit: the wrapper would read `amount` as a TAKING amount and pull the
+    // wrong asset quantity from the caller.
+    id: "forself-fill-amount-mode-bit",
+    file: "packages/core/src/forself.ts",
+    find: "const FORSELF_MAKER_AMOUNT_FLAG = 1n << 255n;",
+    replace: "const FORSELF_MAKER_AMOUNT_FLAG = 1n << 254n;",
+    tests: [T.forself],
+  },
+  {
+    // The pull-cap width must match the wrapper's PRESERVE mask (bits 0-183): a wider local
+    // bound admits caps the wrapper would silently truncate.
+    id: "forself-fill-threshold-bound",
+    file: "packages/core/src/forself.ts",
+    find: "const FORSELF_THRESHOLD_MAX = (1n << 184n) - 1n;",
+    replace: "const FORSELF_THRESHOLD_MAX = (1n << 190n) - 1n;",
+    tests: [T.forself],
+  },
+  {
+    // The market-binding mirror collapses to "any share involved": the pre-flight would bless
+    // share-for-junk orders the wrapper reverts (and flag nothing on junk-for-cash).
+    id: "forself-pair-comparator",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "return (isShare(m) && isCash(t)) || (isCash(m) && isShare(t));",
+    replace: "return isShare(m) || isShare(t);",
+    tests: [T.forself],
+  },
+  {
+    // exact-vs-cap flipped in the allowance matrix: the disclosure would tell an integrator
+    // the adapter refunds a leg it consumes in full.
+    id: "forself-allowance-kind-flip",
+    file: "packages/core/src/forself.ts",
+    find: '{ tokenRole: "cST", amountField: "cstSharesIn", kind: "exact" },',
+    replace: '{ tokenRole: "cST", amountField: "cstSharesIn", kind: "cap" },',
+    tests: [T.forself],
   },
 ];
 

@@ -8,7 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
 import { buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES } from "@cork/schemas";
-import { stubRpc, type StubCall } from "./helpers.ts";
+import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 
@@ -84,7 +84,11 @@ function stubVenue(routes: Array<{ match: string; status?: number; body: unknown
 }
 
 function ctxWith(routes: Array<{ match: string; status?: number; body: unknown }>, seen: Seen[] = []): HandlerContext {
-  return { nowSeconds: NOW, ...stubVenue(routes, seen) };
+  // resolveRpc pinned to null: venue-backed handlers now take best-effort chain reads (order
+  // liveness, ERC-1271 verification) whenever an RPC resolves — offline tests must never let
+  // that fall through to the built-in endpoints. Tests that WANT chain answers spread their
+  // own resolveRpc over this.
+  return { nowSeconds: NOW, resolveRpc: async () => null, ...stubVenue(routes, seen) };
 }
 
 describe("cork_query venue-backed resources", () => {
@@ -365,6 +369,30 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("F3/ERC-1271: a contract maker is verified with the fill's own isValidSignature staticcall — rejection is NOT relayed", async () => {
+    const seen: Seen[] = [];
+    const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
+    const rpcAnswering = (magic: string) => async () =>
+      stubResolved({ readContract: async (a: { functionName: string }) => (a.functionName === "isValidSignature" ? magic : (() => { throw new Error(`no stub for ${a.functionName}`); })()) });
+    const rejected = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0xffffffff") });
+    expect(rejected.state).toBe("conflict");
+    expect(rejected.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+
+    const accepted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0x1626ba7e") });
+    expect(accepted.state).toBe("ok");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
+  });
+
+  it("F3/ERC-1271: with no RPC the gap is DISCLOSED (relayed with chain_read_failed), never silent", async () => {
+    const seen: Seen[] = [];
+    const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
+    const env = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: async () => null });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("NOT pre-verified"))).toBe(true);
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
 
   it("F14: a rollover order whose signature does not recover to order.user → conflict, NOT relayed", async () => {
@@ -900,6 +928,35 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     expect(d.fillFunction).toBe("fillOrder");
     expect(d.calldata.slice(0, 10)).toBe("0x9fda64bd"); // uint256-tuple selector
     expect(env.warnings.some((w) => w.code === "unsigned_artifact")).toBe(true);
+  });
+
+  it("K7 liveness: a venue row whose chain invalidator says filled-or-cancelled → conflict, no fill bytes", async () => {
+    // makerTraits 0 → the bit invalidator (allowMultipleFills unset), slot 0; bit 0 SET = dead.
+    const deadChain = async () => stubResolved({ readContract: async (a: { functionName: string }) => (a.functionName === "bitInvalidatorForOrder" ? 1n : (() => { throw new Error(`no stub for ${a.functionName}`); })()) });
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-dead-01", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
+      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: deadChain },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("status_mismatch");
+    expect((env.data as { chainStatus: string }).chainStatus).toBe("filled-or-cancelled");
+  });
+
+  it("K7 liveness: a live chain reading builds normally; a failed read degrades silently", async () => {
+    const liveChain = async () => stubResolved({ readContract: async (a: { functionName: string }) => (a.functionName === "bitInvalidatorForOrder" ? 0n : (() => { throw new Error(`no stub for ${a.functionName}`); })()) });
+    const live = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-live-01", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
+      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: liveChain },
+    );
+    expect(live.state).toBe("ok");
+    const broken = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-live-02", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
+      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: async () => stubResolved({ readContract: async () => { throw new Error("rpc down"); } }) },
+    );
+    expect(broken.state).toBe("ok"); // liveness is best-effort — a failed read never blocks bytes
   });
 
   it("a row that does not hash to the requested order → conflict digest_mismatch (no fill bytes)", async () => {
