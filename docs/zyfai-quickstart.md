@@ -113,6 +113,163 @@ Your user holds **cST** (the cover); Bond holds **cPT** (the underwriter's leg).
 This step is entirely off-chain: choosing what to cover, deriving the market those choices name, and
 asking the supply side to price it. There is no UI for RFQs — the CLI/MCP is the way in.
 
+Sections 1a–1d below are the fast path. If you want to understand *why* those four choices are the
+whole selection — and how the registry decides which markets are even possible — take the slower
+tour first:
+
+<details>
+<summary><b>Market selection, deliberately — how the registry decides what you can ask for (expand)</b></summary>
+
+A Cork market has no factory catalog to browse. There is no list of "available markets" anywhere —
+a market is **fully named by four choices** (CA + REF + expiry + recipe), and the registry holds the
+**ingredients** every legal market is made from. Selecting a market means walking those
+ingredients; the RFQ you open in step 1d is simply that selection written down. Five stops, each a
+read you can run right now (all responses below were captured live).
+
+**Stop 1 — assets: who is registered, and how each one is priced.**
+`registry-assets` (step 1a) is the universe: an asset absent from it cannot be covered, period.
+Look one asset up by address to see what the registry actually knows about it:
+
+```sh
+ch query registry-assets --chainid 42161 --json \
+  --filters '{"address":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
+# alternative — the rest in one --input blob:
+ch query registry-assets --chainid 42161 --input '{"filters":{"address":"0x4448…4D14"}}' --json
+```
+```jsonc
+{ "address": "0x444868B6e8079ac2c55eea115250f92C2b2c4D14", "name": "dUSDC", "kind": "ERC4626",
+  "priceSource": { "address": "0x5E794850…", "sourceType": "PRICE",
+                   "sourceInterface": "AGGREGATOR_V3", "denomination": "USD" },
+  "navSource":   { "address": "0x444868B6…", "sourceType": "NAV",
+                   "sourceInterface": "ERC4626",       "denomination": "USDC" },
+  "token": { "decimals": 6, "symbol": "dUSDC" } }
+```
+Each asset carries up to **two named source slots**, and they answer different questions:
+- **`priceSource`** — what the *market* says the asset is worth (a Chainlink-style aggregator),
+  quoted in some denomination (here USD).
+- **`navSource`** — what the asset's own *accounting* says it is worth (here the ERC-4626 vault's
+  `convertToAssets`), quoted in its underlying (here USDC).
+
+An asset may carry either slot, or both. dUSDC carries both — which means a dUSDC pair could be
+covered against its **market price** (a depeg view) or against its **book value** (an accounting
+view). That choice surfaces later as the oracle *mode* (`price` | `nav`), and it changes what
+"impairment" means for your cover — so it's a product decision, not a plumbing detail.
+
+**Stop 2 — denominations: the units prices are quoted in.**
+Source values are only comparable when they end up in the same unit. The registry's denomination
+table maps each label to its unit (a token address, or a pseudo-unit like ISO-4217 USD):
+
+```sh
+ch query registry-denominations --chainid 42161 --json
+# alternative — the rest in one --input blob:
+ch query registry-denominations --input '{"chainId":42161}' --json
+```
+```jsonc
+// 5 labels live: USD, ETH, USDS, USDC, WETH — trimmed to two
+{ "label": "USD", "unit": "0x0000000000000000000000000000000000000348", "labelSource": "pseudo-unit table" }
+{ "label": "ETH", "unit": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", "labelSource": "pseudo-unit table" }
+```
+Labels are **exact bytes** (case-sensitive; `labelHash` is the real identity). Two assets whose
+sources are denominated in the *same* label compare directly; different labels need a bridge —
+
+**Stop 3 — feeds: the bridges between denominations.**
+
+```sh
+ch query registry-feeds --chainid 42161 --json
+# alternative — the rest in one --input blob:
+ch query registry-feeds --input '{"chainId":42161}' --json
+```
+```jsonc
+// 4 directed edges live, all into USD — trimmed to one
+{ "base": "0x6491c05A…", "quote": "0x…0348",   // USDS → USD
+  "aggregator": "0x37833E5b…", "feedDecimals": 8,
+  "live": { "answer": "99990612", "decimals": 8, "updatedAt": "1785962274" } }
+```
+Feeds are **directed** conversion edges with live answers — base→quote is not quote→base. When
+your CA's and REF's sources speak different denominations, the registry needs a feed path to
+reconcile them; a pair with **no path cannot get a price oracle at all** (you'd see
+`oracle_not_deployable` at the next stop). Today every edge converts into USD, so USD is the hub.
+
+**Stop 4 — the pair's oracle: does your CA/REF combination actually price?**
+This is the go/no-go check for a pair, before you think about terms:
+
+```sh
+ch query registry-oracle --chainid 42161 --json \
+  --filters '{"collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","referenceAsset":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
+# alternative — the rest in one --input blob:
+ch query registry-oracle --chainid 42161 --input '{"filters":{…same…}}' --json
+```
+```jsonc
+{ "mode": "price",   // the default; pass filters.mode "nav" explicitly when you mean book value
+  "modeNote": "…one pair can hold a price AND a nav wrapper at different addresses…",
+  "oracle": { "address": "0x0DF21ad4Ce3F27Aac74b977e58E0943D8B3aC033",
+              "deployed": true, "deployable": true, "rate": "1025603415387290352" } }
+```
+Read `oracle` as a three-state answer:
+- **`deployed: true`** — the pair prices today; `rate` is live (1e18 = 1.0).
+- **`deployed: false, deployable: true`** — fine too: the oracle deploy is permissionless and
+  idempotent, and a JIT fill performs it inside the fill transaction. You lose nothing by waiting.
+- **`deployable: false`** — the pair is not viable: an asset is unregistered or a denomination has
+  no feed path. The fix is Cork-side (register the asset / add the feed) — ask, don't retry.
+
+**Stop 5 — recipes: the actual terms of the cover.**
+Step 1b lists the two approved recipe contracts. To see what a recipe would *actually commit you
+to* on your pair, ask it — `resolve-recipe` is the very staticcall a fill runs:
+
+```sh
+ch compute --chainid 42161 --json \
+  --params '{"kind":"resolve-recipe","recipe":"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D","collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","referenceAsset":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
+# alternative — the rest in one --input blob:
+ch compute --chainid 42161 --input '{"params":{…same…}}' --json
+```
+```jsonc
+{ "kind": "resolve-recipe", "recipe": "0xA39d5528…1234D",
+  "constraint": { "rateMin": "1", "rateMax": "2051206830774580704",
+                  "rateChangePerDayMax": "1025603415387290352",
+                  "rateChangeCapacityMax": "3076810246161871056" },
+  "scales": { "constraint": "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" } }
+```
+In plain English, for the **liquidity** recipe (anchor = the oracle rate at resolve time, ~1.0256
+here): the market's tracked rate may fall all the way to 1 wei (`rateMin: 1` — the cover never
+stops paying out on the way down), may never exceed twice the anchor (`rateMax`), and may move at
+most one whole anchor per day (`rateChangePerDayMax`) with a total budget of three
+(`rateChangeCapacityMax`). Those speed limits are the product: a slow bleed is tracked, a flash
+crash is rate-limited — which is what makes the worst case computable (`ch compute` →
+`impairment-floor`). The **fixed** recipe instead pins the rate forever (both change limits zero).
+Either way, **these four numbers are literally what Bond's order will sign**, and the market's
+identity is derived from them.
+
+**Stop 6 — the identity check.**
+`market-predict` (step 1c) is the final dry-run: it folds your four choices through the registry —
+predicts the oracle, resolves the constraint, derives the `poolId` and the cST/cPT addresses, and
+tells you whether the pool already exists. Nothing is deployed or signed; it is the same
+derivation a JIT fill runs on-chain.
+
+**How the selection becomes your RFQ (step 1d).** Every field of `rfq-open` is one of the choices
+you just made:
+
+| Your choice (stop) | RFQ field |
+|---|---|
+| REF asset (1) | `referenceAsset` |
+| CA asset (1) | `collateralAsset.exact` — or `one_of: […]` to let underwriters pick from a set |
+| Price-vs-NAV view (1, 4) | implied by the recipe + oracle mode behind `oracle_recipe` |
+| Recipe contract (5) | `marketTemplate.inline.oracle_recipe` — copy the address from `registry-recipes`, never hand-type it |
+| Term (6) | `expiryWindow` — pin an exact expiry with `notBefore = notAfter − 1` |
+| Cover style | `modes` (`liquidity_only` pairs with the liquidity recipe) + the venue's `packageIds` |
+
+Note what the RFQ does **not** carry: the constraint. The four numbers get resolved and pinned
+when Bond *signs the order* (step 2) — your recipe choice determines them, but the anchor is read
+at signing time. That's why deriving, quoting, and signing close together matters (step 1c).
+
+**Pre-RFQ checklist:**
+1. REF appears in `registry-assets` (and carries the source slot your view needs).
+2. `registry-oracle` says the pair is `deployed` or at least `deployable` — in the mode you mean.
+3. The recipe address came from `registry-recipes` on-chain, not from a doc or a chat message.
+4. `market-predict` returns a full identity and the expiry you want.
+5. `packageIds` and `notionalAssets` units confirmed with your Cork contact (venue conventions).
+
+</details>
+
 #### 1a. Pick the REF asset to cover
 
 List the assets the registry approves. Each entry self-describes its price/NAV sources and token
@@ -225,7 +382,9 @@ The steps below use this market: `poolId` =
 #### 1d. Open the RFQ
 
 Now ask the supply side to price the cover. An RFQ is an off-chain venue posting: the parameter
-envelope (pair, mode, size, acceptable expiry window) that underwriters answer against.
+envelope (pair, mode, size, acceptable expiry window) that underwriters answer against. Every field
+in the call below is one of the choices from 1a–1c — the collapsible tour above ends with a
+field-by-field mapping and a pre-RFQ checklist if any of them feels arbitrary.
 
 ```sh
 VU=$(date -u -d '+1 hour' +%s)
