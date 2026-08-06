@@ -202,11 +202,17 @@ ch capabilities
 ch query protocol-config
 ch query registry-assets --chainid 42161
 
+# actions are subcommands, their fields are flags, amounts take exact sugar (1000e18, 1_000):
+ch compute rollover-premium-floor --dstcstproduced 1000e18 --minpremiumpershare 12e15
+ch prepare phoenix exercise --chainid 42161 --pool-id 0x… --cst-shares-in 1000e18 \
+  --receiver 0x… --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
+
 # the same fields can ride in one JSON blob (flags override blob keys); bare --json = JSON output
 ch query protocol-config --input '{"chainId":42161}' --json
 
-ch compute --explain          # plain English: every parameter, unions unfolded
-ch compute --explain --json   # the same contract as JSON Schema
+ch compute --explain                # every parameter, unions unfolded
+ch compute cst-swap-rate --explain  # scoped to one variant
+ch compute --explain --json         # the same contract as JSON Schema
 ```
 
 `ch capabilities` listing 9 tools means the CLI is wired correctly. Prefer not to touch `PATH`? The
@@ -221,8 +227,10 @@ unchanged.
 
 **Input has three interchangeable forms.** `--json '<object>'` is canonical and identical to what the
 MCP server receives; `--input '<object>'` is the same thing under a name that cannot be confused with
-the output flag; or pass a positional plus flags named after the tool's own schema fields, which is
-usually what you want by hand:
+the output flag; or pass subcommands/positionals plus flags named after the tool's own schema fields,
+which is usually what you want by hand — every discriminated action/kind is its own subcommand
+(`ch prepare phoenix exercise …`, `ch submit rfq-open …`, `ch track verify market-ref …`) with a
+variant-scoped `--help`/`--explain`:
 
 ```sh
 ch query market --chainid 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05"}'
@@ -230,8 +238,10 @@ ch query market --chainid 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
 spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag. Object-valued
-fields (`--filters`, `--params`, `--action`) take a JSON string; union-typed fields accept a raw
-string too (`ch decode tx --data 0x…` — no quoting gymnastics).
+fields (`--filters`, `--forself`) take a JSON string; union-typed fields accept a raw string too
+(`ch decode tx --data 0x…` — no quoting gymnastics). Amount fields accept exact human sugar:
+`1000e18` and `1_000000` expand by integer arithmetic (a fractional remainder like `1.23e1` is
+refused with teaching, and sugar applies to flags only — JSON blobs stay the exact wire form).
 
 Every tool accepts an optional `"format"` — `"concise"` (the default) or `"full"` for the verbose
 envelope. Exit codes map the envelope state so scripts can branch: `0` ok · `2` invalid input · `3`

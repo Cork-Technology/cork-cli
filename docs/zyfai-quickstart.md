@@ -87,12 +87,17 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   **sUSDe / dUSDC** market derived in step 1c — a market that doesn't exist yet, so run the
   derivation yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real
   and runnable today.
-- **Inputs are flags named after the tool's own schema fields.** The first required scalar can
-  ride as a positional (`ch query market-predict …`, `ch prepare phoenix 42161 …`); scalar fields
-  are plain flags (`--chainid 42161` — spelling is forgiving, `--chain-id` works too); and
-  object-valued fields take a JSON string (`--filters '{…}'`, `--action '{…}'`). Each command also
-  shows an **alternative style**: scalars as flags, everything else in one `--input '{…}'` blob.
-  Flags override blob keys, so a saved blob is reusable.
+- **Commands read like English: the action is a subcommand, its fields are flags.**
+  `ch prepare phoenix exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
+  `ch compute resolve-recipe --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
+  tool is its own subcommand with its own `--help` and `--explain`. Scalar fields are plain flags
+  (spelling is forgiving: `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued
+  fields take a JSON string (`--filters '{…}'`, `--forself '{…}'`); amount fields accept exact
+  human sugar (`1000e18`, `95e16`, `1_000000` — expanded by integer math, never floats).
+- **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
+  the full object, `--action`/`--params` blobs, and the older `ch prepare phoenix 42161 --action
+  '{…}'` shape are all unchanged; flags override blob keys, so a saved blob is reusable. Some
+  examples below show this as the **alternative style** — it is what an MCP call carries.
 - **Output is prose by default; a bare `--json` returns the raw result envelope.** The walkthrough
   adds `--json` wherever it dissects a response, and the responses shown are that JSON, trimmed.
 
@@ -221,10 +226,12 @@ Step 1b lists the two approved recipe contracts. To see what a recipe would *act
 to* on your pair, ask it — `resolve-recipe` is the very staticcall a fill runs:
 
 ```sh
-ch compute --chainid 42161 --json \
-  --params '{"kind":"resolve-recipe","recipe":"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D","collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","referenceAsset":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
-# alternative — the rest in one --input blob:
-ch compute --chainid 42161 --input '{"params":{…same…}}' --json
+ch compute resolve-recipe --chainid 42161 --json \
+  --recipe 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D \
+  --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
+  --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14
+# alternative — the canonical wire blob:
+ch compute --chainid 42161 --input '{"params":{"kind":"resolve-recipe","recipe":"0xA39d…1234D","collateralAsset":"0x211C…5d2","referenceAsset":"0x4448…D14"}}' --json
 ```
 ```jsonc
 { "kind": "resolve-recipe", "recipe": "0xA39d5528…1234D",
@@ -392,11 +399,17 @@ field-by-field mapping and a pre-RFQ checklist if any of them feels arbitrary.
 
 ```sh
 VU=$(date -u -d '+1 hour' +%s)
+ch submit rfq-open --chainid 42161 --clientrequestid rfq-0001 --json \
+  --requester 0xYOUR_SAFE \
+  --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14 \
+  --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
+  --modes '["liquidity_only"]' --packageids '["balanced-v1"]' \
+  --expirywindow "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
+  --markettemplate '{"inline":{"oracle_recipe":"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D"}}' \
+  --notionalassets … --validuntil $VU --signature 0x…
+# alternative — the canonical wire blob behind the positional chainId:
 ch submit 42161 --clientrequestid rfq-0001 --json \
-  --action "{\"type\":\"rfq-open\",\"requester\":\"0xYOUR_SAFE\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"collateralAsset\":{\"exact\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\"},\"modes\":[\"liquidity_only\"],\"packageIds\":[\"balanced-v1\"],\"expiryWindow\":{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP},\"marketTemplate\":{\"inline\":{\"oracle_recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}},\"notionalAssets\":\"…\",\"validUntil\":$VU,\"signature\":\"0x…\"}"
-# alternative — the rest in one --input blob behind the positional chainId:
-ch submit 42161 --clientrequestid rfq-0001 --json \
-  --input "{\"action\":{ …the same action object… }}"
+  --input "{\"action\":{\"type\":\"rfq-open\", …the same fields… }}"
 ```
 Conventions the live flow uses (all observable in the venue's open RFQs):
 - **`modes: ["liquidity_only"]`** and **`packageIds: ["balanced-v1"]`** — the live package. Confirm
@@ -501,9 +514,10 @@ ch query market --chainid 42161 --json \
   --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
-ch prepare orders 42161 --account 0xYOUR_SAFE --clientrequestid buy-0001 --json \
-  --action '{"type":"taker-fill","orderHash":"0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05","fillMakingAmount":"100000000000000"}'
-#    (alternative — the rest in one --input blob behind the positional chainId:)
+ch prepare orders taker-fill --chainid 42161 --account 0xYOUR_SAFE --clientrequestid buy-0001 --json \
+  --order-hash 0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05 \
+  --fill-making-amount 100000000000000
+#    (alternative — the canonical wire blob behind the positional chainId:)
 ch prepare orders 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3…df05","fillMakingAmount":"100000000000000"}}'
 
@@ -533,11 +547,12 @@ the same transaction. What to check:
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
   (§5, item A).
 - **Or build through your deployed adapter and skip both worries:** add
-  `"forSelf":{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}` inside the taker-fill action and the
-  tool emits `fillOrderForSelf` instead — the bought asset structurally forced to the caller,
-  taker interactions impossible, the taker-asset allowance granted to the adapter (never the LOP).
-  The tool verifies the adapter's on-chain bindings first and hard-refuses a mismatched or
-  code-less address (`adapter_binding_mismatch`) — your wallet is about to grant it an allowance.
+  `--forself '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` to the `taker-fill` subcommand (in
+  blob form: `"forSelf":{…}` inside the action) and the tool emits `fillOrderForSelf` instead —
+  the bought asset structurally forced to the caller, taker interactions impossible, the
+  taker-asset allowance granted to the adapter (never the LOP). The tool verifies the adapter's
+  on-chain bindings first and hard-refuses a mismatched or code-less address
+  (`adapter_binding_mismatch`) — your wallet is about to grant it an allowance.
 
 <details>
 <summary><b>Variation — resting your own BUY order instead</b> (available-but-verify; expand)</summary>
@@ -568,9 +583,12 @@ counterparty needed, so it works exactly when the market is stressed.
 
 ```sh
 # replace 0xYOUR_SAFE (used for both account and receiver); REF (dUSDC) is 6-dec, CA (sUSDe) 18-dec
-ch prepare phoenix 42161 --account 0xYOUR_SAFE --clientrequestid exercise-0001 --json \
-  --action '{"type":"exercise","poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}'
-# alternative — the rest in one --input blob behind the positional chainId:
+# amounts use exact sugar: 1000e18 cST in, floor 0.95 sUSDe out, at most 1 dUSDC (1_000000) in
+ch prepare phoenix exercise --chainid 42161 --account 0xYOUR_SAFE --clientrequestid exercise-0001 --json \
+  --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78 \
+  --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
+  --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
+# alternative — the canonical wire blob behind the positional chainId:
 ch prepare phoenix 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x6b02…7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}'
 ```
@@ -670,10 +688,12 @@ claude mcp list   # expect: cork-defi … ✓ Connected
 (The same server also runs from the built binary — `ch mcp` for stdio, `ch mcp --http` for a
 Streamable HTTP endpoint with `/healthz` and `/docs/signing`.)
 
-**CLI:** put `bin/` on PATH → `ch <command> [positional] [--flags…] [--json] [--rpc-url <url>]
-[--explain]`. Inputs are flags named after the schema's own fields (objects as JSON-string flag
-values), or one blob via `--input '{…}'`; a bare `--json` switches the output from prose to the
-raw envelope. Runtime is **Bun** (pinned), not Node.
+**CLI:** put `bin/` on PATH → `ch <command> [action] [--flags…] [--json] [--rpc-url <url>]
+[--explain]`. Every action/kind is a subcommand with its fields as flags
+(`ch prepare phoenix exercise --pool-id … --cst-shares-in 1000e18`), amount fields take exact
+human sugar (`1000e18`, `1_000000`), objects ride as JSON-string flag values, and the canonical
+wire blob (`--input '{…}'`) works everywhere; a bare `--json` switches the output from prose to
+the raw envelope. Runtime is **Bun** (pinned), not Node.
 
 **The 9 tools:** `capabilities` (searchable manual + maturity map — start here), `query` (state
 reads), `compute` (deterministic math: swap/unwind rate, impairment floor, recipe resolution),
@@ -842,8 +862,9 @@ description plus a per-parameter breakdown with variants unfolded — then exits
 `--json` when you want the raw JSON schema instead:
 
 ```sh
-ch compute --explain            # human-readable contract
-ch compute --explain --json     # the raw JSON schema
+ch compute --explain                     # human-readable contract, all variants
+ch compute cst-swap-rate --explain       # scoped to ONE variant
+ch compute --explain --json              # the raw JSON schema
 ```
 ```jsonc
 {

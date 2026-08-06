@@ -20,7 +20,15 @@ Bun 1.3 is pinned in `mise.toml`.
     Flag typing is schema-judged ($refs resolved): $ref'd string fields are plain flags
     (`--account 0x…`), union-typed fields accept a raw string when JSON parsing fails
     (`--data 0x…`), and object-ONLY fields reject non-JSON loud (`invalid_json`) — mutation-probed
-    (`cli-*` probes), positionals pinned by test.
+    (`cli-*` probes), positionals pinned by test. Every discriminated action/kind is ALSO a
+    subcommand with the variant's fields flattened to flags and a variant-scoped --help/--explain
+    (`ch prepare phoenix exercise --pool-id … --cst-shares-in 1000e18`, `ch submit rfq-open …`,
+    `ch track verify market-ref …` — English order works: a positional-then-variant spelling is
+    shuffled internally, and options after the variant that the parent also declares are merged
+    back). The discriminator always comes from the subcommand name (a blob cannot override it).
+    Amount fields (digits-only pattern) take exact sugar on FLAGS only: `1000e18`/`1_000` expand
+    via integer math; fractional remainders are refused (`invalid_amount`); blobs stay the exact
+    wire form. All mutation-probed (`cli-variant-*`, `cli-amount-*`).
   - **Output** is prose by default, JSON on request: a bare `--json`, or `CORK_JSON=1`. Passing input
     as `--json '<object>'` also yields JSON, which is why every pre-existing scripted example works.
     Results/errors render via `packages/cli/src/render.ts`.
