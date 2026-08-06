@@ -28,7 +28,7 @@ describe("runTool: cork_capabilities", () => {
     const data = env.data as { tools: Array<{ name: string; cli: string; phase: number }> };
     expect(data.tools).toHaveLength(9);
     expect(data.tools.map((t) => t.name)).toContain("cork_prepare_phoenix");
-    expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("ch prepare phoenix");
+    expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("ch prepare pool");
   });
 
   it("search resolves natural-language queries to the tool AND variant (RFC §13 worked example)", async () => {
@@ -49,6 +49,14 @@ describe("runTool: cork_capabilities", () => {
     expect(d.matches.length).toBeGreaterThan(0);
     expect(d.matches.some((m) => m.name === "cork_prepare_phoenix")).toBe(true);
     expect(d.matches[0]?.inputSchema).toBeTruthy();
+  });
+
+  it("topic resolves canonical CLI leaves AND their aliases (pool/phoenix, order/orders)", async () => {
+    for (const [topic, name] of [["pool", "cork_prepare_phoenix"], ["phoenix", "cork_prepare_phoenix"], ["order", "cork_prepare_orders"], ["orders", "cork_prepare_orders"]] as const) {
+      const env = await runTool("cork_capabilities", { topic }, { nowSeconds: NOW });
+      expect(env.state, topic).toBe("ok");
+      expect((env.data as { name: string }).name, topic).toBe(name);
+    }
   });
 
   it("topic resolves a tool (by name, cork_ prefix, or cli leaf)", async () => {

@@ -154,9 +154,6 @@ function levenshtein(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
-/** Friendlier leaf spellings: the codename-free / singular forms. Help shows both. */
-const LEAF_ALIASES: Record<string, string> = { phoenix: "pool", orders: "order" };
-
 /** Old variant spellings kept routable after a rename (schema advertises only the new name). */
 const VARIANT_ALIASES: Record<string, string[]> = { "deploy-oracle": ["deploy-wrapper"] };
 
@@ -377,8 +374,7 @@ export async function runCli(
     };
 
     const cmd = baseOptions(parent.command(leafName(tool)).description(`[phase ${tool.phase}] ${tool.description}`));
-    const leafAlias = LEAF_ALIASES[leafName(tool)];
-    if (leafAlias !== undefined) cmd.alias(leafAlias);
+    for (const alias of tool.cliAliases ?? []) cmd.alias(alias);
     if (positional) cmd.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : `${positional} to act on`);
     const cmdRegistered = new Set<string>();
     for (const [name, node] of Object.entries(props)) {
@@ -548,7 +544,7 @@ export async function runCli(
       {
         const variantNames = union.variants.map((v) => kebab(v.value));
         const variantCanon = new Set([...variantNames, ...variantNames.flatMap((v) => VARIANT_ALIASES[v] ?? [])].map(canonicalise));
-        const specPaths = [[...tool.cliPath], ...(leafAlias !== undefined ? [[...tool.cliPath.slice(0, -1), leafAlias]] : [])];
+        const specPaths = [[...tool.cliPath], ...(tool.cliAliases ?? []).map((alias) => [...tool.cliPath.slice(0, -1), alias])];
         for (const specPath of specPaths)
         unionSpecs.push({
           path: specPath,

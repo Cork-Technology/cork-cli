@@ -746,6 +746,15 @@ const CATALOG: Mutant[] = [
     tests: [T.cli],
   },
   {
+    // Alias resolution dropped from the capabilities topic matcher: topic "phoenix"/"orders"
+    // (the internal spellings) would dead-end in unknown_topic after the canonical flip.
+    id: "cli-capabilities-alias-dropped",
+    file: "packages/core/src/handlers/capabilities.ts",
+    find: ' || (x.cliAliases ?? []).some((a) => a.toLowerCase() === key)',
+    replace: "",
+    tests: [T.handlers],
+  },
+  {
     // English-order shuffle disabled: `track verify market-ref` / `prepare phoenix 1 exercise`
     // stop reaching the variant and die as excess positionals. (Re-aimed 2026-08-06 after the
     // shuffle grew into preParseVariants.)

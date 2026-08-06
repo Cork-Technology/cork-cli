@@ -65,7 +65,7 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
       });
     }
     const key = input.topic.toLowerCase();
-    const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key);
+    const t = REGISTRY.find((x) => x.name.toLowerCase() === key || x.name.toLowerCase() === `cork_${key}` || x.cliPath.join(" ").toLowerCase() === key || x.cliPath[x.cliPath.length - 1]?.toLowerCase() === key || (x.cliAliases ?? []).some((a) => a.toLowerCase() === key));
     if (!t) {
       // The teaching list is DERIVED from DOC_TOPICS — a hardcoded copy here would drift the
       // moment a topic is added, in the one message whose job is naming what exists.

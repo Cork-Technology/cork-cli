@@ -91,15 +91,16 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   `ch prepare pool exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
   `ch compute resolve-recipe --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
   tool is its own subcommand with its own `--help` and `--explain` (`pool` and `order` are
-  friendlier aliases of the canonical `phoenix`/`orders` leaves; both spellings work everywhere), and a mistyped action gets a
+  the canonical spellings; the MCP tool names keep the internal `phoenix`/`orders`, which the CLI
+  still accepts as aliases), and a mistyped action gets a
   did-you-mean instead of a cryptic error. Scalar fields are plain flags (spelling is forgiving:
   `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued fields take a JSON string
   (`--filters '{…}'`, `--for-self '{…}'`); amount fields accept exact human sugar (`1000e18`,
   `95e16`, `1_000000` — expanded by integer math, never floats); `--chain-id` takes network names
   too (`arbitrum`, `mainnet`, `base`, `sepolia`).
 - **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
-  the full object, `--action`/`--params` blobs, and the older `ch prepare phoenix 42161 --action
-  '{…}'` shape are all unchanged; flags override blob keys, so a saved blob is reusable. Some
+  the full object, `--action`/`--params` blobs, and the older `ch prepare pool 42161 --action
+  '{…}'` shape (`phoenix` works there too) are all unchanged; flags override blob keys, so a saved blob is reusable. Some
   examples below show this as the **alternative style** — it is what an MCP call carries.
 - **Output is prose by default; a bare `--json` returns the raw result envelope.** The walkthrough
   adds `--json` wherever it dissects a response, and the responses shown are that JSON, trimmed.
@@ -521,7 +522,7 @@ ch prepare order taker-fill --chain-id 42161 --account 0xYOUR_SAFE --client-requ
   --order-hash 0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05 \
   --fill-making-amount 100000000000000
 #    (alternative — the canonical wire blob behind the positional chainId:)
-ch prepare orders 42161 --json \
+ch prepare order 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3…df05","fillMakingAmount":"100000000000000"}}'
 
 # 3. dry-run: does it revert at current state? (paste the artifact object from step 2's output)
@@ -592,7 +593,7 @@ ch prepare pool exercise --chain-id 42161 --account 0xYOUR_SAFE --client-request
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
   --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
 # alternative — the canonical wire blob behind the positional chainId:
-ch prepare phoenix 42161 --json \
+ch prepare pool 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x6b02…7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}'
 ```
 Build with `--rpc-url <your node>` so the funding legs resolve — without an explicit RPC the bundle

@@ -22,7 +22,7 @@ Bun 1.3 is pinned in `mise.toml`.
     (`--data 0x…`), and object-ONLY fields reject non-JSON loud (`invalid_json`) — mutation-probed
     (`cli-*` probes), positionals pinned by test. Every discriminated action/kind is ALSO a
     subcommand with the variant's fields flattened to flags and a variant-scoped --help/--explain
-    (`ch prepare phoenix exercise --pool-id … --cst-shares-in 1000e18`, `ch submit rfq-open …`,
+    (`ch prepare pool exercise --pool-id … --cst-shares-in 1000e18`, `ch submit rfq-open …`,
     `ch track verify market-ref …` — English order works: a positional-then-variant spelling is
     shuffled internally, and options after the variant that the parent also declares are merged
     back). The discriminator always comes from the subcommand name (a blob cannot override it).

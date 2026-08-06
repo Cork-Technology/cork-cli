@@ -23,8 +23,10 @@ export interface ToolDef<In extends z.ZodType = z.ZodType> {
   name: `cork_${string}`;
   /** Human display label (MCP Tool.title) — UI-only; models see name/description/schema. */
   title: string;
-  /** CLI command path, e.g. ["prepare", "phoenix"] — the human projection. */
+  /** CLI command path, e.g. ["prepare", "pool"] — the human projection. */
   cliPath: readonly string[];
+  /** Alternate spellings for the CLI leaf (older/internal names kept routable). */
+  cliAliases?: readonly string[];
   phase: 1 | 2 | 3 | 4;
   description: string;
   annotations: ToolAnnotations;
@@ -84,7 +86,8 @@ export const REGISTRY = [
   def({
     name: "cork_prepare_phoenix",
     title: "Cork: build unsigned Phoenix bundle",
-    cliPath: ["prepare", "phoenix"],
+    cliPath: ["prepare", "pool"],
+    cliAliases: ["phoenix"],
     phase: 2,
     description:
       "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities.",
@@ -95,7 +98,8 @@ export const REGISTRY = [
   def({
     name: "cork_prepare_orders",
     title: "Cork: build signable order",
-    cliPath: ["prepare", "orders"],
+    cliPath: ["prepare", "order"],
+    cliAliases: ["orders"],
     phase: 3,
     description:
       "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit.",

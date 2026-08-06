@@ -229,8 +229,8 @@ unchanged.
 MCP server receives; `--input '<object>'` is the same thing under a name that cannot be confused with
 the output flag; or pass subcommands/positionals plus flags named after the tool's own schema fields,
 which is usually what you want by hand — every discriminated action/kind is its own subcommand
-(`ch prepare pool exercise …`, `ch submit rfq-open …`, `ch track verify market-ref …` — `pool`
-and `order` alias the canonical `phoenix`/`orders`) with a
+(`ch prepare pool exercise …`, `ch submit rfq-open …`, `ch track verify market-ref …` — `pool` and
+`order` are canonical; the internal `phoenix`/`orders` spellings remain as aliases) with a
 variant-scoped `--help`/`--explain`:
 
 ```sh
