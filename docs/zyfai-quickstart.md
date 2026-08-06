@@ -2,7 +2,8 @@
 
 **Audience:** the Zyfai engineering team. **Assumes:** fluency with Safe/ERC-7579, 1inch LOP v4,
 EIP-712/ERC-1271, ERC-2612 permits, ERC-4626/7540, CREATE2. **Chain:** Arbitrum One (42161).
-**Status:** as of 2026-08-06, against the redeployed MarketRegistry 2.1.0 stack. Addresses/rates
+**Status:** as of 2026-08-06, against the redeployed MarketRegistry 2.1.0 stack (whose contracts
+self-report `contractsVersion 0.3.0` — same deployment, relabeled). Addresses/rates
 below were read live from chain; still, **treat this doc as orientation and pull the authoritative
 values from the tool** (`ch query protocol-config`), never hardcode them.
 
@@ -300,7 +301,7 @@ OK  ·  ch query  ·  chain 42161
 
 resource               registry-assets
 registry               0x47C3AF38435Db64D9400c30575E4c10482c0752D
-contractsVersion       2.1.0
+contractsVersion       0.3.0
 count                  11
 items
   [2]  sUSDe
@@ -333,7 +334,7 @@ ch query registry-recipes --input '{"chainId":42161}'
 OK  ·  ch query  ·  chain 42161
 
 resource               registry-recipes
-contractsVersion       2.1.0
+contractsVersion       0.3.0
 count                  2
 items
   [1]  0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D
