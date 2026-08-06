@@ -200,11 +200,11 @@ ch capabilities
 
 # reads: a positional for the resource, flags named after the schema's own fields
 ch query protocol-config
-ch query registry-assets --chainid 42161
+ch query registry-assets --chain-id 42161
 
 # actions are subcommands, their fields are flags, amounts take exact sugar (1000e18, 1_000):
-ch compute rollover-premium-floor --dstcstproduced 1000e18 --minpremiumpershare 12e15
-ch prepare phoenix exercise --chainid 42161 --pool-id 0x… --cst-shares-in 1000e18 \
+ch compute rollover-premium-floor --dst-cst-produced 1000e18 --min-premium-per-share 12e15
+ch prepare pool exercise --chain-id 42161 --pool-id 0x… --cst-shares-in 1000e18 \
   --receiver 0x… --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
 
 # the same fields can ride in one JSON blob (flags override blob keys); bare --json = JSON output
@@ -229,20 +229,21 @@ unchanged.
 MCP server receives; `--input '<object>'` is the same thing under a name that cannot be confused with
 the output flag; or pass subcommands/positionals plus flags named after the tool's own schema fields,
 which is usually what you want by hand — every discriminated action/kind is its own subcommand
-(`ch prepare phoenix exercise …`, `ch submit rfq-open …`, `ch track verify market-ref …`) with a
+(`ch prepare pool exercise …`, `ch submit rfq-open …`, `ch track verify market-ref …` — `pool`
+and `order` alias the canonical `phoenix`/`orders`) with a
 variant-scoped `--help`/`--explain`:
 
 ```sh
-ch query market --chainid 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05"}'
+ch query market --chain-id 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05"}'
 ```
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
 spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag (help displays
-the kebab form). Object-valued fields (`--filters`, `--forself`) take a JSON string; union-typed
+the kebab form). Object-valued fields (`--filters`, `--for-self`) take a JSON string; union-typed
 fields accept a raw string too (`ch decode tx --data 0x…` — no quoting gymnastics). Amount fields
 accept exact human sugar: `1000e18` and `1_000000` expand by integer arithmetic (a fractional
 remainder like `1.23e1` is refused with teaching, and sugar applies to flags only — JSON blobs stay
-the exact wire form). `--chainid` also takes network names (`arbitrum`, `mainnet`, `base`,
+the exact wire form). `--chain-id` also takes network names (`arbitrum`, `mainnet`, `base`,
 `sepolia`), and a mistyped action name gets a did-you-mean refusal.
 
 Every tool accepts an optional `"format"` — `"concise"` (the default) or `"full"` for the verbose

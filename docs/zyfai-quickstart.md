@@ -48,8 +48,8 @@ plain reads — you sign/broadcast with your own stack.
 |---|---|---|---|
 | 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `market-predict`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
 | 2 | **Bond mints cST and creates a limit order (to sell)** | Bond answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | Bond's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
-| 3 | **Zyfai buys Bond's cST** (by filling Bond's limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare orders` → `taker-fill`; `ch track` → `simulate` |
-| 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare phoenix` → `exercise` / `exercise-other` |
+| 3 | **Zyfai buys Bond's cST** (by filling Bond's limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
+| 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare pool` → `exercise` / `exercise-other` |
 
 One piece of one-time prep per CA/REF pair comes before step 1: deploying the pair's rate oracle
 (`ch prepare market` → `deploy-oracle`). It is permissionless, idempotent, and optional — a JIT
@@ -88,13 +88,14 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   derivation yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real
   and runnable today.
 - **Commands read like English: the action is a subcommand, its fields are flags.**
-  `ch prepare phoenix exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
+  `ch prepare pool exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
   `ch compute resolve-recipe --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
-  tool is its own subcommand with its own `--help` and `--explain`, and a mistyped action gets a
+  tool is its own subcommand with its own `--help` and `--explain` (`pool` and `order` are
+  friendlier aliases of the canonical `phoenix`/`orders` leaves; both spellings work everywhere), and a mistyped action gets a
   did-you-mean instead of a cryptic error. Scalar fields are plain flags (spelling is forgiving:
   `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued fields take a JSON string
-  (`--filters '{…}'`, `--forself '{…}'`); amount fields accept exact human sugar (`1000e18`,
-  `95e16`, `1_000000` — expanded by integer math, never floats); `--chainid` takes network names
+  (`--filters '{…}'`, `--for-self '{…}'`); amount fields accept exact human sugar (`1000e18`,
+  `95e16`, `1_000000` — expanded by integer math, never floats); `--chain-id` takes network names
   too (`arbitrum`, `mainnet`, `base`, `sepolia`).
 - **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
   the full object, `--action`/`--params` blobs, and the older `ch prepare phoenix 42161 --action
@@ -141,10 +142,10 @@ read you can run right now (all responses below were captured live).
 Look one asset up by address to see what the registry actually knows about it:
 
 ```sh
-ch query registry-assets --chainid 42161 --json \
+ch query registry-assets --chain-id 42161 --json \
   --filters '{"address":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
 # alternative — the rest in one --input blob:
-ch query registry-assets --chainid 42161 --input '{"filters":{"address":"0x4448…4D14"}}' --json
+ch query registry-assets --chain-id 42161 --input '{"filters":{"address":"0x4448…4D14"}}' --json
 ```
 ```jsonc
 { "address": "0x444868B6e8079ac2c55eea115250f92C2b2c4D14", "name": "dUSDC", "kind": "ERC4626",
@@ -170,7 +171,7 @@ Source values are only comparable when they end up in the same unit. The registr
 table maps each label to its unit (a token address, or a pseudo-unit like ISO-4217 USD):
 
 ```sh
-ch query registry-denominations --chainid 42161 --json
+ch query registry-denominations --chain-id 42161 --json
 # alternative — the rest in one --input blob:
 ch query registry-denominations --input '{"chainId":42161}' --json
 ```
@@ -186,7 +187,7 @@ which is the next stop.
 **Stop 3 — feeds: the bridges between denominations.**
 
 ```sh
-ch query registry-feeds --chainid 42161 --json
+ch query registry-feeds --chain-id 42161 --json
 # alternative — the rest in one --input blob:
 ch query registry-feeds --input '{"chainId":42161}' --json
 ```
@@ -205,10 +206,10 @@ reconcile them; a pair with **no path cannot get a price oracle at all** (you'd 
 This is the go/no-go check for a pair, before you think about terms:
 
 ```sh
-ch query registry-oracle --chainid 42161 --json \
+ch query registry-oracle --chain-id 42161 --json \
   --filters '{"collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","referenceAsset":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
 # alternative — the rest in one --input blob:
-ch query registry-oracle --chainid 42161 --input '{"filters":{…same…}}' --json
+ch query registry-oracle --chain-id 42161 --input '{"filters":{…same…}}' --json
 ```
 ```jsonc
 { "mode": "price",   // the default; pass filters.mode "nav" explicitly when you mean book value
@@ -228,12 +229,12 @@ Step 1b lists the two approved recipe contracts. To see what a recipe would *act
 to* on your pair, ask it — `resolve-recipe` is the very staticcall a fill runs:
 
 ```sh
-ch compute resolve-recipe --chainid 42161 --json \
+ch compute resolve-recipe --chain-id 42161 --json \
   --recipe 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14
 # alternative — the canonical wire blob:
-ch compute --chainid 42161 --input '{"params":{"kind":"resolve-recipe","recipe":"0xA39d…1234D","collateralAsset":"0x211C…5d2","referenceAsset":"0x4448…D14"}}' --json
+ch compute --chain-id 42161 --input '{"params":{"kind":"resolve-recipe","recipe":"0xA39d…1234D","collateralAsset":"0x211C…5d2","referenceAsset":"0x4448…D14"}}' --json
 ```
 ```jsonc
 { "kind": "resolve-recipe", "recipe": "0xA39d5528…1234D",
@@ -289,7 +290,7 @@ List the assets the registry approves. Each entry self-describes its price/NAV s
 metadata:
 
 ```sh
-ch query registry-assets --chainid 42161
+ch query registry-assets --chain-id 42161
 # alternative — the rest in one --input blob:
 ch query registry-assets --input '{"chainId":42161}'
 ```
@@ -323,7 +324,7 @@ The recipe sets how the market's rate may move, which is what defines the cover.
 recipe is an **approved contract address** that self-reports its rules:
 
 ```sh
-ch query registry-recipes --chainid 42161
+ch query registry-recipes --chain-id 42161
 # alternative — the rest in one --input blob:
 ch query registry-recipes --input '{"chainId":42161}'
 ```
@@ -359,10 +360,10 @@ cST/cPT addresses, oracle, and resolved constraint — before anything exists on
 
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
-ch query market-predict --chainid 42161 --json \
+ch query market-predict --chain-id 42161 --json \
   --filters "{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}"
 # alternative — the rest in one --input blob (`--json` stays the bare output flag):
-ch query market-predict --chainid 42161 --json \
+ch query market-predict --chain-id 42161 --json \
   --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}}"
 ```
 ```jsonc
@@ -401,16 +402,16 @@ field-by-field mapping and a pre-RFQ checklist if any of them feels arbitrary.
 
 ```sh
 VU=$(date -u -d '+1 hour' +%s)
-ch submit rfq-open --chainid 42161 --clientrequestid rfq-0001 --json \
+ch submit rfq-open --chain-id 42161 --client-request-id rfq-0001 --json \
   --requester 0xYOUR_SAFE \
   --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14 \
   --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
-  --modes '["liquidity_only"]' --packageids '["balanced-v1"]' \
-  --expirywindow "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
-  --markettemplate '{"inline":{"oracle_recipe":"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D"}}' \
-  --notionalassets … --validuntil $VU --signature 0x…
+  --modes '["liquidity_only"]' --package-ids '["balanced-v1"]' \
+  --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
+  --market-template '{"inline":{"oracle_recipe":"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D"}}' \
+  --notional-assets … --valid-until $VU --signature 0x…
 # alternative — the canonical wire blob behind the positional chainId:
-ch submit 42161 --clientrequestid rfq-0001 --json \
+ch submit 42161 --client-request-id rfq-0001 --json \
   --input "{\"action\":{\"type\":\"rfq-open\", …the same fields… }}"
 ```
 Conventions the live flow uses (all observable in the venue's open RFQs):
@@ -426,10 +427,10 @@ Conventions the live flow uses (all observable in the venue's open RFQs):
 Then watch for answers — this is also how you'd browse what others are asking:
 
 ```sh
-ch query rfqs --chainid 42161                                    # all open RFQs
-ch query rfqs --chainid 42161 --filters '{"rfqId":"rfq_…"}'      # one RFQ with all its answers
+ch query rfqs --chain-id 42161                                    # all open RFQs
+ch query rfqs --chain-id 42161 --filters '{"rfqId":"rfq_…"}'      # one RFQ with all its answers
 # alternative — the rest in one --input blob:
-ch query rfqs --chainid 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
+ch query rfqs --chain-id 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
 ```
 
 ---
@@ -463,10 +464,10 @@ commit — `decode order` unpacks the adapter, recipe, carried constraint, and p
 order's own bytes:
 
 ```sh
-ch query orderbook --chainid 42161 --json \
+ch query orderbook --chain-id 42161 --json \
   --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
 # alternative:
-ch query orderbook --chainid 42161 --json \
+ch query orderbook --chain-id 42161 --json \
   --input '{"filters":{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}}'
 ```
 ```jsonc
@@ -488,9 +489,9 @@ The venue row carries the order's own struct fields (`salt`/`maker`/…/`extensi
 them straight to the decoder:
 
 ```sh
-ch decode order --chainid 42161 --data '{…the signed order row…}' --json
+ch decode order --chain-id 42161 --data '{…the signed order row…}' --json
 # alternative:
-ch decode order --chainid 42161 --input '{"data":{…the signed order row…}}' --json
+ch decode order --chain-id 42161 --input '{"data":{…the signed order row…}}' --json
 ```
 ```jsonc
 { "state": "ok", "data": { "jit": {          // decoded live from the row above
@@ -512,11 +513,11 @@ for you. Three commands: re-verify, build, dry-run.
 
 ```sh
 # 1. re-verify the market on-chain (the book is discovery only)
-ch query market --chainid 42161 --json \
+ch query market --chain-id 42161 --json \
   --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
-ch prepare orders taker-fill --chainid 42161 --account 0xYOUR_SAFE --clientrequestid buy-0001 --json \
+ch prepare order taker-fill --chain-id 42161 --account 0xYOUR_SAFE --client-request-id buy-0001 --json \
   --order-hash 0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05 \
   --fill-making-amount 100000000000000
 #    (alternative — the canonical wire blob behind the positional chainId:)
@@ -524,9 +525,9 @@ ch prepare orders 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3…df05","fillMakingAmount":"100000000000000"}}'
 
 # 3. dry-run: does it revert at current state? (paste the artifact object from step 2's output)
-ch track simulate --chainid 42161 --subject '{"kind":"artifact","artifact":{…}}' --json
+ch track simulate --chain-id 42161 --subject '{"kind":"artifact","artifact":{…}}' --json
 #    (alternative:)
-ch track simulate --chainid 42161 --input '{"subject":{"kind":"artifact","artifact":{…}}}' --json
+ch track simulate --chain-id 42161 --input '{"subject":{"kind":"artifact","artifact":{…}}}' --json
 ```
 Then **sign the calldata with your own Safe stack and broadcast.** The fill is atomic: the adapter
 creates the market if it's new and mints the cST to your Safe, pulling the CA premium from you in
@@ -549,7 +550,7 @@ the same transaction. What to check:
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
   (§5, item A).
 - **Or build through your deployed adapter and skip both worries:** add
-  `--forself '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` to the `taker-fill` subcommand (in
+  `--for-self '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` to the `taker-fill` subcommand (in
   blob form: `"forSelf":{…}` inside the action) and the tool emits `fillOrderForSelf` instead —
   the bought asset structurally forced to the caller, taker interactions impossible, the
   taker-asset allowance granted to the adapter (never the LOP). The tool verifies the adapter's
@@ -586,7 +587,7 @@ counterparty needed, so it works exactly when the market is stressed.
 ```sh
 # replace 0xYOUR_SAFE (used for both account and receiver); REF (dUSDC) is 6-dec, CA (sUSDe) 18-dec
 # amounts use exact sugar: 1000e18 cST in, floor 0.95 sUSDe out, at most 1 dUSDC (1_000000) in
-ch prepare phoenix exercise --chainid 42161 --account 0xYOUR_SAFE --clientrequestid exercise-0001 --json \
+ch prepare pool exercise --chain-id 42161 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
   --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78 \
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
   --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
@@ -600,7 +601,7 @@ deliberately offline by default). Then sign with your Safe stack, routing the ca
 `*ForSelf` adapter so `receiver` is forced to the Safe (§5, item A).
 
 Once that adapter is deployed, skip the routing step and build the twin call directly: add
-`--forself '{"adapter":"0xYOUR_ADAPTER"}'` and the artifact becomes a single `exerciseForSelf`
+`--for-self '{"adapter":"0xYOUR_ADAPTER"}'` and the artifact becomes a single `exerciseForSelf`
 transaction — no Bundler3 legs, output structurally to the Safe, allowances to the adapter (each
 flow's exact allowance needs are machine-readable in `data.forSelf.allowances`). Keep in mind:
 - `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-check the preview at
@@ -624,9 +625,9 @@ a two-party trade, and the roles are easy to mix up:
 Find open rollover orders:
 
 ```sh
-ch query flows --chainid 42161 --filters '{"kind":"orders"}'
+ch query flows --chain-id 42161 --filters '{"kind":"orders"}'
 # alternative:
-ch query flows --chainid 42161 --input '{"filters":{"kind":"orders"}}'
+ch query flows --chain-id 42161 --input '{"filters":{"kind":"orders"}}'
 ```
 ```text
 OK  ·  ch query  ·  chain 42161
@@ -692,7 +693,7 @@ Streamable HTTP endpoint with `/healthz` and `/docs/signing`.)
 
 **CLI:** put `bin/` on PATH → `ch <command> [action] [--flags…] [--json] [--rpc-url <url>]
 [--explain]`. Every action/kind is a subcommand with its fields as flags
-(`ch prepare phoenix exercise --pool-id … --cst-shares-in 1000e18`), amount fields take exact
+(`ch prepare pool exercise --pool-id … --cst-shares-in 1000e18`), amount fields take exact
 human sugar (`1000e18`, `1_000000`), objects ride as JSON-string flag values, and the canonical
 wire blob (`--input '{…}'`) works everywhere; a bare `--json` switches the output from prose to
 the raw envelope. Runtime is **Bun** (pinned), not Node.
@@ -911,7 +912,7 @@ The `search` result hands you example inputs you can paste straight into the com
     // …more examples
   ] } ] } }
 ```
-Lift the `input` object's fields straight onto the command line (`ch compute --chainid 42161
+Lift the `input` object's fields straight onto the command line (`ch compute --chain-id 42161
 --params '{…}'`) — or run the object verbatim with `ch compute --input '<that object>'`.
 
 ### 7c. Try it from Claude Code

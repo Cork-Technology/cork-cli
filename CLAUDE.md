@@ -14,7 +14,7 @@ Bun 1.3 is pinned in `mise.toml`.
   `bun packages/cli/src/bin.ts <command> …`
   - **Input**, three interchangeable forms: `--json '<object>'` (canonical wire shape, same as MCP) ·
     `--input '<object>'` (identical, unambiguous name) · a positional for the first required scalar
-    plus flags named after the schema's own fields (`ch query registry-assets --chainid 42161`).
+    plus flags named after the schema's own fields (`ch query registry-assets --chain-id 42161`).
     Flags override keys in a JSON blob. Spelling is normalised, so `--chainid`, `--chain-id` and
     `--chainId` are one flag; object-valued fields (`--filters`, `--params`) take a JSON string.
     Flag typing is schema-judged ($refs resolved): $ref'd string fields are plain flags
@@ -28,7 +28,7 @@ Bun 1.3 is pinned in `mise.toml`.
     back). The discriminator always comes from the subcommand name (a blob cannot override it).
     Amount fields (digits-only pattern) take exact sugar on FLAGS only: `1000e18`/`1_000` expand
     via integer math; fractional remainders are refused (`invalid_amount`); blobs stay the exact
-    wire form. `--chainid` also takes network names (mainnet/ethereum/arbitrum/base/sepolia). Help
+    wire form. `--chain-id` also takes network names (mainnet/ethereum/arbitrum/base/sepolia). Help
     displays kebab flag spellings (`--client-request-id`); an --action/--params blob given WITH a
     variant subcommand merges as the base (variant flags override, discriminator still injected);
     a mistyped action gets a levenshtein did-you-mean refusal pre-parse. All mutation-probed
