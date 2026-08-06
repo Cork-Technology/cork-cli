@@ -55,10 +55,13 @@ both pinned as submodules.
    could simply sign its own order, sell one wei of a worthless token for the account's
    entire balance, and name itself as the receiver: nothing is misdirected, so
    target-forcing is silent. This wrapper therefore requires each fill to name a `poolId`
-   and to trade that market's cST against its collateral asset, in one direction or the
-   other, with both addresses read from the pinned pool manager rather than from the
-   caller. A caged agent can only ever buy or sell genuine cover in a real market. **What
-   remains is price risk** — see "What these adapters do NOT close".
+   and to trade one of that market's share tokens (cST or cPT) against one of its cash
+   legs (collateral or reference asset), in one direction or the other, with all four
+   addresses read from the pinned pool manager rather than from the caller — the set the
+   live venue actually lists (cST *and* cPT markets, quoted in collateral) plus the
+   reference leg the protocol equally supports. A caged agent can only ever buy or sell
+   genuine market value in a real market. **What remains is price risk** — see "What
+   these adapters do NOT close".
    The check runs *after* the fill on purpose: a Cork order may create its market just in
    time, during the fill itself, so the market is unreadable beforehand. Checking after
    covers both plain and just-in-time orders with one rule and gives up nothing, because a
@@ -138,6 +141,16 @@ Arbitrum One (chain id 42161) at the time of writing:
 | `CorkPoolManager` | `0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2` |
 | 1inch LOP v4 | `0x111111125421cA6dc452d289314280a0f8842A65` |
 | `WhitelistManager` | `0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A` |
+
+Those two are the only contracts the adapters ever call, and the only constructor
+arguments. The just-in-time order flow additionally involves the MarketRegistry 2.1.0
+stack — named inside the *orders* the wrapper fills, never called by the wrapper itself:
+
+| | |
+|---|---|
+| `MarketRegistry` (2.1.0) | `0x47C3AF38435Db64D9400c30575E4c10482c0752D` |
+| `CorkLimitOrderAdapter` (JIT, 2.1.0) | `0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B` |
+| `DefaultCorkController` | `0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172` |
 
 Verify these against the live deployment before deploying — Cork publishes the current set,
 and the addresses above are a snapshot, not a promise.
@@ -225,13 +238,17 @@ whole scope of receiver-forcing, and it should shape the rest of your policy:
    guard across both surfaces in the combined contract.
 8. The market binding in `_requireOrderIsForPool` — the only thing standing between a caged agent and
    an arbitrary transfer out of the account — including *why* it runs after the fill rather than
-   before, and that a failure there reverts the payment along with everything else.
+   before, that a failure there reverts the payment along with everything else, and that the
+   admitted pair set (a share asset against a cash leg, either direction) never reaches outside the
+   named market's own balance sheet.
 9. Error names are deliberately distinct from the protocols' where both can surface in one trace.
-   A fill runs Cork's JIT adapter inside it (via the order extension's pre-interaction), and that
-   adapter raises `OrderNotForPool()` on rate drift — so the market-binding failure here is
-   `OrderAssetsNotInMarket(makerAsset, takerAsset)` instead, and carries the offending pair. Cork's
-   `DeadlineExceeded` is declared but never raised in core, and its `ZeroAddress` only fires in
-   market creation, which this adapter never calls; those names are therefore safe to share.
+   A fill may run Cork's JIT adapter inside it (via the order extension's pre-interaction), and
+   that adapter raises `OrderNotForPool()` when an order's side does not match its derived pool
+   (and `RecipeRejectedConstraint` when the carried constraint has gone stale against the live
+   rate) — so the market-binding failure here is `OrderAssetsNotInMarket(makerAsset, takerAsset)`
+   instead, and carries the offending pair. Cork's `DeadlineExceeded` is declared but never raised
+   in core, and its `ZeroAddress` only fires in market creation, which this adapter never calls;
+   those names are therefore safe to share.
 10. **Do not add ERC-1271 to this contract.** If the adapter could validate signatures, an order naming
    the adapter itself as maker would let the protocol spend the adapter's transient allowance. Today
    that is rejected only because `isValidSignature` does not exist here.
@@ -259,7 +276,7 @@ lib/<name>` and commit the updated gitlink.
 
 ## Tests
 
-38 tests. Most run against the **live** Arbitrum One deployment on a fork — real pool, real
+43 tests. Most run against the **live** Arbitrum One deployment on a fork — real pool, real
 protocol, real orders signed in-test:
 
 ```sh
@@ -276,13 +293,19 @@ caller cannot inject a mid-fill interaction, and a **properly signed** self-deal
 one the protocol itself is perfectly willing to execute — is stopped by the market binding
 with the account's balance untouched.
 
-The two exceptions are `test/JitOrdering.t.sol`, which uses mocks and needs no fork. They pin the
-one property a live market cannot demonstrate: that the market binding is checked *after* the fill,
-so an order whose market is created during that same fill is accepted, while one whose market never
-appears still reverts and unwinds the payment. Mocks are used there by necessity: no JIT adapter yet
-exists for the live deployment (the only one deployed is bound to the pre-launch pool manager, and
-every order in the live book carries an empty extension), so there is nothing to fill against. What
-those tests cover is this wrapper's ordering, which is the part Cork owns.
+`test/JitFill210.t.sol` takes the just-in-time story all the way: it builds a complete
+MarketRegistry 2.1.0 JIT order from live chain state — constraint from `recipe.resolve`, the
+cST prediction and its ERC-2612 permit domain from a create-then-unwind state snapshot, both
+signatures from throwaway test keys — and fills it through the wrapper against the real
+protocol stack. The market this order belongs to does not exist when the fill begins; the
+fill creates it, the wrapper's post-fill binding admits it, and the cover lands on the
+caller. A second test presents the same genuine fill under the wrong `poolId` and shows the
+binding still reverts, unwinding the created market, the mint, and the payment together. It
+needs a fork block on which the JIT adapter holds its controller roles (granted 2026-08-04,
+block 491025419 — any current block qualifies).
+
+`test/JitOrdering.t.sol` pins the same ordering property offline with mocks and no fork —
+kept because it documents the check-after-fill decision in isolation, at zero RPC cost.
 
 ### Verified against the deployed Zyfai account
 

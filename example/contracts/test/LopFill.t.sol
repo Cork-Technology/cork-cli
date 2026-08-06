@@ -144,6 +144,101 @@ contract LopFillTest is ForkBase {
         _assertAdapterClean(address(lopAdapter));
     }
 
+    /// @dev The live venue lists cPT markets quoted in collateral alongside the cST ones
+    ///      (observed on Arbitrum, 2026-08-06). The market binding admits any of the
+    ///      pool's share assets against either cash leg — this pins the cPT side.
+    function test_fill_cptAgainstCollateral_isBoundToTheMarket() public {
+        uint256 seeded = _seedShares(poolAdapter, 10e18);
+        vm.prank(safe);
+        assertTrue(IERC20(cpt).transfer(maker, seeded), "maker cPT inventory");
+        vm.prank(maker);
+        IERC20(cpt).approve(LOP, type(uint256).max);
+
+        IOrderMixinMinimal.Order memory order = _makeOrder(5e18, 1e18, 5);
+        order.makerAsset = uint256(uint160(cpt));
+        deal(collateralAsset, safe, 1e18);
+        uint256 safeCptBefore = IERC20(cpt).balanceOf(safe);
+
+        vm.startPrank(safe);
+        IERC20(collateralAsset).approve(address(lopAdapter), 1e18);
+        (uint256 making,,) = lopAdapter.fillOrderForSelf(
+            CorkLopFillForSelfBase.FillOrderForSelfParams({
+                poolId: POOL_ID,
+                order: order,
+                signature: _signCompact(order),
+                amount: 1e18,
+                takerTraits: 0,
+                extension: "",
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+
+        assertEq(making, 5e18);
+        assertEq(IERC20(cpt).balanceOf(safe), safeCptBefore + 5e18, "cPT delivered to the caller");
+        _assertAdapterClean(address(lopAdapter));
+    }
+
+    /// @dev The reference asset is the market's other cash leg; a cST order quoted in it
+    ///      is still genuine market value and passes the binding.
+    function test_fill_cstAgainstReference_isBoundToTheMarket() public {
+        IOrderMixinMinimal.Order memory order = _makeOrder(10e18, 1e18, 6);
+        order.takerAsset = uint256(uint160(referenceAsset));
+        deal(referenceAsset, safe, 1e18);
+        uint256 safeCstBefore = IERC20(cst).balanceOf(safe);
+
+        vm.startPrank(safe);
+        IERC20(referenceAsset).approve(address(lopAdapter), 1e18);
+        (uint256 making,,) = lopAdapter.fillOrderForSelf(
+            CorkLopFillForSelfBase.FillOrderForSelfParams({
+                poolId: POOL_ID,
+                order: order,
+                signature: _signCompact(order),
+                amount: 1e18,
+                takerTraits: 0,
+                extension: "",
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+
+        assertEq(making, 10e18);
+        assertEq(IERC20(cst).balanceOf(safe), safeCstBefore + 10e18, "cST delivered to the caller");
+        _assertAdapterClean(address(lopAdapter));
+    }
+
+    /// @dev Two real market assets that are BOTH cash legs do not pair: the binding
+    ///      requires a share asset on one side, so the wrapper cannot be used as a
+    ///      general collateral/reference swapper.
+    function test_fill_cashAgainstCash_reverts() public {
+        IOrderMixinMinimal.Order memory order = _makeOrder(1e18, 1e18, 7);
+        order.makerAsset = uint256(uint160(referenceAsset));
+        deal(referenceAsset, maker, 1e18);
+        vm.prank(maker);
+        IERC20(referenceAsset).approve(LOP, type(uint256).max);
+        deal(collateralAsset, safe, 1e18);
+
+        // Sign BEFORE the cheatcode: _signCompact makes an external hashOrder call, which
+        // would otherwise consume the expectRevert.
+        bytes memory signature = _signCompact(order);
+
+        vm.startPrank(safe);
+        IERC20(collateralAsset).approve(address(lopAdapter), 1e18);
+        vm.expectPartialRevert(CorkLopFillForSelfBase.OrderAssetsNotInMarket.selector);
+        lopAdapter.fillOrderForSelf(
+            CorkLopFillForSelfBase.FillOrderForSelfParams({
+                poolId: POOL_ID,
+                order: order,
+                signature: signature,
+                amount: 1e18,
+                takerTraits: 0,
+                extension: "",
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+    }
+
     function test_fill_contractMaker_viaErc1271Branch() public {
         ERC1271Maker contractMaker = new ERC1271Maker();
         vm.prank(maker);

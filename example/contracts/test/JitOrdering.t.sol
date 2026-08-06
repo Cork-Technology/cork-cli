@@ -14,13 +14,11 @@ import {MockJitLop, MockJitPoolManager} from "./mocks/MockJitProtocols.sol";
 ///      whose market is created during the fill itself — is not rejected for a market that
 ///      could not exist yet. These tests pin that ordering.
 ///
-///      They run against mocks rather than a fork, deliberately and by necessity. On
-///      2026-07-28 no JIT adapter exists for the live Arbitrum deployment: the only one
-///      deployed reports `poolManager() == 0xc2De…54AE`, the pre-launch pool manager, and
-///      every order in the live book carries an empty extension. So there is nothing to
-///      fill against. What is verified here is this wrapper's ordering, which is the part
-///      Cork owns; the JIT adapter's own behaviour is Cork protocol territory and is
-///      covered upstream.
+///      They run against mocks and need no fork, so the ordering decision stays
+///      documented and enforced at zero RPC cost. The same property is proven against
+///      the REAL MarketRegistry 2.1.0 stack — live JIT adapter, real market created
+///      inside a real 1inch fill — in `JitFill210.t.sol`, which is the authoritative
+///      end-to-end check; keep both.
 contract JitOrderingTest is Test {
     MockERC20 internal collateral;
     MockERC20 internal cst;

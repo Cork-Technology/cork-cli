@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import {MarketId} from "../interfaces/ICorkPoolManagerMinimal.sol";
+import {Market, MarketId} from "../interfaces/ICorkPoolManagerMinimal.sol";
 import {IOrderMixinMinimal} from "../interfaces/IOrderMixinMinimal.sol";
 import {ForSelfCommon} from "./ForSelfCommon.sol";
 
@@ -42,13 +42,15 @@ import {ForSelfCommon} from "./ForSelfCommon.sol";
 ///         nothing was misdirected — the account really did "buy" something.
 ///
 ///         So this wrapper is a CORK fill wrapper, not a general 1inch one. Every fill is
-///         bound to a Cork market: the order must trade that market's cST against its
-///         collateral asset, in one direction or the other, with both addresses read from
-///         the pinned pool manager rather than taken from the caller. A caged agent can
-///         therefore only ever buy or sell genuine cover in a real market. What remains
-///         is price risk — it may still trade badly — which is bounded by the allowance
-///         the account grants this adapter, not by anything a wrapper can enforce. See
-///         the README's residual-risk section.
+///         bound to a Cork market: the order must trade one of that market's share tokens
+///         (cST or cPT) against one of its cash legs (collateral or reference asset), in
+///         one direction or the other, with all four addresses read from the pinned pool
+///         manager rather than taken from the caller — the set the live venue actually
+///         lists (cST and cPT markets quoted in collateral) plus the reference leg. A
+///         caged agent can therefore only ever buy or sell genuine market value in a real
+///         market. What remains is price risk — it may still trade badly — which is
+///         bounded by the allowance the account grants this adapter, not by anything a
+///         wrapper can enforce. See the README's residual-risk section.
 ///
 ///         One entrypoint serves both maker kinds: contract makers (ERC-1271) are
 ///         detected by code size and routed to `fillContractOrderArgs`; EOA makers'
@@ -162,20 +164,28 @@ abstract contract CorkLopFillForSelfBase is ForSelfCommon {
         _sweep(takerAsset);
     }
 
-    /// @dev The order must trade this market's cST against its collateral asset, one way
-    ///      or the other. Both addresses come from the pinned pool manager, never from
-    ///      the caller, so an unknown market (zeroed struct) or a substituted token pair
-    ///      cannot pass. This is what stops a caged agent from handing the wrapper a
-    ///      self-signed order that pays the account's balance to an address of its
-    ///      choosing in exchange for a worthless token. Called after the fill so that a
+    /// @dev The order must trade one of this market's share tokens (cST or cPT) against
+    ///      one of its cash legs (collateral or reference asset), one way or the other.
+    ///      All four addresses come from the pinned pool manager, never from the caller,
+    ///      so an unknown market (zeroed struct) or a substituted token pair cannot pass.
+    ///      This is what stops a caged agent from handing the wrapper a self-signed order
+    ///      that pays the account's balance to an address of its choosing in exchange for
+    ///      a worthless token. The admitted set mirrors what the venue actually lists
+    ///      (cST- and cPT-against-collateral markets, observed live on Arbitrum) plus the
+    ///      reference-asset quote leg the protocol equally supports; every admitted asset
+    ///      is a real balance-sheet leg of the named market, so the "only genuine value in
+    ///      a real market" guarantee is unchanged. Called after the fill so that a
     ///      just-in-time market, which does not exist until the fill creates it, is
     ///      readable by the time it is checked.
     function _requireOrderIsForPool(MarketId poolId, address makerAsset, address takerAsset) internal view {
-        (, address corkSwapToken) = CORK.shares(poolId);
-        address collateralAsset = CORK.market(poolId).collateralAsset;
-        bool known = corkSwapToken != address(0) && collateralAsset != address(0);
-        bool paired = (makerAsset == corkSwapToken && takerAsset == collateralAsset)
-            || (makerAsset == collateralAsset && takerAsset == corkSwapToken);
+        (address principalToken, address corkSwapToken) = CORK.shares(poolId);
+        Market memory params = CORK.market(poolId);
+        bool known = corkSwapToken != address(0) && params.collateralAsset != address(0);
+        bool makerIsShare = makerAsset == corkSwapToken || makerAsset == principalToken;
+        bool takerIsShare = takerAsset == corkSwapToken || takerAsset == principalToken;
+        bool makerIsCash = makerAsset == params.collateralAsset || makerAsset == params.referenceAsset;
+        bool takerIsCash = takerAsset == params.collateralAsset || takerAsset == params.referenceAsset;
+        bool paired = (makerIsShare && takerIsCash) || (makerIsCash && takerIsShare);
         require(known && paired, OrderAssetsNotInMarket(makerAsset, takerAsset));
     }
 
