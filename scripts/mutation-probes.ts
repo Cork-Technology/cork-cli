@@ -46,6 +46,7 @@ const T = {
   venue: "packages/core/test/venue.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
+  phala: "packages/core/test/phala-attest.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -490,6 +491,83 @@ const CATALOG: Mutant[] = [
     find: "candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())",
     replace: "candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() !== to.toLowerCase())",
     tests: [T.decodeTx],
+  },
+  {
+    // chainId conflict gate: the signature commits to the tx's chainId — an inverted comparator
+    // would bless wrong-chain broadcasts and conflict the honest ones.
+    id: "decodetx-chainid-gate-inverted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "if (input.chainId !== undefined && txChainId !== undefined && input.chainId !== txChainId) {",
+    replace: "if (input.chainId !== undefined && txChainId !== undefined && input.chainId === txChainId) {",
+    tests: [T.decodeTx],
+  },
+  {
+    // Envelope enum guard: dropping the ChainId membership check leaks an exotic tx chainId into
+    // provenance, making the result violate the advertised outputSchema.
+    id: "decodetx-chain-enum-guard-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "const txChainKnown = txChainId === undefined || ChainId.safeParse(txChainId).success;",
+    replace: "const txChainKnown = true;",
+    tests: [T.decodeTx],
+  },
+  // ── Phala attestation: the byte math a third-party deployment verdict stands on ───────────
+  {
+    // Measurement chain order: SHA384(old || digest), never the reverse.
+    id: "phala-rtmr-concat-swapped",
+    file: "packages/core/src/phala-attest.ts",
+    find: "rtmr = sha384(Buffer.concat([rtmr, digest]));",
+    replace: "rtmr = sha384(Buffer.concat([digest, rtmr]));",
+    tests: [T.phala],
+  },
+  {
+    // RTMR3 measures ONLY imr==3 events — folding other registers' events in breaks the replay.
+    id: "phala-rtmr-imr-filter",
+    file: "packages/core/src/phala-attest.ts",
+    find: "if (e.imr !== 3) continue;",
+    replace: "if (e.imr > 3) continue;",
+    tests: [T.phala],
+  },
+  {
+    // Short digests pad on the RIGHT (documented replay detail) — left-padding measures differently.
+    id: "phala-rtmr-pad-left",
+    file: "packages/core/src/phala-attest.ts",
+    find: "digest = Buffer.concat([digest, Buffer.alloc(48 - digest.length, 0)]);",
+    replace: "digest = Buffer.concat([Buffer.alloc(48 - digest.length, 0), digest]);",
+    tests: [T.phala],
+  },
+  {
+    // TD-report field offsets: shifting rtmr3 one stride down silently returns rtmr2 — the
+    // classic off-by-a-field that the real-quote pinned bytes exist to catch.
+    id: "phala-quote-rtmr3-offset",
+    file: "packages/core/src/phala-attest.ts",
+    find: "rtmr0: 328, rtmr1: 376, rtmr2: 424, rtmr3: 472,",
+    replace: "rtmr0: 328, rtmr1: 376, rtmr2: 424, rtmr3: 424,",
+    tests: [T.phala],
+  },
+  {
+    // compose-hash anchors to ITS event, not whichever imr3 event comes along.
+    id: "phala-compose-event-name",
+    file: "packages/core/src/phala-attest.ts",
+    find: 'events.find((e) => e.event === "compose-hash")',
+    replace: 'events.find((e) => e.event === "instance-id")',
+    tests: [T.phala],
+  },
+  {
+    // An imageless compose must FAIL the pin check — a vacuous pass would bless an empty deploy.
+    id: "phala-pin-vacuous-pass",
+    file: "packages/core/src/phala-attest.ts",
+    find: "ok: images.length > 0 && unpinned.length === 0 && wrongDigest.length === 0",
+    replace: "ok: unpinned.length === 0 && wrongDigest.length === 0",
+    tests: [T.phala],
+  },
+  {
+    // The pinned digest must EQUAL the released one — pinned-but-different is the supply-chain
+    // swap this check exists to catch.
+    id: "phala-pin-wrong-digest-blessed",
+    file: "packages/core/src/phala-attest.ts",
+    find: "const wrongDigest = images.filter((i) => /@sha256:[0-9a-f]{64}$/.test(i) && !i.toLowerCase().endsWith(`@${expectedDigest.toLowerCase()}`));",
+    replace: "const wrongDigest: string[] = [];",
+    tests: [T.phala],
   },
 ];
 

@@ -23,24 +23,34 @@ interface SurfaceEntry {
   annotations: Record<string, unknown>;
 }
 
+/** The whole agent-visible surface: the initialize `instructions` string is prompt-injected into
+ *  every connected agent exactly like tool descriptions are, so it drifts under the same gate. */
+interface Surface {
+  instructions: string;
+  tools: SurfaceEntry[];
+}
+
 function sha(v: unknown): string {
   return createHash("sha256").update(JSON.stringify(v)).digest("hex");
 }
 
-async function currentSurface(): Promise<SurfaceEntry[]> {
+async function currentSurface(): Promise<Surface> {
   const server = createCorkServer({ nowSeconds: 1_800_000_000n });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "drift-gate", version: "0" });
   await Promise.all([client.connect(clientT), server.connect(serverT)]);
   const { tools } = await client.listTools();
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description ?? "",
-    descriptionTokensApprox: Math.ceil((t.description ?? "").length / 4),
-    inputSchemaSha256: sha(t.inputSchema),
-    outputSchemaSha256: sha(t.outputSchema ?? null),
-    annotations: (t.annotations ?? {}) as Record<string, unknown>,
-  }));
+  return {
+    instructions: client.getInstructions() ?? "",
+    tools: tools.map((t) => ({
+      name: t.name,
+      description: t.description ?? "",
+      descriptionTokensApprox: Math.ceil((t.description ?? "").length / 4),
+      inputSchemaSha256: sha(t.inputSchema),
+      outputSchemaSha256: sha(t.outputSchema ?? null),
+      annotations: (t.annotations ?? {}) as Record<string, unknown>,
+    })),
+  };
 }
 
 describe("tool-surface drift gate", () => {
@@ -49,21 +59,23 @@ describe("tool-surface drift gate", () => {
 
     if (process.env.UPDATE_SURFACE || !existsSync(FIXTURE)) {
       writeFileSync(FIXTURE, JSON.stringify(surface, null, 2) + "\n");
-      expect(surface.length).toBe(9);
+      expect(surface.tools.length).toBe(9);
+      expect(surface.instructions.length).toBeGreaterThan(0);
       return; // fixture (re)generated deliberately — record and pass
     }
 
-    const committed = JSON.parse(readFileSync(FIXTURE, "utf8")) as SurfaceEntry[];
+    const committed = JSON.parse(readFileSync(FIXTURE, "utf8")) as Surface;
     expect(
       surface,
-      "Tool surface changed (names/descriptions/schemas). This is eval-gated: run the agent evals (bun run eval) against the new surface, then regenerate the fixture with UPDATE_SURFACE=1.",
+      "Agent-visible surface changed (instructions/names/descriptions/schemas). This is eval-gated: run the agent evals (bun run eval) against the new surface, then regenerate the fixture with UPDATE_SURFACE=1.",
     ).toEqual(committed);
   });
 
   it("description token budget stays bounded (context economy)", async () => {
     const surface = await currentSurface();
-    const total = surface.reduce((s, t) => s + t.descriptionTokensApprox, 0);
-    // 9 tools incl. one inline example each — generous ceiling that still catches runaway prose.
+    const total = surface.tools.reduce((s, t) => s + t.descriptionTokensApprox, 0) + Math.ceil(surface.instructions.length / 4);
+    // 9 tools incl. one inline example each + the instructions string — generous ceiling that
+    // still catches runaway prose.
     expect(total).toBeLessThan(3000);
   });
 });
