@@ -30,7 +30,11 @@ Bun 1.3 is pinned in `mise.toml`.
   bytes-critical core logic — struct/tuple field order, enum ordinals, bit flags, hash inputs,
   rounding directions, boundary comparators, storage-slot math — and FAILS unless the focused
   offline suite catches every one; also fails on pattern rot so probes can't silently stop aiming
-  at moved code. When a mutant survives: write a killer test, keep the probe)
+  at moved code. When a mutant survives: write a killer test, keep the probe) ·
+  `bun run test:prop` (pinned-seed fast-check harnesses under experiments/proptest — numeric-port
+  revert-parity + Fusion pricing invariants; CI-gated in the private tree, loud-skipped in the
+  public port which carries no experiments/. Assert only properties you can argue mathematically,
+  and keep seeds pinned so a run is reproducible evidence)
 
 ## Install / verify as an MCP server
 

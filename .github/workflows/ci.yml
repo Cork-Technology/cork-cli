@@ -41,6 +41,28 @@ jobs:
           CORK_CONFIG_NO_FETCH: "1"
         run: bun run test:mutation
 
+      # Pinned-seed fast-check harnesses (numeric revert-parity + Fusion pricing invariants).
+      # The public cork-cli tree deliberately carries no experiments/ — skip LOUDLY there, never
+      # silently (bun test exits 0 on a no-match filter, which is exactly the failure mode this
+      # step exists to prevent; test:prop asserts the harness files exist before running).
+      - name: Property harnesses (test:prop)
+        run: |
+          if [ -d experiments/proptest ]; then
+            bun run test:prop
+          else
+            echo "SKIP test:prop — experiments/ tree absent (public port); harnesses run in the private repo's CI"
+          fi
+
+      - name: Lint — no machine-absolute paths in committed sources
+        # /Users/<name> paths break every other checkout and the private→public port. notes/ is
+        # private-tree prose and exempt. The character-class pattern keeps this step from
+        # matching its own definition.
+        run: |
+          if git grep -n "/Users/[a-z]" -- ':!notes'; then
+            echo "::error::machine-absolute path committed — use relative paths"
+            exit 1
+          fi
+
   # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   agent-evals:
