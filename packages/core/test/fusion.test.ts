@@ -154,6 +154,16 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     expect(d.scales.rateBump).toContain("1e7");
   });
 
+  it("warns makingamount_exceeds_order when the priced makingAmount is larger than the order [N2]", async () => {
+    // EXAMPLE_ORDER makes 1e18; ask for 10x → linear extrapolation past any fillable amount.
+    const over = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: EXAMPLE_ORDER, makingAmount: "10000000000000000000" }, at: { timestamp: NOW.toString() }, format: "concise" }, { nowSeconds: 0n });
+    expect(over.state).toBe("ok");
+    expect(over.warnings.map((w) => w.code)).toContain("makingamount_exceeds_order");
+    // At or below the order size there is no warning (a genuine marginal-price query).
+    const within = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: EXAMPLE_ORDER, makingAmount: "500000000000000000" }, at: { timestamp: NOW.toString() }, format: "concise" }, { nowSeconds: 0n });
+    expect(within.warnings.map((w) => w.code)).not.toContain("makingamount_exceeds_order");
+  });
+
   it("REAL production order (Arbitrum fill, frozen fixture): decode + price reproduce the captured values", async () => {
     const env = await runTool(
       "cork_compute",
@@ -249,8 +259,22 @@ describe("encodeAuctionGetterData: exact inverse of the parser", () => {
 
   it("curve guards: zero duration, non-decaying point, overlong tail all refuse", () => {
     expect(() => encodeAuctionGetterData({ ...AUCTION, duration: 0n })).toThrow(/zero duration/);
-    expect(() => encodeAuctionGetterData({ ...AUCTION, points: [{ rateBump: AUCTION.initialRateBump + 1n, timeDelta: 60n }] })).toThrow(/decay/);
+    expect(() => encodeAuctionGetterData({ ...AUCTION, points: [{ rateBump: AUCTION.initialRateBump + 1n, timeDelta: 60n }] })).toThrow(/exceeds the preceding bump/);
     expect(() => encodeAuctionGetterData({ ...AUCTION, points: [{ rateBump: 1n, timeDelta: 3000n }, { rateBump: 0n, timeDelta: 3000n }] })).toThrow(/past the/);
+  });
+
+  it("enforces true monotonic decay: a down-THEN-up curve (each point <= initialRateBump) is REJECTED [N1]", () => {
+    // The old guard only checked each point <= initialRateBump, so 100→10→90 slipped through and
+    // produced a curve that RISES from +10% to +90% mid-window — contradicting every "decays to
+    // the floor" doc. The fix checks each point against the PRECEDING bump.
+    const initialRateBump = 1_000_000n;
+    const downThenUp = { ...AUCTION, initialRateBump, points: [{ rateBump: 100_000n, timeDelta: 60n }, { rateBump: 900_000n, timeDelta: 60n }] };
+    expect(() => encodeAuctionGetterData(downThenUp)).toThrow(/exceeds the preceding bump 100000/);
+    // A genuinely non-increasing multi-point curve (each <= the one before) still encodes and
+    // round-trips through the parser unchanged.
+    const decaying = { ...AUCTION, initialRateBump, points: [{ rateBump: 600_000n, timeDelta: 60n }, { rateBump: 200_000n, timeDelta: 60n }] };
+    const { auction } = parseAuctionGetterData(encodeAuctionGetterData(decaying));
+    expect(auction.points.map((p) => p.rateBump)).toEqual([600_000n, 200_000n]);
   });
 });
 

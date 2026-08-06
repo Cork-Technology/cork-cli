@@ -153,6 +153,7 @@ Warning codes you will encounter:
 | `listing_traits_mismatch` | On `conflict` (`cork_submit lop-order`): the venue-listing fields (expiry/nonce/allowsPartialFills) contradict what the SIGNED makerTraits encode — derived from the signature, never trusted [K3]; NOT relayed. |
 | `invalid_state` | A LOCAL computation/domain failure (C11), distinct from `chain_read_failed`: the on-chain state or derived values violate a domain rule the port enforces (e.g. a 100% rateMin band). Also informational on `ok` impairment-floor when the worst rate collapses to 0 (maxReferencePerCst null = unbounded). |
 | `reserved_field_ignored` | Informational on `ok`: an accepted-but-reserved field was validated and then ignored — results are NOT pinned by it. `cork_compute at.timestamp` is reserved for the BLOCK-anchored kinds only; dutch-auction-price HONORS it (a decaying price is clock-anchored). |
+| `makingamount_exceeds_order` | Informational on `ok` (`cork_compute` dutch-auction-price): the requested `makingAmount` is larger than the order's own `makingAmount`, so the quoted `takerPays` is a linear extrapolation of an amount no fill can consume (1inch clamps every fill to the remaining size). Quote at most the order's makingAmount for a realizable cost. |
 | `expiry_far_future` | Informational on JIT maker-order prepares: `jitMarket.expiryTimestamp` is >5 years out — the chain enforces NO upper bound and cPT principal stays locked until expiry; double-check intent. |
 
 CLI exit codes mirror state for scripting: `0` ok · `2` invalid input (schema or malformed

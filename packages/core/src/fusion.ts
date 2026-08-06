@@ -161,10 +161,18 @@ export function encodeAuctionGetterData(a: FusionAuction): Hex {
     fit(BigInt(a.points.length), 1, "point count"),
   ];
   let cumulative = 0n;
+  // The curve must be NON-INCREASING, not merely bounded by initialRateBump. The getters
+  // interpolate linearly between consecutive points, so a point higher than its predecessor makes
+  // the price RISE across that segment — the opposite of a decaying-premium auction, and a
+  // violation of every doc/warning that promises "decays down to the floor". Checking each point
+  // against the PRECEDING bump (starting at initialRateBump) is what actually enforces decay; the
+  // old `> initialRateBump` check accepted a down-then-up curve (e.g. 100→10→90). [footgun N1]
+  let prevBump = a.initialRateBump;
   for (const [i, p] of a.points.entries()) {
-    if (p.rateBump > a.initialRateBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds initialRateBump ${a.initialRateBump} — the curve must decay (the getters interpolate DOWN between points)`);
+    if (p.rateBump > prevBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds the preceding bump ${prevBump} — a dutch auction's curve must be non-increasing; the getters interpolate linearly, so a higher point makes the price RISE across that segment instead of decaying. Order the points by non-increasing rateBump (each <= the one before, <= initialRateBump).`);
     parts.push(fit(p.rateBump, 3, `point ${i} rateBump`), fit(p.timeDelta, 2, `point ${i} timeDelta`));
     cumulative += p.timeDelta;
+    prevBump = p.rateBump;
   }
   if (cumulative > a.duration) throw new Error(`Fusion auction: point timeDeltas sum to ${cumulative}s, past the ${a.duration}s duration — the tail would never be reached`);
   parts.push(toHex(0n, { size: 7 })); // zeroed fee section: integratorFee(2) integratorShare(1) resolverFee(2) whitelistDiscount(1) whitelistSize(1)

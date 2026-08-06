@@ -200,6 +200,13 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
   const m = p.makingAmount !== undefined ? BigInt(p.makingAmount) : order.makingAmount;
   const M = order.makingAmount;
   const T = order.takingAmount;
+  // A requested makingAmount above the order's own makingAmount extrapolates the linear term past
+  // what is fillable — 1inch clamps any fill to the remaining amount, so takerPays for m > M is a
+  // number that corresponds to no real fill. Disclose it (build-and-warn, same posture as the
+  // taker-fill clamp which hard-errors on a SIGNABLE artifact; a quote stays a quote). [footgun N2]
+  if (m > M) {
+    warnings.push({ code: "makingamount_exceeds_order", message: `makingAmount ${m} exceeds the order's own makingAmount ${M}; the price is a LINEAR EXTRAPOLATION of no fillable amount (1inch clamps every fill to the remaining size). Quote at most ${M} for a realizable taker cost` });
+  }
   const feeWhitelisted = fusionTotalFee(decoded.fees, true);
   const feeOther = fusionTotalFee(decoded.fees, false);
   const takerWhitelisted = p.taker !== undefined ? isGetterWhitelisted(decoded.fees, p.taker) : undefined;

@@ -213,6 +213,15 @@ const CATALOG: Mutant[] = [
     tests: [T.fusion],
   },
   {
+    // Monotonic-decay enforcement [N1]: comparing against initialRateBump instead of the running
+    // prevBump re-opens the down-then-up curve that every "decays to the floor" doc forbids.
+    id: "fusion-encode-decay-vs-initial-not-prev",
+    file: "packages/core/src/fusion.ts",
+    find: "if (p.rateBump > prevBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds the preceding bump ${prevBump}",
+    replace: "if (p.rateBump > a.initialRateBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds the preceding bump ${prevBump}",
+    tests: [T.fusion],
+  },
+  {
     id: "fusion-encode-fee-section-width",
     file: "packages/core/src/fusion.ts",
     find: "parts.push(toHex(0n, { size: 7 }));",

@@ -116,7 +116,7 @@ export const ComputeParams = z.discriminatedUnion("kind", [
         .describe("the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes [K3]"),
       baseFeeWei: UintStr.optional().describe("block base fee in WEI for the gas-bump term; omitted = gas bump skipped = the UPPER-BOUND price (public-node eth_call cannot verify this term — it runs with basefee 0)"),
       taker: Address.optional().describe("price for THIS taker (getter-whitelist discount applies); omitted = both whitelisted and non-whitelisted prices are returned"),
-      makingAmount: TokenAmount.optional().describe("price this making amount; omitted = the full order"),
+      makingAmount: TokenAmount.optional().describe("price this making amount (the fillable range is 0..the order's own makingAmount; a larger value is extrapolated past what any fill can consume and warns makingamount_exceeds_order); omitted = the full order"),
     }).describe(
       "current decayed price of a 1inch Fusion dutch-auction order (v3.1 layout) — pure local math, wei-exact vs the deployed settlement getters; pin the moment with at.timestamp (defaults to now)",
     ),
@@ -363,7 +363,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         durationSeconds: z.number().int().min(60).max(16_777_215).describe("how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"),
         initialRateBump: UintStr.describe("the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor"),
         points: z
-          .array(z.strictObject({ rateBump: UintStr.describe("bump at this point, base 1e7; must not exceed initialRateBump (curves decay)"), timeDelta: z.number().int().min(1).max(65_535).describe("seconds since the previous point (2-byte wire field)") }))
+          .array(z.strictObject({ rateBump: UintStr.describe("bump at this point, base 1e7; must be NON-INCREASING — each point <= the preceding point's bump (<= initialRateBump for the first). The getters interpolate linearly between points, so a point higher than its predecessor would make the price RISE across that segment; a dutch auction only decays."), timeDelta: z.number().int().min(1).max(65_535).describe("seconds since the previous point (2-byte wire field)") }))
           .max(255)
           .optional()
           .describe("piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"),
