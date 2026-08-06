@@ -523,15 +523,19 @@ the same transaction. What to check:
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
   (§5, item A).
 
-> **Variation — resting your own BUY order instead.** You can invert the trade: post a signed BUY
-> (makerAsset = CA, takerAsset = the predicted cST) with `ch prepare orders` → `maker-order`, submit
-> it with `ch submit`, and wait for a supply-side filler to lift it — the book has carried real BUY
-> rows shaped exactly like this, including for the market derived in step 1c. Since 2.1.0 the taker-side
-> JIT interaction can create the market and mint inside the lift, so this works even for a
-> not-yet-created market. It's still the road less traveled for the pilot: you depend on a filler
-> showing up, and your resting order is exposed to the shares-address race (step 2's dead-row
-> warning applies to you then). Fill Bond's SELL (above) as the default; confirm the BUY path with
-> Cork before relying on it.
+<details>
+<summary><b>Variation — resting your own BUY order instead</b> (available-but-verify; expand)</summary>
+
+You can invert the trade: post a signed BUY (makerAsset = CA, takerAsset = the predicted cST) with
+`ch prepare orders` → `maker-order`, submit it with `ch submit`, and wait for a supply-side filler
+to lift it — the book has carried real BUY rows shaped exactly like this, including for the market
+derived in step 1c. Since 2.1.0 the taker-side JIT interaction can create the market and mint
+inside the lift, so this works even for a not-yet-created market. It's still the road less traveled
+for the pilot: you depend on a filler showing up, and your resting order is exposed to the
+shares-address race (step 2's dead-row warning applies to you then). Fill Bond's SELL (above) as
+the default; confirm the BUY path with Cork before relying on it.
+
+</details>
 
 ---
 
@@ -599,21 +603,25 @@ receives your premium. Net: you spend the expiring cST plus a premium (bought wi
 and the user gets fresh cover — you are paying to carry the cover forward, and how you charge the
 user for that carry is your own off-chain pricing decision.
 
-The on-chain entrypoint is the CorkSettler:
+> **Tool status (your action item).** `ch` builds the **supply side** of rollover today (`ch prepare
+> orders` → `rollover-intent`, then `ch submit` → `rollover-order`) — what a cPT-holder posts. It
+> does **not** yet build the **filler** transaction or the REF→premium swap that you need. So for
+> now: discover with `flows`, then build and sign the `fill` with your own stack (entrypoint below).
+> A filler-side `ch prepare` action is a natural next addition — confirm the current path with Cork.
+
+<details>
+<summary>The on-chain entrypoint your filler transaction calls (expand)</summary>
 
 ```
 ExactSettler.fill(bytes32 orderId, bytes originData, bytes fillerData)     // all-or-nothing
 PartialSettler.fill(bytes32 orderId, bytes originData, bytes fillerData)   // fill a slice
 ```
-The order's signed `allowPartialFills` flag routes it to exactly one of these (ExactSettler rejects
-partials; PartialSettler requires them).
 
-> **Tool status.** `ch` builds the **supply side** of rollover today (`ch prepare orders` →
-> `rollover-intent`, then `ch submit` → `rollover-order`) — what a cPT-holder posts. It does **not**
-> yet build the **filler** transaction (the `fillerData` envelope plus `settler.fill`) or the
-> REF→premium swap that you need. So for now: discover with `flows`, then build and sign the `fill`
-> with your own stack. A filler-side `ch prepare` action is a natural next addition — confirm the
-> current path with Cork.
+The order's signed `allowPartialFills` flag routes it to exactly one of these (ExactSettler rejects
+partials; PartialSettler requires them). `originData` carries the maker's signed order; `fillerData`
+carries your side of the fill.
+
+</details>
 
 ---
 
@@ -627,8 +635,9 @@ tool only relays a payload *you* already signed to the venue.
 
 **Install (MCP):**
 ```sh
-# from a clone of github.com/Cork-Technology/cork-cli
+# from a clone of github.com/Cork-Technology/cork-cli; ABSOLUTE bun path so the spawned server finds it
 claude mcp add cork-defi -- "$(which bun)" /path/to/cork-cli/packages/mcp/src/bin.ts
+claude mcp list   # expect: cork-defi … ✓ Connected
 # health check — a good install returns exactly 9 tools:
 #   call cork_capabilities with no args
 ```
@@ -660,15 +669,23 @@ you broadcast), and broadcasting through your own RPC.
 - Money/rate outputs carry a `scales` block + `collateralDecimals`/`referenceDecimals` — **read the
   labels; do not assume 18 decimals** (dUSDC REF is 6-dec while sUSDe CA is 18-dec).
 
-**Maturity — the tool self-reports it; check it live.** `cork_capabilities` returns a per-tool /
-per-variant map with three states: `activated` = live and verified against chain; `implemented` =
-code-complete and locally verified, awaiting a live-milestone flip (not a code gap); `specified` =
-designed, not built (returns `unavailable`). The read → derive → build → simulate → verify path is
-`activated` end to end, with the math ports checked **bit-exact, wei-for-wei** against on-chain
-reads. `submit` self-reports `implemented` today: code-complete, with real local pre-flight (it
-recomputes hashes and recovers your signature before relaying, idempotent by `clientRequestId`) —
-the map flips it to `activated` on the first venue-accepted live POST, i.e. the unproven part is
-the venue round-trip, not the relay logic. Simulate before, reconcile after, as always.
+**Trust posture in one line:** everything you need for the four-step flow is live and verified
+against chain — and whatever you run, **simulate before, reconcile after**. The tool self-reports
+its own maturity; details if you want them:
+
+<details>
+<summary>How the tool reports its own maturity (expand)</summary>
+
+`cork_capabilities` returns a per-tool / per-variant map with three states: `activated` = live and
+verified against chain; `implemented` = code-complete and locally verified, awaiting a
+live-milestone flip (not a code gap); `specified` = designed, not built (returns `unavailable`).
+The read → derive → build → simulate → verify path is `activated` end to end, with the math ports
+checked **bit-exact, wei-for-wei** against on-chain reads. `submit` self-reports `implemented`
+today: code-complete, with real local pre-flight (it recomputes hashes and recovers your signature
+before relaying, idempotent by `clientRequestId`) — the map flips it to `activated` on the first
+venue-accepted live POST, i.e. the unproven part is the venue round-trip, not the relay logic.
+
+</details>
 
 **RPC & secrets:** Arbitrum reads **work out of the box** (built-in default endpoints + a public
 fallback). Set `CORK_RPC_URL` only to use your own/faster node. Full-decentralized reads and order
@@ -676,16 +693,24 @@ reconciliation want an Envio token (`ENVIO_API_TOKEN`) — generate one at
 <https://envio.dev/app/api-tokens> (sign-in required; docs at
 <https://docs.envio.dev/docs/HyperSync/api-tokens>). **Never commit an RPC URL or token** — env only.
 
-**Prefer decentralized reads when freshness matters.** The venue-backed reads (`orderbook`, `rfqs`,
-`fills`, `flows`, `markets`) are served by Cork's off-chain indexer (api-phoenix), which can lag chain
-head. For anything time-sensitive — discovering an order right before a fill, checking order status,
-reconciling after — lean on the decentralized paths instead: `lite-decentralized` (direct RPC chain
-reads, already the default for `market` / `account-state` / `market-predict`) and `full-decentralized`
-(HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports more than one backend you
-can force it with `mode` on `ch query`, and every result's `provenance.mode` tells you which one
-answered. When the indexer and chain disagree, chain wins — that's the reconcile principle behind
-`ch track` (§5, item F). (RFQs are the one venue-only resource by construction — a request-for-quote
-emits no on-chain events.)
+**Venue reads can lag; chain wins.** The book/RFQ/fill feeds come from Cork's off-chain indexer,
+which can trail chain head — so for anything time-sensitive (an order right before a fill, status
+right after one), verify against chain (`ch query market`, `ch track`) rather than trusting the
+feed. Details on the read backends, if you want them:
+
+<details>
+<summary>Read backends and how to force one (expand)</summary>
+
+The venue-backed reads (`orderbook`, `rfqs`, `fills`, `flows`, `markets`) are served by
+api-phoenix, Cork's indexer. The decentralized paths are `lite-decentralized` (direct RPC chain
+reads — already the default for `market` / `account-state` / `market-predict`) and
+`full-decentralized` (HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports
+more than one backend you can force it with `mode` on `ch query`, and every result's
+`provenance.mode` says which one answered. When indexer and chain disagree, chain wins — the
+reconcile principle behind `ch track` (§5, item F). RFQs are the one venue-only resource by
+construction: a request-for-quote emits no on-chain events.
+
+</details>
 
 ---
 
@@ -839,23 +864,10 @@ The `search` result hands you example inputs you can paste straight into the com
 Lift the `input` object's fields straight onto the command line (`ch compute --chainid 42161
 --params '{…}'`) — or run the object verbatim with `ch compute --input '<that object>'`.
 
-### 7c. Install the MCP server into Claude Code
+### 7c. Ask Claude Code for the right command
 
-The CLI and the MCP server are the **same 9-tool core** — install the server to drive it from Claude
-Code (or any MCP client) instead of the shell:
-
-```sh
-# from a clone of github.com/Cork-Technology/cork-cli; ABSOLUTE bun path so the spawned server finds it
-claude mcp add cork-defi -- "$(which bun)" /ABSOLUTE/PATH/TO/cork-cli/packages/mcp/src/bin.ts
-
-# health check — expect: cork-defi … ✓ Connected
-claude mcp list
-```
-Then, inside Claude Code, calling `cork_capabilities` with no arguments should return **exactly 9
-tools** — that's the signal the server launched correctly. Optional env: `CORK_RPC_URL` (your own
-node) and `ENVIO_API_TOKEN` (full-decentralized reads); never commit either.
-
-### 7d. Ask Claude Code for the right command
+(The install itself is in §4 — the CLI and the MCP server are the same 9-tool core, so once
+`cork-defi` is registered, Claude Code can drive everything below.)
 
 Because the MCP tools and the CLI commands are the same core with identical input shapes, two things
 follow:
