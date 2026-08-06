@@ -399,6 +399,12 @@ async function resolveAuto(chainId: number, cfg: RpcConfig, deps: RpcDeps): Prom
  * there is no eth_sendRawTransaction path), so retrying a request is always safe.
  */
 function mkFailoverResolved(chainId: number, url: string, source: "default" | "chainlist", cfg: RpcConfig, deps: RpcDeps): ResolvedRpc {
+  // Deployment kill-switch (read per construction, so a container env flip takes effect on the
+  // next resolution — no image rebuild): plain clients, no in-call failover. The escape hatch for
+  // the newest hot-path code; everything else (breaker, single-flight, jitter) stays on.
+  if (process.env.CORK_RPC_NO_FAILOVER) {
+    return { url, source, client: mkClient(url, chainId) };
+  }
   const requestFor = deps.request ?? realTransportRequest;
   const resolved = { url, source } as ResolvedRpc & { source: "default" | "chainlist" };
   let inner = requestFor(url, chainId);

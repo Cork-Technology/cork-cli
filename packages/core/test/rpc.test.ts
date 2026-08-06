@@ -388,3 +388,30 @@ describe("rpcDiagnostics (the /readyz feed)", () => {
     expect(d.breakers).toEqual([{ host: new URL(MAINNET_DEFAULT).host, failures: 3, open: true, remainingCooldownMs: CFG.cooldownMs }]);
   });
 });
+
+describe("CORK_RPC_NO_FAILOVER kill-switch", () => {
+  it("disables the in-call failover wrapper: a transport failure propagates untouched, nothing re-resolves", async () => {
+    process.env.CORK_RPC_NO_FAILOVER = "1";
+    try {
+      const h = harness({
+        probe: (url) => (url === "https://b.public.rpc" ? { ok: true, chainId: 1, latencyMs: 5 } : { ok: false, latencyMs: 9 }),
+        candidates: { 1: ["https://b.public.rpc"] },
+      });
+      h.state.chosen[1] = { url: MAINNET_DEFAULT, source: "default", ts: h.deps.now() };
+      let requested = 0;
+      h.deps.request = () => async () => {
+        requested++;
+        throw Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
+      };
+      const r = await resolveRpc(1, undefined, CFG, h.deps);
+      expect(r?.url).toBe(MAINNET_DEFAULT);
+      // The plain client uses the REAL viem http transport, not deps.request — so the injected
+      // fake must never be consulted, and the resolved fields must never mutate.
+      expect(requested).toBe(0);
+      expect(r?.source).toBe("default");
+      expect(h.calls.probe).toHaveLength(0);
+    } finally {
+      delete process.env.CORK_RPC_NO_FAILOVER;
+    }
+  });
+});

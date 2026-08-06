@@ -55,7 +55,7 @@
         "fixed": "0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682"
       },
       "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
-      "contractsVersion": "2.1.0",
+      "contractsVersion": "0.3.0",
       "deployedAtBlock": 489540043
     }
   },

@@ -75,10 +75,13 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     }
   };
 
-  it("our configured registry matches GET /v1/registries (address + contracts_version 2.1.0)", async () => {
+  it("our configured registry matches GET /v1/registries (address + contracts_version)", async () => {
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr } = await resolveMarketRegistry(42161);
-    expect(mr?.contractsVersion).toBe("2.1.0");
+    // "0.3.0" is the contracts-release label the API serves (relabeled from "2.1.0" ~2026-08-06;
+    // the registry ADDRESS is the identity check — the version is a free-form tag, cf. Base's
+    // "unreleased-base-test", with no on-chain getter to arbitrate).
+    expect(mr?.contractsVersion).toBe("0.3.0");
     const api = await apiGet<{ registries: Array<{ chain_id: number; registry: string; contracts_version: string }> }>("/v1/registries");
     if (!api) return;
     const row = api.registries.find((r) => r.chain_id === 42161);

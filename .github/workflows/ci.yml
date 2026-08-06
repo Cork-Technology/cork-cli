@@ -71,6 +71,33 @@ jobs:
             exit 1
           fi
 
+  # Live smoke on main pushes: continuous REAL-transport coverage for the RPC resolver — the
+  # failover-wrapped client resolves the committed default and a real chainlist fallback (the one
+  # code path the offline suite exercises only with injected transports). The registry-parity legs
+  # self-skip (early return) when the sandbox read API is unreachable, so transient flake stays
+  # green; a FAILURE here means real behavioral drift (e.g. the 2026-08-06 contracts_version
+  # relabel) or resolver breakage. Deliberately NOT `-t`-filtered: a vitest name filter that
+  # matches nothing exits 0 with everything skipped — the same green-no-op class test:prop closed.
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: RPC resolver + registry parity against the real network
+        env:
+          CORK_RPC_LIVE: "1"
+        run: bunx vitest run packages/core/test/rpc-live.test.ts
+
   # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   agent-evals:

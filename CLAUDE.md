@@ -299,7 +299,9 @@ automatic (default/chainlist) clients fail over **in-call** — a transport-clas
 breaker, re-resolves once (`attempts:1`), and retries the request on whatever resolves, with the
 `ResolvedRpc` mutating in place so `rpc_fallback`/`provenance.rpc` (evaluated at envelope construction)
 disclose the endpoint that actually served; explicit URLs never fail over (your config, your call).
-Concurrent automatic resolutions for one chain are single-flighted (one probe pass). The breaker state
+Deployment kill-switch: `CORK_RPC_NO_FAILOVER=1` disables the in-call failover wrapper (plain
+clients, everything else stays on) — an env flip on the CVM beats an image rebuild if the wrapper
+ever misbehaves. Concurrent automatic resolutions for one chain are single-flighted (one probe pass). The breaker state
 machine itself is ONE shared module (`packages/core/src/breaker.ts`, mutation-probed) — the venue
 transport uses the same machine per-host (3 transport failures → open 30 s → fail fast with the
 cooldown named in the `venue_unreachable` message), plus one silent immediate retry for idempotent
@@ -351,9 +353,14 @@ call sites, mutation-probed). The OLD adapter's roles were NOT revoked, so BOTH 
 fillable in parallel; the pre-2.1.0 flow is preserved intact behind the general
 deprecation gate: `marketRegistryLegacy` config + `legacy:true` inputs + `CORK_ENABLE_DEPRECATED=1`
 (CLI `--enable-deprecated`) — see `packages/core/src/deprecation.ts` for the warning-code
-contract (`deprecated_gated`/`deprecated`/`deprecation_notice`). The read API's sandbox
+contract (`deprecated_gated`/`deprecated`/`deprecation_notice`). Naming vs release tag: "2.1.0"
+is the GENERATION name (this prose, the architecture); the config's `contractsVersion` follows the
+free-form contracts-RELEASE label the registry read API serves — relabeled to "0.3.0" ~2026-08-06
+(verified full-parity same-behavior; the registry ADDRESS is the identity check, there is no
+on-chain version getter to arbitrate, cf. Base's "unreleased-base-test"). The read API's sandbox
 (`https://zian-b.feat.cork.tech`, override `CORK_MARKET_API`) is used ONLY in env-gated live
-parity tests — never a committed runtime dependency; our reads are chain-native and were verified
+parity tests — never a committed runtime dependency (plus the main-push `live-smoke` CI job, whose
+parity legs self-skip when the sandbox is unreachable); our reads are chain-native and were verified
 wei-for-wei against it (resolve, oracles, predict), with one deliberate capability difference:
 our share prediction also works pre-oracle-deploy (the simulation prepends the same permissionless
 deploy the fill performs, where the HTTP endpoint returns market/shares null). The whole 2.1.0 fill

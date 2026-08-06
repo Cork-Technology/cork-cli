@@ -194,7 +194,9 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
     }));
     expect(env.state).toBe("ok");
     const d = env.data as { contractsVersion: string; scale: string; items: Array<{ address: string; source: string; registryMatches: boolean; argsKnown: boolean; constants: Record<string, string>; args: { type: string } }> };
-    expect(d.contractsVersion).toBe("2.1.0");
+    // The config's release tag, echoed verbatim ("0.3.0" = the contracts-release label the
+    // registry read API serves; "2.1.0" remains the GENERATION name in prose/docs).
+    expect(d.contractsVersion).toBe("0.3.0");
     expect(d.items[0]?.source).toBe("price");
     expect(d.items[0]?.registryMatches).toBe(true);
     expect(d.items[0]?.argsKnown).toBe(true);
