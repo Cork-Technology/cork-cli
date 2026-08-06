@@ -90,10 +90,12 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
 - **Commands read like English: the action is a subcommand, its fields are flags.**
   `ch prepare phoenix exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
   `ch compute resolve-recipe --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
-  tool is its own subcommand with its own `--help` and `--explain`. Scalar fields are plain flags
-  (spelling is forgiving: `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued
-  fields take a JSON string (`--filters '{…}'`, `--forself '{…}'`); amount fields accept exact
-  human sugar (`1000e18`, `95e16`, `1_000000` — expanded by integer math, never floats).
+  tool is its own subcommand with its own `--help` and `--explain`, and a mistyped action gets a
+  did-you-mean instead of a cryptic error. Scalar fields are plain flags (spelling is forgiving:
+  `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued fields take a JSON string
+  (`--filters '{…}'`, `--forself '{…}'`); amount fields accept exact human sugar (`1000e18`,
+  `95e16`, `1_000000` — expanded by integer math, never floats); `--chainid` takes network names
+  too (`arbitrum`, `mainnet`, `base`, `sepolia`).
 - **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
   the full object, `--action`/`--params` blobs, and the older `ch prepare phoenix 42161 --action
   '{…}'` shape are all unchanged; flags override blob keys, so a saved blob is reusable. Some

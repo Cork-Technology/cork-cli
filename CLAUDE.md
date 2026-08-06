@@ -28,7 +28,11 @@ Bun 1.3 is pinned in `mise.toml`.
     back). The discriminator always comes from the subcommand name (a blob cannot override it).
     Amount fields (digits-only pattern) take exact sugar on FLAGS only: `1000e18`/`1_000` expand
     via integer math; fractional remainders are refused (`invalid_amount`); blobs stay the exact
-    wire form. All mutation-probed (`cli-variant-*`, `cli-amount-*`).
+    wire form. `--chainid` also takes network names (mainnet/ethereum/arbitrum/base/sepolia). Help
+    displays kebab flag spellings (`--client-request-id`); an --action/--params blob given WITH a
+    variant subcommand merges as the base (variant flags override, discriminator still injected);
+    a mistyped action gets a levenshtein did-you-mean refusal pre-parse. All mutation-probed
+    (`cli-variant-*`, `cli-amount-*`, `cli-chain-name-wrong`).
   - **Output** is prose by default, JSON on request: a bare `--json`, or `CORK_JSON=1`. Passing input
     as `--json '<object>'` also yields JSON, which is why every pre-existing scripted example works.
     Results/errors render via `packages/cli/src/render.ts`.

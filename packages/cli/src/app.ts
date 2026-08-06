@@ -95,9 +95,10 @@ function admitsString(node: SchemaNode, defs: Record<string, SchemaNode>, depth 
   return [...(n.anyOf ?? []), ...(n.oneOf ?? [])].some((b) => admitsString(b, defs, depth + 1));
 }
 
-/** Flag spelling for a schema property: lowercased, so `chainId` answers to `--chainid`. */
+/** Display spelling for a schema property's flag: kebab-case (`chainId` → `--chain-id`), which
+ *  commander camelCases back so the opts attribute equals the schema field name exactly. */
 function flagFor(prop: string): string {
-  return prop.toLowerCase();
+  return prop.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 }
 
 /** `--chain-id`, `--chainId` and `--chainid` should all reach the same option. */
@@ -128,14 +129,14 @@ function coerce(node: SchemaNode, raw: string): unknown {
  * reasonably type it. Only names that resolve to a known property are touched; anything
  * else (including `--rpc-url`) passes through untouched for commander to handle.
  */
-export function normaliseArgv(argv: readonly string[], known: ReadonlySet<string>): string[] {
-  return argv.map((token) => {
-    if (!token.startsWith("--")) return token;
-    const eq = token.indexOf("=");
-    const name = (eq === -1 ? token.slice(2) : token.slice(2, eq)).trim();
-    const canon = canonicalise(name);
-    if (!known.has(canon) || canon === name) return token;
-    return eq === -1 ? `--${canon}` : `--${canon}${token.slice(eq)}`;
+export function normaliseArgv(argv: readonly string[], known: ReadonlyMap<string, string>): string[] {
+  return argv.map((arg) => {
+    if (!arg.startsWith("--")) return arg;
+    const eq = arg.indexOf("=");
+    const name = (eq === -1 ? arg.slice(2) : arg.slice(2, eq)).trim();
+    const spelling = known.get(canonicalise(name));
+    if (spelling === undefined || spelling === name) return arg;
+    return eq === -1 ? `--${spelling}` : `--${spelling}${arg.slice(eq)}`;
   });
 }
 
@@ -143,6 +144,18 @@ export function normaliseArgv(argv: readonly string[], known: ReadonlySet<string
 function kebab(v: string): string {
   return v.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 }
+
+/** Plain Levenshtein for did-you-mean suggestions on mistyped variant names. */
+function levenshtein(a: string, b: string): number {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0]![j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) dp[i]![j] = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length]![b.length]!;
+}
+
+/** Network-name shorthand for chainId values: arbitrum → 42161. */
+const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbitrum: "42161", base: "8453", sepolia: "11155111" };
 
 /** One variant of a discriminated-union field: the const that names it + its own field schemas. */
 interface UnionVariant {
@@ -217,7 +230,10 @@ function isAmountNode(node: SchemaNode): boolean {
 /** A one-word placeholder for a flag's value, shown in --help. */
 function describeShort(node: SchemaNode): string {
   const t = Array.isArray(node.type) ? node.type[0] : node.type;
-  if (node.enum && node.enum.length > 0) return "value";
+  if (node.enum && node.enum.length > 0) {
+    const joined = node.enum.map(String).join("|");
+    return joined.length <= 42 ? joined : "value";
+  }
   if (t === "number" || t === "integer") return "n";
   if (t === "boolean") return "true|false";
   return "value";
@@ -268,29 +284,47 @@ export async function runCli(
 
   // Every schema-derived flag across every tool, so argv can be normalised before commander
   // sees it (commander binds one long flag per option; spelling tolerance lives here).
-  const knownFlags = new Set<string>();
+  const knownFlags = new Map<string, string>();
   for (const tool of REGISTRY) {
     const s = inputJsonSchema(tool.name) as SchemaNode;
-    for (const prop of Object.keys(s?.properties ?? {})) knownFlags.add(flagFor(prop));
+    for (const prop of Object.keys(s?.properties ?? {})) knownFlags.set(canonicalise(flagFor(prop)), flagFor(prop));
   }
 
-  // English-order rescue: commander dispatches subcommands on the FIRST operand only, so
-  // `ch track verify market-ref …` (mode first, variant second) and `ch prepare phoenix 42161
-  // exercise …` (chainId first) would never reach the variant. When the operand after the tool
-  // path is a legal positional value AND the next one names a variant, swap them — the positional
-  // rides as its flag (`--mode verify`), which the variant subcommand accepts anyway.
-  const variantShuffles: Array<{ path: string[]; positionalFlag: string; positionalValues: Set<string>; variants: Set<string> }> = [];
-  const shuffleVariantArgv = (argvIn: string[]): string[] => {
-    for (const s of variantShuffles) {
-      if (s.path.some((seg, i) => argvIn[i] !== seg)) continue;
-      const i = s.path.length;
-      const posVal = argvIn[i];
-      const variantTok = argvIn[i + 1];
-      if (posVal === undefined || variantTok === undefined || posVal.startsWith("--") || variantTok.startsWith("--")) continue;
-      if (!s.positionalValues.has(posVal) || !s.variants.has(canonicalise(variantTok))) continue;
-      return [...s.path, variantTok, `--${s.positionalFlag}`, posVal, ...argvIn.slice(i + 2)];
+  interface UnionCliSpec {
+    path: string[];
+    variants: Set<string>;
+    variantNames: string[];
+    positional?: { flag: string; values: Set<string> };
+  }
+  const unionSpecs: UnionCliSpec[] = [];
+  // English-order rescue + typo guard for unioned tools: commander dispatches subcommands on the
+  // FIRST operand only, so a positional-then-variant spelling (`track verify market-ref`,
+  // `prepare phoenix 42161 exercise`) is swapped here (the positional rides as its own flag).
+  // A first operand that is NEITHER a variant nor a legal positional value gets a did-you-mean
+  // refusal — left alone, commander would blame an unrelated option and mislead.
+  const preParseVariants = (argvIn: string[]): { argv: string[] } | { error: string } => {
+    for (const spec of unionSpecs) {
+      if (spec.path.some((seg, i) => argvIn[i] !== seg)) continue;
+      const i = spec.path.length;
+      const first = argvIn[i];
+      if (first === undefined || first.startsWith("-")) return { argv: argvIn };
+      if (spec.variants.has(canonicalise(first))) return { argv: argvIn };
+      if (spec.positional?.values.has(first.toLowerCase())) {
+        const next = argvIn[i + 1];
+        if (next !== undefined && !next.startsWith("-") && spec.variants.has(canonicalise(next))) {
+          return { argv: [...spec.path, next, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };
+        }
+        return { argv: argvIn };
+      }
+      const nearest = spec.variantNames.reduce(
+        (best, v) => (levenshtein(canonicalise(first), canonicalise(v)) < levenshtein(canonicalise(first), canonicalise(best)) ? v : best),
+        spec.variantNames[0]!,
+      );
+      const hint = levenshtein(canonicalise(first), canonicalise(nearest)) <= 3 ? ` — did you mean '${nearest}'?` : "";
+      const posNote = spec.positional ? `, or a ${spec.positional.flag} value` : "";
+      return { error: `unknown action '${first}' for ch ${spec.path.join(" ")}${hint} (expected one of: ${spec.variantNames.join(", ")}${posNote})` };
     }
-    return argvIn;
+    return { argv: argvIn };
   };
 
   for (const tool of REGISTRY) {
@@ -400,6 +434,7 @@ export async function runCli(
         /** Assign one flag value with amount sugar + scalar/JSON handling; false = error emitted. */
         const assign = (target: Record<string, unknown>, name: string, node: SchemaNode, supplied: unknown): boolean => {
           let rawStr = String(supplied);
+          if (name === "chainId" && CHAIN_NAMES[rawStr.toLowerCase()] !== undefined) rawStr = CHAIN_NAMES[rawStr.toLowerCase()]!;
           if (isAmountNode(node) && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
@@ -433,11 +468,14 @@ export async function runCli(
         };
 
         // Then the ergonomic forms, which win over the JSON blob so a flag can override it.
-        if (positional && positionalValue !== undefined) input[positional] = coerce(props[positional]!, positionalValue);
+        if (positional && positionalValue !== undefined) {
+          const posRaw = positional === "chainId" ? (CHAIN_NAMES[positionalValue.toLowerCase()] ?? positionalValue) : positionalValue;
+          input[positional] = coerce(props[positional]!, posRaw);
+        }
         for (const [name, node] of Object.entries(props)) {
           if (!variant && name === positional) continue;
           if (variant && union && name === union.field) continue;
-          const supplied = opts[flagFor(name)];
+          const supplied = opts[name];
           if (supplied === undefined) continue;
           if (!assign(input, name, node, supplied)) return;
         }
@@ -446,12 +484,25 @@ export async function runCli(
         // variant's flattened flags override it, and the discriminator is always injected from
         // the subcommand's own name (never trusted from the blob).
         if (variant && union) {
+          let base: Record<string, unknown> = {};
           const blobBase = input[union.field];
-          const obj: Record<string, unknown> =
-            blobBase && typeof blobBase === "object" && !Array.isArray(blobBase) ? { ...(blobBase as Record<string, unknown>) } : {};
+          if (blobBase && typeof blobBase === "object" && !Array.isArray(blobBase)) base = { ...(blobBase as Record<string, unknown>) };
+          const flagBase = opts[union.field];
+          if (flagBase !== undefined) {
+            try {
+              const parsed = parseJsonPrecise(String(flagBase));
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = { ...base, ...(parsed as Record<string, unknown>) };
+            } catch (e) {
+              const payload = { error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(union.field)} expects JSON: ${(e as Error).message}` } };
+              err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+              code = EXIT.invalid;
+              return;
+            }
+          }
+          const obj: Record<string, unknown> = base;
           for (const [name, node0] of Object.entries(variant.props)) {
             if (name === union.disc) continue;
-            const supplied = opts[flagFor(name)];
+            const supplied = opts[name];
             if (supplied === undefined) continue;
             if (!assign(obj, name, resolveNode(node0, defs), supplied)) return;
           }
@@ -486,12 +537,23 @@ export async function runCli(
     cmd.action(makeAction());
 
     if (union) {
-      if (positional && props[positional]?.enum?.length) {
-        variantShuffles.push({
+      {
+        const variantNames = union.variants.map((v) => kebab(v.value));
+        unionSpecs.push({
           path: [...tool.cliPath],
-          positionalFlag: flagFor(positional),
-          positionalValues: new Set(props[positional]!.enum!.map((e) => String(e))),
-          variants: new Set(union.variants.map((v) => canonicalise(kebab(v.value)))),
+          variants: new Set(variantNames.map(canonicalise)),
+          variantNames,
+          ...(positional && props[positional]?.enum?.length
+            ? {
+                positional: {
+                  flag: flagFor(positional),
+                  values: new Set([
+                    ...props[positional]!.enum!.map((e) => String(e).toLowerCase()),
+                    ...(positional === "chainId" ? Object.keys(CHAIN_NAMES) : []),
+                  ]),
+                },
+              }
+            : {}),
         });
       }
       for (const v of union.variants) {
@@ -511,7 +573,7 @@ export async function runCli(
           if (name === union.disc) continue;
           const node = resolveNode(node0, defs);
           fieldOption(sub, subRegistered, name, node);
-          knownFlags.add(flagFor(name));
+          knownFlags.set(canonicalise(flagFor(name)), flagFor(name));
         }
         sub.action(makeAction(v));
       }
@@ -563,8 +625,14 @@ export async function runCli(
       code = res.code === 0 ? EXIT.ok : EXIT.error;
     });
 
+  const pre = preParseVariants(normaliseArgv(argv, knownFlags));
+  if ("error" in pre) {
+    const payload = { error: { code: "invalid_input", tool: "ch", message: pre.error } };
+    err += envWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+    return { code: EXIT.invalid, stdout: out, stderr: err };
+  }
   try {
-    await program.parseAsync(shuffleVariantArgv(normaliseArgv(argv, knownFlags)), { from: "user" });
+    await program.parseAsync(pre.argv, { from: "user" });
   } catch (e) {
     // exitOverride throws CommanderError for --help/--version/parse errors.
     const ce = e as { code?: string; exitCode?: number; message?: string };

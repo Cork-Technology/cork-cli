@@ -747,11 +747,39 @@ const CATALOG: Mutant[] = [
   },
   {
     // English-order shuffle disabled: `track verify market-ref` / `prepare phoenix 1 exercise`
-    // stop reaching the variant and die as excess positionals.
+    // stop reaching the variant and die as excess positionals. (Re-aimed 2026-08-06 after the
+    // shuffle grew into preParseVariants.)
     id: "cli-variant-shuffle-disabled",
     file: "packages/cli/src/app.ts",
-    find: "return [...s.path, variantTok, `--${s.positionalFlag}`, posVal, ...argvIn.slice(i + 2)];",
-    replace: "return argvIn;",
+    find: "return { argv: [...spec.path, next, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };",
+    replace: "return { argv: argvIn };",
+    tests: [T.cli],
+  },
+  {
+    // Typo guard disabled: a mistyped variant falls through to commander, which blames an
+    // unrelated option instead of naming the nearest action.
+    id: "cli-variant-typo-guard-disabled",
+    file: "packages/cli/src/app.ts",
+    find: "if (first === undefined || first.startsWith(\"-\")) return { argv: argvIn };",
+    replace: "if (first !== undefined) return { argv: argvIn };",
+    tests: [T.cli],
+  },
+  {
+    // Network-name map wrong: `--chainid arbitrum` quietly meaning mainnet would aim every
+    // read (and every prepared artifact) at the wrong chain.
+    id: "cli-chain-name-wrong",
+    file: "packages/cli/src/app.ts",
+    find: 'arbitrum: "42161"',
+    replace: 'arbitrum: "1"',
+    tests: [T.cli],
+  },
+  {
+    // The union-field blob dropped on variant subcommands: fields supplied via --action would
+    // vanish and the schema error would blame the user for omitting them.
+    id: "cli-variant-flagbase-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "const flagBase = opts[union.field];",
+    replace: "const flagBase = undefined as unknown;",
     tests: [T.cli],
   },
   // ── circuit breaker (breaker.ts — ONE state machine shared by RPC resolver + venue transport):

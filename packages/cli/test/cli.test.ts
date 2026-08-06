@@ -282,11 +282,34 @@ describe("variant subcommands (English-first grammar, 2026-08-06)", () => {
     expect(r.stdout).not.toContain("authority-onboard");
   });
 
-  it("variant --help lists the variant's own flattened flags", async () => {
+  it("variant --help lists the variant's own flattened flags, in kebab-case", async () => {
     const r = await runCli(["prepare", "orders", "taker-fill", "--help"], { nowSeconds: NOW });
-    expect(r.stdout).toContain("--orderhash");
-    expect(r.stdout).toContain("--forself");
-    expect(r.stdout).toContain("--chainid"); // top-level fields ride as flags on the sub
+    expect(r.stdout).toContain("--order-hash");
+    expect(r.stdout).toContain("--for-self");
+    expect(r.stdout).toContain("--chain-id"); // top-level fields ride as flags on the sub
+  });
+
+  it("a mistyped variant gets a did-you-mean refusal, not a misleading option error", async () => {
+    const r = await runCli(["prepare", "phoenix", "exercize", "--chainid", "42161"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("did you mean 'exercise'");
+    expect(r.stderr).not.toContain("unknown option");
+  });
+
+  it("an --action blob on a variant subcommand is the BASE, variant flags override, disc still injected", async () => {
+    const r = await runCli(
+      ["prepare", "phoenix", "authority-revoke", "--chainid", "1", "--account", RCV, "--clientrequestid", "variant-0004", "--spender", RCV, "--action", JSON.stringify({ type: "swap", token: RCV }), "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.kind).toBe("authority-revoke"); // token from blob, type from subcommand
+  });
+
+  it("chainId accepts network names — `--chainid arbitrum` means 42161", async () => {
+    const r = await runCli(["query", "protocol-config", "--chainid", "arbitrum", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.chainId).toBe(42161);
   });
 
   it("no variant field collides with a top-level field or a reserved flag, in any tool", () => {

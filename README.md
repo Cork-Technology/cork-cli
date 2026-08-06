@@ -237,11 +237,13 @@ ch query market --chainid 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8
 ```
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
-spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag. Object-valued
-fields (`--filters`, `--forself`) take a JSON string; union-typed fields accept a raw string too
-(`ch decode tx --data 0x…` — no quoting gymnastics). Amount fields accept exact human sugar:
-`1000e18` and `1_000000` expand by integer arithmetic (a fractional remainder like `1.23e1` is
-refused with teaching, and sugar applies to flags only — JSON blobs stay the exact wire form).
+spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag (help displays
+the kebab form). Object-valued fields (`--filters`, `--forself`) take a JSON string; union-typed
+fields accept a raw string too (`ch decode tx --data 0x…` — no quoting gymnastics). Amount fields
+accept exact human sugar: `1000e18` and `1_000000` expand by integer arithmetic (a fractional
+remainder like `1.23e1` is refused with teaching, and sugar applies to flags only — JSON blobs stay
+the exact wire form). `--chainid` also takes network names (`arbitrum`, `mainnet`, `base`,
+`sepolia`), and a mistyped action name gets a did-you-mean refusal.
 
 Every tool accepts an optional `"format"` — `"concise"` (the default) or `"full"` for the verbose
 envelope. Exit codes map the envelope state so scripts can branch: `0` ok · `2` invalid input · `3`
