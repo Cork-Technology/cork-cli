@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_EXAMPLES } from "@cork/schemas";
-import { EXIT, runCli } from "@cork/cli";
+import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
+import { EXIT, expandAmount, runCli } from "@cork/cli";
 
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
@@ -149,17 +149,19 @@ describe("ch CLI", () => {
     expect(r.stdout).toContain("the initiating account");
   });
 
-  it("positionals are stable across every leaf — $ref resolution must never move them", async () => {
+  it("positionals are stable across every leaf — grammar changes here must be deliberate", async () => {
+    // [command] appears on every tool with a discriminated union (variant subcommands,
+    // 2026-08-06); the trailing positional is the legacy form and must keep working.
     const expected: Array<[string[], string]> = [
       [["capabilities"], "Usage: ch capabilities [options]"],
       [["query"], "Usage: ch query [options] [resource]"],
-      [["compute"], "Usage: ch compute [options]"],
+      [["compute"], "Usage: ch compute [options] [command]"],
       [["decode"], "Usage: ch decode [options] [kind]"],
-      [["track"], "Usage: ch track [options] [mode]"],
-      [["submit"], "Usage: ch submit [options] [chainId]"],
-      [["prepare", "phoenix"], "Usage: ch prepare phoenix [options] [chainId]"],
-      [["prepare", "orders"], "Usage: ch prepare orders [options] [chainId]"],
-      [["prepare", "market"], "Usage: ch prepare market [options] [chainId]"],
+      [["track"], "Usage: ch track [options] [command] [mode]"],
+      [["submit"], "Usage: ch submit [options] [command] [chainId]"],
+      [["prepare", "phoenix"], "Usage: ch prepare phoenix [options] [command] [chainId]"],
+      [["prepare", "orders"], "Usage: ch prepare orders [options] [command] [chainId]"],
+      [["prepare", "market"], "Usage: ch prepare market [options] [command] [chainId]"],
     ];
     for (const [path, usage] of expected) {
       const r = await runCli([...path, "--help"], { nowSeconds: NOW });
@@ -226,5 +228,136 @@ describe("ch CLI", () => {
   it("excess positional arguments error instead of being silently ignored", async () => {
     const r = await runCli(["capabilities", "stray-arg"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.invalid);
+  });
+});
+
+describe("variant subcommands (English-first grammar, 2026-08-06)", () => {
+  it("routes a variant and merges parent-consumed top-level flags", async () => {
+    // account/clientrequestid are ALSO parent flags — commander's traversal binds them to the
+    // parent even when written after the variant name; the sub must still see them.
+    const r = await runCli(
+      ["prepare", "phoenix", "authority-revoke", "--chainid", "1", "--account", RCV, "--clientrequestid", "variant-0001", "--token", RCV, "--spender", RCV, "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(EXIT.ok);
+    const env = JSON.parse(r.stdout);
+    expect(env.state).toBe("ok");
+    expect(env.data.kind).toBe("authority-revoke");
+  });
+
+  it("injects the discriminator from the subcommand name — a blob cannot smuggle a different type", async () => {
+    const r = await runCli(
+      ["prepare", "phoenix", "authority-revoke", "--chainid", "1", "--account", RCV, "--clientrequestid", "variant-0002", "--token", RCV, "--spender", RCV, "--input", JSON.stringify({ action: { type: "swap" } }), "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.kind).toBe("authority-revoke");
+  });
+
+  it("mode-then-variant reads in English order — `track verify market-ref` reaches the tool", async () => {
+    const r = await runCli(
+      ["track", "verify", "market-ref", "--chainid", "1", "--poolid", POOL, "--json"],
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(r.code).toBe(EXIT.unavailable);
+    const env = JSON.parse(r.stdout);
+    expect(env.warnings[0].code).toBe("requires_rpc");
+  });
+
+  it("chainId-then-variant also shuffles — `prepare phoenix 1 authority-revoke` works", async () => {
+    const r = await runCli(
+      ["prepare", "phoenix", "1", "authority-revoke", "--account", RCV, "--clientrequestid", "variant-0003", "--token", RCV, "--spender", RCV, "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.kind).toBe("authority-revoke");
+  });
+
+  it("variant --explain is scoped to that variant", async () => {
+    const r = await runCli(["prepare", "phoenix", "exercise", "--explain"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(r.stdout).toContain("ch prepare phoenix exercise");
+    expect(r.stdout).toContain("cstSharesIn");
+    expect(r.stdout).not.toContain("authority-onboard");
+  });
+
+  it("variant --help lists the variant's own flattened flags", async () => {
+    const r = await runCli(["prepare", "orders", "taker-fill", "--help"], { nowSeconds: NOW });
+    expect(r.stdout).toContain("--orderhash");
+    expect(r.stdout).toContain("--forself");
+    expect(r.stdout).toContain("--chainid"); // top-level fields ride as flags on the sub
+  });
+
+  it("no variant field collides with a top-level field or a reserved flag, in any tool", () => {
+    // The registration silently prefers the first occurrence on collision — this lint keeps
+    // that branch dead: the registry must never actually contain one.
+    const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help"]);
+    for (const t of REGISTRY) {
+      const s = inputJsonSchema(t.name) as { properties?: Record<string, { oneOf?: unknown[]; anyOf?: unknown[] }> };
+      const top = Object.keys(s.properties ?? {});
+      const topCanon = new Set(top.map((k) => k.toLowerCase()));
+      for (const k of topCanon) expect(RESERVED.has(k), `${t.name}: top-level '${k}' is reserved`).toBe(false);
+      for (const [field, node] of Object.entries(s.properties ?? {})) {
+        const branches = (node.oneOf ?? node.anyOf ?? []) as Array<{ properties?: Record<string, { const?: unknown }> }>;
+        for (const b of branches) {
+          const p = b.properties ?? {};
+          if (typeof p["type"]?.const !== "string" && typeof p["kind"]?.const !== "string") continue;
+          for (const vf of Object.keys(p)) {
+            const canon = vf.toLowerCase();
+            expect(RESERVED.has(canon), `${t.name}.${field}: variant field '${vf}' is reserved`).toBe(false);
+            expect(topCanon.has(canon) && vf !== "type" && vf !== "kind", `${t.name}.${field}: variant field '${vf}' collides with a top-level field`).toBe(false);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("amount sugar (exact, no floats)", () => {
+  it("expands scientific notation and underscores exactly", () => {
+    expect(expandAmount("1000e18")).toEqual({ ok: `1${"0".repeat(21)}` });
+    expect(expandAmount("1e18")).toEqual({ ok: `1${"0".repeat(18)}` });
+    expect(expandAmount("1.5e18")).toEqual({ ok: `15${"0".repeat(17)}` });
+    expect(expandAmount("0.5e18")).toEqual({ ok: `5${"0".repeat(17)}` });
+    expect(expandAmount("1_000")).toEqual({ ok: "1000" });
+    expect(expandAmount("1_000e6")).toEqual({ ok: "1000000000" });
+    expect(expandAmount("123456")).toEqual({ ok: "123456" });
+  });
+
+  it("refuses sugar that cannot expand to an integer, and absurd exponents", () => {
+    expect("err" in expandAmount("1.23e1")).toBe(true);
+    expect("err" in expandAmount("1e101")).toBe(true);
+  });
+
+  it("passes non-sugar values through untouched for the schema to judge", () => {
+    expect(expandAmount("abc")).toEqual({ ok: "abc" });
+    expect(expandAmount("1.5")).toEqual({ ok: "1.5" });
+  });
+
+  it("works end-to-end on a money field — floor math stays wei-exact", async () => {
+    const r = await runCli(
+      ["compute", "rollover-premium-floor", "--dstcstproduced", "1000e18", "--minpremiumpershare", "12e15", "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.premiumFloor).toBe("12000000000000000000");
+  });
+
+  it("a fractional-remainder amount fails loud with invalid_amount, exit 2", async () => {
+    const r = await runCli(
+      ["compute", "rollover-premium-floor", "--dstcstproduced", "1.23e1", "--minpremiumpershare", "12e15", "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("invalid_amount");
+  });
+
+  it("sugar applies to FLAGS only — JSON blobs stay the exact wire form", async () => {
+    const r = await runCli(
+      ["compute", "--json", JSON.stringify({ params: { kind: "rollover-premium-floor", dstCstProduced: "1000e18", minPremiumPerShare: "12000000000000000" } })],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.invalid); // schema pattern rejects the sugar inside the blob
   });
 });

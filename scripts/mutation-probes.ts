@@ -697,11 +697,59 @@ const CATALOG: Mutant[] = [
     // Attribution comparator collapsed to "everything is transport": a contract's definitive
     // refusal (a reverting isValidSignature / binding view) would be relayed or merely warned
     // instead of conflicting — the exact false-negative the classifier exists to prevent.
+    // Re-aimed 2026-08-06: the classifier was unified into chain/rpc.ts `isTransportError`
+    // (shared.ts re-exports it as isTransportFailure) — same mutant, new address.
     id: "shared-transport-classifier-always-true",
-    file: "packages/core/src/handlers/shared.ts",
-    find: "    e = e.cause as { name?: string; cause?: unknown } | undefined;\n  }\n  return false;\n}",
-    replace: "    e = e.cause as { name?: string; cause?: unknown } | undefined;\n  }\n  return true;\n}",
+    file: "packages/core/src/chain/rpc.ts",
+    find: '    if (name === "HttpRequestError" || name === "TimeoutError" || name === "WebSocketRequestError" || name === "SocketClosedError") return true;\n  }\n  return false;\n}',
+    replace: '    if (name === "HttpRequestError" || name === "TimeoutError" || name === "WebSocketRequestError" || name === "SocketClosedError") return true;\n  }\n  return true;\n}',
     tests: [T.venue, T.forself, T.handlers],
+  },
+
+  // ── CLI variant grammar + amount sugar (2026-08-06): what reaches runTool, and exact values ──
+  {
+    // The discriminator must come from the subcommand's own name. Under this mutant a blob's
+    // type field wins, so the executed action can differ from what the command line reads —
+    // the killer test pins authority-revoke against a blob that says swap.
+    id: "cli-variant-disc-blob-trusted",
+    file: "packages/cli/src/app.ts",
+    find: "obj[union.disc] = variant.value;",
+    replace: "if (obj[union.disc] === undefined) obj[union.disc] = variant.value;",
+    tests: [T.cli],
+  },
+  {
+    // Exponent off-by-one multiplies every sugared amount by ten.
+    id: "cli-amount-exp-off-by-one",
+    file: "packages/cli/src/app.ts",
+    find: 'return { ok: digits + "0".repeat(exp) };',
+    replace: 'return { ok: digits + "0".repeat(exp + 1) };',
+    tests: [T.cli],
+  },
+  {
+    // Fraction guard dropped: 1.23e1 must be refused with teaching, never mangled or crashed.
+    id: "cli-amount-fraction-allowed",
+    file: "packages/cli/src/app.ts",
+    find: "if (exp < 0) return",
+    replace: "if (exp < -999) return",
+    tests: [T.cli],
+  },
+  {
+    // Parent-consumed options must merge into the sub's view: without it, a flag written after
+    // the variant name that the parent also declares (--account) never reaches the input.
+    id: "cli-variant-parent-opts-unmerged",
+    file: "packages/cli/src/app.ts",
+    find: "const opts = { ...parentOpts, ...(args[args.length - 2] as Record<string, unknown>) };",
+    replace: "const opts = { ...(args[args.length - 2] as Record<string, unknown>) };",
+    tests: [T.cli],
+  },
+  {
+    // English-order shuffle disabled: `track verify market-ref` / `prepare phoenix 1 exercise`
+    // stop reaching the variant and die as excess positionals.
+    id: "cli-variant-shuffle-disabled",
+    file: "packages/cli/src/app.ts",
+    find: "return [...s.path, variantTok, `--${s.positionalFlag}`, posVal, ...argvIn.slice(i + 2)];",
+    replace: "return argvIn;",
+    tests: [T.cli],
   },
 ];
 
