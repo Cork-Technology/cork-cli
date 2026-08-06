@@ -401,8 +401,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
 
   const client = resolved.client;
-  const w = [...rpcWarn(resolved), ...depWarn];
-  const rpc = rpcProvenance(input.format, resolved);
+  // rpcWarn/rpcProvenance are deferred to ENVELOPE construction: the client fails over in-call
+  // on a dead endpoint (mutating `resolved`), and the disclosure must describe the endpoint
+  // that actually served the reads.
+  const w = [...depWarn];
+  const rpc = () => rpcProvenance(input.format, resolved);
   const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
 
   try {
@@ -429,8 +432,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         chainId,
         source: "chain",
         block: s.blockNumber,
-        warnings: w,
-        ...rpc,
+        warnings: [...rpcWarn(resolved), ...w],
+        ...rpc(),
         ctx,
       });
     }
@@ -485,7 +488,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
       }
       const tokensOut = { collateral: tokens.collateral, reference: tokens.reference, corkSwapToken: tokens.cst, corkPrincipalToken: tokens.cpt, expiryTimestamp: tokens.expiryTimestamp };
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, tokens: tokensOut, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, tokens: tokensOut, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
     }
 
     // pool-whitelist (wlm presence checked above)
@@ -497,9 +500,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       args: [filters.poolId, filters.account],
       ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
     });
-    return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: w, ...rpc, ctx });
+    return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
   } catch (err) {
-    return chainReadFailed(chainId, err, w, ctx, resolved);
+    return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx, resolved);
   }
 }
 

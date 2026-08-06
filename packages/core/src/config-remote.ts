@@ -14,7 +14,8 @@
 // disk for 10 minutes so fresh CLI processes don't re-attempt the fetch on every invocation.
 import { z } from "zod";
 import { Address } from "@cork/schemas";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
+import { atomicWriteFileSync } from "./atomic-file.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
@@ -171,7 +172,7 @@ export function realConfigDeps(): ConfigDeps {
     saveCache: (entry) => {
       try {
         mkdirSync(dirname(cachePath()), { recursive: true });
-        writeFileSync(cachePath(), JSON.stringify(entry));
+        atomicWriteFileSync(cachePath(), JSON.stringify(entry));
       } catch {
         /* best-effort; in-memory result still stands */
       }
@@ -275,6 +276,15 @@ export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promis
 /** Test hook: clear the in-process memo. */
 export function resetConfigMemo(): void {
   memo = null;
+}
+
+/** Snapshot of the last in-process config resolution for the /readyz diagnostics surface —
+ *  which copy is serving (github/cache/bundled), how old the resolution is, and whether it
+ *  carried a fetch-failure warning. Null before the first resolution (or after a memo reset). */
+export function configDiagnostics(now: number = Date.now()): { source: ResolvedConfig["source"]; ageMs: number; ttlMs: number; degraded: boolean } | null {
+  if (process.env.CORK_CONFIG_NO_FETCH) return { source: "bundled", ageMs: 0, ttlMs: 0, degraded: false };
+  if (!memo) return null;
+  return { source: memo.resolved.source, ageMs: Math.max(0, now - memo.at), ttlMs: memo.ttl, degraded: memo.resolved.warning !== undefined };
 }
 
 /** Deployment lookup over the resolved defaults (remote-first, bundled fallback). */

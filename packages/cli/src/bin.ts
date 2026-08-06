@@ -34,7 +34,7 @@ if (argv[0] === "mcp") {
       "Usage: ch mcp [--http [--port <n>] [--host <addr>]]\n\n" +
         "Start the Cork MCP server (all 9 tools).\n" +
         "  (default)        stdio transport — for MCP clients: claude mcp add cork-defi -- ch mcp\n" +
-        "  --http           Streamable HTTP — endpoint /mcp, health /healthz, docs /docs/signing\n" +
+        "  --http           Streamable HTTP — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/signing\n" +
         "  --port <n>       HTTP port (default 8080)\n" +
         "  --host <addr>    bind address (default 127.0.0.1 — loopback only; containers/ingress\n" +
         "                   deployments pass --host 0.0.0.0 to accept external connections)\n" +
@@ -64,7 +64,7 @@ if (argv[0] === "mcp") {
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
     const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
-    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

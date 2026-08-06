@@ -64,6 +64,12 @@ describe("ch mcp --http (real Bun.serve socket)", () => {
     const docs = await fetch(`http://127.0.0.1:${port}/docs/signing`);
     expect(docs.status).toBe(200);
     expect(await docs.text()).toContain("eth_sendRawTransaction");
+
+    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(ready.status).toBe(200);
+    const snapshot = (await ready.json()) as { status: string; subsystems: Record<string, unknown> };
+    expect(snapshot.status).toBe("ok");
+    expect(Object.keys(snapshot.subsystems).sort()).toEqual(["config", "rpc", "venue"]);
   }, 30_000);
 
   it("CORK_MCP_TOKEN gates /mcp (401 bare, 200 with bearer) but not healthz", async () => {

@@ -10,11 +10,13 @@
 // on-disk cache with TTLs, so the long-lived MCP server and repeated short-lived CLI runs both skip
 // re-probing in steady state. All network/fs/clock access is injectable so the logic unit-tests
 // offline.
-import { createPublicClient, http, type Chain, type PublicClient } from "viem";
+import { createPublicClient, custom, http, type Chain, type PublicClient } from "viem";
 import { arbitrum, base, mainnet, sepolia } from "viem/chains";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "../atomic-file.ts";
+import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry } from "../breaker.ts";
 
 export interface ResolvedRpc {
   url: string;
@@ -55,10 +57,7 @@ export const DEFAULT_CONFIG: RpcConfig = {
   maxProbe: 10,
 };
 
-interface Breaker {
-  failures: number;
-  openedAt: number | null;
-}
+type Breaker = BreakerEntry;
 interface Chosen {
   url: string;
   source: "default" | "chainlist";
@@ -81,6 +80,9 @@ export interface ProbeResult {
   latencyMs: number;
 }
 
+/** A bare EIP-1193 request function — the unit the failover client composes over. */
+export type TransportRequest = (args: { method: string; params?: unknown }) => Promise<unknown>;
+
 /** Injectable side-effects — real ones by default; tests pass fakes for offline determinism. */
 export interface RpcDeps {
   now: () => number;
@@ -89,6 +91,12 @@ export interface RpcDeps {
   fetchChainlist: (chainId: number) => Promise<string[]>;
   loadState: () => RpcState;
   saveState: (s: RpcState) => void;
+  /** Uniform [0,1) source for backoff jitter; defaults to Math.random. Tests pin it (0.5 = the
+   *  un-jittered delay, so pre-jitter assertions carry over unchanged). */
+  random?: () => number;
+  /** Build the raw transport for a URL (default: viem http). Tests inject fakes so the failover
+   *  client's request path runs offline. */
+  request?: (url: string, chainId: number | undefined) => TransportRequest;
 }
 
 function emptyState(): RpcState {
@@ -138,11 +146,12 @@ function realSaveState(s: RpcState): void {
   memState = { path, state: s };
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(s));
+    atomicWriteFileSync(path, JSON.stringify(s));
   } catch {
     /* disk cache is best-effort; in-memory memoization still holds within the process */
   }
 }
+
 
 async function realProbe(url: string, timeoutMs: number): Promise<ProbeResult> {
   const client = createPublicClient({ transport: http(url, { retryCount: 0, timeout: timeoutMs }) });
@@ -182,6 +191,14 @@ async function realFetchChainlist(chainId: number): Promise<string[]> {
   }
 }
 
+/** The real transport for the failover client: viem's http transport, instantiated per URL with
+ *  the known chain attached (same construction mkClient performs, minus the client shell). */
+function realTransportRequest(url: string, chainId: number | undefined): TransportRequest {
+  const chain = chainId !== undefined ? CHAINS[chainId] : undefined;
+  const t = http(url)(chain ? { chain } : {});
+  return (args) => t.request(args as Parameters<typeof t.request>[0]);
+}
+
 export function realDeps(): RpcDeps {
   return {
     now: () => Date.now(),
@@ -190,22 +207,21 @@ export function realDeps(): RpcDeps {
     fetchChainlist: realFetchChainlist,
     loadState: realLoadState,
     saveState: realSaveState,
+    random: Math.random,
+    request: realTransportRequest,
   };
 }
 
-// ── breaker helpers ─────────────────────────────────────────────────────────
+// ── breaker helpers — thin views over the shared state machine (breaker.ts), keyed by URL in the
+//    persisted RpcState. The comparators live in ONE place so the venue breaker cannot drift. ────
 function isOpen(st: RpcState, url: string, now: number, cfg: RpcConfig): boolean {
-  const b = st.breaker[url];
-  return b?.openedAt != null && now - b.openedAt < cfg.cooldownMs;
+  return breakerOpen(st.breaker[url], now, cfg);
 }
 function recordSuccess(st: RpcState, url: string): void {
-  st.breaker[url] = { failures: 0, openedAt: null };
+  st.breaker[url] = breakerOnSuccess();
 }
 function recordFailure(st: RpcState, url: string, cfg: RpcConfig, now: number): void {
-  const b = st.breaker[url] ?? { failures: 0, openedAt: null };
-  b.failures += 1;
-  if (b.failures >= cfg.openThreshold) b.openedAt = now;
-  st.breaker[url] = b;
+  st.breaker[url] = breakerOnFailure(st.breaker[url], now, cfg);
 }
 
 export function hostOf(url: string): string {
@@ -217,12 +233,17 @@ export function hostOf(url: string): string {
 }
 
 /**
- * Transport-class failure? (endpoint unreachable/timeout — walks viem's cause chain.) Contract
- * reverts deliberately do NOT count: they indicate a bad request, not a bad endpoint, and feeding
- * them to the breaker would punish healthy RPCs.
+ * Transport-class failure? (endpoint unreachable/timeout — walks viem's cause chain by error
+ * NAME, so no viem class imports are needed.) Contract reverts deliberately do NOT count: they
+ * indicate a bad request, not a bad endpoint, and feeding them to the breaker would punish
+ * healthy RPCs. This split decides ATTRIBUTION everywhere a read doubles as a verdict: a revert
+ * is a DEFINITIVE on-chain answer (the same call in a fill would revert too → conflict), while a
+ * transport failure is indeterminate (→ disclose, don't accuse). THE single implementation —
+ * handlers/shared.ts re-exports it as `isTransportFailure`; duplicated classifications would
+ * drift and defeat first-occurrence mutation probes.
  */
 export function isTransportError(err: unknown): boolean {
-  for (let e = err, depth = 0; e && typeof e === "object" && depth < 6; e = (e as { cause?: unknown }).cause, depth++) {
+  for (let e = err, depth = 0; e && typeof e === "object" && depth < 8; e = (e as { cause?: unknown }).cause, depth++) {
     const name = (e as { name?: string }).name;
     if (name === "HttpRequestError" || name === "TimeoutError" || name === "WebSocketRequestError" || name === "SocketClosedError") return true;
   }
@@ -258,9 +279,22 @@ export function resetExplicitVerification(): void {
   explicitVerified.clear();
 }
 
+// In-flight automatic resolutions, keyed by chainId. Deduplicates the cold-start stampede AND the
+// half-open stampede in the long-lived HTTP server: N concurrent requests share ONE probe pass
+// (the first caller's cfg/deps drive it) instead of each probing up to maxProbe candidates. The
+// explicit-URL path bypasses this (verbatim use, one memoized verification — nothing to stampede).
+const inflight = new Map<number, Promise<ResolvedRpc | null>>();
+
+/** Test hook: forget in-flight resolutions (pair with resetExplicitVerification in setups). */
+export function resetRpcInflight(): void {
+  inflight.clear();
+}
+
 /**
  * Resolve a working PublicClient for `chainId`. Returns null when no RPC can be resolved
  * (chain not eligible for fallback and no default/explicit URL, or every endpoint is down).
+ * Automatic (default/chainlist) clients fail over IN-CALL: a transport-class request failure
+ * feeds the breaker, re-resolves once, and retries the request — see mkFailoverResolved.
  */
 export async function resolveRpc(
   chainId: number,
@@ -285,16 +319,28 @@ export async function resolveRpc(
     return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
   }
 
+  const existing = inflight.get(chainId);
+  if (existing) return existing;
+  const flight = resolveAuto(chainId, cfg, deps).finally(() => inflight.delete(chainId));
+  inflight.set(chainId, flight);
+  return flight;
+}
+
+/** The automatic (default → chainlist) resolution pass. Every hit returns a failover-wrapped
+ *  client so an endpoint dying mid-call heals within the same tool call. */
+async function resolveAuto(chainId: number, cfg: RpcConfig, deps: RpcDeps): Promise<ResolvedRpc | null> {
   const st = deps.loadState();
   const now = deps.now();
 
   // 2. a recently-chosen, still-trusted RPC (skips re-probing in steady state).
   const chosen = st.chosen[chainId];
   if (chosen && now - chosen.ts < cfg.chosenTtlMs && !isOpen(st, chosen.url, now, cfg)) {
-    return { url: chosen.url, client: mkClient(chosen.url, chainId), source: chosen.source };
+    return mkFailoverResolved(chainId, chosen.url, chosen.source, cfg, deps);
   }
 
-  // 3. the committed default for this chain, retried with exponential backoff.
+  // 3. the committed default for this chain, retried with jittered exponential backoff (the
+  //    jitter decorrelates concurrent retriers in the hosted server; random()=0.5 is the
+  //    un-jittered midpoint).
   const def = DEFAULT_RPCS[chainId];
   if (def && !isOpen(st, def, now, cfg)) {
     for (let i = 0; i < cfg.attempts; i++) {
@@ -303,9 +349,9 @@ export async function resolveRpc(
         recordSuccess(st, def);
         st.chosen[chainId] = { url: def, source: "default", ts: now };
         deps.saveState(st);
-        return { url: def, client: mkClient(def, chainId), source: "default" };
+        return mkFailoverResolved(chainId, def, "default", cfg, deps);
       }
-      if (i < cfg.attempts - 1) await deps.sleep(cfg.baseDelayMs * 2 ** i);
+      if (i < cfg.attempts - 1) await deps.sleep(cfg.baseDelayMs * 2 ** i * (0.5 + (deps.random ?? Math.random)()));
     }
     recordFailure(st, def, cfg, now); // may trip the breaker open
     deps.saveState(st);
@@ -334,9 +380,66 @@ export async function resolveRpc(
       recordSuccess(st, best.u);
       st.chosen[chainId] = { url: best.u, source: "chainlist", ts: now };
       deps.saveState(st);
-      return { url: best.u, client: mkClient(best.u, chainId), source: "chainlist" };
+      return mkFailoverResolved(chainId, best.u, "chainlist", cfg, deps);
     }
   }
 
   return null;
+}
+
+/**
+ * A ResolvedRpc whose client fails over IN-CALL (same-call failover): on a transport-class
+ * request failure it feeds the breaker, re-resolves once (attempts:1 — the endpoint just failed
+ * a REAL request, one more probe is evidence enough), and retries the request through whatever
+ * resolves — at most one retry per request, so latency stays bounded and a still-dead world
+ * propagates the original error. The `url`/`source` fields MUTATE on switch so that rpcWarn /
+ * rpcProvenance built at envelope-construction time disclose the endpoint that actually served
+ * (handlers evaluate them after reads complete). Explicit endpoints never get this wrapper:
+ * no-fallback is their contract. All reads here are idempotent (this server never broadcasts —
+ * there is no eth_sendRawTransaction path), so retrying a request is always safe.
+ */
+function mkFailoverResolved(chainId: number, url: string, source: "default" | "chainlist", cfg: RpcConfig, deps: RpcDeps): ResolvedRpc {
+  const requestFor = deps.request ?? realTransportRequest;
+  const resolved = { url, source } as ResolvedRpc & { source: "default" | "chainlist" };
+  let inner = requestFor(url, chainId);
+  const provider = {
+    request: async (args: { method: string; params?: unknown }): Promise<unknown> => {
+      try {
+        return await inner(args);
+      } catch (err) {
+        if (!isTransportError(err)) throw err;
+        reportEndpointFailure(chainId, resolved.url, cfg, deps);
+        const next = await resolveRpc(chainId, undefined, { ...cfg, attempts: 1 }, deps).catch(() => null);
+        if (!next) throw err;
+        if (next.url !== resolved.url) {
+          resolved.url = next.url;
+          if (next.source !== "explicit") resolved.source = next.source;
+          inner = requestFor(next.url, chainId);
+        }
+        return inner(args); // the single retry; a second transport failure propagates as-is
+      }
+    },
+  };
+  const chain = CHAINS[chainId];
+  resolved.client = chain
+    ? (createPublicClient({ chain, batch: { multicall: true }, transport: custom(provider, { retryCount: 0 }) }) as PublicClient)
+    : createPublicClient({ transport: custom(provider, { retryCount: 0 }) });
+  return resolved;
+}
+
+/** Host-only snapshot of resolver health for the /readyz diagnostics surface. HOSTS ONLY by
+ *  construction: committed default URLs embed access tokens in their PATH, so full URLs must
+ *  never leave this module through a diagnostics channel. */
+export function rpcDiagnostics(cfg: RpcConfig = DEFAULT_CONFIG, deps: RpcDeps = realDeps()): {
+  chosen: Record<string, { host: string; source: "default" | "chainlist"; ageMs: number }>;
+  breakers: Array<{ host: string; failures: number; open: boolean; remainingCooldownMs: number }>;
+} {
+  const st = deps.loadState();
+  const now = deps.now();
+  return {
+    chosen: Object.fromEntries(Object.entries(st.chosen).map(([cid, c]) => [cid, { host: hostOf(c.url), source: c.source, ageMs: Math.max(0, now - c.ts) }])),
+    breakers: Object.entries(st.breaker)
+      .filter(([, b]) => b.failures > 0 || b.openedAt != null)
+      .map(([u, b]) => ({ host: hostOf(u), failures: b.failures, open: breakerOpen(b, now, cfg), remainingCooldownMs: breakerRemainingMs(b, now, cfg) })),
+  };
 }

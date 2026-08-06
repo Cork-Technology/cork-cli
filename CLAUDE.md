@@ -146,7 +146,7 @@ Warning codes you will encounter:
 | `pool_paused` | Informational on `ok` prepare_phoenix results: the action is paused and the bundle would revert `EnforcedPause()`. Either the CorkPoolManager's GLOBAL pause (blocks every action on every pool) or the pool's own `getPausedBitMap` bit for this action's family (bit0 deposit/mint, bit1 swap/exercise/exercise-other, bit2 withdraw/withdraw-other/redeem, bit3 unwind-deposit/unwind-mint, bit4 unwind-swap/unwind-exercise/-other). Both can fire at once. |
 | `not_whitelisted` | Informational on `ok` prepare_phoenix results: a gated pool checks **two** addresses and this one fails. Emitted once per failing address — see the whitelist note below. |
 | `digest_mismatch` / `marketid_mismatch` / `create2_mismatch` | On `conflict`: what failed verification. For `cork_submit rollover-order`, `digest_mismatch` means the payload's intent does not hash to its own `rolloverIntentHash` (not relayed) or the venue computed a different orderDigest. |
-| `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (4xx; HTTP status + message) / couldn't be reached OR answered 5xx (transient — retry; check `CORK_VENUE_URL`) / rate-limited (per-user open-order caps). |
+| `venue_rejected` / `venue_unreachable` / `venue_rate_limited` | The venue (api-phoenix) refused (4xx; HTTP status + message) / couldn't be reached OR answered 5xx (transient — retry; check `CORK_VENUE_URL`); after 3 consecutive transport failures the per-host breaker fails fast for 30 s and the message names the remaining cooldown / rate-limited (per-user open-order caps; the venue's 429 `Retry-After` is surfaced as "retry after Ns" when sent). Idempotent venue GETs get ONE silent transport retry; POST relays never do ([K2] retries are the caller's, keyed by clientRequestId). |
 | `venue_conflict` | On `conflict`: venue 409 — same id/digest already stored with a DIFFERENT payload. Use a fresh `clientRequestId` for a genuinely new request. |
 | `order_not_found` | Reconcile/lookup: the digest is unknown to the venue — a normal outcome for a never-posted order. Also `cork_prepare_orders` taker-fill when the orderHash is absent from a COMPLETE orderbook traversal. |
 | `pagination_incomplete` | A bounded traversal did not exhaust the set — venue lists (`reason`: `metadata_absent`/`cursor_absent`/`max_pages`, with a `nextCursor` to resume), HyperSync scans that hit the page bound, registry getAssets/getRecipes truncation, and track-reconcile book/fills walks. On `ok` it's honest partial evidence; on `conflict` it's `cursor_repeated` (venue self-contradiction) or an incomplete search that would otherwise claim "not found" (taker-fill, reconcile). |
@@ -285,11 +285,25 @@ reverts.
 Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`; its
 `eth_chainId` is verified once per process — an endpoint answering with the WRONG chain is refused
 as teachable invalid input; an unreachable one is still used verbatim)
-→ **built-in default** (committed endpoints for mainnet + Arbitrum, retried with backoff behind a
-per-endpoint circuit breaker) → **chainlist.org fallback** (public chains 1/42161/8453/11155111:
+→ **built-in default** (committed endpoints for mainnet + Arbitrum, retried with jittered backoff
+behind a per-endpoint circuit breaker) → **chainlist.org fallback** (public chains 1/42161/8453/11155111:
 fetch candidates just-in-time, latency-probe, verify chainId, pick fastest). Chosen endpoint + breaker
-state are cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`).
-A chainlist fallback adds an `rpc_fallback` warning to the envelope.
+state are cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`;
+writes are temp+rename atomic — the MCP server and concurrent CLI runs share the file safely).
+A chainlist fallback adds an `rpc_fallback` warning to the envelope. Resilience internals (2026-08-06):
+automatic (default/chainlist) clients fail over **in-call** — a transport-class read failure feeds the
+breaker, re-resolves once (`attempts:1`), and retries the request on whatever resolves, with the
+`ResolvedRpc` mutating in place so `rpc_fallback`/`provenance.rpc` (evaluated at envelope construction)
+disclose the endpoint that actually served; explicit URLs never fail over (your config, your call).
+Concurrent automatic resolutions for one chain are single-flighted (one probe pass). The breaker state
+machine itself is ONE shared module (`packages/core/src/breaker.ts`, mutation-probed) — the venue
+transport uses the same machine per-host (3 transport failures → open 30 s → fail fast with the
+cooldown named in the `venue_unreachable` message), plus one silent immediate retry for idempotent
+venue GETs (never POSTs — relays retry only under the caller's [K2] idempotency) and 429 `Retry-After`
+surfaced in `venue_rate_limited` messages. The HTTP server exposes `/readyz` — a 200 always
+(pure tools need no upstream), machine-readable degradation snapshot (RPC breakers, venue transport,
+config source; endpoint HOSTS only, never full URLs — the committed defaults embed tokens in their
+paths) for ingress/monitoring to alert on.
 
 So `cork_query` market/account-state/pool-whitelist, `cork_compute` cst-swap-rate/unwind-rate/
 impairment-floor, and `cork_track` marketRef **just work** on public chains — no RPC setup. They only

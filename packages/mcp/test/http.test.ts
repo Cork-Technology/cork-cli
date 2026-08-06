@@ -2,10 +2,14 @@
 // pure fetch function, so the whole suite runs offline with zero sockets — the SDK client's
 // custom-fetch hook drives real Streamable HTTP protocol traffic straight into the handler.
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DOC_TOPICS } from "@cork/schemas";
+import { DEFAULT_RPCS } from "@cork/core";
 import { createCorkServer, createHttpHandler } from "@cork/mcp";
 
 const NOW = 1_800_000_000n;
@@ -92,5 +96,46 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
     expect(await docs.text()).toBe(DOC_TOPICS.signing!.body);
     const missing = await handler(new Request("http://cork.test/nope"));
     expect(missing.status).toBe(404);
+  });
+});
+
+describe("/readyz diagnostics", () => {
+  it("serves a 200 degradation snapshot without auth, and NEVER leaks a full RPC URL — hosts only", async () => {
+    // Seed the resolver's disk state with entries for the tokened default URL, then prove the
+    // snapshot redacts to hosts. The cache path is env-switchable per process (documented), so
+    // this drives the REAL realDeps() load path, not a stub.
+    const dir = mkdtempSync(join(tmpdir(), "cork-readyz-"));
+    const file = join(dir, "rpc-state.json");
+    const tokened = DEFAULT_RPCS[1]!;
+    writeFileSync(file, JSON.stringify({ version: 1, breaker: { [tokened]: { failures: 3, openedAt: Date.now() } }, chosen: { 1: { url: tokened, source: "default", ts: Date.now() } }, candidates: {} }));
+    const prev = process.env.CORK_RPC_CACHE_FILE;
+    process.env.CORK_RPC_CACHE_FILE = file;
+    try {
+      const handler = createHttpHandler({ token: "sekrit" }); // like /healthz, no bearer required
+      const res = await handler(new Request("http://cork.test/readyz"));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        status: string;
+        version: string;
+        subsystems: {
+          rpc: { chosen: Record<string, { host: string }>; breakers: Array<{ host: string; open: boolean }>; degraded: boolean };
+          venue: { host: string; degraded: boolean };
+          config: { source: string | null; degraded: boolean };
+        };
+      };
+      expect(body.status).toBe("ok");
+      expect(body.subsystems.rpc.chosen["1"]!.host).toBe(new URL(tokened).host);
+      expect(body.subsystems.rpc.degraded).toBe(true); // the seeded breaker is open
+      expect(body.subsystems.venue.host).toBe("api-phoenix.cork.tech");
+      // CORK_CONFIG_NO_FETCH=1 (vitest config) → deliberate offline mode, bundled + not degraded.
+      expect(body.subsystems.config).toMatchObject({ source: "bundled", degraded: false });
+      // The redaction guarantee: the access token embedded in the default URL's PATH must not
+      // appear anywhere in the payload.
+      const tokenSegment = tokened.split("/").pop()!;
+      expect(JSON.stringify(body)).not.toContain(tokenSegment);
+    } finally {
+      if (prev === undefined) delete process.env.CORK_RPC_CACHE_FILE;
+      else process.env.CORK_RPC_CACHE_FILE = prev;
+    }
   });
 });

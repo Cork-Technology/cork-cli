@@ -54,7 +54,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       return envelope({ state: "conflict", data: { venueResponse: body }, chainId, source: "service", warnings: [{ code: "venue_conflict", message: `venue 409: ${msg} (same id/digest already stored with a DIFFERENT payload — use a fresh clientRequestId for a genuinely new request [K2])` }], ctx });
     }
     if (res.httpStatus === 429) {
-      return unavailable(chainId, "venue_rate_limited", `venue 429: ${msg} (per-user open-order caps / 100 req/min per IP)`, ctx);
+      return unavailable(chainId, "venue_rate_limited", `venue 429: ${msg}${res.retryAfterSeconds !== undefined ? ` — retry after ${res.retryAfterSeconds}s` : ""} (per-user open-order caps / 100 req/min per IP)`, ctx);
     }
     if (res.httpStatus === 404 || res.httpStatus === 410 || res.httpStatus === 422) {
       return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg}${res.httpStatus === 422 ? " (permanent for this RFQ — do not retry)" : ""}`, ctx);

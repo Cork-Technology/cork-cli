@@ -28,8 +28,11 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", `${p.kind} needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
     const client = resolved.client;
-    const w = [...rpcWarn(resolved), ...depWarn];
-    const rpc = rpcProvenance(input.format, resolved);
+    // rpcWarn/rpcProvenance are evaluated at ENVELOPE construction, not here: the client fails
+    // over in-call on a dead endpoint (mutating `resolved`), and the disclosure must describe
+    // the endpoint that actually served the reads.
+    const w = [...depWarn];
+    const rpc = () => rpcProvenance(input.format, resolved);
     const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
     const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
     if (input.at?.timestamp !== undefined) {
@@ -43,7 +46,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     try {
       s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
     } catch (err) {
-      return chainReadFailed(chainId, err, w, ctx, resolved);
+      return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx, resolved);
     }
     try {
       const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
@@ -59,7 +62,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
           referenceAssetsIn: `native decimals of the reference asset (${s.referenceDecimals})`,
           fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
         };
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
       }
       if (p.kind === "unwind-rate") {
         const r = previewUnwindSwap(BigInt(p.collateralAssetsIn), { swapRate, unwindSwapFeePercentage: s.unwindSwapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals, issuedAt: s.issuedAt, expiryTimestamp: s.market.expiryTimestamp, nowTs: s.blockTimestamp });
@@ -69,16 +72,16 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
           referenceAssetsOut: `native decimals of the reference asset (${s.referenceDecimals})`,
           fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
         };
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
       }
       const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
       const scales = { worstRate: "1e18 = 1.0 (WAD)", maxReferencePerCst: "reference WAD per 1e18 cST (null = unbounded: impairment can be total)", availableAtEval: "WAD descent budget" };
       if (floor.maxReferencePerCst === null) {
         w.push({ code: "invalid_state", message: "the worst-case rate collapses to ZERO over this horizon (rateMin is 0) — impairment can be total and the reference cost per cST is unbounded" });
       }
-      return envelope({ state: "ok", data: { kind: p.kind, ...floor, scales }, chainId, source: "chain", block: s.blockNumber, warnings: w, ...rpc, ctx });
+      return envelope({ state: "ok", data: { kind: p.kind, ...floor, scales }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
     } catch (err) {
-      return localComputeFailed(chainId, err, w, ctx);
+      return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx);
     }
   }
 
@@ -95,7 +98,6 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     if (r.gate) return r.gate;
     const { mr, resolved, warnings } = r;
     const client = resolved.client;
-    const rpc = rpcProvenance(input.format, resolved);
     try {
       const res = await resolveRecipeOracleConstraint({
         client,
@@ -127,12 +129,12 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
         },
         chainId,
         source: "chain",
-        warnings,
-        ...rpc,
+        warnings: [...rpcWarn(resolved), ...warnings],
+        ...rpcProvenance(input.format, resolved),
         ctx,
       });
     } catch (err) {
-      return chainReadFailed(chainId, err, warnings, ctx, resolved);
+      return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
     }
   }
 

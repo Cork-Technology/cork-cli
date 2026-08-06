@@ -59,6 +59,9 @@ export function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext)
     if (err.status >= 500) {
       return unavailable(chainId, "venue_unreachable", `venue server error HTTP ${err.status}: ${err.message} — likely transient; retry (or check CORK_VENUE_URL)`, ctx);
     }
+    if (err.status === 429) {
+      return unavailable(chainId, "venue_rate_limited", `venue 429: ${err.message}${err.retryAfterSeconds !== undefined ? ` — retry after ${err.retryAfterSeconds}s` : ""} (per-user open-order caps / 100 req/min per IP)`, ctx);
+    }
     return unavailable(chainId, "venue_rejected", `venue returned HTTP ${err.status}: ${err.message}`, ctx);
   }
   if (err instanceof VenueUnreachable) {
@@ -232,16 +235,8 @@ export function revertReason(err: unknown): string {
 }
 
 /** True when a failed chain call died in TRANSPORT (HTTP/timeout/socket) rather than in the
- *  contract. This split decides ATTRIBUTION everywhere a read doubles as a verdict: a revert
- *  is a DEFINITIVE on-chain answer (the same call in the fill would revert too → conflict),
- *  while a transport failure is indeterminate (→ disclose, don't accuse). ONE comparator on
- *  purpose — duplicated classifications would drift and defeat first-occurrence mutation
- *  probes. Walks viem's cause chain by error NAME so no viem class imports are needed. */
-export function isTransportFailure(err: unknown): boolean {
-  let e = err as { name?: string; cause?: unknown } | undefined;
-  for (let i = 0; e && i < 8; i++) {
-    if (e.name === "HttpRequestError" || e.name === "TimeoutError" || e.name === "SocketClosedError" || e.name === "WebSocketRequestError") return true;
-    e = e.cause as { name?: string; cause?: unknown } | undefined;
-  }
-  return false;
-}
+ *  contract — the ATTRIBUTION split (revert = definitive on-chain answer; transport =
+ *  indeterminate). ONE comparator on purpose: this is chain/rpc.ts's `isTransportError` under
+ *  the name the handlers grew up with. (Until 2026-08-06 this was a duplicated implementation —
+ *  exactly the drift its own comment warned against.) */
+export { isTransportError as isTransportFailure } from "../chain/rpc.ts";

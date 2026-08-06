@@ -8,6 +8,13 @@
 //                            no server-initiated messages, a GET-opened SSE stream could only
 //                            dangle — connection-pinning waste on a public deployment.
 //   GET /healthz           — 200 + BUILD_VERSION (liveness for the container orchestrator)
+//   GET /readyz            — 200 + a machine-readable degradation snapshot (RPC breakers, venue
+//                            transport, config source). ALWAYS 200 while the process serves:
+//                            the pure tools (capabilities/decode/byte-building) need no upstream,
+//                            so "not ready" would lie — ingress/monitoring alert on the BODY
+//                            (subsystems.*.degraded), not the status code. Hosts only, never
+//                            full URLs: the committed default RPC URLs embed access tokens in
+//                            their PATH, and CORK_RPC_URL may too.
 //   GET /docs/signing      — the DOC_TOPICS signing body as text/markdown (same constant as the
 //                            capabilities topic and the initialize instructions — zero drift)
 // The handler is a pure function so tests drive it without a socket; `startHttpServer` wraps it
@@ -20,7 +27,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { DOC_TOPICS } from "@cork/schemas";
-import { BUILD_VERSION, type HandlerContext } from "@cork/core";
+import { BUILD_VERSION, configDiagnostics, rpcDiagnostics, venueDiagnostics, type HandlerContext } from "@cork/core";
 import { createCorkServer } from "./server.ts";
 
 export interface CorkHttpOptions {
@@ -48,6 +55,21 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
     const url = new URL(req.url);
     if (url.pathname === "/healthz") {
       return new Response(`ok ${BUILD_VERSION}\n`, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+    if (url.pathname === "/readyz") {
+      const rpc = rpcDiagnostics();
+      const venue = venueDiagnostics();
+      const config = configDiagnostics();
+      const body = {
+        status: "ok",
+        version: BUILD_VERSION,
+        subsystems: {
+          rpc: { ...rpc, degraded: rpc.breakers.some((b) => b.open) },
+          venue: { ...venue, degraded: venue.breaker?.open === true || venue.lastOutcome?.ok === false },
+          config: config ? { ...config } : { source: null, degraded: false, note: "no config resolution yet this process" },
+        },
+      };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.pathname === "/docs/signing") {
       return new Response(DOC_TOPICS.signing!.body, { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
@@ -81,7 +103,7 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
       await server.connect(transport);
       return transport.handleRequest(req);
     }
-    return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /docs/signing\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/signing\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   };
 }
 

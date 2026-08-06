@@ -44,6 +44,9 @@ const T = {
   funding: "packages/core/test/funding.test.ts",
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
+  venueTransport: "packages/core/test/venue-transport.test.ts",
+  breaker: "packages/core/test/breaker.test.ts",
+  rpc: "packages/core/test/rpc.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
@@ -750,6 +753,65 @@ const CATALOG: Mutant[] = [
     find: "return [...s.path, variantTok, `--${s.positionalFlag}`, posVal, ...argvIn.slice(i + 2)];",
     replace: "return argvIn;",
     tests: [T.cli],
+  },
+  // ── circuit breaker (breaker.ts — ONE state machine shared by RPC resolver + venue transport):
+  //    the boundary comparators decide when a subsystem stops burning timeouts on a dead
+  //    upstream, and both consumers inherit a drift here silently ────────────────────────────
+  {
+    // >= → >: the breaker opens one failure LATE (threshold+1) — every fail-fast window shifts.
+    id: "breaker-threshold-boundary",
+    file: "packages/core/src/breaker.ts",
+    find: "return { failures, openedAt: failures >= policy.openThreshold ? now : (b?.openedAt ?? null) };",
+    replace: "return { failures, openedAt: failures > policy.openThreshold ? now : (b?.openedAt ?? null) };",
+    tests: [T.breaker, T.venueTransport],
+  },
+  {
+    // < → <=: the half-open probe is refused AT the cooldown boundary — an endpoint that died
+    // once stays unprobed one tick longer than documented (and the venue fail-fast overshoots).
+    id: "breaker-cooldown-boundary",
+    file: "packages/core/src/breaker.ts",
+    find: "return b?.openedAt != null && now - b.openedAt < policy.cooldownMs;",
+    replace: "return b?.openedAt != null && now - b.openedAt <= policy.cooldownMs;",
+    tests: [T.breaker],
+  },
+  // ── same-call failover (chain/rpc.ts): the transport gate is the attribution split — without
+  //    it a contract REVERT (a definitive on-chain answer) silently retries on another endpoint
+  //    and feeds the breaker for an endpoint that answered correctly ─────────────────────────
+  {
+    id: "failover-transport-gate-dropped",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "if (!isTransportError(err)) throw err;",
+    replace: "",
+    tests: [T.rpc],
+  },
+  // ── venue transport (datasources/venue.ts): fail-fast admission + consecutive-failure reset —
+  //    each mutant turns the breaker into either a lock-out or a no-op ───────────────────────
+  {
+    // Success no longer resets: two spaced blips accumulate to the threshold and lock the venue
+    // out for a cooldown even though it answered in between.
+    id: "venue-breaker-success-reset-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "    if (br) br.byHost[host] = breakerOnSuccess();",
+    replace: "",
+    tests: [T.venueTransport],
+  },
+  {
+    // Fail-fast admission gate dropped: an open breaker no longer short-circuits — every call
+    // burns the full transport timeout again, which is the exact waste the breaker exists for.
+    id: "venue-failfast-gate-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "if (br && breakerOpen(br.byHost[host], now(), VENUE_BREAKER_POLICY)) {",
+    replace: "if (br && breakerOpen(br.byHost[host], now(), VENUE_BREAKER_POLICY) && false) {",
+    tests: [T.venueTransport],
+  },
+  {
+    // GET-retry gating dropped: the silent retry fires even when the failure just OPENED the
+    // breaker — fail-fast loses to retry exactly when it matters.
+    id: "venue-get-retry-gate-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "if (br && breakerOpen(br.byHost[hostOf(venueBaseUrl(deps.baseUrl))], now(), VENUE_BREAKER_POLICY)) throw err;",
+    replace: "",
+    tests: [T.venueTransport],
   },
 ];
 

@@ -2,14 +2,20 @@
 // injected, so nothing here touches the wire — we assert the resolution *logic*: precedence,
 // retry/backoff, the breaker state machine, the chainId guard, and fallback scope.
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_RPCS,
   FALLBACK_CHAINS,
   filterChainlistRpcs,
   isTransportError,
+  realDeps,
   reportEndpointFailure,
   resetExplicitVerification,
+  resetRpcInflight,
   resolveRpc,
+  rpcDiagnostics,
   type ProbeResult,
   type RpcConfig,
   type RpcDeps,
@@ -54,6 +60,9 @@ function harness(opts: {
     saveState: () => {
       /* state is the same object ref — mutations already persist */
     },
+    // 0.5 is the un-jittered midpoint of the 0.5+random() factor, so the pre-jitter backoff
+    // assertions carry over unchanged; the jitter test overrides this.
+    random: () => 0.5,
   };
   return { deps, calls, state, advance: (ms: number) => (t += ms) };
 }
@@ -228,5 +237,154 @@ describe("circuit breaker state machine", () => {
     healthy = true;
     await resolveRpc(1, undefined, CFG, h.deps); // success -> reset
     expect(h.state.breaker[MAINNET_DEFAULT]).toEqual({ failures: 0, openedAt: null });
+  });
+});
+
+describe("backoff jitter", () => {
+  it("delays scale by 0.5+random(): 0 halves them, high values stretch them", async () => {
+    const h = harness({ probe: () => ({ ok: false, latencyMs: 999 }), candidates: { 1: [] } });
+    h.deps.random = () => 0;
+    await resolveRpc(1, undefined, CFG, h.deps);
+    expect(h.calls.sleeps).toEqual([CFG.baseDelayMs * 0.5, CFG.baseDelayMs * 2 * 0.5]);
+
+    h.calls.sleeps.length = 0;
+    h.state.breaker = {}; // close the breaker so the default is probed again
+    h.deps.random = () => 0.9;
+    await resolveRpc(1, undefined, CFG, h.deps);
+    expect(h.calls.sleeps).toEqual([CFG.baseDelayMs * 1.4, CFG.baseDelayMs * 2 * 1.4]);
+  });
+});
+
+describe("single-flight resolution", () => {
+  it("concurrent automatic resolutions for one chain share a single probe pass", async () => {
+    resetRpcInflight();
+    const h = harness({ probe: okOn([MAINNET_DEFAULT]) });
+    let probes = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = h.deps.probe;
+    h.deps.probe = async (url, t) => {
+      probes++;
+      await gate;
+      return orig(url, t);
+    };
+    const p1 = resolveRpc(1, undefined, CFG, h.deps);
+    const p2 = resolveRpc(1, undefined, CFG, h.deps); // joins p1's flight
+    release();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(probes).toBe(1);
+    expect(r1?.url).toBe(MAINNET_DEFAULT);
+    expect(r2?.url).toBe(MAINNET_DEFAULT);
+  });
+
+  it("the flight is cleared on settle — a later resolution runs fresh", async () => {
+    resetRpcInflight();
+    const h = harness({ probe: okOn([MAINNET_DEFAULT]) });
+    await resolveRpc(1, undefined, CFG, h.deps);
+    h.state.chosen = {}; // force a re-probe
+    h.calls.probe.length = 0;
+    await resolveRpc(1, undefined, CFG, h.deps);
+    expect(h.calls.probe.length).toBeGreaterThan(0); // not served from a stale in-flight promise
+  });
+});
+
+describe("same-call failover (the failover-wrapped client)", () => {
+  const B = "https://b.public.rpc";
+  const transportDead = () => Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
+
+  function failoverHarness() {
+    // A fresh-chosen default that dies at REQUEST time; B is the healthy chainlist candidate.
+    const h = harness({
+      probe: (url) => (url === B ? { ok: true, chainId: 1, latencyMs: 5 } : { ok: false, latencyMs: 9 }),
+      candidates: { 1: [B] },
+    });
+    h.state.chosen[1] = { url: MAINNET_DEFAULT, source: "default", ts: h.deps.now() };
+    return h;
+  }
+
+  it("a transport-dead endpoint heals WITHIN the call; url/source mutate so the disclosure follows", async () => {
+    const h = failoverHarness();
+    const served: string[] = [];
+    h.deps.request = (url) => async () => {
+      served.push(url);
+      if (url === MAINNET_DEFAULT) throw transportDead();
+      return "0x10";
+    };
+    const r = await resolveRpc(1, undefined, CFG, h.deps);
+    expect(r?.url).toBe(MAINNET_DEFAULT);
+    const out = await r!.client.request({ method: "eth_blockNumber" });
+    expect(out).toBe("0x10");
+    expect(served).toEqual([MAINNET_DEFAULT, B]); // one failure, one retry — no third attempt
+    expect(r?.url).toBe(B); // mutated in place → rpcWarn/rpcProvenance built at envelope time disclose B
+    expect(r?.source).toBe("chainlist");
+    expect(h.state.breaker[MAINNET_DEFAULT]?.failures).toBeGreaterThan(0); // the real failure fed the breaker
+    expect(h.state.chosen[1]?.url).toBe(B); // the NEXT call starts on B
+    // the failover re-resolve probes the just-failed default ONCE (attempts:1), not cfg.attempts times
+    expect(h.calls.probe.filter((u) => u === MAINNET_DEFAULT)).toHaveLength(1);
+  });
+
+  it("a NON-transport error (contract revert) does NOT fail over and does NOT feed the breaker", async () => {
+    const h = failoverHarness();
+    h.deps.request = () => async () => {
+      throw Object.assign(new Error("execution reverted"), { name: "ContractFunctionRevertedError" });
+    };
+    const r = await resolveRpc(1, undefined, CFG, h.deps);
+    await expect(r!.client.request({ method: "eth_chainId" })).rejects.toThrow("execution reverted");
+    expect(r?.url).toBe(MAINNET_DEFAULT); // unchanged
+    expect(h.state.breaker[MAINNET_DEFAULT]).toBeUndefined();
+    expect(h.calls.probe).toHaveLength(0); // no re-resolution
+  });
+
+  it("when nothing else resolves, the ORIGINAL error propagates after exactly one extra resolution attempt", async () => {
+    const h = failoverHarness();
+    h.state.candidates = {}; // no chainlist candidates cached
+    const deadHarnessProbe = h.deps.probe;
+    h.deps.probe = async (url, t) => (url === B ? { ok: false, latencyMs: 9 } : deadHarnessProbe(url, t));
+    h.deps.fetchChainlist = async () => []; // and none fetchable
+    const attempts: string[] = [];
+    h.deps.request = (url) => async () => {
+      attempts.push(url);
+      throw transportDead();
+    };
+    const r = await resolveRpc(1, undefined, CFG, h.deps);
+    await expect(r!.client.request({ method: "eth_blockNumber" })).rejects.toThrow("fetch failed");
+    expect(attempts).toEqual([MAINNET_DEFAULT]); // bounded: no endpoint to retry on → no second request
+    expect(r?.url).toBe(MAINNET_DEFAULT);
+  });
+});
+
+describe("disk cache (real deps): corrupt-read reset + atomic write", () => {
+  it("a corrupt state file resets to empty instead of throwing; saves are temp+rename with no residue", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cork-rpc-state-"));
+    const file = join(dir, "rpc-state.json");
+    writeFileSync(file, "{ this is not json");
+    const prev = process.env.CORK_RPC_CACHE_FILE;
+    process.env.CORK_RPC_CACHE_FILE = file;
+    try {
+      const deps = realDeps();
+      const st = deps.loadState();
+      expect(st).toEqual({ version: 1, breaker: {}, chosen: {}, candidates: {} }); // reset, not a throw
+      st.chosen[1] = { url: "https://x.example/rpc", source: "chainlist", ts: 1 };
+      deps.saveState(st);
+      expect(readdirSync(dir)).toEqual(["rpc-state.json"]); // no .tmp-<pid> staging residue
+      expect((JSON.parse(readFileSync(file, "utf8")) as RpcState).chosen[1]?.url).toBe("https://x.example/rpc");
+    } finally {
+      if (prev === undefined) delete process.env.CORK_RPC_CACHE_FILE;
+      else process.env.CORK_RPC_CACHE_FILE = prev;
+    }
+  });
+});
+
+describe("rpcDiagnostics (the /readyz feed)", () => {
+  it("reports hosts only — never the full URL (the committed defaults embed tokens in their PATH)", () => {
+    const h = harness({ probe: () => ({ ok: false, latencyMs: 1 }) });
+    h.state.chosen[1] = { url: MAINNET_DEFAULT, source: "default", ts: h.deps.now() };
+    h.state.breaker[MAINNET_DEFAULT] = { failures: 3, openedAt: h.deps.now() };
+    const d = rpcDiagnostics(CFG, h.deps);
+    const raw = JSON.stringify(d);
+    const tokenSegment = MAINNET_DEFAULT.split("/").pop()!;
+    expect(raw).not.toContain(tokenSegment);
+    expect(d.chosen[1]?.host).toBe(new URL(MAINNET_DEFAULT).host);
+    expect(d.breakers).toEqual([{ host: new URL(MAINNET_DEFAULT).host, failures: 3, open: true, remainingCooldownMs: CFG.cooldownMs }]);
   });
 });

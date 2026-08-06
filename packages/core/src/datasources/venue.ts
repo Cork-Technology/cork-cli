@@ -5,6 +5,8 @@
 // key fields typed, extra fields passed through, because the venue's own zod schemas are the
 // authoritative contract and it may add fields).
 import { z } from "zod";
+import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
+import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
 
 export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech/v1";
@@ -15,10 +17,58 @@ export function venueBaseUrl(override?: string): string {
 
 export type VenueFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
+/** Per-host breaker entries — callers own the container (the module singleton for the real
+ *  network; tests inject their own to stay isolated). */
+export interface VenueBreakerState {
+  byHost: Record<string, BreakerEntry>;
+}
+
 export interface VenueDeps {
   fetch?: VenueFetch;
   baseUrl?: string;
   timeoutMs?: number;
+  /** Clock for breaker decisions; defaults to Date.now. */
+  now?: () => number;
+  /** Breaker container override: an explicit state object, or null to disable. When omitted, the
+   *  module singleton guards the REAL network only — an injected `fetch` stub is not a network,
+   *  so stubbed calls (the entire offline test surface) neither consult nor pollute the shared
+   *  breaker unless they opt in by injecting a state object. */
+  breaker?: VenueBreakerState | null;
+}
+
+// Same shape as the RPC endpoint breaker (3 consecutive transport failures → open 30 s). The
+// state machine is the shared one in breaker.ts; only the container and the keying differ.
+export const VENUE_BREAKER_POLICY: BreakerPolicy = { openThreshold: 3, cooldownMs: 30_000 };
+
+const moduleBreaker: VenueBreakerState = { byHost: {} };
+
+/** Last real-network venue call outcome (diagnostics only — never drives admission). */
+let lastOutcome: { ok: boolean; host: string; atMs: number } | null = null;
+
+/** Test hook: clear the module-level breaker + diagnostics memory. */
+export function resetVenueBreaker(): void {
+  moduleBreaker.byHost = {};
+  lastOutcome = null;
+}
+
+function breakerStateOf(deps: VenueDeps): VenueBreakerState | null {
+  if (deps.breaker !== undefined) return deps.breaker;
+  return deps.fetch ? null : moduleBreaker;
+}
+
+/** Host-only snapshot of venue transport health for the /readyz diagnostics surface. */
+export function venueDiagnostics(now: number = Date.now()): {
+  host: string;
+  breaker: { failures: number; open: boolean; remainingCooldownMs: number } | null;
+  lastOutcome: { ok: boolean; ageMs: number } | null;
+} {
+  const host = hostOf(venueBaseUrl());
+  const entry = moduleBreaker.byHost[host];
+  return {
+    host,
+    breaker: entry ? { failures: entry.failures, open: breakerOpen(entry, now, VENUE_BREAKER_POLICY), remainingCooldownMs: breakerRemainingMs(entry, now, VENUE_BREAKER_POLICY) } : null,
+    lastOutcome: lastOutcome && lastOutcome.host === host ? { ok: lastOutcome.ok, ageMs: Math.max(0, now - lastOutcome.atMs) } : null,
+  };
 }
 
 /** Transport-level failure (network, timeout, non-JSON body) — distinct from an HTTP status. */
@@ -56,19 +106,63 @@ export interface PageParams {
 export interface VenuePostResult {
   httpStatus: number;
   body: unknown;
+  /** Seconds the venue asked us to wait (429 Retry-After), when it said. */
+  retryAfterSeconds?: number;
 }
 
+/** One transport attempt: breaker-gated (fail fast while open), breaker-fed (a fetch throw /
+ *  timeout records a failure; ANY HTTP response — even a 5xx — records a success, because the
+ *  breaker guards the 10s-timeout class of waste, not server-side errors that answer quickly). */
 async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Promise<Response> {
   const f = deps.fetch ?? fetch;
+  const br = breakerStateOf(deps);
+  const now = deps.now ?? Date.now;
+  const host = hostOf(venueBaseUrl(deps.baseUrl));
+  if (br && breakerOpen(br.byHost[host], now(), VENUE_BREAKER_POLICY)) {
+    const waitMs = breakerRemainingMs(br.byHost[host], now(), VENUE_BREAKER_POLICY);
+    throw new VenueUnreachable(`venue unreachable: failing fast — ${host} failed ${br.byHost[host]!.failures} consecutive transport attempts and its breaker is open for another ${Math.ceil(waitMs / 1000)}s; check connectivity or CORK_VENUE_URL`);
+  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), deps.timeoutMs ?? 10_000);
   try {
-    return await f(`${venueBaseUrl(deps.baseUrl)}${path}`, { ...init, signal: ctrl.signal });
+    const res = await f(`${venueBaseUrl(deps.baseUrl)}${path}`, { ...init, signal: ctrl.signal });
+    if (br) br.byHost[host] = breakerOnSuccess();
+    if (br === moduleBreaker) lastOutcome = { ok: true, host, atMs: now() };
+    return res;
   } catch (err) {
+    if (br) br.byHost[host] = breakerOnFailure(br.byHost[host], now(), VENUE_BREAKER_POLICY);
+    if (br === moduleBreaker) lastOutcome = { ok: false, host, atMs: now() };
     throw new VenueUnreachable(`venue unreachable: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
   } finally {
     clearTimeout(t);
   }
+}
+
+/** GET transport with ONE immediate silent retry on a transport-class failure — GETs are
+ *  idempotent, and a single blip (connection reset, DNS hiccup) shouldn't fail a read that
+ *  would succeed 50ms later. Never retries when the failure just opened the breaker (fail-fast
+ *  wins), and never applies to POSTs: relays retry only under the caller's [K2] idempotency
+ *  contract, not silently at the transport. Same-tier retries stay silent by the same rule the
+ *  RPC resolver's backoff retries do — only tier CHANGES are disclosed. */
+async function getFetch(deps: VenueDeps, path: string): Promise<Response> {
+  try {
+    return await rawFetch(deps, path);
+  } catch (err) {
+    if (!(err instanceof VenueUnreachable)) throw err;
+    const br = breakerStateOf(deps);
+    const now = deps.now ?? Date.now;
+    if (br && breakerOpen(br.byHost[hostOf(venueBaseUrl(deps.baseUrl))], now(), VENUE_BREAKER_POLICY)) throw err;
+    return rawFetch(deps, path);
+  }
+}
+
+/** Parse a Retry-After header: delta-seconds, or an HTTP-date (converted to seconds from now). */
+function parseRetryAfter(header: string | null, nowMs: number): number | undefined {
+  if (header === null) return undefined;
+  if (/^\d+$/.test(header.trim())) return Number(header.trim());
+  const at = Date.parse(header);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - nowMs) / 1000));
 }
 
 function qs(params: Record<string, string | number | boolean | undefined>): string {
@@ -79,7 +173,7 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
 }
 
 async function getJson(deps: VenueDeps, path: string): Promise<unknown> {
-  const res = await rawFetch(deps, path);
+  const res = await getFetch(deps, path);
   let body: unknown;
   try {
     body = await res.json();
@@ -88,8 +182,7 @@ async function getJson(deps: VenueDeps, path: string): Promise<unknown> {
   }
   if (!res.ok) {
     const msg = body && typeof body === "object" && "message" in body ? String((body as { message: unknown }).message) : `HTTP ${res.status}`;
-    const err = new VenueHttpError(res.status, msg, body);
-    throw err;
+    throw new VenueHttpError(res.status, msg, body, parseRetryAfter(res.headers.get("retry-after"), (deps.now ?? Date.now)()));
   }
   return body;
 }
@@ -100,6 +193,8 @@ export class VenueHttpError extends Error {
     public status: number,
     message: string,
     public body: unknown,
+    /** Seconds the venue asked us to wait (429 Retry-After), when it said. */
+    public retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "VenueHttpError";
@@ -313,6 +408,8 @@ export function parseSignedLopOrder(row: unknown): { ok: true; value: SignedLopO
 // ── Writes (relays of caller-authored/signed payloads [K1]) ─────────────────
 
 async function postJson(deps: VenueDeps, path: string, body: unknown): Promise<VenuePostResult> {
+  // Deliberately NO transport retry here (contrast getFetch): a relay retries only under the
+  // caller's [K2] clientRequestId idempotency contract, never silently at the transport layer.
   const res = await rawFetch(deps, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -324,7 +421,8 @@ async function postJson(deps: VenueDeps, path: string, body: unknown): Promise<V
   } catch {
     /* some errors have empty bodies — keep the status */
   }
-  return { httpStatus: res.status, body: parsed };
+  const retryAfter = parseRetryAfter(res.headers.get("retry-after"), (deps.now ?? Date.now)());
+  return { httpStatus: res.status, body: parsed, ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}) };
 }
 
 /** POST /v1/rollover/orders — relay a signed rollover order. */

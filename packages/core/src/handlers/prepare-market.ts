@@ -23,7 +23,9 @@ export async function handlePrepareMarket(
   const warnings: Array<{ code: string; message: string }> = warning ? [warning] : [];
   const a = input.action;
   const resolved = await getRpc(ctx, chainId);
-  if (resolved) warnings.push(...rpcWarn(resolved));
+  // rpcWarn is prepended at ENVELOPE construction, not pushed here: the client fails over
+  // in-call (mutating `resolved`), and the disclosure must describe the endpoint that served
+  // the pre-checks.
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
 
   if (a.type === "deploy-fixed-oracle") {
@@ -49,7 +51,7 @@ export async function handlePrepareMarket(
       data: { kind: "deploy-fixed-oracle", to: mr.registry, calldata, value: "0", rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
       chainId,
       source: resolved ? "chain" : "config",
-      warnings,
+      warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings],
       ctx,
     });
   }
@@ -82,7 +84,7 @@ export async function handlePrepareMarket(
     data: { kind: "deploy-wrapper", to: mr.registry, calldata, value: "0", collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, mode: modeName, ...modeNote, ...status, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId,
     source: resolved ? "chain" : "config",
-    warnings,
+    warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings],
     ctx,
   });
 }

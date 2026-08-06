@@ -24,7 +24,10 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
   if (!resolved) {
     return { gate: unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx) };
   }
-  return { mr, resolved, warnings: [...rpcWarn(resolved), ...(warning ? [warning] : [])] };
+  // CONFIG warnings only — rpcWarn is deliberately NOT baked in here: the client fails over
+  // in-call (mutating `resolved`), so consumers prepend rpcWarn(resolved) at ENVELOPE
+  // construction, after their reads have run.
+  return { mr, resolved, warnings: warning ? [warning] : [] };
 }
 
 /** Best-effort 2.1.0 generation guard, cached per (chainId, adapter) for the process: the ONE
@@ -124,13 +127,13 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
   if (r.gate) return r.gate;
   const { mr, resolved, warnings } = r;
   const client = resolved.client;
-  const rpc = rpcProvenance(input.format, resolved);
+  const rpc = () => rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
   const version = mr.contractsVersion ? { contractsVersion: mr.contractsVersion } : {};
   try {
     const bindingWarn = await registryBindingMismatch(client, chainId, mr);
     if (bindingWarn) {
-      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...warnings, bindingWarn], ...rpc, ctx });
+      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, bindingWarn], ...rpc(), ctx });
     }
     if (input.resource === "registry-assets") {
       // filters.address → single lookup by natural key (an address keys exactly one asset per chain).
@@ -138,7 +141,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
         const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address] });
         if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a registry-approved asset on chainId ${chainId} — list them with cork_query resource:"registry-assets" (no filters)`, ctx);
         const item = { address: entry.addr, name: entry.name, kind: ASSET_KIND[entry.kind] ?? entry.kind, priceSource: shapeAssetSource(entry.priceSource), navSource: shapeAssetSource(entry.navSource), token: await tokenMeta(client, entry.addr) };
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
@@ -147,7 +150,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       const items = await Promise.all(
         page.map(async (a) => ({ address: a.addr, name: a.name, kind: ASSET_KIND[a.kind] ?? a.kind, priceSource: shapeAssetSource(a.priceSource), navSource: shapeAssetSource(a.navSource), token: await tokenMeta(client, a.addr) })),
       );
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (input.resource === "registry-recipes") {
       // A recipe is an approved CONTRACT ADDRESS in 2.1.0 — no modes, no stored bands, no
@@ -166,14 +169,14 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
         const isRecipe = await client.readContract({ ...reg, functionName: "isRecipe", args: [single] });
         if (!isRecipe) return unavailable(chainId, "recipe_not_found", `${single} is not an approved recipe on this registry (isRecipe is the only membership gate) — list them with cork_query resource:"registry-recipes"`, ctx);
         const item = await readRecipeMeta(client, single, mr.registry);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: 1, items: [item] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} recipes but this read returns the first ${page.length} — items are partial evidence; a recipe absent here may still exist` });
       }
       const items = await Promise.all(page.map((addr) => readRecipeMeta(client, addr, mr.registry)));
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (input.resource === "registry-denominations") {
       // The registry stores the label HASH; display text comes from the unit's own symbol()
@@ -181,7 +184,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       if (filters.label !== undefined) {
         const [found, unit] = await client.readContract({ ...reg, functionName: "lookupDenomination", args: [filters.label] });
         if (!found) return unavailable(chainId, "denomination_not_found", `denomination '${filters.label}' is not registered on chainId ${chainId} — labels are EXACT BYTES and case-sensitive ('USD' and 'usd' are different denominations); list them with cork_query resource:"registry-denominations"`, ctx);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [{ label: filters.label, unit }] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [{ label: filters.label, unit }] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getDenominations", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
@@ -194,7 +197,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
           return { labelHash: d.labelHash, unit: d.unit, label, labelSource: pseudo ? "pseudo-unit table" : label ? "unit symbol() — display only; labelHash is the identity" : null };
         }),
       );
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (input.resource === "registry-feeds") {
       // A feed is ONE DIRECTED edge of the graph proving an asset reaches US dollars — base→quote
@@ -217,14 +220,14 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
         const [found, entry] = await client.readContract({ ...reg, functionName: "lookupConversionFeed", args: [filters.base, filters.quote] });
         if (!found) return unavailable(chainId, "feed_not_found", `no conversion feed registered for ${filters.base} → ${filters.quote} on chainId ${chainId} (direction matters); list them with cork_query resource:"registry-feeds"`, ctx);
         const item = { base: entry.base, quote: entry.quote, aggregator: entry.aggregatorAddress, feedDecimals: entry.feedDecimals, live: await readLive(entry.aggregatorAddress) };
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getConversionFeeds", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} conversion feeds but this read returns the first ${page.length}` });
       }
       const items = await Promise.all(page.map(async (f) => ({ base: f.base, quote: f.quote, aggregator: f.aggregatorAddress, feedDecimals: f.feedDecimals, live: await readLive(f.aggregatorAddress) })));
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     // registry-oracle — two keying families, one resource:
     //  · filters.rate → the FIXED-RATE oracle for that rate (keyed on the rate, not a pair);
@@ -245,7 +248,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
         chainId,
         source: "chain",
         warnings,
-        ...rpc,
+        ...rpc(),
         ctx,
       });
     }
@@ -263,19 +266,19 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
     if (wrapper !== ZERO_ADDR) {
       const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate } : {}) } }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     try {
       // Simulating the real deploy (not re-deriving CREATE2 off-chain) is deliberate: the salt
       // includes the RESOLVED source addresses, so re-deriving would duplicate the registry's
       // nav-fallback rules — the simulation cannot drift from what a fill will actually do.
       const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: sim.result, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: sim.result, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     } catch (err) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) }, note: `this pair cannot get a ${modeName} oracle as-registered (MissingSource / NavModeWithoutNavSource — an unregistered asset, a missing source slot, or no conversion path) — a JIT fill for it would revert` }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) }, note: `this pair cannot get a ${modeName} oracle as-registered (MissingSource / NavModeWithoutNavSource — an unregistered asset, a missing source slot, or no conversion path) — a JIT fill for it would revert` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
   } catch (err) {
-    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+    return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
   }
 }
 
@@ -295,9 +298,9 @@ export async function handleComputeResolveRecipeLegacy(
   if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
-  const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved), ...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 band math against the OLD registry (CORK_ENABLE_DEPRECATED is set) — 2.1.0 recipes resolve their own constraints" }];
+  const warnings: Array<{ code: string; message: string }> = [...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 band math against the OLD registry (CORK_ENABLE_DEPRECATED is set) — 2.1.0 recipes resolve their own constraints" }];
   const client = resolved.client;
-  const rpc = rpcProvenance(input.format, resolved);
+  const rpc = () => rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
   try {
     const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [p.mode] });
@@ -323,12 +326,12 @@ export async function handleComputeResolveRecipeLegacy(
     try {
       local = legacyRegistry.applyBandsLocal(bands, rate);
     } catch (err) {
-      return localComputeFailed(chainId, err, warnings, ctx);
+      return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx);
     }
     const onChain = await client.readContract({ ...reg, functionName: "applyBands", args: [p.mode, rate] });
     const same = onChain.rateMin === local.rateMin && onChain.rateMax === local.rateMax && onChain.rateChangePerDayMax === local.rateChangePerDayMax && onChain.rateChangeCapacityMax === local.rateChangeCapacityMax;
     if (!same) {
-      return envelope({ state: "conflict", data: { kind: p.kind, mode: p.mode, rate, local, onChain }, chainId, source: "chain", warnings: [...warnings, { code: "band_parity_mismatch", message: "local applyBands port disagrees with the on-chain view — trust the chain values and report this" }], ctx });
+      return envelope({ state: "conflict", data: { kind: p.kind, mode: p.mode, rate, local, onChain }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, { code: "band_parity_mismatch", message: "local applyBands port disagrees with the on-chain view — trust the chain values and report this" }], ctx });
     }
     return envelope({
       state: "ok",
@@ -336,11 +339,11 @@ export async function handleComputeResolveRecipeLegacy(
       chainId,
       source: "chain",
       warnings,
-      ...rpc,
+      ...rpc(),
       ctx,
     });
   } catch (err) {
-    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+    return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
   }
 }
 
@@ -358,50 +361,50 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
   if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
-  const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved), ...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 registry generation (CORK_ENABLE_DEPRECATED is set) — its answers do not describe the 2.1.0 world" }];
+  const warnings: Array<{ code: string; message: string }> = [...(warning ? [warning] : []), { code: "deprecated", message: "this is the DEPRECATED pre-2.1.0 registry generation (CORK_ENABLE_DEPRECATED is set) — its answers do not describe the 2.1.0 world" }];
   const client = resolved.client;
-  const rpc = rpcProvenance(input.format, resolved);
+  const rpc = () => rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
   try {
     if (input.resource === "registry-assets") {
       if (filters.address) {
         const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address, BigInt(chainId)] });
         if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a legacy-registry asset on chainId ${chainId}`, ctx);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: 1, items: [entry] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `legacy registry reports ${total} assets but this read returns the first ${page.length} — items are partial evidence` });
       }
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, count: page.length, total, items: page }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (input.resource === "registry-recipes") {
       if (filters.mode !== undefined) {
         const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [filters.mode] });
         if (!found) return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' is not in the legacy registry`, ctx);
-        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings, ...rpc, ctx });
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", items: [entry] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
       const [page, modes, total] = await client.readContract({ ...reg, functionName: "getRecipes", args: [0n, 100n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `legacy registry reports ${total} recipes but this read returns the first ${page.length} — items (and the modes list) are partial evidence; a mode absent here may still exist` });
       }
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, scale: "bands are PERCENTAGES: 1e18 = 1%", count: page.length, total, modes, items: page }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (!filters.collateralAsset || !filters.referenceAsset) {
       return unavailable(chainId, "missing_filter", "registry-oracle requires filters.collateralAsset AND filters.referenceAsset", ctx);
     }
     const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset] });
     if (wrapper !== ZERO_ADDR) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: wrapper, deployed: true, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: wrapper, deployed: true, deployable: true } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     try {
       const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset] });
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: sim.result, deployed: false, deployable: true } }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: sim.result, deployed: false, deployable: true } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     } catch (err) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) } }, chainId, source: "chain", warnings, ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
   } catch (err) {
-    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+    return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
   }
 }
 
@@ -545,13 +548,13 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
   if (r.gate) return r.gate;
   const { mr, resolved, warnings } = r;
   const client = resolved.client;
-  const rpc = rpcProvenance(input.format, resolved);
+  const rpc = () => rpcProvenance(input.format, resolved);
   const ca = filters.collateralAsset, ref = filters.referenceAsset, expiry = filters.expiry;
   const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, ...(filters.recipe ? { recipe: filters.recipe } : {}), ...(filters.mode ? { mode: filters.mode } : {}) };
   try {
     const bindingWarn = await registryBindingMismatch(client, chainId, mr);
     if (bindingWarn) {
-      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...warnings, bindingWarn], ...rpc, ctx });
+      return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, bindingWarn], ...rpc(), ctx });
     }
     const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, additionalData: filters.args, wantConstraint: true });
     warnings.push(...res.warnings);
@@ -566,7 +569,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     // oracle has no code and forces agents to deploy the wrapper just to learn the share
     // addresses (the walkthrough calls that behavior out as a caveat).
     if (oracle.address === null) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...warnings, { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` }], ...rpc, ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` }], ...rpc(), ctx });
     }
     if (oracle.deployed && oracle.rate === 0n) return unavailable(chainId, "chain_read_failed", "the rate oracle reports a ZERO rate (RateUnavailable) — a fill creating this market would revert and the identity cannot be derived", ctx);
     // Identity: constraint + oracle → Market struct → LOCAL poolId (verified computeMarketId).
@@ -575,7 +578,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     try {
       derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address });
     } catch (err) {
-      return localComputeFailed(chainId, err, warnings, ctx);
+      return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx);
     }
     // cST / cPT — pinned when the pool exists, else predicted via the state-override simulation.
     // With an UNDEPLOYED oracle the simulation prepends the same permissionless deploy the fill
@@ -618,11 +621,11 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
       },
       chainId,
       source: "chain",
-      warnings: [...warnings, ...extra],
-      ...rpc,
+      warnings: [...rpcWarn(resolved), ...warnings, ...extra],
+      ...rpc(),
       ctx,
     });
   } catch (err) {
-    return chainReadFailed(chainId, err, warnings, ctx, resolved);
+    return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
   }
 }

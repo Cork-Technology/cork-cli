@@ -43,8 +43,10 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     }
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", `simulate needs an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
-    const rpc = rpcProvenance(input.format, resolved);
-    const warnings: Array<{ code: string; message: string }> = [...rpcWarn(resolved)];
+    const rpc = () => rpcProvenance(input.format, resolved);
+    // Deferred rpcWarn: the client fails over in-call (mutating `resolved`) — disclosure is
+    // evaluated at envelope construction, after the simulate call ran.
+    const warnings: Array<{ code: string; message: string }> = [];
     if (!from) warnings.push({ code: "manual_funding", message: "no `from`/`account` in the artifact — simulated without a sender, so sender-dependent legs (transferFrom funding, role gates) are NOT exercised; pass the account for a faithful dry-run" });
     const valueStr = typeof a.value === "string" && /^[0-9]+$/.test(a.value) ? a.value : undefined;
     try {
@@ -65,22 +67,22 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         data: { mode: "simulate", wouldRevert: false, to, from: from ?? null, ...(res.data && res.data !== "0x" ? { returnData: res.data } : {}), ...(gas !== undefined ? { gasEstimate: gas } : {}), note: "eth_call dry-run at the current state — a later broadcast can still land differently (state/deadline drift)" },
         chainId,
         source: "chain",
-        warnings,
-        ...rpc,
+        warnings: [...rpcWarn(resolved), ...warnings],
+        ...rpc(),
         ctx,
       });
     } catch (err) {
       // Distinguish an execution REVERT (a real simulation answer) from a transport failure.
       const msg = err instanceof Error ? err.message : String(err);
-      if (isTransportError(err)) return chainReadFailed(chainId, err, warnings, ctx, resolved);
+      if (isTransportError(err)) return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
       const reason = msg.split("\n").find((l) => /revert|Error|Custom/i.test(l))?.trim() ?? msg.split("\n")[0];
       return envelope({
         state: "ok",
         data: { mode: "simulate", wouldRevert: true, to, from: from ?? null, revertReason: reason },
         chainId,
         source: "chain",
-        warnings: [...warnings, { code: "would_revert", message: `the frozen bytes REVERT at the current state (${reason}) — do not sign/broadcast as-is; common causes: expired deadline, missing funding/allowance, pool state moved since prepare` }],
-        ...rpc,
+        warnings: [...rpcWarn(resolved), ...warnings, { code: "would_revert", message: `the frozen bytes REVERT at the current state (${reason}) — do not sign/broadcast as-is; common causes: expired deadline, missing funding/allowance, pool state moved since prepare` }],
+        ...rpc(),
         ctx,
       });
     }
@@ -104,7 +106,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", "marketRef verification needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
     const client = resolved.client;
-    const rpc = rpcProvenance(input.format, resolved);
+    const rpc = () => rpcProvenance(input.format, resolved);
     try {
       const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
       const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
@@ -115,7 +117,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         source: "chain",
         block: s.blockNumber,
         warnings: idMatches ? [...rpcWarn(resolved), ...depWarn] : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved), ...depWarn],
-        ...rpc,
+        ...rpc(),
         ctx,
       });
     } catch (err) {
@@ -127,7 +129,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", "txHash reconcile needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
     const client = resolved.client;
-    const rpc = rpcProvenance(input.format, resolved);
+    const rpc = () => rpcProvenance(input.format, resolved);
     try {
       const r = await client.getTransactionReceipt({ hash: subj.txHash });
       // Label known Cork lifecycle events in the receipt (settler rollover events + the JIT
@@ -138,14 +140,14 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           return name ? { event: name, address: l.address, ...(l.topics[1] ? { topic1: l.topics[1] } : {}) } : undefined;
         })
         .filter((x): x is NonNullable<typeof x> => x !== undefined);
-      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length, ...(labeled.length ? { corkEvents: labeled } : {}) }, chainId, source: "chain", block: r.blockNumber, ...rpc, ctx });
+      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length, ...(labeled.length ? { corkEvents: labeled } : {}) }, chainId, source: "chain", block: r.blockNumber, ...rpc(), ctx });
     } catch (err) {
       // A missing receipt is a normal outcome (pending/unknown tx); anything else is a real
       // chain-read failure and must not masquerade as "not found".
       if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "TransactionReceiptNotFoundError") {
         return envelope({ state: "unavailable", data: { txHash: subj.txHash, found: false }, chainId, source: "chain", warnings: [{ code: "receipt_not_found", message: "no receipt for this txHash at the RPC (pending or unknown)" }], ctx });
       }
-      return chainReadFailed(chainId, err, [], ctx, resolved);
+      return chainReadFailed(chainId, err, [...rpcWarn(resolved)], ctx, resolved);
     }
   }
 
