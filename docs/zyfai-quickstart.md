@@ -20,7 +20,7 @@ position into two ERC-20 legs:
 
 | Term | Meaning | Who holds it |
 |---|---|---|
-| **REF** | the asset your user is exposed to and wants cover on. The live RFQ flow currently covers **dUSDC**; the registry lists 11 approved assets — read the list, don't assume | the user |
+| **REF** | the asset your user is exposed to and wants cover on. Live RFQs currently cover **dUSDC** and **fUSDT**; the registry lists 11 approved assets — read the list, don't assume | the user |
 | **CA** | the liquid collateral asset paid out on cover (pilot: **sUSDe**, `0x211Cc4DD…5fE5d2`, 18 dec) | pool |
 | **cST** | the cover / "swap" token — right to swap REF→CA at the market's tracked rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token — the underwriter's leg + premium | **bond.credit (supply)** |
@@ -304,8 +304,8 @@ items
   …                    (11 total: sUSDS, weETH, wstETH, dWETH, fUSDT, USDACM, dUSDC [6 dec],
                         fWETH, arbUSD, sUSDai — dUSDC at 0x444868B6e8079ac2c55eea115250f92C2b2c4D14)
 ```
-Pick an asset your users actually hold. This walkthrough uses **dUSDC**, the asset the live RFQ
-flow covers. (If an asset isn't on this list it isn't coverable yet — registering it is a Cork-side
+Pick an asset your users actually hold. This walkthrough uses **dUSDC**, one of the assets live
+RFQs cover. (If an asset isn't on this list it isn't coverable yet — registering it is a Cork-side
 step.)
 
 #### 1b. Pick the cover template (recipe)
@@ -532,11 +532,12 @@ the same transaction. What to check:
   close to broadcast time.
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
   (§5, item A).
-- **Or build through your deployed adapter and skip both worries:** `taker-fill` with
-  `--forself '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` emits `fillOrderForSelf`, where the
-  target is structurally forced to the caller and taker interactions are impossible. The tool
-  verifies the adapter's on-chain bindings first and hard-refuses a mismatched or code-less
-  address — your wallet is about to grant it an allowance.
+- **Or build through your deployed adapter and skip both worries:** add
+  `"forSelf":{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}` inside the taker-fill action and the
+  tool emits `fillOrderForSelf` instead — the bought asset structurally forced to the caller,
+  taker interactions impossible, the taker-asset allowance granted to the adapter (never the LOP).
+  The tool verifies the adapter's on-chain bindings first and hard-refuses a mismatched or
+  code-less address (`adapter_binding_mismatch`) — your wallet is about to grant it an allowance.
 
 <details>
 <summary><b>Variation — resting your own BUY order instead</b> (available-but-verify; expand)</summary>
