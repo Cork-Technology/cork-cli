@@ -461,46 +461,60 @@ emits no on-chain events.)
 
 Sections A–C are the security core.
 
-**A. Outputs go to an address argument your policy layer cannot see — you must force the receiver.**
-Every asset-moving *raw* Cork method sends its output to a `receiver`/`target` **parameter**, while
-pulling inputs from `msg.sender`. A Zodiac/ERC-7579-style whitelist gates `(contract, selector)` but
-**not calldata**, so a prompt-injected or compromised agent can point that argument at an attacker
-while your Safe funds the call. This is **source-confirmed and still present in the latest Phoenix
-build**, across three distinct surfaces:
+**A. Cork sends payouts to an address argument — and your permission layer cannot see arguments.
+You must force the receiver yourself.**
+Every raw Cork function that pays out takes its destination as a **parameter** (`receiver` or
+`target`) while pulling the inputs from the calling Safe. Your Safe-module whitelist
+(Zodiac/ERC-7579-style) can only allow or deny *"this contract, this function"* — it cannot look
+inside the call to check where the money goes. So an agent that has been prompt-injected or
+compromised can make a perfectly *allowed* call in which **your Safe pays and an attacker
+receives**, and the whitelist sees nothing wrong. This is **source-confirmed and still present in
+the latest Phoenix build**, on two surfaces:
 
-| Surface | The unseen argument | Your remedy |
+| Surface | The argument the whitelist can't see | Your remedy |
 |---|---|---|
-| `exercise` / `swap` / `redeem` / `withdraw` / `unwind*` (direct Phoenix) | `receiver` | Route through a **self-forcing wrapper** that fixes `receiver = Safe` |
-| Buying cST via the 1inch fill | takerTraits **bit-251 `target`** (routes the bought cST) | Leave `target` unset / pin it to the Safe on **every** fill |
+| Direct Phoenix calls: `exercise` / `swap` / `redeem` / `withdraw` / `unwind*` | `receiver` — where the payout lands | Only whitelist a wrapper that hardcodes `receiver` = the Safe |
+| Buying cST via the 1inch fill | the optional `target` in takerTraits (bit 251) — where the bought cST lands | Leave `target` unset, or pin it to the Safe, on **every** fill |
 
-**This is yours to own, and it fits what you already run.** Your deployed `*ForSelf` / AdapterProxy
-pattern (the one behind `supplyForSelf`/`withdrawForSelf`/… for Aave/Morpho/Euler) is exactly the
-right shape: whitelist a **Zyfai-owned** route that forces the receiver to the Safe, rather than raw
-Cork methods — because your users trust *Zyfai*, not Cork. **Cork will provide reference/example
-adapter code, but you audit, vet, and deploy it.** Guardrail worth internalizing: *"Zyfai-owned" is
-the trust anchor, not the safety property* — the wrapper still has to actually force the receiver,
-hold no custody, and be audited. (Cork can share the full analysis and the on-chain evidence behind
-this — the "Scope & Ownership" write-up — on request.)
+**The fix is yours to own, and it's a pattern you already run.** Don't whitelist raw Cork methods.
+Deploy a small Zyfai-owned wrapper that forces the payout to the Safe — the same shape as your
+existing `*ForSelf` / AdapterProxy routes (`supplyForSelf`/`withdrawForSelf`/… for
+Aave/Morpho/Euler) — and whitelist *that* instead. **Cork will provide reference/example adapter
+code, but you audit, vet, and deploy it** — your users trust Zyfai, not Cork. One guardrail worth
+internalizing: *"Zyfai-owned" says who is accountable, not what makes it safe* — the wrapper is
+only safe if it actually forces the receiver, holds no funds of its own, and has been audited.
+(Cork can share the full analysis and on-chain evidence — the "Scope & Ownership" write-up — on
+request.)
 
-**B. The market must be created with `isWhitelistEnabled = false`.** The JIT adapter is the
-`msg.sender` of the mint; a whitelisted pool can never be JIT-minted, so every fill would revert
-`MintUnavailable`. The JIT builders set this; it is not configurable.
+**B. Markets in this flow have their pool-level access whitelist turned OFF — by construction.**
+The just-in-time mint inside a fill is performed by Cork's adapter contract. A market created with
+its whitelist *enabled* would refuse that adapter, so every purchase would revert
+(`MintUnavailable`). The order builders always create markets with the whitelist off, and it isn't
+a knob you can turn — this item exists so nobody asks for a gated pool and then wonders why nothing
+fills.
 
-**C. Different approve spenders — and one approval you do *not* need.** CA premium → **1inch LOP**;
-REF (for exercise) → **CorkPoolManager**. Same selector, different spender — easy to get wrong, and
-your carve-out must allow both explicitly. **cST needs no approval to the pool manager** (corrected
-2026-07-28, source-verified): the cST leg of `swap`/`exercise`/`exerciseOther` moves through the
-gated 4-arg `PoolShare.transferFrom(sender, owner, to, amount)` called as
-`(_msgSender(), _msgSender(), address(this), …)`, which skips `_spendAllowance` when
-`sender == owner`. Granting one anyway is a standing approval that can never be spent. The same
-applies to cPT when you exit your own position. If you route through a `*ForSelf` adapter, cST does
-need approving — to that adapter, never to the pool manager.
+**C. Two approvals to two different spenders — and one approval you should NOT grant.**
+The premium you pay (CA, sUSDe) must be approved to the **1inch exchange**. The REF you hand in on
+exercise must be approved to **Cork's pool manager**. It's the same `approve` call with two
+different spenders — easy to wire wrong, and your allow-list must permit both explicitly. And do
+**not** approve the cST to the pool manager: when you exercise, the pool manager moves your cST
+through an internal transfer path that skips the allowance check whenever the token's owner is the
+caller (source-verified 2026-07-28: the 4-arg `PoolShare.transferFrom` skips `_spendAllowance` when
+`sender == owner`). A cST approval can therefore never legitimately be spent — it just sits there
+as standing risk. The same goes for cPT if you ever exit an underwriter position. One exception: if
+you route through your own `*ForSelf` wrapper, the cST does need approving — **to that wrapper**,
+never to the pool manager.
 
-**D. `exercise` has no slippage guard** and is gated by the constraint-rate credit bucket + a pause
-bit. Re-check the preview at send time; treat a zero preview as "unavailable," not "free."
+**D. `exercise` has no built-in slippage protection.** The only bounds on what you receive and pay
+are the `min*`/`max*` numbers you pass in yourself (and the call can also be blocked by the
+market's rate-change budget or a pause). Compute the expected payout immediately before sending and
+pass tight bounds — and read a zero preview as *"the market cannot pay right now,"* never as
+*"it's free."*
 
-**E. REF pausability.** A REF pause freezes transfers — including the `cST + REF → CA` exercise,
-i.e. exactly when you need cover. Keep pilot positions small and monitor REF liveness.
+**E. If the REF token can be paused, your cover freezes with it.** Exercising means transferring
+REF in — a paused REF blocks that transfer, so the cover is unusable for exactly as long as the
+pause lasts. And pauses tend to happen during the very stress event you bought cover for. Keep
+pilot positions small and monitor the REF's pause status.
 
 **F. `submit` pre-flights locally; the venue round-trip is the part to reconcile.** Simulate
 (`ch track simulate`) before signing and reconcile (`ch track` → `reconcile/orderHash`) after;
