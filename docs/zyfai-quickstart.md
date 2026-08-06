@@ -83,10 +83,10 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
 
 **A few conventions for every command below:**
 - Replace **`0xYOUR_SAFE`** with the user smart account (Safe) you're driving.
-- Steps 3–4 reuse one market's `poolId` and `cST` address. The values shown are the live
-  **sUSDe / dUSDC** market derived in step 1c — that market doesn't exist yet, so run the derivation
-  yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real and
-  runnable today.
+- Steps 3–4 reuse one market's `poolId` and `cST` address. The values shown come from the
+  **sUSDe / dUSDC** market derived in step 1c — a market that doesn't exist yet, so run the
+  derivation yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real
+  and runnable today.
 - **Inputs are flags named after the tool's own schema fields.** The first required scalar can
   ride as a positional (`ch query market-predict …`, `ch prepare phoenix 42161 …`); scalar fields
   are plain flags (`--chainid 42161` — spelling is forgiving, `--chain-id` works too); and
@@ -126,7 +126,7 @@ tour first:
 A Cork market has no factory catalog to browse. There is no list of "available markets" anywhere —
 a market is **fully named by four choices** (CA + REF + expiry + recipe), and the registry holds the
 **ingredients** every legal market is made from. Selecting a market means walking those
-ingredients; the RFQ you open in step 1d is simply that selection written down. Five stops, each a
+ingredients; the RFQ you open in step 1d is simply that selection written down. Six stops, each a
 read you can run right now (all responses below were captured live).
 
 **Stop 1 — assets: who is registered, and how each one is priced.**
@@ -174,6 +174,7 @@ ch query registry-denominations --input '{"chainId":42161}' --json
 ```
 Labels are **exact bytes** (case-sensitive; `labelHash` is the real identity). Two assets whose
 sources are denominated in the *same* label compare directly; different labels need a bridge —
+which is the next stop.
 
 **Stop 3 — feeds: the bridges between denominations.**
 
@@ -232,7 +233,7 @@ ch compute --chainid 42161 --input '{"params":{…same…}}' --json
                   "rateChangeCapacityMax": "3076810246161871056" },
   "scales": { "constraint": "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" } }
 ```
-Decoded, for the **liquidity** recipe (anchor = the oracle rate at resolve time, ~1.0256
+Simply put, for the **liquidity** recipe (anchor = the oracle rate at resolve time, ~1.0256
 here): the market's tracked rate may fall all the way to 1 wei (`rateMin: 1` — the cover never
 stops paying out on the way down), may never exceed twice the anchor (`rateMax`), and may move at
 most one whole anchor per day (`rateChangePerDayMax`) with a total budget of three
@@ -530,11 +531,12 @@ the same transaction. What to check:
   `data.auction` (current/ceiling/floor) with a `decaying_price_notice` — re-price and simulate
   close to broadcast time.
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
-  (§5, item A). Or build through your deployed adapter instead: `taker-fill` with
+  (§5, item A).
+- **Or build through your deployed adapter and skip both worries:** `taker-fill` with
   `--forself '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` emits `fillOrderForSelf`, where the
-  target is structurally forced to the caller and taker interactions are impossible. (The tool
+  target is structurally forced to the caller and taker interactions are impossible. The tool
   verifies the adapter's on-chain bindings first and hard-refuses a mismatched or code-less
-  address — your wallet is about to grant it an allowance.)
+  address — your wallet is about to grant it an allowance.
 
 <details>
 <summary><b>Variation — resting your own BUY order instead</b> (available-but-verify; expand)</summary>
@@ -883,6 +885,20 @@ The `search` result hands you example inputs you can paste straight into the com
 ```
 Lift the `input` object's fields straight onto the command line (`ch compute --chainid 42161
 --params '{…}'`) — or run the object verbatim with `ch compute --input '<that object>'`.
+
+### 7c. Try it from Claude Code
+
+With the `cork-defi` server installed (§4), prompts like these exercise the whole surface — start
+with *"call `cork_capabilities` first"* when in doubt, so it grounds itself before acting:
+
+> "Using cork-defi, derive the sUSDe / dUSDC market on Arbitrum that expires in 7 days, and give
+> me the poolId and cST address."
+
+> "What's the `ch` command to build an unsigned exercise bundle — 1000 cST out of pool
+> `0x…`, receiver my Safe `0x…`?"
+
+> "List the Cork registry recipes on Arbitrum and explain the difference between the fixed and
+> liquidity recipes for my cover."
 
 ---
 
