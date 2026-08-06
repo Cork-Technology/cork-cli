@@ -27,6 +27,11 @@ export interface CorkHttpOptions {
   ctx?: HandlerContext;
   /** Bearer token gating the MCP endpoint (CORK_MCP_TOKEN). Unset = open; ingress owns auth. */
   token?: string;
+  /** Bind address. Default 127.0.0.1 — loopback-only, so `ch mcp --http` on a workstation never
+   * exposes an open endpoint to the network by accident. Widening to 0.0.0.0 is an explicit act
+   * (`--host 0.0.0.0`), which is what the container deployment passes (packaging/phala-compose.yml)
+   * because a mapped port needs a non-loopback bind and Phala's ingress fronts the CVM. */
+  host?: string;
 }
 
 /** Constant-time bearer check — a plain === would leak prefix length via timing. */
@@ -82,11 +87,14 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
 
 // Minimal ambient Bun.serve surface — the repo compiles with plain TS (no bun-types); the
 // runtime is always Bun (mise-pinned), so the declaration only mirrors what we call.
-declare const Bun: { serve(opts: { port: number; fetch: (req: Request) => Promise<Response> }): { port: number; stop(): void } };
+declare const Bun: { serve(opts: { port: number; hostname: string; fetch: (req: Request) => Promise<Response> }): { port: number; hostname?: string; stop(): void } };
 
-/** Serve the handler with Bun.serve. Returns the Bun server (has .port and .stop()). */
-export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; stop: () => void } {
+/** Serve the handler with Bun.serve. Returns the Bun server (has .port, .hostname and .stop()).
+ * Binds loopback unless opts.host widens it — Bun's own default is 0.0.0.0, which must never be
+ * the accidental outcome of a bare `ch mcp --http`. */
+export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: () => void } {
   const handler = createHttpHandler(opts);
-  const server = Bun.serve({ port, fetch: handler });
-  return { port: server.port ?? port, stop: () => server.stop() };
+  const hostname = opts.host ?? "127.0.0.1";
+  const server = Bun.serve({ port, hostname, fetch: handler });
+  return { port: server.port ?? port, hostname: server.hostname ?? hostname, stop: () => server.stop() };
 }

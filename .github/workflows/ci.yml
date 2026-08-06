@@ -53,6 +53,14 @@ jobs:
             echo "SKIP test:prop — experiments/ tree absent (public port); harnesses run in the private repo's CI"
           fi
 
+      # The npm dist layout has its own gate script (scripts/verify-package-layout.mjs) that was
+      # wired into no trigger — class C13: the published-package layout could rot while CI stayed
+      # green. The melange/apko image pipeline builds compiled binaries, not this layout, so only
+      # this step exercises it. build-packages.mjs runs under the runner's preinstalled Node
+      # (the dist must be Node-runnable, so building it under Node is the honest environment).
+      - name: Package layout (build + verify dist-only npm layout)
+        run: bun run build && bun run verify:package
+
       - name: Lint — no machine-absolute paths in committed sources
         # /Users/<name> paths break every other checkout and the private→public port. notes/ is
         # private-tree prose and exempt. The character-class pattern keeps this step from

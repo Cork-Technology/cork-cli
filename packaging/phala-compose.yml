@@ -12,7 +12,9 @@
 services:
   cork-mcp:
     image: ghcr.io/cork-technology/cork-cli@${DIGEST}
-    command: ["mcp", "--http"]
+    # --host 0.0.0.0: the server's default bind is loopback-only (workstation safety); the mapped
+    # port needs a non-loopback bind, and Phala's ingress fronts the CVM.
+    command: ["mcp", "--http", "--host", "0.0.0.0"]
     ports:
       - "8080:8080"
     restart: unless-stopped

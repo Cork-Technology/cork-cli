@@ -3,6 +3,20 @@ export {}; // top-level await needs module context; this file is an entrypoint, 
 
 const argv = process.argv.slice(2);
 
+// Deliberate crash policy (both transports): log to STDERR and exit nonzero. Stdout is never an
+// option — in stdio MCP mode it is the protocol stream. Exiting beats contain-and-continue: a
+// stdio client sees the process die and resets; the container's `restart: unless-stopped` brings
+// the HTTP server back with clean state, whereas surviving an unknown exception would keep
+// serving from a process whose invariants can no longer be trusted.
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`ch: fatal uncaught exception: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  process.stderr.write(`ch: fatal unhandled rejection: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  process.exit(1);
+});
+
 const ctx = {
   ...(process.env.CORK_RPC_URL ? { rpcUrl: process.env.CORK_RPC_URL } : {}),
 };
@@ -17,29 +31,40 @@ if (argv[0] === "mcp") {
     // blocks on stdin) — the one leaf commander never sees still owes its user a help page.
     // stdout is safe here precisely because no server is started.
     process.stdout.write(
-      "Usage: ch mcp [--http [--port <n>]]\n\n" +
+      "Usage: ch mcp [--http [--port <n>] [--host <addr>]]\n\n" +
         "Start the Cork MCP server (all 9 tools).\n" +
         "  (default)        stdio transport — for MCP clients: claude mcp add cork-defi -- ch mcp\n" +
         "  --http           Streamable HTTP — endpoint /mcp, health /healthz, docs /docs/signing\n" +
         "  --port <n>       HTTP port (default 8080)\n" +
+        "  --host <addr>    bind address (default 127.0.0.1 — loopback only; containers/ingress\n" +
+        "                   deployments pass --host 0.0.0.0 to accept external connections)\n" +
         "Bearer auth: set CORK_MCP_TOKEN (unset = open; put auth/rate limits at the ingress).\n",
     );
     process.exit(0);
   }
   if (argv.includes("--http")) {
-    // `ch mcp --http [--port 8080]` — the Streamable HTTP projection (container entrypoint is
-    // /usr/bin/ch, so a compose command of ["mcp","--http"] serves it). Same server factory,
-    // stateless per-request transports; logs go to stderr only (never the token).
+    // `ch mcp --http [--port 8080] [--host 0.0.0.0]` — the Streamable HTTP projection (container
+    // entrypoint is /usr/bin/ch; the compose command passes --host 0.0.0.0 because a mapped port
+    // needs a non-loopback bind). Default bind is LOOPBACK: a bare `ch mcp --http` on a
+    // workstation must never expose an open endpoint (cork_submit included) to the network by
+    // accident — widening is an explicit act. Same server factory, stateless per-request
+    // transports; logs go to stderr only (never the token).
     const portIdx = argv.indexOf("--port");
     const port = portIdx !== -1 ? Number(argv[portIdx + 1]) : 8080;
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
       process.stderr.write(`ch mcp --http: invalid --port value '${argv[portIdx + 1]}'\n`);
       process.exit(2);
     }
+    const hostIdx = argv.indexOf("--host");
+    const host = hostIdx !== -1 ? argv[hostIdx + 1] : undefined;
+    if (hostIdx !== -1 && (host === undefined || host === "" || host.startsWith("--"))) {
+      process.stderr.write(`ch mcp --http: --host requires an address (e.g. --host 0.0.0.0)\n`);
+      process.exit(2);
+    }
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
-    const server = startHttpServer(port, { ctx, ...(token !== undefined && token !== "" ? { token } : {}) });
-    process.stderr.write(`cork-mcp: Streamable HTTP on :${server.port} — endpoint /mcp, health /healthz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

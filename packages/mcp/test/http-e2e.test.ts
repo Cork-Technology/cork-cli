@@ -9,21 +9,21 @@ import { join } from "node:path";
 const BIN = join(import.meta.dirname, "..", "..", "cli", "src", "bin.ts");
 const children: ChildProcess[] = [];
 
-/** Spawn `bun <bin> mcp --http --port 0 [env]` and resolve the kernel-assigned port from the
- *  readiness line on stderr. Rejects on process exit or a 15s deadline, so a broken server
- *  fails the test instead of hanging it. */
-function startServer(env: Record<string, string> = {}): Promise<{ port: number; child: ChildProcess }> {
+/** Spawn `bun <bin> mcp --http --port 0 [extraArgs] [env]` and resolve the bind host + kernel-
+ *  assigned port from the readiness line on stderr. Rejects on process exit or a 15s deadline,
+ *  so a broken server fails the test instead of hanging it. */
+function startServer(env: Record<string, string> = {}, extraArgs: string[] = []): Promise<{ host: string; port: number; child: ChildProcess }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("bun", [BIN, "mcp", "--http", "--port", "0"], { env: { ...process.env, ...env }, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn("bun", [BIN, "mcp", "--http", "--port", "0", ...extraArgs], { env: { ...process.env, ...env }, stdio: ["ignore", "ignore", "pipe"] });
     children.push(child);
     const deadline = setTimeout(() => reject(new Error(`server never printed its readiness line: ${stderr}`)), 15_000);
     let stderr = "";
     child.stderr!.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
-      const m = stderr.match(/Streamable HTTP on :(\d+)/);
+      const m = stderr.match(/Streamable HTTP on ([^\s:]+):(\d+)/);
       if (m) {
         clearTimeout(deadline);
-        resolve({ port: Number(m[1]), child });
+        resolve({ host: m[1]!, port: Number(m[2]), child });
       }
     });
     child.on("exit", (code) => {
@@ -47,7 +47,10 @@ const MCP_HEADERS = { "content-type": "application/json", accept: "application/j
 
 describe("ch mcp --http (real Bun.serve socket)", () => {
   it("serves initialize (with instructions), healthz, and docs over a kernel-assigned port", async () => {
-    const { port } = await startServer();
+    const { host, port } = await startServer();
+    // The default bind is LOOPBACK — a bare `ch mcp --http` (possibly open, no token) must never
+    // listen on external interfaces by accident. Widening is the explicit --host act, below.
+    expect(host).toBe("127.0.0.1");
     const health = await fetch(`http://127.0.0.1:${port}/healthz`);
     expect(health.status).toBe(200);
     expect(await health.text()).toMatch(/^ok /);
@@ -71,5 +74,22 @@ describe("ch mcp --http (real Bun.serve socket)", () => {
     expect(authed.status).toBe(200);
     const health = await fetch(`http://127.0.0.1:${port}/healthz`);
     expect(health.status).toBe(200);
+  }, 30_000);
+
+  it("--host 0.0.0.0 widens the bind (the container/compose path) and still serves", async () => {
+    const { host, port } = await startServer({}, ["--host", "0.0.0.0"]);
+    expect(host).toBe("0.0.0.0");
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(health.status).toBe(200);
+  }, 30_000);
+
+  it("--host without an address is refused (exit 2), not silently defaulted", async () => {
+    const child = spawn("bun", [BIN, "mcp", "--http", "--port", "0", "--host"], { stdio: ["ignore", "ignore", "pipe"] });
+    children.push(child);
+    let stderr = "";
+    child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    const code = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+    expect(code).toBe(2);
+    expect(stderr).toContain("--host requires an address");
   }, 30_000);
 });
