@@ -216,8 +216,8 @@ launcher at all: `bun packages/cli/src/bin.ts capabilities`.
 **Output is prose by default and JSON on request.** A person at a terminal gets a readable summary;
 ask for the wire format with a bare `--json`, or set `CORK_JSON=1` to make JSON the default for every
 command in a shell. Supplying input *as* `--json '<object>'` also returns JSON — handing the tool the
-wire shape is itself a machine-readable intent — so every scripted example that predates this keeps
-working unchanged.
+wire shape is itself a machine-readable intent — so scripts that pass the wire shape keep working
+unchanged.
 
 **Input has three interchangeable forms.** `--json '<object>'` is canonical and identical to what the
 MCP server receives; `--input '<object>'` is the same thing under a name that cannot be confused with
@@ -225,7 +225,7 @@ the output flag; or pass a positional plus flags named after the tool's own sche
 usually what you want by hand:
 
 ```sh
-ch query market --chainid 42161 --filters '{"poolId":"0xd68978…fe259"}'
+ch query market --chainid 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05"}'
 ```
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
@@ -302,7 +302,8 @@ CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test:live
 # Live RPC-resolver smoke (default + chainlist fallback, real network):
 CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
 
-# Agent evals (LLM-graded tool-surface quality; self-skips without a key):
+# Agent evals (programmatically graded tool-surface quality; needs an API key OR ambient
+# gateway auth, e.g. ANTHROPIC_BASE_URL — fails loud rather than skipping):
 bun run eval               # see evals/README.md for grading, env knobs, held-out rule
 ```
 
