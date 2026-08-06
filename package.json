@@ -21,11 +21,10 @@
   "devDependencies": {
     "@anthropic-ai/sdk": "0.112.3",
     "@types/node": "22.20.1",
-    "@vitest/coverage-v8": "2.1.9",
     "ajv": "8.20.0",
     "fast-check": "4.9.0",
     "typescript": "5.9.3",
-    "vitest": "2.1.9"
+    "vitest": "3.2.7"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -35,5 +34,8 @@
   },
   "optionalDependencies": {
     "@envio-dev/hypersync-client": "1.4.0"
+  },
+  "overrides": {
+    "vite": "6.4.3"
   }
 }
