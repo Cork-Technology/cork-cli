@@ -164,7 +164,7 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 Arbitrum (chainId 42161) is a **full** deployment like mainnet (bindings verified on-chain): reads,
 bundle building, orders, and the MarketRegistry 2.1.0 resources
 (registry-assets / registry-oracle / registry-recipes / registry-denominations / registry-feeds /
-market-predict, plus `cork_prepare_market` oracle deploys) all work there. `market-predict` derives
+derive-market, plus `cork_prepare_market` oracle deploys) all work there. `derive-market` derives
 the market a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved constraint,
 pool id, and cST/cPT tokens — before anything is deployed or signed; the identity is pinned the
 moment an order carrying that constraint is signed.
@@ -367,7 +367,7 @@ Implemented + tested:
   `deployFixedRateOracle(rate)` fixed-rate oracle txs (permissionless, idempotent; Arbitrum).
 - **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
   spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
-  registry-recipes / registry-denominations / registry-feeds / market-predict — predict a market's
+  registry-recipes / registry-denominations / registry-feeds / derive-market — predict a market's
   oracle, pool id, constraint, and cST/cPT before it exists); venue-backed reads (markets,
   orderbook, fills, limit-order-markets, flows, rfqs — incl. single-RFQ lookup via
   `filters.rfqId`); an event-derived subset (markets, fills, flows) also serves

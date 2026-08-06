@@ -31,7 +31,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "registry-recipes", text: "recipes approved recipe contracts addresses constraint policy liquidity fixed constants args isRecipe" },
     { variant: "registry-denominations", text: "denominations labels units USD ETH USDS label hash case sensitive currency" },
     { variant: "registry-feeds", text: "conversion feeds chainlink aggregator edges base quote live answer decimals drift usd graph" },
-    { variant: "market-predict", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses" },
+    { variant: "derive-market", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses market-predict" },
     { variant: "rfqs", text: "rfq request for quote list open requests answers underwriter discovery feed poll" },
   ],
   cork_compute: [

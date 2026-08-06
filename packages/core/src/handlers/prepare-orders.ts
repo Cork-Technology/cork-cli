@@ -296,7 +296,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               const cstLc = cst.toLowerCase();
               if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
                 warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
-                await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run market-predict and set the order side to the FRESH predicted cST before signing.");
+                await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run derive-market and set the order side to the FRESH predicted cST before signing.");
               }
             }
           } catch (err) {

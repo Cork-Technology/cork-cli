@@ -66,7 +66,7 @@ export async function handlePrepareMarket(
     try {
       const wrapper = await resolved.client.readContract({ ...reg, functionName: "lookupWrapper", args: [a.collateralAsset, a.referenceAsset, ORACLE_MODE[modeName]] });
       if (wrapper !== ZERO_ADDR) {
-        // Same oracle:{address,deployed} shape as cork_query registry-oracle / market-predict.
+        // Same oracle:{address,deployed} shape as cork_query registry-oracle / derive-market.
         status = { oracle: { address: wrapper, deployed: true } };
         warnings.push({ code: "oracle_already_deployed", message: `this pair's ${modeName} oracle already exists at ${wrapper} — the tx is a safe no-op (deploy is idempotent and returns the recorded address)` });
       } else {

@@ -364,7 +364,7 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
   });
 });
 
-describe("cork_query market-predict (2.1.0: recipe contract + off-chain constraint)", () => {
+describe("cork_query derive-market (2.1.0: recipe contract + off-chain constraint)", () => {
   const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(withBinding(handler), opts) });
   // Live-captured ground truth: the identical Market struct hash across generations.
   const GT = {
@@ -378,20 +378,20 @@ describe("cork_query market-predict (2.1.0: recipe contract + off-chain constrai
   const sharesWord = (a: string) => "000000000000000000000000" + a.replace(/^0x/, "").toLowerCase();
 
   it("missing recipe AND mode → missing_filter (no chain call)", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000" } }, ctx(() => { throw new Error("must not read chain"); }));
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000" } }, ctx(() => { throw new Error("must not read chain"); }));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("missing_filter");
     expect(env.warnings[0]?.message).toContain("recipe");
   });
 
   it("ca === ref is a domain-rule envelope (invalid_pair), not a throw", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", recipe: LIQ } }, ctx(() => 0));
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", recipe: LIQ } }, ctx(() => 0));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_pair");
   });
 
   it("full prediction (deployed oracle, pool NOT created): local pool_id parity, simulated cST/cPT, drift notice teaches signing pins it", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
         if (c.functionName === "source") return 1; // PRICE
@@ -432,7 +432,7 @@ describe("cork_query market-predict (2.1.0: recipe contract + off-chain constrai
     // resolves from the anchor in args; the share simulation prepends the same permissionless
     // deploy the fill performs. Nothing has to be deployed first.
     const anchorArgs = `0x${WAD.toString(16).padStart(64, "0")}`;
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx(
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
         if (c.functionName === "source") return 1;
@@ -466,7 +466,7 @@ describe("cork_query market-predict (2.1.0: recipe contract + off-chain constrai
   });
 
   it("a refusing recipe → recipe_refused naming the contract's own error", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx((c) => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx((c) => {
       if (c.functionName === "isRecipe") return true;
       if (c.functionName === "source") return 1;
       if (c.functionName === "lookupWrapper") return ZERO;
@@ -480,7 +480,7 @@ describe("cork_query market-predict (2.1.0: recipe contract + off-chain constrai
   });
 
   it("mode sugar resolves via config hints with a deprecation_notice", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
       if (c.functionName === "isRecipe") {
         expect(String(c.args?.[0]).toLowerCase()).toBe(LIQ.toLowerCase());
         return true;

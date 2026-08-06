@@ -81,7 +81,7 @@ export const TASKS: EvalTask[] = [
   {
     id: "predict-market",
     prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D. Report the derived pool id plus the cST and cPT contracts.`,
-    expect: { tool: "cork_query", params: { resource: "market-predict", filters: { recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
+    expect: { tool: "cork_query", params: { resource: "derive-market", filters: { recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
   // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the

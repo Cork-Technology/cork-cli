@@ -48,6 +48,17 @@ function valueAt(input: unknown, path: ReadonlyArray<PropertyKey>): unknown {
   return v;
 }
 
+/** Wire values that were RENAMED (not typos). Exact-match teaching that levenshtein cannot
+ *  provide: the edit distance from old name to new name usually exceeds the typo cap (both
+ *  entries below do), so without this map an old-surface caller gets a bare enum error with no
+ *  pointer. Guarded at the use site: the suggestion only fires when the new name is actually in
+ *  the failing field's legal set, so an unrelated enum receiving the same string falls through
+ *  to normal typo handling. */
+export const RENAMED_VALUES: Record<string, string> = {
+  "deploy-wrapper": "deploy-oracle", // cork_prepare_market action.type (renamed 2026-08-06)
+  "market-predict": "derive-market", // cork_query resource (renamed 2026-08-06)
+};
+
 /** Suggest the closest member of a closed value set for a likely typo (≤40% edit distance). */
 export function nearestValue(got: string, legal: readonly string[]): string | undefined {
   let best: { v: string; d: number } | undefined;
@@ -109,8 +120,13 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
     if (legal?.length) {
       const got = valueAt(rawInput, i.path ?? []);
       if (typeof got === "string") {
-        const s = nearestValue(got, legal);
-        if (s) out.suggestion = `did you mean "${s}"?`;
+        const renamed = RENAMED_VALUES[got];
+        if (renamed !== undefined && legal.includes(renamed)) {
+          out.suggestion = `"${got}" was renamed to "${renamed}"`;
+        } else {
+          const s = nearestValue(got, legal);
+          if (s) out.suggestion = `did you mean "${s}"?`;
+        }
       }
       if (out.expected === undefined) out.expected = legal.join(" | ");
     }

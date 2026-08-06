@@ -5,7 +5,7 @@
       "name": "cork_query",
       "description": "Read any Cork resource. Live chain state: market, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): markets, orderbook, fills, limit-order-markets, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a pool's full live market state (demo pool, vnet): {\"resource\":\"market\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
       "descriptionTokensApprox": 149,
-      "inputSchemaSha256": "60e8424ed2b74bb321a828bdcf76b31af495f2cd74e1224c66b7e739c6fc3fcb",
+      "inputSchemaSha256": "f18550796e4a41c73c3ce477be322c094faefa2af885e573b317399329c4cb7f",
       "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
       "annotations": {
         "title": "Cork: read state",

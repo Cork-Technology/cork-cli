@@ -184,10 +184,10 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(oc["rateChangeCapacityMax"]).toBe(api.constraint["rate_change_capacity_max"]!.raw);
   }, 60_000);
 
-  it("market-predict matches POST /v1/42161/market/predict (oracle address; identity when both derive one)", async () => {
+  it("derive-market matches POST /v1/42161/market/predict (oracle address; identity when both derive one)", async () => {
     const ours = await runTool(
       "cork_query",
-      { chainId: 42161, resource: "market-predict", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");

@@ -157,8 +157,11 @@ function levenshtein(a: string, b: string): number {
 /** Old variant spellings kept routable after a rename (schema advertises only the new name). */
 const VARIANT_ALIASES: Record<string, string[]> = { "deploy-oracle": ["deploy-wrapper"] };
 
-/** Singular resource spellings accepted at the CLI: `ch query rfq …` reads the rfqs feed. */
-const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };
+/** Alternate resource spellings accepted at the CLI: the singular `rfq`, and the pre-rename
+ *  `market-predict` (wire value renamed to derive-market; the old spelling stays routable here,
+ *  exactly like the deploy-wrapper variant alias). Blobs stay wire-exact — aliases apply to the
+ *  positional and flag forms only. */
+const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };
 
 /** Pool actions + fill are also TOP-LEVEL verbs: `ch exercise …` = `ch prepare pool exercise …`,
  *  `ch fill …` = `ch prepare order taker-fill …`. The authority ops stay namespaced. */
@@ -464,7 +467,6 @@ export async function runCli(
         const assign = (target: Record<string, unknown>, name: string, node: SchemaNode, supplied: unknown): boolean => {
           let rawStr = String(supplied);
           if (name === "chainId" && CHAIN_NAMES[rawStr.toLowerCase()] !== undefined) rawStr = CHAIN_NAMES[rawStr.toLowerCase()]!;
-          if (name === "resource" && RESOURCE_ALIASES[rawStr] !== undefined) rawStr = RESOURCE_ALIASES[rawStr]!;
           if (isAmountNode(node) && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
@@ -574,7 +576,10 @@ export async function runCli(
           // Errors are structured on stderr with the same closed codes as the envelope, so
           // scripts parse failures the way they parse stdout.
           if (e instanceof ToolInputError) {
-            const payload = { error: { code: "invalid_input", tool: e.tool, issues: e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example, suggestions: e.teaching.issues.filter((i) => i.suggestion) } : {}) } };
+            // Teaching issues (path/expected/received/suggestion — the documented shape, same
+            // payload MCP puts in its error envelope) ARE the issues; raw zod issues only when
+            // teaching could not be built.
+            const payload = { error: { code: "invalid_input", tool: e.tool, issues: e.teaching ? e.teaching.issues : e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example } : {}) } };
             err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
             code = EXIT.invalid;
           } else {

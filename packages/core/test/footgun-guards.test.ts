@@ -175,9 +175,9 @@ describe("F1/T6 — UnixSeconds plausibility bound (ms-detector) rides every abs
     expect(UnixSeconds.safeParse("4102444800").success).toBe(true);
     expect(UnixSeconds.safeParse("4102444801").success).toBe(false);
   });
-  it("market-predict filters.expiry goes through the same bound (was: bare digit regex)", async () => {
+  it("derive-market filters.expiry goes through the same bound (was: bare digit regex)", async () => {
     await expect(
-      runTool("cork_query", { resource: "market-predict", chainId: 42161, filters: { collateralAsset: A, referenceAsset: B, expiry: "1753363200000", mode: "liquidity" } }),
+      runTool("cork_query", { resource: "derive-market", chainId: 42161, filters: { collateralAsset: A, referenceAsset: B, expiry: "1753363200000", mode: "liquidity" } }),
     ).rejects.toMatchObject({ name: "ToolInputError" });
   });
 });

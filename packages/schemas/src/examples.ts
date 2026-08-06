@@ -40,7 +40,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "Token balances an account holds in a pool", input: { resource: "account-state", filters: { poolId: DEMO_POOL_ID, account: DEMO_ACCOUNT } } },
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
     { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
-    { title: "Predict a market before it exists: pool id + cST/cPT + constraint for a pair (Arbitrum; recipe = the approved liquidity recipe CONTRACT)", input: { resource: "market-predict", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiry: "1900000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
+    { title: "Predict a market before it exists: pool id + cST/cPT + constraint for a pair (Arbitrum; recipe = the approved liquidity recipe CONTRACT)", input: { resource: "derive-market", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiry: "1900000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
     { title: "The approved recipe contracts with their live constants + argument shapes (Arbitrum)", input: { resource: "registry-recipes", chainId: 42161 } },
     { title: "Enumerate a pool's whitelist rows (event-derived; global rows ride along)", input: { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: DEMO_POOL_ID } } },
   ],
@@ -132,7 +132,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "registry-recipes": { status: "activated", reason: "2.1.0 recipes-as-contracts: address + source + description + live constants + args annotation (isRecipe is the only membership gate) — 42161" },
       "registry-denominations": { status: "activated", reason: "2.1.0 label→unit map with display-label resolution (pseudo-unit table + unit symbol); labelHash is the identity — 42161" },
       "registry-feeds": { status: "activated", reason: "2.1.0 directed conversion-feed edges with live aggregator answers (decimals drift visible) — 42161" },
-      "market-predict": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
+      "derive-market": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
     },
   },
   cork_compute: {

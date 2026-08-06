@@ -52,6 +52,7 @@ const T = {
   forself: "packages/core/test/forself.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
+  teaching: "packages/schemas/test/teaching.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -796,8 +797,54 @@ const CATALOG: Mutant[] = [
     // reading the rfqs feed.
     id: "cli-resource-alias-dropped",
     file: "packages/cli/src/app.ts",
-    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };',
-    replace: "const RESOURCE_ALIASES: Record<string, string> = {};",
+    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };',
+    replace: 'const RESOURCE_ALIASES: Record<string, string> = { "market-predict": "derive-market" };',
+    tests: [T.cli],
+  },
+  {
+    // The renamed-resource alias dropped: ch query market-predict would fail the resource enum
+    // instead of routing to derive-market — old CLI scripts break silently at the surface.
+    id: "cli-resource-rename-dropped",
+    file: "packages/cli/src/app.ts",
+    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };',
+    replace: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };',
+    tests: [T.cli],
+  },
+  {
+    // The renamed-values teaching map emptied: an MCP caller sending an OLD wire value
+    // ("market-predict", "deploy-wrapper") gets a bare enum error with no pointer — the exact
+    // gap this map exists to close (levenshtein distance exceeds the typo cap for both renames).
+    id: "teaching-rename-map-dropped",
+    file: "packages/schemas/src/teaching.ts",
+    find: '"market-predict": "derive-market", // cork_query resource (renamed 2026-08-06)',
+    replace: "",
+    tests: [T.teaching],
+  },
+  {
+    // The legal-set guard removed from renamed-value teaching: an unrelated enum receiving the
+    // same string would be told it "was renamed" to a value that field does not accept.
+    id: "teaching-rename-guard-dropped",
+    file: "packages/schemas/src/teaching.ts",
+    find: "if (renamed !== undefined && legal.includes(renamed)) {",
+    replace: "if (renamed !== undefined) {",
+    tests: [T.teaching],
+  },
+  {
+    // Prose error rendering drops the per-issue suggestion line: the renamed-to teaching and
+    // every did-you-mean become JSON-only — invisible to a person at a terminal.
+    id: "cli-render-suggestion-dropped",
+    file: "packages/cli/src/render.ts",
+    find: 'if (i["suggestion"]) parts.push(wrapped(`→ ${i["suggestion"]}`, 4));',
+    replace: "",
+    tests: [T.cli],
+  },
+  {
+    // CLI stderr reverts to raw zod issues: the documented path/expected/received/suggestion
+    // shape (what MCP puts in its error envelope) silently disappears from scripts.
+    id: "cli-teaching-issues-swapped",
+    file: "packages/cli/src/app.ts",
+    find: "issues: e.teaching ? e.teaching.issues : e.issues,",
+    replace: "issues: e.issues,",
     tests: [T.cli],
   },
   {

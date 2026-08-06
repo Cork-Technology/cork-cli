@@ -232,7 +232,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     // registry-oracle — two keying families, one resource:
     //  · filters.rate → the FIXED-RATE oracle for that rate (keyed on the rate, not a pair);
     //  · filters.collateralAsset+referenceAsset [+ filters.mode price|nav] → the pair's wrapper.
-    // The oracle:{address,deployed,deployable,…} shape is shared with market-predict +
+    // The oracle:{address,deployed,deployable,…} shape is shared with derive-market +
     // cork_prepare_market, so oracle.address is one reusable path across those tools.
     if (filters.rate !== undefined) {
       if (filters.collateralAsset || filters.referenceAsset) {
@@ -410,7 +410,7 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
 
 /** Shared 2.1.0 recipe/oracle/constraint resolution — the exact sequence a fill's _resolveOracle
  *  runs, and the one place its rules live so cork_compute resolve-recipe, cork_query
- *  market-predict, and the JIT maker-order prepare can never disagree:
+ *  derive-market, and the JIT maker-order prepare can never disagree:
  *  1. recipe from an explicit address, or DEPRECATED mode sugar over the config hints;
  *  2. isRecipe — the only membership gate (no unverified path);
  *  3. source() decides the oracle family (ENUM TRAP: RecipeSource ≠ OracleMode ordering —
@@ -527,7 +527,7 @@ export async function staticResolveConstraint(
   }
 }
 
-/** market-predict: derive the market a JIT LOP fill would produce for (collateralAsset,
+/** derive-market: derive the market a JIT LOP fill would produce for (collateralAsset,
  *  referenceAsset, expiry, recipe [+args/rate]) BEFORE it exists — the recipe's oracle (+ live
  *  rate), the OFF-CHAIN-resolved constraint, pool id, cST/cPT tokens, and whether the pool
  *  already exists. Composes the shared recipe resolution + our verified computeMarketId + a
@@ -537,7 +537,7 @@ export async function staticResolveConstraint(
  *  the identity would be an invention. */
 export async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || (filters.recipe === undefined && filters.mode === undefined)) {
-    return unavailable(chainId, "missing_filter", "market-predict requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
+    return unavailable(chainId, "missing_filter", "derive-market requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
   }
   if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
     // Well-formed inputs that violate a domain rule → envelope (exit 3), not a throw — same class

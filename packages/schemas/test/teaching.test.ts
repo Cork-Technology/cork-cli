@@ -2,7 +2,7 @@
 // variant, not blindly echo the tool's first example (which would silently change the caller's
 // action/resource and teach the wrong move). Agent-facing surface — asserted here directly.
 import { describe, expect, it } from "vitest";
-import { buildTeaching, nearestValue, TOOL_EXAMPLES } from "@cork/schemas";
+import { PrepareMarketInput, QueryInput, buildTeaching, nearestValue, TOOL_EXAMPLES } from "@cork/schemas";
 
 describe("nearestValue — closed-enum typo suggestion", () => {
   it("suggests the closest legal member for a near typo", () => {
@@ -31,9 +31,9 @@ describe("buildTeaching — corrected example matches the failing variant", () =
     expect(variant(TOOL_EXAMPLES.cork_compute![0]!.input)).not.toBe("impairment-floor");
   });
 
-  it("cork_query market-predict input → the market-predict example", () => {
-    const t = buildTeaching("cork_query", [], { resource: "market-predict" });
-    expect(variant(t.example?.input)).toBe("market-predict");
+  it("cork_query derive-market input → the derive-market example", () => {
+    const t = buildTeaching("cork_query", [], { resource: "derive-market" });
+    expect(variant(t.example?.input)).toBe("derive-market");
   });
 
   it("cork_prepare_orders cancel input → the cancel example", () => {
@@ -90,6 +90,35 @@ describe("buildTeaching — enum-typo issue enrichment", () => {
     expect(t.issues[0]?.suggestion).toBe('did you mean "market"?');
     expect(t.issues[0]?.expected).toContain("market");
     expect(t.summary).toContain("resource"); // failing field surfaced in the summary
+  });
+
+  it("an OLD wire value teaches its rename, end-to-end through the real schema (enum field)", () => {
+    const input = { resource: "market-predict", chainId: 1 };
+    const parsed = QueryInput.safeParse(input);
+    expect(parsed.success).toBe(false);
+    const t = buildTeaching("cork_query", parsed.success ? [] : parsed.error.issues, input);
+    expect(t.issues[0]?.suggestion).toBe('"market-predict" was renamed to "derive-market"');
+  });
+
+  it("an OLD wire value teaches its rename through a discriminated union (deploy-wrapper)", () => {
+    const input = {
+      chainId: 42161,
+      clientRequestId: "teach-rename-01",
+      action: { type: "deploy-wrapper", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" },
+    };
+    const parsed = PrepareMarketInput.safeParse(input);
+    expect(parsed.success).toBe(false);
+    const t = buildTeaching("cork_prepare_market", parsed.success ? [] : parsed.error.issues, input);
+    expect(t.issues.map((i) => i.suggestion)).toContain('"deploy-wrapper" was renamed to "deploy-oracle"');
+  });
+
+  it("the rename map does NOT misfire when the new name is absent from the failing field's legal set", () => {
+    const t = buildTeaching(
+      "cork_query",
+      [{ code: "invalid_value", path: ["kind"], message: "invalid", values: ["orders", "fills", "contracts"] }],
+      { kind: "deploy-wrapper" },
+    );
+    expect(t.issues[0]?.suggestion ?? "").not.toContain("renamed");
   });
 
   it("tolerates a non-array issue payload without throwing (defensive)", () => {

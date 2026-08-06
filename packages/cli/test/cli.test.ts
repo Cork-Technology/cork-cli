@@ -435,7 +435,10 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
 
   it("root help lists the pool verbs and fill; verbs advertise their canonical spelling", async () => {
     const r = await runCli(["--help"], { nowSeconds: NOW });
-    for (const verb of ["mint", "deposit", "swap", "exercise", "redeem", "withdraw", "unwind-swap", "fill"]) {
+    // ALL 13 pool actions + fill — a silently-skipped registration (name collision with a
+    // future command) must fail this lint, not vanish.
+    const VERBS = ["mint", "deposit", "unwind-deposit", "unwind-mint", "withdraw", "withdraw-other", "redeem", "swap", "exercise", "exercise-other", "unwind-swap", "unwind-exercise", "unwind-exercise-other", "fill"];
+    for (const verb of VERBS) {
       expect(r.stdout).toMatch(new RegExp(`^  ${verb} `, "m"));
     }
     // Root-list descriptions wrap; the canonical-spelling pointer shows in the verb's own help.
@@ -467,6 +470,34 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
     expect(r.code).toBe(EXIT.ok);
     expect(JSON.parse(r.stdout).data.resource).toBe("rfqs");
     expect(seen.some((u) => u.includes("/rfqs"))).toBe(true);
+  });
+
+  it("ch query market-predict routes to the renamed derive-market resource (CLI alias)", async () => {
+    // Offline: derive-market without its required filters is a missing_filter envelope — an
+    // envelope AT ALL proves the old spelling passed schema validation as the new resource.
+    const r = await runCli(["query", "market-predict", "--chain-id", "42161", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.unavailable);
+    const env = JSON.parse(r.stdout);
+    expect(env.warnings[0].code).toBe("missing_filter");
+    expect(env.warnings[0].message).toMatch(/^derive-market requires/);
+  });
+
+  it("an OLD wire value in a blob teaches the rename — in prose AND in the JSON issues shape", async () => {
+    const argvBase = ["query", "--input", JSON.stringify({ resource: "market-predict", chainId: 42161 })];
+    const prose = await runCli(argvBase, { nowSeconds: NOW });
+    expect(prose.code).toBe(EXIT.invalid);
+    expect(prose.stderr).toContain('"market-predict" was renamed to "derive-market"');
+    const json = await runCli([...argvBase, "--json"], { nowSeconds: NOW });
+    const payload = JSON.parse(json.stderr);
+    // Teaching issues ARE the issues (path/expected/received/suggestion) — the documented shape.
+    expect(payload.error.issues[0].suggestion).toBe('"market-predict" was renamed to "derive-market"');
+    expect(payload.error.issues[0].path).toBe("resource");
+  });
+
+  it("prose enum-typo help prints the suggestion sentence verbatim (no double wrapping)", async () => {
+    const r = await runCli(["query", "--input", JSON.stringify({ resource: "makret", chainId: 1 })], { nowSeconds: NOW });
+    expect(r.stderr).toContain('did you mean "market"?');
+    expect(r.stderr).not.toContain("did you mean did you mean");
   });
 
   it("filter keys are first-class flags landing under filters.*", async () => {

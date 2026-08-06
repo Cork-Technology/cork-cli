@@ -161,9 +161,14 @@ export function renderError(payload: Record<string, unknown>): string {
     for (const raw of issues) {
       const i = raw as Record<string, unknown>;
       const where = i["path"] ? String(i["path"]) : "(input)";
-      const detail = [i["expected"] ? `expected ${i["expected"]}` : "", i["received"] ? `received ${i["received"]}` : ""].filter(Boolean).join(", ");
+      // Teaching issues carry a human message; fall back to expected/received for raw zod issues.
+      const detail = i["message"]
+        ? String(i["message"])
+        : [i["expected"] ? `expected ${i["expected"]}` : "", i["received"] ? `received ${i["received"]}` : ""].filter(Boolean).join(", ");
       parts.push(wrapped(`- ${where}${detail ? `: ${detail}` : ""}`, 2));
-      if (i["suggestion"]) parts.push(wrapped(`did you mean ${i["suggestion"]}?`, 4));
+      // Suggestions are complete sentences ('did you mean "x"?', '"a" was renamed to "b"') —
+      // print verbatim, never re-wrap.
+      if (i["suggestion"]) parts.push(wrapped(`→ ${i["suggestion"]}`, 4));
     }
   }
   if (e["remediation"]) parts.push("", wrapped(String(e["remediation"]), 2));

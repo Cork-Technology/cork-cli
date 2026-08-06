@@ -47,7 +47,7 @@ plain reads — you sign/broadcast with your own stack.
 
 | # | Step | What happens | Tool |
 |---|---|---|---|
-| 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `market-predict`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
+| 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `derive-market`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
 | 2 | **Bond mints cST and creates a limit order (to sell)** | Bond answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | Bond's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
 | 3 | **Zyfai buys Bond's cST** (by filling Bond's limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
 | 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare pool` → `exercise` / `exercise-other` |
@@ -261,7 +261,7 @@ Either way, **these four numbers are literally what Bond's order will sign**, an
 identity is derived from them.
 
 **Stop 6 — the identity check.**
-`market-predict` (step 1c) is the final dry-run: it folds your four choices through the registry —
+`derive-market` (step 1c) is the final dry-run: it folds your four choices through the registry —
 predicts the oracle, resolves the constraint, derives the `poolId` and the cST/cPT addresses, and
 tells you whether the pool already exists. Nothing is deployed or signed; it is the same
 derivation a JIT fill runs on-chain.
@@ -286,7 +286,7 @@ at signing time. That's why deriving, quoting, and signing close together matter
 1. REF appears in `registry-assets` (and carries the source slot your view needs).
 2. `registry-oracle` says the pair is `deployed` or at least `deployable` — in the mode you mean.
 3. The recipe address came from `registry-recipes` on-chain, not from a doc or a chat message.
-4. `market-predict` returns a full identity and the expiry you want.
+4. `derive-market` returns a full identity and the expiry you want.
 5. `packageIds` and `notionalAssets` units confirmed with your Cork contact (venue conventions).
 
 </details>
@@ -367,12 +367,12 @@ cST/cPT addresses, oracle, and resolved constraint — before anything exists on
 
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
-ch query market-predict --chain-id 42161 --json \
+ch query derive-market --chain-id 42161 --json \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14 \
   --expiry "$EXP" --recipe 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D
 # alternative — the rest in one --input blob (`--json` stays the bare output flag):
-ch query market-predict --chain-id 42161 --json \
+ch query derive-market --chain-id 42161 --json \
   --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}}"
 ```
 ```jsonc
@@ -750,7 +750,7 @@ feed. Details on the read backends, if you want them:
 
 The venue-backed reads (`orderbook`, `rfqs`, `fills`, `flows`, `markets`) are served by
 api-phoenix, Cork's indexer. The decentralized paths are `lite-decentralized` (direct RPC chain
-reads — already the default for `market` / `account-state` / `market-predict`) and
+reads — already the default for `market` / `account-state` / `derive-market`) and
 `full-decentralized` (HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports
 more than one backend you can force it with `mode` on `ch query`, and every result's
 `provenance.mode` says which one answered. When indexer and chain disagree, chain wins — the
@@ -854,7 +854,7 @@ you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
    exercise routes (`fillOrderForSelf`, `exerciseForSelf`/`exerciseOtherForSelf` — or your
    equivalents) and the approvals for the route you chose (§5, item C — adapter route:
    CA/REF/cST → the adapter; raw route: CA→LOP, REF→PoolManager).
-4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`market-predict`,
+4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`derive-market`,
    RFQ with `submit rfq-open` / watch `rfqs`, **simulate every artifact before signing**, fill with
    `taker-fill` (target pinned), exercise with `prepare_phoenix`, reconcile with `track`.
 5. **Confirm ownership + timeline back to Cork** — Cork needs no protocol change from you; it needs to

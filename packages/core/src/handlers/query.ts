@@ -372,8 +372,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.resource === "registry-assets" || input.resource === "registry-oracle" || input.resource === "registry-recipes" || input.resource === "registry-denominations" || input.resource === "registry-feeds") {
     return handleQueryRegistry(input, filters, chainId, ctx);
   }
-  // market-predict — the registry+adapter derivation of a market that may not exist yet.
-  if (input.resource === "market-predict") {
+  // derive-market — the registry+adapter derivation of a market that may not exist yet.
+  if (input.resource === "derive-market") {
     return handleQueryMarketPredict(input, filters, chainId, ctx);
   }
   const { dep, depWarn } = await getDep(ctx, chainId);

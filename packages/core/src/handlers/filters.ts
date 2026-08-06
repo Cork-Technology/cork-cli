@@ -125,7 +125,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     }
   }
   if (raw?.mode !== undefined) out.mode = String(raw.mode);
-  // market-predict: expiry as a unix-seconds decimal string (part of the derived market
+  // derive-market: expiry as a unix-seconds decimal string (part of the derived market
   // identity) — routed through the shared UnixSeconds primitive so the ms-detector and
   // plausibility bound ride this field too (T6a), instead of a bare digit regex that accepted
   // year-58-billion values.
