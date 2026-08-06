@@ -209,7 +209,9 @@ async function signedVenueRow(over: Partial<LopOrder> = {}) {
 
 /** A chain stub that answers the ForSelf bindings and the pool token reads. */
 const chainStub = (over: { cork?: string; lop?: string; market?: Record<string, unknown> } = {}) =>
-  stubRpc((c) => {
+  stubRpc((c) => chainStubAnswer(c, over), { code: { [ADAPTER.toLowerCase()]: "0x60806040" } });
+const chainStubAnswer = (c: { functionName: string }, over: { cork?: string; lop?: string; market?: Record<string, unknown> }) => {
+  {
     switch (c.functionName) {
       case "CORK":
         return over.cork ?? MAINNET_DEPLOYMENT.poolManager;
@@ -230,7 +232,8 @@ const chainStub = (over: { cork?: string; lop?: string; market?: Record<string, 
       default:
         throw new Error(`no stub for ${c.functionName}`);
     }
-  });
+  }
+};
 
 const venueWith = (row: Record<string, unknown>) => async (url: string) => {
   if (url.includes("orderbook")) return new Response(JSON.stringify({ items: [row], hasMore: false }), { status: 200 });
@@ -281,6 +284,57 @@ describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");
+  });
+
+  it("attribution: NO CONTRACT at the adapter address is a definitive conflict", async () => {
+    const { orderHash, row } = await signedVenueRow();
+    // stubRpc's default: addresses not in opts.code answer getCode "0x".
+    const noCode = stubRpc((c) => chainStubAnswer(c, {}));
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0006", action: { type: "taker-fill", orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(row), resolveRpc: noCode },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");
+    expect(env.warnings[0]?.message).toContain("NO CONTRACT");
+  });
+
+  it("attribution: a TRANSPORT failure on the binding reads discloses instead of accusing", async () => {
+    const { orderHash, row } = await signedVenueRow();
+    const transportDown = stubRpc(
+      (c) => {
+        if (c.functionName === "CORK" || c.functionName === "LOP") throw Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
+        return chainStubAnswer(c, {});
+      },
+      { code: { [ADAPTER.toLowerCase()]: "0x60806040" } },
+    );
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0007", action: { type: "taker-fill", orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(row), resolveRpc: transportDown },
+    );
+    expect(env.state).toBe("ok"); // artifact still built — the gap is disclosed, not misattributed
+    expect(env.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("could NOT be verified"))).toBe(true);
+  });
+
+  it("attribution: a contract that REFUSES the binding views is a definitive conflict", async () => {
+    const { orderHash, row } = await signedVenueRow();
+    const refuses = stubRpc(
+      (c) => {
+        if (c.functionName === "CORK" || c.functionName === "LOP") throw new Error("execution reverted");
+        return chainStubAnswer(c, {});
+      },
+      { code: { [ADAPTER.toLowerCase()]: "0x60806040" } },
+    );
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0008", action: { type: "taker-fill", orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(row), resolveRpc: refuses },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");
+    expect(env.warnings[0]?.message).toContain("not a Cork ForSelf adapter");
   });
 
   it("a pair outside the pool's share×cash set warns would_revert (build-and-warn)", async () => {
@@ -380,6 +434,12 @@ describe("runTool: cork_prepare_phoenix forSelf", () => {
     expect(d.forSelf.allowances.map((a) => a.tokenRole).sort()).toEqual(["cST", "reference"]);
     expect(d.forSelf.allowances.find((a) => a.tokenRole === "cST")?.token).toBe(CST);
     expect(env.warnings.some((w) => w.code === "for_self_artifact")).toBe(true);
+    // The summary is DERIVED from the built bytes (decoded with the same decoder every
+    // consumer sees), not narrated — so it must carry the decoded action, pool, deadline.
+    const summary = (env.data as { summary: string[] }).summary;
+    expect(summary[0]).toContain("run 'exerciseForSelf' on the ForSelf adapter");
+    expect(summary[0]).toContain(`deadline ${NOW + 900n}`);
+    expect(summary[1]).toContain("approve the adapter to spend");
   });
 
   it("a receiver other than the account is a teaching error, not a silent redirect", async () => {
@@ -431,7 +491,7 @@ describe("runTool: cork_prepare_phoenix forSelf", () => {
         default:
           throw new Error(`no stub for ${c.functionName}`);
       }
-    });
+    }, { code: { [ADAPTER.toLowerCase()]: "0x60806040" } });
     const env = await runTool(
       "cork_prepare_phoenix",
       { chainId: 1, account: ACCOUNT, clientRequestId: "forself-ex-0005", forSelf: { adapter: ADAPTER }, action: exercise, format: "concise" },

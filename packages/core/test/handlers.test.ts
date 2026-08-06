@@ -538,6 +538,27 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
     expect(env.warnings[0]?.message).toContain("ERC-1271");
   });
 
+  it("a TRANSPORT failure during isValidSignature is unavailable (retryable), never a mismatch accusation", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: acct.address, clientRequestId: "final-int-01", action: { type: "finalize-maker-order", prepared, listing, signature: "0xdeadbeef" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: contractMakerRpc(Object.assign(new Error("fetch failed"), { name: "HttpRequestError" })) },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+    expect(env.warnings[0]?.message).toContain("transport");
+  });
+
+  it("a CONTRACT maker whose isValidSignature REVERTS is a definitive rejection (the fill would revert too)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: acct.address, clientRequestId: "final-int-01", action: { type: "finalize-maker-order", prepared, listing, signature: "0xdeadbeef" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: contractMakerRpc(new Error("execution reverted")) },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+  });
+
   it("without an RPC a contract maker fails in the ecrecover branch WITH the ERC-1271 hint", async () => {
     // The signature is opaque contract bytes; recovery cannot yield the maker. The conflict
     // must teach the fix (an RPC) instead of a bare mismatch.

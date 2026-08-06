@@ -11,8 +11,10 @@
 //  - each entrypoint takes ONE params struct; FIELD ORDER inside each struct is load-bearing;
 //  - fillOrderForSelf embeds the 1inch v4 order as the underlying uint256 8-tuple;
 //  - the wrapper sanitizes takerTraits itself (forces the target bit, zeroes interaction
-//    bits, clears Permit2), so the traits passed here carry ONLY amount-mode bit 255 +
-//    the low-185-bit taking cap (plus preserved bits 254/253 when a caller wants them);
+//    bits, clears Permit2), so the traits built here carry EXACTLY amount-mode bit 255 +
+//    the low-184-bit taking cap. The wrapper would also preserve bits 254 (WETH unwrap)
+//    and 253 (skip maker permit) from its caller, but this builder deliberately never
+//    sets them — neither belongs in the caged-wallet flow this artifact serves;
 //  - the wrapper pulls the taker asset from the CALLER, so allowances are granted to the
 //    ADAPTER, not to the LOP / pool manager.
 import { encodeFunctionData, parseAbi, toFunctionSelector } from "viem";

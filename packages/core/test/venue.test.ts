@@ -386,6 +386,22 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
 
+  it("F3/ERC-1271 attribution: a REVERTING isValidSignature is a definitive rejection (conflict, NOT relayed); a transport failure discloses and relays", async () => {
+    const seen: Seen[] = [];
+    const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
+    const throwing = (err: Error) => async () => stubResolved({ readContract: async () => { throw err; } });
+
+    const reverted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: throwing(new Error("execution reverted")) });
+    expect(reverted.state).toBe("conflict");
+    expect(reverted.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+
+    const transport = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: throwing(Object.assign(new Error("fetch failed"), { name: "HttpRequestError" })) });
+    expect(transport.state).toBe("ok");
+    expect(transport.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("transport"))).toBe(true);
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
+  });
+
   it("F3/ERC-1271: with no RPC the gap is DISCLOSED (relayed with chain_read_failed), never silent", async () => {
     const seen: Seen[] = [];
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
@@ -1176,6 +1192,44 @@ describe("taker-fill of an auction-priced resting order", () => {
     expect(d.auction["phase"]).toBe("decaying");
     // current at 600s into 3600s: bump 833333 → ceil(1_000_000 * 10833333 / 1e7) = 1083334.
     expect(d.auction["currentTakerPays"]).toBe("1083334");
+    expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(true);
+  });
+
+  it("forSelf carries the same ceiling cap into the wrapper's pull (an auction fill pulls the ceiling up-front, remainder swept back)", async () => {
+    const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
+    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const forSelfAdapter = "0xaaaAAAAAAaAaaaaAAAaaAAAAaAaaaaAaaAaaAA01";
+    const chain = stubRpc(
+      (c) => {
+        switch (c.functionName) {
+          case "CORK":
+            return "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // 42161 poolManager
+          case "LOP":
+            return LOP;
+          case "market":
+            return { collateralAsset: "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: NOW2 + 10_000n, rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 1n, rateChangeCapacityMax: 1n, rateOracle: "0x00000000000000000000000000000000000000f0" };
+          case "shares":
+            // The auction row SELLS the collateral-address asset; make it the pool's cST so
+            // the pair pre-flight is clean and only the cap semantics are under test.
+            return ["0x00000000000000000000000000000000000000c7", "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2"];
+          case "bitInvalidatorForOrder":
+            return 0n;
+          default:
+            throw new Error(`no stub for ${c.functionName}`);
+        }
+      },
+      { code: { [forSelfAdapter.toLowerCase()]: "0x60806040" } },
+    );
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-forself-0001", action: { type: "taker-fill", orderHash: built.orderHash, forSelf: { adapter: forSelfAdapter, poolId: `0x${"11".repeat(32)}` } }, format: "concise" },
+      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { fillFunction: string; forSelf: { pullCap: string }; auction: Record<string, unknown> };
+    expect(d.fillFunction).toBe("fillOrderForSelf");
+    expect(d.forSelf.pullCap).toBe("1100000"); // the curve ceiling, not the signed floor
+    expect(d.auction["ceilingTakerPays"]).toBe("1100000");
     expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(true);
   });
 

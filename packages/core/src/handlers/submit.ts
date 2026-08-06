@@ -6,7 +6,7 @@ import { ERC1271_MAGIC, erc1271Abi, LOP_ADDRESSES, lopDomain } from "../orders.t
 import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
-import { envelope, getRpc, type HandlerContext, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
 
 const U160 = (1n << 160n) - 1n;
@@ -268,12 +268,14 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           let magic: string | null | undefined;
           try {
             magic = await resolved.client.readContract({ address: orderMsg.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [orderHash, action.signature] });
-          } catch {
-            magic = undefined; // read failed (reverted/unreachable) — distinguished below
+          } catch (err) {
+            // Attribution: transport = indeterminate (disclose, relay); a contract-side
+            // revert = the maker's own definitive refusal (the fill runs this exact call).
+            magic = isTransportFailure(err) ? undefined : null;
           }
           if (magic === undefined) {
-            lopWarnings.push({ code: "chain_read_failed", message: `the maker ${orderMsg.maker}'s isValidSignature staticcall failed (reverted or unreachable) — the ERC-1271 signature could not be pre-verified; the fill path runs this exact check, so an invalid signature would rest on the book unfillable` });
-          } else if (magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
+            lopWarnings.push({ code: "chain_read_failed", message: `the maker ${orderMsg.maker}'s isValidSignature staticcall failed in transport — the ERC-1271 signature could not be pre-verified; the fill path runs this exact check, so an invalid signature would rest on the book unfillable` });
+          } else if (magic === null || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
             return envelope({
               state: "conflict",
               data: { orderHash, maker: orderMsg.maker, isValidSignatureAnswer: magic },

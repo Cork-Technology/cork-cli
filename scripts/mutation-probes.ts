@@ -693,6 +693,16 @@ const CATALOG: Mutant[] = [
     replace: '{ tokenRole: "cST", amountField: "cstSharesIn", kind: "cap" },',
     tests: [T.forself],
   },
+  {
+    // Attribution comparator collapsed to "everything is transport": a contract's definitive
+    // refusal (a reverting isValidSignature / binding view) would be relayed or merely warned
+    // instead of conflicting — the exact false-negative the classifier exists to prevent.
+    id: "shared-transport-classifier-always-true",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "    e = e.cause as { name?: string; cause?: unknown } | undefined;\n  }\n  return false;\n}",
+    replace: "    e = e.cause as { name?: string; cause?: unknown } | undefined;\n  }\n  return true;\n}",
+    tests: [T.venue, T.forself, T.handlers],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

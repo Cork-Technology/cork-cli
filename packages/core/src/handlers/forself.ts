@@ -13,7 +13,9 @@ import { buildTakerFill } from "../orders.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
-import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
+import { decodeSingleCall } from "../bundle/decode.ts";
+import { summarizeBundle } from "../bundle/summary.ts";
+import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
@@ -47,12 +49,35 @@ export async function verifyForSelfBindings(args: {
 }): Promise<{ gate?: Envelope; warnings: Warning[] }> {
   const { client, ctx, chainId, adapter, poolManager, lop } = args;
   const warnings: Warning[] = [];
-  if (!client) {
+  const unverified = (why: string): { warnings: Warning[] } => {
     warnings.push({
       code: "chain_read_failed",
-      message: `no RPC resolved — the ForSelf adapter ${adapter} could NOT be verified against its pinned protocols. You are about to grant it a token allowance: independently confirm its CORK()${lop ? "/LOP()" : ""} bindings before signing`,
+      message: `${why} — the ForSelf adapter ${adapter} could NOT be verified against its pinned protocols. You are about to grant it a token allowance: independently confirm its CORK()${lop ? "/LOP()" : ""} bindings before signing`,
     });
     return { warnings };
+  };
+  if (!client) return unverified("no RPC resolved");
+  // Attribution discipline: only a DEFINITIVE on-chain answer may accuse the adapter. A
+  // transport failure is indeterminate and discloses instead — accusing an integrator's
+  // real adapter because an RPC blipped would be a false alarm with an allowance at stake.
+  let code: string | undefined;
+  try {
+    code = await client.getCode({ address: adapter });
+  } catch {
+    return unverified("the adapter's code could not be read");
+  }
+  if (code === undefined || code === "0x") {
+    return {
+      gate: envelope({
+        state: "conflict",
+        data: { adapter },
+        chainId,
+        source: "chain",
+        warnings: [{ code: "adapter_binding_mismatch", message: `there is NO CONTRACT at ${adapter} on chainId ${chainId} — an allowance/tx to it would be irrecoverable. Verify the adapter address with your integrator; no artifact was built` }],
+        ctx,
+      }),
+      warnings,
+    };
   }
   try {
     const [boundCork, boundLop] = await Promise.all([
@@ -75,13 +100,15 @@ export async function verifyForSelfBindings(args: {
       };
     }
   } catch (err) {
+    if (isTransportFailure(err)) return unverified(`the binding reads failed in transport (${revertReason(err)})`);
+    // The contract itself refused the views — that is the chain's own answer.
     return {
       gate: envelope({
         state: "conflict",
         data: { adapter },
         chainId,
         source: "chain",
-        warnings: [{ code: "adapter_binding_mismatch", message: `the address ${adapter} did not answer the ForSelf binding views (CORK()${lop ? "/LOP()" : ""}): ${revertReason(err)} — it is not a Cork ForSelf adapter (or not deployed on chainId ${chainId}). You would be granting an allowance to an unverified contract; no artifact was built` }],
+        warnings: [{ code: "adapter_binding_mismatch", message: `the contract at ${adapter} did not answer the ForSelf binding views (CORK()${lop ? "/LOP()" : ""}): ${revertReason(err)} — it is not a Cork ForSelf adapter. You would be granting an allowance to an unverified contract; no artifact was built` }],
         ctx,
       }),
       warnings,
@@ -295,6 +322,15 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     .join(", plus ");
   warnings.push(forSelfNotice(forSelf.adapter, allowanceText));
 
+  // Summary derived from the BUILT BYTES [K3] — the same decoder+renderer every consumer of
+  // this calldata sees — plus one allowance line from the (test-pinned) matrix. A hand-written
+  // narration could drift from what the bytes actually do; a decoded one cannot.
+  const summary = summarizeBundle(
+    [decodeSingleCall({ to: forSelf.adapter, data: call.calldata, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })],
+    {},
+  );
+  summary.push(`2. before signing, approve the adapter to spend: ${allowanceText}`);
+
   return envelope({
     state: "ok",
     data: {
@@ -311,10 +347,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
         allowances: call.allowances.map((a) => ({ ...a, ...(tokenAddresses?.[a.tokenRole] ? { token: tokenAddresses[a.tokenRole] } : {}) })),
         receiverPolicy: "structurally the calling account — the adapter's entrypoints carry no receiver/owner parameters",
       },
-      summary: [
-        `1. call ${call.functionName} on the ForSelf adapter ${forSelf.adapter} (deadline ${deadline})`,
-        `2. the adapter pulls the inputs it needs from you (allowances above), executes '${input.action.type}' on the pool manager with every output directed to YOU, and sweeps any unspent remainder back to you in the same transaction`,
-      ],
+      summary,
       simulationRequired: true,
       execution: executionEthTransaction(),
       clientRequestId: input.clientRequestId,

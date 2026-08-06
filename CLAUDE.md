@@ -290,7 +290,10 @@ return `requires_rpc` when nothing resolves (offline, or an ineligible chain lik
 node. Pure/config tools never touch a chain: `cork_capabilities`, `cork_decode`, `cork_query
 resource:"protocol-config"`, `cork_compute kind:"rollover-premium-floor"`, `cork_prepare_*` byte-building.
 (`cork_prepare_phoenix` funding-leg token resolution still needs an *explicit* RPC — offline by default,
-so without one you get the bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`.)
+so without one you get the bundle plus a `funding_needs_rpc` warning and `fundingLegs:0`.
+ForSelf-mode prepares and the taker-fill liveness/ERC-1271 checks DO use the default-resolved RPC:
+adapter-binding verification and chain-vs-venue liveness are security reads, so they run whenever
+any endpoint resolves and disclose honestly when none does.)
 
 Per-chain deployment coverage: chainId 1 and chainId 42161 are both **full** (all 5 contracts;
 prepare + all reads). The 42161 set was announced 2026-07-22 and its bindings verified on-chain

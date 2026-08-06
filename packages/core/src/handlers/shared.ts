@@ -230,3 +230,18 @@ export function revertReason(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
   return (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0] ?? err.message).trim();
 }
+
+/** True when a failed chain call died in TRANSPORT (HTTP/timeout/socket) rather than in the
+ *  contract. This split decides ATTRIBUTION everywhere a read doubles as a verdict: a revert
+ *  is a DEFINITIVE on-chain answer (the same call in the fill would revert too → conflict),
+ *  while a transport failure is indeterminate (→ disclose, don't accuse). ONE comparator on
+ *  purpose — duplicated classifications would drift and defeat first-occurrence mutation
+ *  probes. Walks viem's cause chain by error NAME so no viem class imports are needed. */
+export function isTransportFailure(err: unknown): boolean {
+  let e = err as { name?: string; cause?: unknown } | undefined;
+  for (let i = 0; e && i < 8; i++) {
+    if (e.name === "HttpRequestError" || e.name === "TimeoutError" || e.name === "SocketClosedError" || e.name === "WebSocketRequestError") return true;
+    e = e.cause as { name?: string; cause?: unknown } | undefined;
+  }
+  return false;
+}

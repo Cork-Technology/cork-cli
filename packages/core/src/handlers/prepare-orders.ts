@@ -9,7 +9,7 @@ import { buildRolloverIntent } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
-import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, jitValueGate, prepareJitLegacy } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
@@ -52,11 +52,26 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       let makerAccountType: "EOA" | "ERC1271" = "EOA";
       let recoveredSigner: `0x${string}` | null = null;
       const resolved = await getRpc(ctx, chainId);
-      const makerCode = resolved ? await resolved.client.getCode({ address: m.maker }).catch(() => undefined) : undefined;
+      let makerCode: string | undefined;
+      if (resolved) {
+        try {
+          makerCode = await resolved.client.getCode({ address: m.maker });
+        } catch {
+          makerCode = undefined; // code unknowable (transport or a client without getCode) — the EOA branch discloses it
+        }
+      }
       if (makerCode !== undefined && makerCode !== "0x") {
-        const magic = await resolved!.client
-          .readContract({ address: m.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [reconstructedHash, action.signature] })
-          .catch(() => null);
+        let magic: unknown;
+        try {
+          magic = await resolved!.client.readContract({ address: m.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [reconstructedHash, action.signature] });
+        } catch (err) {
+          // Attribution: a transport failure is indeterminate (retryable, not a verdict); a
+          // contract-side revert IS the verdict — the fill runs this exact staticcall.
+          if (isTransportFailure(err)) {
+            return unavailable(chainId, "chain_read_failed", `the maker ${m.maker} is a CONTRACT account but its isValidSignature staticcall failed in transport (${revertReason(err)}) — the ERC-1271 signature could not be verified either way; retry with a working RPC (the fill path requires this exact call to answer)`, ctx);
+          }
+          magic = null;
+        }
         if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
           return envelope({
             state: "conflict",
