@@ -278,7 +278,14 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           return filters.poolId ? { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) } : list;
         });
       } else if (input.resource === "orderbook") {
-        traversal = await collectVenuePages(paging, (cursor) => getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+        traversal = await collectVenuePages(paging, async (cursor) => {
+          const list = await getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize });
+          // The venue's orderbook path has no orderHash query param — filter client-side (the
+          // markets/poolId pattern above) so a known filter key is never silently unapplied:
+          // an "unfiltered because unsupported" read would let a caller mistake the whole book
+          // for a per-order answer.
+          return filters.orderHash ? { ...list, items: list.items.filter((r) => String((r as { orderHash?: unknown }).orderHash ?? "").toLowerCase() === filters.orderHash!.toLowerCase()) } : list;
+        });
       } else if (input.resource === "fills") {
         traversal = await collectVenuePages(paging, (cursor) => getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "limit-order-markets") {

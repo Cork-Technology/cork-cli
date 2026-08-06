@@ -116,6 +116,25 @@ describe("cork_query venue-backed resources", () => {
     expect(url).toContain(`poolId=0x${"ab".repeat(32)}`);
   });
 
+  it("orderbook applies filters.orderHash CLIENT-side (the venue path has no such param)", async () => {
+    // A known filter key must never be silently unapplied: without the client-side filter this
+    // read returned the WHOLE book for an orderHash query (observed live 2026-08-06).
+    const target = `0x${"9c".repeat(32)}`;
+    const other = `0x${"11".repeat(32)}`;
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "orderbook", chainId: 42161, filters: { orderHash: target.toUpperCase().replace("0X", "0x") }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/limit-orders/orderbook", body: { items: [{ orderHash: target, status: "OPEN" }, { orderHash: other, status: "OPEN" }] } }], seen),
+    );
+    expect(env.state).toBe("ok");
+    const data = env.data as { count: number; items: Array<{ orderHash: string }> };
+    expect(data.count).toBe(1);
+    expect(data.items[0]!.orderHash).toBe(target);
+    // and the hash was NOT forwarded as a venue query param (it has no server-side meaning here)
+    expect(seen[0]!.url).not.toContain("orderHash");
+  });
+
   it("flows kind=orders honors fillable + account→user; kind=contracts routes to /contracts", async () => {
     const seen: Seen[] = [];
     const ctx = ctxWith(

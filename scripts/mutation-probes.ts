@@ -618,6 +618,15 @@ const CATALOG: Mutant[] = [
     replace: 'if (t.includes("string")) return false;',
     tests: [T.cli],
   },
+  {
+    // A known filter key silently unapplied: an orderHash query would return the WHOLE book —
+    // the caller mistakes it for a per-order answer (the live bug this filter fixed, 2026-08-06).
+    id: "query-orderbook-orderhash-unfiltered",
+    file: "packages/core/src/handlers/query.ts",
+    find: "return filters.orderHash ? { ...list, items: list.items.filter((r) => String((r as { orderHash?: unknown }).orderHash ?? \"\").toLowerCase() === filters.orderHash!.toLowerCase()) } : list;",
+    replace: "return list;",
+    tests: [T.venue],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

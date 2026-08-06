@@ -12,6 +12,20 @@ const ctx = {
 // server module is shared with the `cork-mcp` dev entrypoint (packages/mcp/src/bin.ts): one
 // core, two thin shells (RFC 011).
 if (argv[0] === "mcp") {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    // Without this, --help would fall through and silently START the stdio server (which then
+    // blocks on stdin) — the one leaf commander never sees still owes its user a help page.
+    // stdout is safe here precisely because no server is started.
+    process.stdout.write(
+      "Usage: ch mcp [--http [--port <n>]]\n\n" +
+        "Start the Cork MCP server (all 9 tools).\n" +
+        "  (default)        stdio transport — for MCP clients: claude mcp add cork-defi -- ch mcp\n" +
+        "  --http           Streamable HTTP — endpoint /mcp, health /healthz, docs /docs/signing\n" +
+        "  --port <n>       HTTP port (default 8080)\n" +
+        "Bearer auth: set CORK_MCP_TOKEN (unset = open; put auth/rate limits at the ingress).\n",
+    );
+    process.exit(0);
+  }
   if (argv.includes("--http")) {
     // `ch mcp --http [--port 8080]` — the Streamable HTTP projection (container entrypoint is
     // /usr/bin/ch, so a compose command of ["mcp","--http"] serves it). Same server factory,
