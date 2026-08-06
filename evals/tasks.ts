@@ -1,8 +1,8 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. ~20 active + 5 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 30+ active + 5 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
-import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
+import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 
 export interface Expectation {
   /** The tool the agent should reach for first. */
@@ -34,10 +34,9 @@ export interface EvalTask {
 const P = DEMO_POOL_ID;
 const A = DEMO_ACCOUNT;
 
-// The decode kind:"tx" fixture from packages/core/test/decode-tx.test.ts: the demo safeSwap
-// multicall signed as an EIP-1559 tx to the mainnet Bundler3 by Anvil dev account #1.
-const SIGNED_TX =
-  "0x02f902720107843b9aca008506fc23ac0083061a80946566194141eefa99af43bb5aa71460ca2dc9024580b90204374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000c080a03f1e02aab6f5035aa44fe1a05c3305a27f14079b3577b3d42e7d5219fc22e8aaa0457efc4d172aa72d297fb0ba25382f5b23091d4297711c4f58d4859b4f0e8f71";
+// The decode kind:"tx" fixture — the schemas-exported constant (bound to in-test deterministic
+// signing by packages/core/test/decode-tx.test.ts, so it cannot drift from the demo bytes).
+const SIGNED_TX = DEMO_SIGNED_TX;
 
 export const TASKS: EvalTask[] = [
   // ── reads ──────────────────────────────────────────────────────────────

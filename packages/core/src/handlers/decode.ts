@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): decode handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
-import { Address, Bytes32, type ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
+import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../orders.ts";
 import { decodeJitExtension } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
@@ -254,14 +254,14 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
   });
 }
 
-/** decode kind:"tx" — a SIGNED raw transaction (legacy RLP or typed envelope 0x01/0x02): recover
+/** decode kind:"tx" — a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04): recover
  *  the signer from the signature, name the target against the chain's known Cork deployment
  *  addresses (warn plainly when unknown), and decode the inner calldata to the same labeled legs
  *  + summary as kind:"calldata". This is the validate-before-broadcast step [K3]: everything is
  *  reconstructed from the bytes; a supplied chainId that contradicts the tx's own is a conflict. */
 export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
   if (typeof input.data !== "string") {
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "tx decode takes the SIGNED raw transaction bytes as 0x hex (legacy RLP or typed envelope 0x01/0x02) — the parse is reconstructed from the bytes, never supplied [K3]" }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "tx decode takes the SIGNED raw transaction bytes as 0x hex (legacy RLP or typed envelope 0x01–0x04) — the parse is reconstructed from the bytes, never supplied [K3]" }]);
   }
   const raw = input.data as `0x${string}`;
   let parsed: ReturnType<typeof parseTransaction>;
@@ -275,34 +275,50 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   }
   const signer = await recoverTransactionAddress({ serializedTransaction: raw as TransactionSerialized });
   const txChainId = parsed.chainId;
-  // Which chain the address book resolves against: the tx's own chainId outranks the input's;
-  // a legacy pre-EIP-155 tx (no chainId of its own) falls back to the supplied one.
-  const chainId = (txChainId ?? input.chainId ?? 1) as ChainId;
+  // Which chain the address book resolves against: the tx's own chainId outranks the input's —
+  // but the Envelope's chainId is a CLOSED enum (the advertised outputSchema), so a tx signed
+  // for a chain outside this tool's coverage must not leak its raw id into provenance. The
+  // truth stays in data.txChainId; the address-book lookup is skipped (we have no book there)
+  // and the gap is disclosed instead of mislabeled. A legacy pre-EIP-155 tx (no chainId of its
+  // own) falls back to the supplied one.
+  const txChainKnown = txChainId === undefined || ChainId.safeParse(txChainId).success;
+  const chainId = (txChainKnown ? (txChainId ?? input.chainId ?? 1) : (input.chainId ?? 1)) as ChainId;
 
   const warnings: Array<{ code: string; message: string }> = [];
-  // Known-address book for the chain (best-effort config reads; every entry optional).
-  const { dep, depWarn } = await getDep(ctx, chainId);
-  warnings.push(...depWarn);
-  const [{ marketRegistry: mr }, { rollover }] = await Promise.all([resolveMarketRegistry(chainId), resolveRollover(chainId)]);
-  const candidates: Array<[string, string | undefined]> = [
-    ["bundler3", dep?.bundler3],
-    ["corkAdapter", dep?.corkAdapter],
-    ["poolManager", dep?.poolManager],
-    ["constraintAdapter", dep?.constraintAdapter],
-    ["whitelistManager", dep?.whitelistManager],
-    ["1inch LOP v4", LOP_ADDRESSES[chainId]],
-    ["marketRegistry", mr?.registry],
-    ["corkLimitOrderAdapter (JIT)", mr?.adapter],
-    ["exactSettler", rollover?.exactSettler],
-    ["partialSettler", rollover?.partialSettler],
-    ["rolloverFactory", rollover?.factory],
-  ];
   const to = parsed.to ?? null;
-  const toLabel = to === null ? null : (candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())?.[0] ?? null);
+  let toLabel: string | null = null;
+  let dep: Awaited<ReturnType<typeof getDep>>["dep"];
   if (to === null) {
+    // Chain-independent: contract creation is outside every Cork prepare path.
     warnings.push({ code: "unknown_target", message: "this transaction has NO `to` (contract creation) — no Cork prepare path produces a deployment tx; do not broadcast unless you built it yourself" });
-  } else if (toLabel === null) {
-    warnings.push({ code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract on chainId ${chainId}. For a token approve (authority-onboard/revoke) the target is the TOKEN itself — verify it is the token you intend; for anything else, do not broadcast until you have identified the target` });
+  }
+  if (!txChainKnown) {
+    warnings.push({ code: "unknown_deployment", message: `the transaction's own chainId ${txChainId} is not a chain this tool has an address book for — the target could not be checked against known Cork contracts (data.txChainId carries the tx's chain; provenance reports the request context ${chainId}). Identify the target independently before broadcasting` });
+  } else {
+    // Known-address book for the chain (best-effort config reads; every entry optional). The
+    // registry/rollover resolvers read the same remote config file as getDep, so getDep's
+    // staleness warning already covers all three — theirs are deliberately not duplicated.
+    const got = await getDep(ctx, chainId);
+    dep = got.dep;
+    warnings.push(...got.depWarn);
+    const [{ marketRegistry: mr }, { rollover }] = await Promise.all([resolveMarketRegistry(chainId), resolveRollover(chainId)]);
+    const candidates: Array<[string, string | undefined]> = [
+      ["bundler3", dep?.bundler3],
+      ["corkAdapter", dep?.corkAdapter],
+      ["poolManager", dep?.poolManager],
+      ["constraintAdapter", dep?.constraintAdapter],
+      ["whitelistManager", dep?.whitelistManager],
+      ["1inch LOP v4", LOP_ADDRESSES[chainId]],
+      ["marketRegistry", mr?.registry],
+      ["corkLimitOrderAdapter (JIT)", mr?.adapter],
+      ["exactSettler", rollover?.exactSettler],
+      ["partialSettler", rollover?.partialSettler],
+      ["rolloverFactory", rollover?.factory],
+    ];
+    toLabel = to === null ? null : (candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())?.[0] ?? null);
+    if (to !== null && toLabel === null) {
+      warnings.push({ code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract on chainId ${chainId}. For a token approve (authority-onboard/revoke) the target is the TOKEN itself — verify it is the token you intend; for anything else, do not broadcast until you have identified the target` });
+    }
   }
 
   // Inner calldata → the SAME labeled legs + summary as kind:"calldata" (a Bundler3 multicall
@@ -316,8 +332,12 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       legs = [decodeSingleCall({ to: to ?? ZERO_ADDR, data, value: parsed.value ?? 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })];
     }
   }
+  // Same summarizer options as kind:"calldata" ({adapter} only) so the documented parity is
+  // UNCONDITIONAL. Passing the signer as `account` would render legs paying the signer as
+  // "you" — wrong when inspecting a third party's tx, and it silently broke the parity the
+  // moment a leg referenced the signer (caught empirically 2026-08-06).
   const adapter = dep?.corkAdapter;
-  const summary = legs ? summarizeBundle(legs, { adapter, ...(signer ? { account: signer } : {}) }) : ["(no calldata — a plain value transfer)"];
+  const summary = legs ? summarizeBundle(legs, { adapter }) : ["(no calldata — a plain value transfer)"];
 
   const base = {
     kind: "tx" as const,

@@ -6,7 +6,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { encodeFunctionData, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { MAINNET_DEPLOYMENT, runTool, ToolInputError } from "@cork/core";
+import { DEMO_SIGNED_TX, Envelope } from "@cork/schemas";
+import { corkActionCall, encodeMulticall, MAINNET_DEPLOYMENT, runTool, ToolInputError } from "@cork/core";
 
 const NOW = 1_800_000_000n;
 
@@ -112,6 +113,78 @@ describe("runTool: cork_decode kind:'tx'", () => {
     expect((d.summary as string[]).join(" ")).toMatch(/no calldata/);
     expect(env.warnings.map((w) => w.code)).toContain("unknown_target");
     expect(d.value).toBe("1");
+  });
+
+  it("the shipped DEMO_SIGNED_TX example IS the deterministic signature over the demo fields — the constant cannot drift", async () => {
+    // ECDSA per RFC 6979 is deterministic: same key + same fields ⇒ same bytes. This binds the
+    // examples.ts literal (reused by evals/tasks.ts) to the in-test source of truth.
+    expect(signedBundleTx).toBe(DEMO_SIGNED_TX);
+  });
+
+  it("summary parity with kind:'calldata' holds even when the SIGNER is a leg participant", async () => {
+    // Adversarial: a bundle whose Cork-leg receiver is the signer. A summarizer given the
+    // signer as `account` would render it as "you" and silently break the documented parity
+    // (and mislabel third-party txs) — this pins the {adapter}-only option set.
+    const data = encodeMulticall([
+      corkActionCall(MAINNET_DEPLOYMENT.corkAdapter, "safeSwap", { poolId: `0x${"ce".repeat(32)}`, collateralAssetsOut: 10n ** 18n, receiver: SIGNER.address, maxCstSharesIn: 2n * 10n ** 18n, maxReferenceAssetsIn: 2_000_000n, deadline: 1_900_000_000n }),
+    ]);
+    const signed = await SIGNER.signTransaction({ type: "eip1559", chainId: 1, nonce: 10, to: MAINNET_DEPLOYMENT.bundler3, data, gas: 300_000n, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 10n ** 8n });
+    const tx = await runTool("cork_decode", { kind: "tx", data: signed }, { nowSeconds: NOW });
+    const cd = await runTool("cork_decode", { kind: "calldata", data }, { nowSeconds: NOW });
+    expect((tx.data as Record<string, unknown>).summary).toEqual((cd.data as Record<string, unknown>).summary);
+    expect((tx.data as Record<string, unknown>).legs).toEqual((cd.data as Record<string, unknown>).legs);
+  });
+
+  it("a tx for a chain outside coverage stays schema-valid: truth in data.txChainId, gap disclosed", async () => {
+    const signed = await SIGNER.signTransaction({ type: "eip1559", chainId: 137, nonce: 11, to: MAINNET_DEPLOYMENT.bundler3, value: 0n, gas: 21_000n, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 10n ** 8n });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as Record<string, unknown>;
+    expect(d.txChainId).toBe(137);
+    // provenance.chainId is a CLOSED enum on the advertised outputSchema — the whole envelope
+    // must validate even for an exotic-chain tx.
+    expect(env.provenance.chainId).toBe(1);
+    expect(Envelope.safeParse(env).success).toBe(true);
+    // The address book was skipped, not faked: no toLabel, and the gap is disclosed.
+    expect(d.toLabel).toBeNull();
+    expect(env.warnings.map((w) => w.code)).toContain("unknown_deployment");
+    // A supplied chainId contradicting the exotic tx still conflicts, schema-valid.
+    const conf = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
+    expect(conf.state).toBe("conflict");
+    expect(conf.warnings.map((w) => w.code)).toContain("chainid_mismatch");
+    expect(Envelope.safeParse(conf).success).toBe(true);
+  });
+
+  it("decodes a legacy EIP-155 tx (chainId recovered from v)", async () => {
+    const signed = await SIGNER.signTransaction({ type: "legacy", chainId: 1, nonce: 12, to: MAINNET_DEPLOYMENT.bundler3, value: 0n, gas: 21_000n, gasPrice: 10n ** 9n });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as Record<string, unknown>;
+    expect(d.type).toBe("legacy");
+    expect(d.txChainId).toBe(1);
+    expect((d.signer as string).toLowerCase()).toBe(SIGNER.address.toLowerCase());
+    expect(d.toLabel).toBe("bundler3");
+    expect((d.gas as Record<string, unknown>).gasPrice).toBe("1000000000");
+  });
+
+  it("a pre-EIP-155 legacy tx (no chainId of its own) falls back to the supplied chain", async () => {
+    const signed = await SIGNER.signTransaction({ type: "legacy", nonce: 13, to: MAINNET_DEPLOYMENT.bundler3, value: 0n, gas: 21_000n, gasPrice: 10n ** 9n });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok"); // no chainId of its own ⇒ nothing to contradict, no conflict
+    const d = env.data as Record<string, unknown>;
+    expect(d.txChainId).toBeNull();
+    expect(d.chainId).toBe(42161);
+    expect((d.signer as string).toLowerCase()).toBe(SIGNER.address.toLowerCase());
+  });
+
+  it("decodes an eip2930 (0x01 envelope) tx", async () => {
+    const signed = await SIGNER.signTransaction({ type: "eip2930", chainId: 1, nonce: 14, to: MAINNET_DEPLOYMENT.bundler3, value: 0n, gas: 21_000n, gasPrice: 10n ** 9n, accessList: [] });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as Record<string, unknown>;
+    expect(d.type).toBe("eip2930");
+    expect((d.signer as string).toLowerCase()).toBe(SIGNER.address.toLowerCase());
+    expect(d.toLabel).toBe("bundler3");
   });
 
   it("rejects unsigned or undecodable bytes as teachable invalid input", async () => {
