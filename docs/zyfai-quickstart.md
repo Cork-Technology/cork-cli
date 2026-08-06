@@ -232,7 +232,7 @@ ch compute --chainid 42161 --input '{"params":{…same…}}' --json
                   "rateChangeCapacityMax": "3076810246161871056" },
   "scales": { "constraint": "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" } }
 ```
-In plain English, for the **liquidity** recipe (anchor = the oracle rate at resolve time, ~1.0256
+Decoded, for the **liquidity** recipe (anchor = the oracle rate at resolve time, ~1.0256
 here): the market's tracked rate may fall all the way to 1 wei (`rateMin: 1` — the cover never
 stops paying out on the way down), may never exceed twice the anchor (`rateMax`), and may move at
 most one whole anchor per day (`rateChangePerDayMax`) with a total budget of three
@@ -403,7 +403,8 @@ Conventions the live flow uses (all observable in the venue's open RFQs):
 - **Pin an exact expiry** by setting `notBefore = notAfter - 1` (live RFQs do exactly this).
 - **`marketTemplate.inline.oracle_recipe` carries the recipe's contract address** — this field is
   the bridge from quote to order, so both sides must put the address here for the quote to be
-  executable.
+  executable. The venue stores it as unchecked free text: a mistyped address still posts and fails
+  only at fill time, so copy it from `registry-recipes`, never type it.
 - You sign the RFQ with your own stack; `ch submit` only relays — it never signs.
 
 Then watch for answers — this is also how you'd browse what others are asking:
@@ -520,8 +521,20 @@ the same transaction. What to check:
 - **If the prepare warns `jit_side_mismatch` / `stale_share_prediction`, stop** — that resting order
   is dead (its predicted cST address was consumed by another market's creation; the warning names
   the consuming pool). Pick a fresher order; filling it would revert `OrderNotForPool`.
+- Stale book rows are refused outright: before building fill bytes, the tool reads the order's
+  on-chain 1inch invalidator and rejects rows that are already filled or cancelled
+  (`status_mismatch`). The book has served dead rows before; chain outranks it.
+- Some SELL rows carry a **decaying premium** (an auction: the taker price starts above the signed
+  floor and falls toward it over a window). `taker-fill` detects these automatically, defaults your
+  cap to the curve's ceiling so the artifact stays valid whenever you broadcast, and reports
+  `data.auction` (current/ceiling/floor) with a `decaying_price_notice` — re-price and simulate
+  close to broadcast time.
 - Before broadcasting: set the CA allowance (§5, item C) and pin the fill target to the Safe
-  (§5, item A).
+  (§5, item A). Or build through your deployed adapter instead: `taker-fill` with
+  `--forself '{"adapter":"0xYOUR_ADAPTER","poolId":"0x…"}'` emits `fillOrderForSelf`, where the
+  target is structurally forced to the caller and taker interactions are impossible. (The tool
+  verifies the adapter's on-chain bindings first and hard-refuses a mismatched or code-less
+  address — your wallet is about to grant it an allowance.)
 
 <details>
 <summary><b>Variation — resting your own BUY order instead</b> (available-but-verify; expand)</summary>
@@ -530,10 +543,15 @@ You can invert the trade: post a signed BUY (makerAsset = CA, takerAsset = the p
 `ch prepare orders` → `maker-order`, submit it with `ch submit`, and wait for a supply-side filler
 to lift it — the book has carried real BUY rows shaped exactly like this, including for the market
 derived in step 1c. Since 2.1.0 the taker-side JIT interaction can create the market and mint
-inside the lift, so this works even for a not-yet-created market. It's still the road less traveled
-for the pilot: you depend on a filler showing up, and your resting order is exposed to the
-shares-address race (step 2's dead-row warning applies to you then). Fill Bond's SELL (above) as
-the default; confirm the BUY path with Cork before relying on it.
+inside the lift, so this works even for a not-yet-created market — the amounts ratio is the premium
+you're offering, `expirySeconds` bounds the order, and the Safe (as maker) structurally receives
+the cST. Safe makers are first-class: order finalization and venue submission verify the ERC-1271
+signature with the same `isValidSignature` staticcall the fill performs, and `ch submit`
+cross-checks your listing premium against the cited RFQ option, refusing an obvious
+percent-vs-fraction mix-up. It's still the road less traveled for the pilot: you depend on a filler
+showing up, and your resting order is exposed to the shares-address race (step 2's dead-row warning
+applies to you then). Fill Bond's SELL (above) as the default; confirm the BUY path with Cork
+before relying on it.
 
 </details>
 
@@ -556,7 +574,12 @@ ch prepare phoenix 42161 --json \
 Build with `--rpc-url <your node>` so the funding legs resolve — without an explicit RPC the bundle
 still builds, but with `fundingLegs: 0` and a `funding_needs_rpc` warning (funding-leg resolution is
 deliberately offline by default). Then sign with your Safe stack, routing the call through your
-`*ForSelf` adapter so `receiver` is forced to the Safe (§5, item A). Keep in mind:
+`*ForSelf` adapter so `receiver` is forced to the Safe (§5, item A).
+
+Once that adapter is deployed, skip the routing step and build the twin call directly: add
+`--forself '{"adapter":"0xYOUR_ADAPTER"}'` and the artifact becomes a single `exerciseForSelf`
+transaction — no Bundler3 legs, output structurally to the Safe, allowances to the adapter (each
+flow's exact allowance needs are machine-readable in `data.forSelf.allowances`). Keep in mind:
 - `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-check the preview at
   send time, and treat a zero preview as *unavailable*, not free (§5, item D).
 - A REF pause blocks the REF transfer — i.e. the exercise leg itself — so keep positions small and
@@ -670,22 +693,8 @@ you broadcast), and broadcasting through your own RPC.
   labels; do not assume 18 decimals** (dUSDC REF is 6-dec while sUSDe CA is 18-dec).
 
 **Trust posture in one line:** everything you need for the four-step flow is live and verified
-against chain — and whatever you run, **simulate before, reconcile after**. The tool self-reports
-its own maturity; details if you want them:
-
-<details>
-<summary>How the tool reports its own maturity (expand)</summary>
-
-`cork_capabilities` returns a per-tool / per-variant map with three states: `activated` = live and
-verified against chain; `implemented` = code-complete and locally verified, awaiting a
-live-milestone flip (not a code gap); `specified` = designed, not built (returns `unavailable`).
-The read → derive → build → simulate → verify path is `activated` end to end, with the math ports
-checked **bit-exact, wei-for-wei** against on-chain reads. `submit` self-reports `implemented`
-today: code-complete, with real local pre-flight (it recomputes hashes and recovers your signature
-before relaying, idempotent by `clientRequestId`) — the map flips it to `activated` on the first
-venue-accepted live POST, i.e. the unproven part is the venue round-trip, not the relay logic.
-
-</details>
+against chain — and whatever you run, **simulate before, reconcile after**. (`ch capabilities`
+self-reports per-tool maturity, live, if you ever need the detail.)
 
 **RPC & secrets:** Arbitrum reads **work out of the box** (built-in default endpoints + a public
 fallback). Set `CORK_RPC_URL` only to use your own/faster node. Full-decentralized reads and order
@@ -736,12 +745,20 @@ the latest Phoenix build**, on two surfaces:
 **The fix is yours to own, and it's a pattern you already run.** Don't whitelist raw Cork methods.
 Deploy a small Zyfai-owned wrapper that forces the payout to the Safe — the same shape as your
 existing `*ForSelf` / AdapterProxy routes (`supplyForSelf`/`withdrawForSelf`/… for
-Aave/Morpho/Euler) — and whitelist *that* instead. **Cork will provide reference/example adapter
-code, but you audit, vet, and deploy it** — your users trust Zyfai, not Cork. One guardrail worth
-internalizing: *"Zyfai-owned" says who is accountable, not what makes it safe* — the wrapper is
-only safe if it actually forces the receiver, holds no funds of its own, and has been audited.
-(Cork can share the full analysis and on-chain evidence — the "Scope & Ownership" write-up — on
-request.)
+Aave/Morpho/Euler) — and whitelist *that* instead.
+
+**Cork's reference adapter now exists and is proven end-to-end.** `CorkForSelfAdapter`
+(`example/contracts` in this repo) is the `*ForSelf` twin of the whole surface: one address, 14
+entrypoints (the 13 pool actions plus `fillOrderForSelf`), custody-free (it pulls, spends, and
+sweeps back in a single transaction), every output structurally delivered to the calling Safe —
+**no receiver parameter exists anywhere on it** — every fill bound on-chain to a named Cork
+market, and all ERC-20 approvals go to the adapter itself, never to the LOP or the pool manager.
+It was exercised end-to-end on an Arbitrum fork against the real 1inch LOP, pool manager, and
+2.1.0 JIT adapter. **You still audit, vet, and deploy it** — your users trust Zyfai, not Cork —
+and the guardrail stands: *"Zyfai-owned" says who is accountable, not what makes it safe*; the
+wrapper is only safe because it structurally forces the receiver, holds nothing, and has been
+audited. (Cork can share the full analysis and on-chain evidence — the "Scope & Ownership"
+write-up — on request.)
 
 **B. Markets in this flow have their pool-level access whitelist turned OFF — by construction.**
 The just-in-time mint inside a fill is performed by Cork's adapter contract. A market created with
@@ -777,11 +794,11 @@ pilot positions small and monitor the REF's pause status.
 (`ch track simulate`) before signing and reconcile (`ch track` → `reconcile/orderHash`) after;
 chain outranks the indexer on any disagreement.
 
-**G. Addresses drift; read them live.** Pull the deployment from `ch query protocol-config`
-(Arbitrum today: poolManager `0x4d0ab673…`, corkAdapter `0xe9f364df…`, bundler3 `0x1FA4431b…`) and
-the registry stack from `ch query registry-assets` (MarketRegistry 2.1.0 at `0x47C3AF38…752D` —
-note the whole registry stack was redeployed 2026-07-31; anything you cached before then is stale).
-The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
+**G. Addresses drift; read them live.** Pull the deployment from `ch query protocol-config` and
+the registry stack from `ch query registry-assets` — the whole registry stack was redeployed
+2026-07-31, so anything cached before then is stale. Installed copies of the tool pick up
+redeployed addresses automatically within an hour (remote config), so reads need no update from
+you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
 
 ---
 
@@ -789,9 +806,10 @@ The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
 
 1. **Stand up the tool** — `claude mcp add` (or `ch` on PATH), confirm `cork_capabilities` returns 9
    tools. Optional: `CORK_RPC_URL` (own node), `ENVIO_API_TOKEN` (decentralized reads).
-2. **Deploy the receiver-forcing routes on your side** — extend your `*ForSelf`/AdapterProxy to cover
-   the Cork exercise/swap family and a target-pinned 1inch fill. Cork ships examples; you audit +
-   deploy.
+2. **Audit and deploy the receiver-forcing adapter** — Cork's reference `CorkForSelfAdapter` lives
+   in `example/contracts` (one address, 14 entrypoints covering the pool actions and the 1inch
+   fill); you audit, vet, and deploy it — or extend your own `*ForSelf`/AdapterProxy to the same
+   shape.
 3. **Load the whitelist** for the loop (your own AdapterProxy routes, not raw Cork): the 1inch
    fill route, `exercise`/`exerciseOther`, and the approvals (CA→LOP, REF→PoolManager).
 4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`market-predict`,
@@ -803,14 +821,16 @@ The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
 
 ---
 
-## 7. Finding the right command (and letting Claude Code find it)
+## 7. Finding the right command
 
-You don't have to memorize any of the commands above. The tool documents itself two ways, and — once
-the MCP server is installed — Claude Code can pick the command for you.
+You don't have to memorize any of the commands above: the tool documents itself two ways. And
+because the MCP tools and the CLI are the same core, **an MCP tool's input fields *are* the CLI's
+flags** — any MCP input object runs verbatim via `--input '<object>'`, so anything that can drive
+the MCP server (Claude Code included) can also hand you the exact `ch` line for a script.
 
 ### 7a. `--explain` — the exact contract for one command
 
-Every `ch <command>` accepts `--explain`. By default it prints a **plain-English contract** —
+Every `ch <command>` accepts `--explain`. By default it prints a **human-readable contract** —
 description plus a per-parameter breakdown with variants unfolded — then exits, no chain call. Add
 `--json` when you want the raw JSON schema instead:
 
@@ -863,35 +883,6 @@ The `search` result hands you example inputs you can paste straight into the com
 ```
 Lift the `input` object's fields straight onto the command line (`ch compute --chainid 42161
 --params '{…}'`) — or run the object verbatim with `ch compute --input '<that object>'`.
-
-### 7c. Ask Claude Code for the right command
-
-(The install itself is in §4 — the CLI and the MCP server are the same 9-tool core, so once
-`cork-defi` is registered, Claude Code can drive everything below.)
-
-Because the MCP tools and the CLI commands are the same core with identical input shapes, two things
-follow:
-1. You can ask Claude Code in plain language and it will call the right tool with the right
-   parameters.
-2. **An MCP tool's input fields *are* the CLI's flags.** The flag names are the schema's own field
-   names, and an MCP input object runs verbatim via `--input '<object>'` — so Claude Code can hand
-   you the exact `ch …` line (flags or blob form) to drop into a script, and any input blob you
-   have works as an MCP call unchanged.
-
-Example prompts, with the `cork-defi` server installed:
-
-> "Using cork-defi, derive the sUSDe / dUSDC market on Arbitrum that expires in 7 days, and give
-> me the poolId and cST address."
-
-> "What's the `ch` command to build an unsigned exercise bundle — 1000 cST out of pool
-> `0x…`, receiver my Safe `0x…`?"
-
-> "List the Cork registry recipes on Arbitrum and explain the difference between the fixed and
-> liquidity recipes for my cover."
-
-Claude Code will call `cork_query` / `cork_compute` / `cork_prepare_phoenix` as needed, and can print
-the equivalent `ch` line because the payloads are identical. When in doubt, start it with
-*"call `cork_capabilities` first"* so it grounds itself in the live tool/variant list before acting.
 
 ---
 
