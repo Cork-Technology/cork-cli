@@ -22,5 +22,5 @@
     "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
     "directory": "packages/mcp"
   },
-  "dependencies": { "@cork/core": "workspace:*", "@cork/schemas": "workspace:*", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" }
+  "dependencies": { "@cork/core": "workspace:*", "@cork/schemas": "workspace:*", "@modelcontextprotocol/sdk": "1.29.0", "zod": "4.4.3" }
 }

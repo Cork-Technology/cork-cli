@@ -1,0 +1,5 @@
+[install]
+# Supply-chain posture: every dependency is pinned to an exact version (no ranges),
+# so a compromised patch release cannot enter through a routine reinstall. `bun add`
+# saves exact versions; upgrades are deliberate edits reviewed like code.
+exact = true

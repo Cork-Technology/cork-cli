@@ -21,5 +21,5 @@
     "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
     "directory": "packages/core"
   },
-  "dependencies": { "@cork/schemas": "workspace:*", "viem": "^2.21.0", "zod": "^4.0.0" }
+  "dependencies": { "@cork/schemas": "workspace:*", "viem": "2.55.2", "zod": "4.4.3" }
 }

@@ -19,21 +19,21 @@
     "eval": "bun evals/run.ts"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.112.3",
-    "@types/node": "^22.10.0",
-    "@vitest/coverage-v8": "2",
-    "ajv": "^8.17.1",
-    "fast-check": "^4.9.0",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "@anthropic-ai/sdk": "0.112.3",
+    "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "2.1.9",
+    "ajv": "8.20.0",
+    "fast-check": "4.9.0",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "commander": "^12.1.0",
-    "viem": "^2.21.0",
-    "zod": "^4.0.0"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "commander": "12.1.0",
+    "viem": "2.55.2",
+    "zod": "4.4.3"
   },
   "optionalDependencies": {
-    "@envio-dev/hypersync-client": "^1.4.0"
+    "@envio-dev/hypersync-client": "1.4.0"
   }
 }

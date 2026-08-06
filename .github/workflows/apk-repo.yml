@@ -237,5 +237,8 @@ jobs:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
           test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY secret is not set — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
-          npm install -g phala
+          # Exact-pinned + scripts disabled: this job holds PHALA_CLOUD_API_KEY, so a floating
+          # `latest` here would hand deploy credentials to whoever ships the next phala release.
+          # Bump deliberately, next to the lockfile pins.
+          npm install -g --ignore-scripts phala@1.1.20
           phala deploy -c phala-compose.deploy.yml -n cork-mcp --wait
