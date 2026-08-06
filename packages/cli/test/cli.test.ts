@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TOOL_EXAMPLES } from "@cork/schemas";
 import { EXIT, runCli } from "@cork/cli";
 
 const NOW = 1_800_000_000n;
@@ -92,6 +93,35 @@ describe("ch CLI", () => {
     );
     expect(r.code).toBe(EXIT.ok);
     expect(JSON.parse(r.stdout).data.chainId).toBe(42161);
+  });
+
+  it("a $ref-typed string field takes a raw flag value — `--account 0x…` without JSON quoting", async () => {
+    // account is `$ref: Address` in the schema; before $ref resolution it mis-classified as a
+    // JSON flag and demanded `--account '"0x…"'`. authority-revoke is pure byte-building (offline).
+    const r = await runCli(
+      ["prepare", "phoenix", "1", "--account", RCV, "--clientrequestid", "req-00000002", "--action", JSON.stringify({ type: "authority-revoke", token: RCV, spender: RCV }), "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.stderr).not.toContain("invalid_json");
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).state).toBe("ok");
+  });
+
+  it("a union-typed field accepts a raw non-JSON string — `--data 0x…` on decode", async () => {
+    // decode's data is hex-string-or-object; a bare 0x value must pass through as a string
+    // instead of dying at the flag layer with invalid_json.
+    const calldata = TOOL_EXAMPLES["cork_decode"]!.find((e) => (e.input as { kind?: string }).kind === "calldata")!.input as { data: string };
+    const r = await runCli(["decode", "calldata", "--data", calldata.data, "--chainid", "1", "--json"], { nowSeconds: NOW });
+    expect(r.stderr).not.toContain("invalid_json");
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).state).toBe("ok");
+  });
+
+  it("a malformed JSON-looking flag value still fails loud with invalid_json", async () => {
+    const r = await runCli(["query", "rfqs", "--filters", "{not json", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("invalid_json");
+    expect(r.stderr).toContain("expects JSON");
   });
 
   it("invalid JSON input → exit 2", async () => {

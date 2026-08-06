@@ -59,6 +59,22 @@ interface SchemaNode {
   description?: string;
   properties?: Record<string, SchemaNode>;
   required?: string[];
+  $ref?: string;
+  $defs?: Record<string, SchemaNode>;
+}
+
+/**
+ * Resolve a `$ref` into its `$defs` target so classification sees the concrete shape.
+ * A field like `account: { $ref: "#/$defs/Address" }` IS a string (pattern-checked) —
+ * without resolution it mis-classifies as a JSON flag and `--account 0x…` demands quoting.
+ * Local keys (description) win over the target's; depth-capped for $ref-of-$ref chains.
+ */
+function resolveNode(node: SchemaNode, defs: Record<string, SchemaNode>, depth = 0): SchemaNode {
+  if (!node.$ref || depth >= 3) return node;
+  const target = defs[node.$ref.replace("#/$defs/", "")];
+  if (!target) return node;
+  const { $ref: _drop, ...local } = node;
+  return resolveNode({ ...target, ...local }, defs, depth + 1);
 }
 
 /** Flag spelling for a schema property: lowercased, so `chainId` answers to `--chainid`. */
@@ -168,7 +184,8 @@ export async function runCli(
   for (const tool of REGISTRY) {
     const parent = tool.cliPath.length > 1 ? groupFor(tool.cliPath[0]!) : program;
     const schema = inputJsonSchema(tool.name) as SchemaNode;
-    const props = schema?.properties ?? {};
+    const defs = schema?.$defs ?? {};
+    const props = Object.fromEntries(Object.entries(schema?.properties ?? {}).map(([k, n]) => [k, resolveNode(n, defs)]));
     const required = schema?.required ?? [];
     // One positional, for the first required scalar — `ch query market`, `ch decode calldata`.
     const positional = required.find((r) => props[r] && isScalarNode(props[r]!));
@@ -245,6 +262,15 @@ export async function runCli(
         try {
           input[name] = parseJsonPrecise(String(supplied));
         } catch (e) {
+          // A value that never LOOKED like JSON (no {, [ or " lead) is a plain string for a
+          // union-typed field — e.g. `--data 0xdeadbeef` on decode, whose schema is hex-or-object.
+          // Pass it through and let schema validation judge it; only a malformed attempt at a
+          // JSON structure keeps the parse error, which is the more actionable message there.
+          const lead = String(supplied).trimStart()[0];
+          if (lead !== "{" && lead !== "[" && lead !== '"') {
+            input[name] = String(supplied);
+            continue;
+          }
           const payload = { error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(name)} expects JSON: ${(e as Error).message}` } };
           err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
           code = EXIT.invalid;
