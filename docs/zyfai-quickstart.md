@@ -86,8 +86,9 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   **sUSDe / dUSDC** market derived in step 1c — that market doesn't exist yet, so run the derivation
   yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real and
   runnable today.
-- Commands pipe to **`| jq .`** only to pretty-print the JSON — `ch` already emits indented JSON, so
-  drop the pipe if you don't have `jq` installed.
+- Passing input via **`--json`** is what makes `ch` emit JSON (already indented — the `| jq .`
+  pipes are cosmetic; drop them if you don't have `jq`). A bare command without `--json` prints a
+  human-readable prose rendering instead.
 
 The pair used throughout, for reference:
 
@@ -257,8 +258,23 @@ ch query --json '{"resource":"orderbook","chainId":42161,"filters":{"poolId":"0x
   "remainingMakingAmount": "100000000000000"
 } ] }
 ```
+(This row is live today for the same dUSDC/sUSDe pair — it executes the RFQ answer shown above.
+Its pinned expiry differs from our 7-day example derivation, so its `poolId` differs too; query
+with *your* poolId from step 1c.)
+
+The venue row carries the order's own struct fields (`salt`/`maker`/…/`extension`) verbatim — pass
+them straight to the decoder:
+
 ```sh
 ch decode --json '{"kind":"order","chainId":42161,"data":{…the signed order row…}}' | jq .
+```
+```jsonc
+{ "state": "ok", "data": { "jit": {          // decoded live from the row above
+  "generation": "2.1.0", "adapter": "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B",
+  "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0x444868B6…2c4D14",
+  "recipe": "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D",
+  "constraint": { "rateMin": "1", "rateMax": "2051135217108776914", /* … */ },
+  "enableJitMint": true, "permits": 1 } } }  // ← the fill WILL mint the cST just-in-time
 ```
 If step 1c showed `exists: false`, there may be no orders yet — you're the first mover, and Bond's
 SELL is the order whose first fill creates the market.
@@ -316,7 +332,9 @@ counterparty needed, so it works exactly when the market is stressed.
 ch prepare phoenix --json '{"chainId":42161,"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000"}}' | jq .
 ```
 Sign with your Safe stack, and route the call through your `*ForSelf` adapter so `receiver` is forced
-to the Safe (§5, item A). A few things to keep in mind:
+to the Safe (§5, item A). Run it with `--rpc-url <your node>` so the funding legs resolve — without
+an explicit RPC the bundle still builds, but with `fundingLegs: 0` and a `funding_needs_rpc` warning
+(funding-leg token resolution is deliberately offline-by-default). A few things to keep in mind:
 - `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-check the preview at
   send time, and treat a zero preview as *unavailable*, not free (§5, item D).
 - A REF pause blocks the REF transfer — i.e. the exercise leg itself — so keep positions small and
@@ -415,8 +433,10 @@ per-variant map with three states: `activated` = live and verified against chain
 code-complete and locally verified, awaiting a live-milestone flip (not a code gap); `specified` =
 designed, not built (returns `unavailable`). The read → derive → build → simulate → verify path is
 `activated` end to end, with the math ports checked **bit-exact, wei-for-wei** against on-chain
-reads; `submit`'s pre-flight recomputes hashes and recovers your signature locally before relaying,
-and is idempotent by `clientRequestId`.
+reads. `submit` self-reports `implemented` today: code-complete, with real local pre-flight (it
+recomputes hashes and recovers your signature before relaying, idempotent by `clientRequestId`) —
+the map flips it to `activated` on the first venue-accepted live POST, i.e. the unproven part is
+the venue round-trip, not the relay logic. Simulate before, reconcile after, as always.
 
 **RPC & secrets:** Arbitrum reads **work out of the box** (built-in default endpoints + a public
 fallback). Set `CORK_RPC_URL` only to use your own/faster node. Full-decentralized reads and order
@@ -519,12 +539,13 @@ the MCP server is installed — Claude Code can pick the command for you.
 
 ### 7a. `--explain` — the exact contract for one command
 
-Every `ch <command>` accepts `--explain`. It prints that command's description and full input JSON
-schema, then exits — no chain call. Use it when you know the command and want the precise parameter
-shape.
+Every `ch <command>` accepts `--explain`. By default it prints a **plain-English contract** —
+description plus a per-parameter breakdown with variants unfolded — then exits, no chain call. Add
+`--json` when you want the raw JSON schema instead:
 
 ```sh
-ch compute --explain | jq .
+ch compute --explain            # human-readable contract
+ch compute --explain --json | jq .   # the raw JSON schema
 ```
 ```jsonc
 {
@@ -551,7 +572,8 @@ decimal string), so you rarely have to guess a value's shape.
 `capabilities` is the whole manual in one command:
 
 ```sh
-ch capabilities | jq .                                   # maturity of every tool + variant (what's live vs gated)
+ch capabilities                                          # human summary; add --json for the machine-readable map
+ch capabilities --json | jq .                            # maturity of every tool + variant (what's live vs gated)
 ch capabilities --json '{"topic":"compute"}' | jq .      # full docs for one tool
 ch capabilities --json '{"topic":"signing"}' | jq .      # the sign→validate→broadcast guide for prepared artifacts
 ch capabilities --json '{"search":"swap rate"}' | jq .   # keywords -> matching tool/variant + ready-to-run examples
