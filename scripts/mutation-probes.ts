@@ -791,6 +791,51 @@ const CATALOG: Mutant[] = [
     replace: "const flagBase = undefined as unknown;",
     tests: [T.cli],
   },
+  {
+    // Singular resource alias dropped: `ch query rfq` would fail the resource enum instead of
+    // reading the rfqs feed.
+    id: "cli-resource-alias-dropped",
+    file: "packages/cli/src/app.ts",
+    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };',
+    replace: "const RESOURCE_ALIASES: Record<string, string> = {};",
+    tests: [T.cli],
+  },
+  {
+    // Top-level verb mapped to the wrong variant: `ch fill` would build cancel calldata instead
+    // of a taker fill — same flags, catastrophically different bytes.
+    id: "cli-verb-variant-swapped",
+    file: "packages/cli/src/app.ts",
+    find: 'cork_prepare_orders: (v) => (v === "taker-fill" ? "fill" : undefined),',
+    replace: 'cork_prepare_orders: (v) => (v === "cancel" ? "fill" : undefined),',
+    tests: [T.cli],
+  },
+  {
+    // Authority ops leaking to the top level: `ch authority-onboard` would become a program verb,
+    // flattening the deliberate namespacing of allowance-granting commands.
+    id: "cli-verb-authority-leaked",
+    file: "packages/cli/src/app.ts",
+    find: 'cork_prepare_phoenix: (v) => (v.startsWith("authority-") ? undefined : v),',
+    replace: "cork_prepare_phoenix: (v) => v,",
+    tests: [T.cli],
+  },
+  {
+    // Filter flags written to the input root instead of filters.*: every flag would become an
+    // unknown top-level key and the read would run unfiltered or fail obscurely.
+    id: "cli-filter-flags-unnested",
+    file: "packages/cli/src/app.ts",
+    find: "filters[k] = String(supplied);",
+    replace: "input[k] = String(supplied);",
+    tests: [T.cli],
+  },
+  {
+    // Blob-vs-flag precedence inverted for filters: a stale --filters blob key would silently win
+    // over the explicitly typed flag.
+    id: "cli-filter-flag-precedence-inverted",
+    file: "packages/cli/src/app.ts",
+    find: "if (touched) input[\"filters\"] = filters;",
+    replace: "if (touched && input[\"filters\"] === undefined) input[\"filters\"] = filters;",
+    tests: [T.cli],
+  },
   // ── circuit breaker (breaker.ts — ONE state machine shared by RPC resolver + venue transport):
   //    the boundary comparators decide when a subsystem stops burning timeouts on a dead
   //    upstream, and both consumers inherit a drift here silently ────────────────────────────

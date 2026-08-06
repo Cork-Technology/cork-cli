@@ -31,8 +31,14 @@ Bun 1.3 is pinned in `mise.toml`.
     wire form. `--chain-id` also takes network names (mainnet/ethereum/arbitrum/base/sepolia). Help
     displays kebab flag spellings (`--client-request-id`); an --action/--params blob given WITH a
     variant subcommand merges as the base (variant flags override, discriminator still injected);
-    a mistyped action gets a levenshtein did-you-mean refusal pre-parse. All mutation-probed
-    (`cli-variant-*`, `cli-amount-*`, `cli-chain-name-wrong`).
+    a mistyped action gets a levenshtein did-you-mean refusal pre-parse. The 13 pool actions +
+    `fill` are ALSO top-level verbs (`ch exercise …` = `ch prepare pool exercise …`, `ch fill …`
+    = `ch prepare order taker-fill …`; authority ops stay namespaced). On `ch query`, every
+    KNOWN_FILTER_KEYS key is a first-class flag merging INTO `filters` (`--pool-id`, `--rfq-id`,
+    `--status` …; flags override the same key in a `--filters` blob; a key colliding with a
+    top-level field, i.e. `mode`, stays blob-only), and the resource accepts the singular `rfq`
+    for `rfqs`. All mutation-probed (`cli-variant-*`, `cli-amount-*`, `cli-chain-name-wrong`,
+    `cli-verb-*`, `cli-filter-flag*`, `cli-resource-alias-dropped`).
   - **Output** is prose by default, JSON on request: a bare `--json`, or `CORK_JSON=1`. Passing input
     as `--json '<object>'` also yields JSON, which is why every pre-existing scripted example works.
     Results/errors render via `packages/cli/src/render.ts`.

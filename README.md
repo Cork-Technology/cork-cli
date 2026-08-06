@@ -207,6 +207,15 @@ ch compute rollover-premium-floor --dst-cst-produced 1000e18 --min-premium-per-s
 ch prepare pool exercise --chain-id 42161 --pool-id 0x… --cst-shares-in 1000e18 \
   --receiver 0x… --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
 
+# the pool actions + fill are also top-level verbs — the same command, flatter:
+ch exercise --chain-id 42161 --pool-id 0x… --cst-shares-in 1000e18 --receiver 0x… \
+  --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
+ch fill --chain-id 42161 --order-hash 0x… --account 0x…
+
+# on ch query, known filter keys are first-class flags (and `rfq` reads the rfqs feed):
+ch query orderbook --chain-id 42161 --pool-id 0x…
+ch query rfq --chain-id 42161 --rfq-id rfq_…
+
 # the same fields can ride in one JSON blob (flags override blob keys); bare --json = JSON output
 ch query protocol-config --input '{"chainId":42161}' --json
 
@@ -234,7 +243,7 @@ which is usually what you want by hand — every discriminated action/kind is it
 variant-scoped `--help`/`--explain`:
 
 ```sh
-ch query market --chain-id 1 --filters '{"poolId":"0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05"}'
+ch query market --chain-id 1 --pool-id 0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05
 ```
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag

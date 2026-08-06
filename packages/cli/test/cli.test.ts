@@ -417,3 +417,80 @@ describe("amount sugar (exact, no floats)", () => {
     expect(r.code).toBe(EXIT.invalid); // schema pattern rejects the sugar inside the blob
   });
 });
+
+describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", () => {
+  const MAINNET_POOL = "0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05";
+
+  it("ch exercise is a top-level verb equal to prepare pool exercise", async () => {
+    const r = await runCli(
+      ["exercise", "--chain-id", "1", "--account", RCV, "--client-request-id", "verb-0001", "--pool-id", POOL, "--cst-shares-in", "1000e18", "--receiver", RCV, "--min-collateral-assets-out", "1", "--max-reference-assets-in", "1000000", "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(EXIT.ok);
+    const env = JSON.parse(r.stdout);
+    expect(env.state).toBe("ok");
+    expect(env.data.action).toBe("safeExercise");
+  });
+
+  it("root help lists the pool verbs and fill; verbs advertise their canonical spelling", async () => {
+    const r = await runCli(["--help"], { nowSeconds: NOW });
+    for (const verb of ["mint", "deposit", "swap", "exercise", "redeem", "withdraw", "unwind-swap", "fill"]) {
+      expect(r.stdout).toMatch(new RegExp(`^  ${verb} `, "m"));
+    }
+    // Root-list descriptions wrap; the canonical-spelling pointer shows in the verb's own help.
+    const h = await runCli(["exercise", "--help"], { nowSeconds: NOW });
+    expect(h.stdout).toContain("(= ch prepare pool exercise)");
+    const hf = await runCli(["fill", "--help"], { nowSeconds: NOW });
+    expect(hf.stdout).toContain("(= ch prepare order taker-fill)");
+  });
+
+  it("ch fill --explain documents taker-fill under the canonical path", async () => {
+    const r = await runCli(["fill", "--explain"], { nowSeconds: NOW });
+    expect(r.stdout).toContain("ch prepare order taker-fill");
+    expect(r.stdout).toContain("taker-fill");
+  });
+
+  it("authority ops stay namespaced — no top-level authority-onboard", async () => {
+    const r = await runCli(["authority-onboard", "--chain-id", "1"], { nowSeconds: NOW });
+    expect(r.code).not.toBe(EXIT.ok);
+    expect(r.stderr).toContain("unknown command");
+  });
+
+  it("ch query rfq reads the rfqs feed (singular alias, flag and positional)", async () => {
+    const seen: string[] = [];
+    const venueFetch = async (url: string): Promise<Response> => {
+      seen.push(url);
+      return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const r = await runCli(["query", "rfq", "--json"], { nowSeconds: NOW, venueFetch });
+    expect(r.code).toBe(EXIT.ok);
+    expect(JSON.parse(r.stdout).data.resource).toBe("rfqs");
+    expect(seen.some((u) => u.includes("/rfqs"))).toBe(true);
+  });
+
+  it("filter keys are first-class flags landing under filters.*", async () => {
+    // A malformed value fails at filters.poolId — proof the flag routed INTO filters.
+    const r = await runCli(["query", "orderbook", "--chain-id", "1", "--pool-id", "notahex", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    const payload = JSON.parse(r.stderr);
+    expect(payload.error.code).toBe("invalid_input");
+    expect(JSON.stringify(payload.error.issues)).toContain("filters");
+  });
+
+  it("a filter flag overrides the same key in a --filters blob", async () => {
+    const r = await runCli(
+      ["query", "orderbook", "--chain-id", "1", "--filters", JSON.stringify({ poolId: MAINNET_POOL }), "--pool-id", "notahex", "--json"],
+      { nowSeconds: NOW },
+    );
+    expect(r.code).toBe(EXIT.invalid);
+    expect(JSON.stringify(JSON.parse(r.stderr).error.issues)).toContain("poolId");
+  });
+
+  it("--mode on query stays the TOP-LEVEL data mode, never filters.mode", async () => {
+    // "price" is a valid filters.mode but NOT a data mode — binding to the top level must reject it.
+    const r = await runCli(["query", "registry-oracle", "--chain-id", "42161", "--mode", "price", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(JSON.stringify(JSON.parse(r.stderr).error.issues)).toContain("mode");
+  });
+});

@@ -18,7 +18,7 @@
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
 import { REGISTRY, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
-import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
 import { runSelfUpdate } from "./self-update.ts";
@@ -156,6 +156,16 @@ function levenshtein(a: string, b: string): number {
 
 /** Old variant spellings kept routable after a rename (schema advertises only the new name). */
 const VARIANT_ALIASES: Record<string, string[]> = { "deploy-oracle": ["deploy-wrapper"] };
+
+/** Singular resource spellings accepted at the CLI: `ch query rfq …` reads the rfqs feed. */
+const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };
+
+/** Pool actions + fill are also TOP-LEVEL verbs: `ch exercise …` = `ch prepare pool exercise …`,
+ *  `ch fill …` = `ch prepare order taker-fill …`. The authority ops stay namespaced. */
+const TOP_LEVEL_VERBS: Record<string, (variant: string) => string | undefined> = {
+  cork_prepare_phoenix: (v) => (v.startsWith("authority-") ? undefined : v),
+  cork_prepare_orders: (v) => (v === "taker-fill" ? "fill" : undefined),
+};
 
 /** Network-name shorthand for chainId values: arbitrum → 42161. */
 const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbitrum: "42161", base: "8453", sepolia: "11155111" };
@@ -382,6 +392,21 @@ export async function runCli(
       fieldOption(cmd, cmdRegistered, name, node);
     }
 
+    // cork_query: every known filters key rides as a first-class flag (`--pool-id`, `--rfq-id`,
+    // `--status` …) merging INTO filters — the escaped-JSON `--filters` blob stays available and
+    // the flags override its keys. A key colliding with a top-level field (mode) stays blob-only.
+    const filterFlagKeys: string[] =
+      tool.name === "cork_query"
+        ? (KNOWN_FILTER_KEYS as readonly string[]).filter(
+            (k) => !(k in props) && !RESERVED.has(canonicalise(flagFor(k))) && !cmdRegistered.has(flagFor(k)),
+          )
+        : [];
+    for (const k of filterFlagKeys) {
+      cmdRegistered.add(flagFor(k));
+      cmd.option(`--${flagFor(k)} <value>`, `filters.${k}`);
+      knownFlags.set(canonicalise(flagFor(k)), flagFor(k));
+    }
+
     /** One action body for the parent AND every variant subcommand (closure over out/err/code). */
     const makeAction = (variant?: UnionVariant) =>
       async (...args: unknown[]) => {
@@ -439,6 +464,7 @@ export async function runCli(
         const assign = (target: Record<string, unknown>, name: string, node: SchemaNode, supplied: unknown): boolean => {
           let rawStr = String(supplied);
           if (name === "chainId" && CHAIN_NAMES[rawStr.toLowerCase()] !== undefined) rawStr = CHAIN_NAMES[rawStr.toLowerCase()]!;
+          if (name === "resource" && RESOURCE_ALIASES[rawStr] !== undefined) rawStr = RESOURCE_ALIASES[rawStr]!;
           if (isAmountNode(node) && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
@@ -473,7 +499,12 @@ export async function runCli(
 
         // Then the ergonomic forms, which win over the JSON blob so a flag can override it.
         if (positional && positionalValue !== undefined) {
-          const posRaw = positional === "chainId" ? (CHAIN_NAMES[positionalValue.toLowerCase()] ?? positionalValue) : positionalValue;
+          const posRaw =
+            positional === "chainId"
+              ? (CHAIN_NAMES[positionalValue.toLowerCase()] ?? positionalValue)
+              : positional === "resource"
+                ? (RESOURCE_ALIASES[positionalValue] ?? positionalValue)
+                : positionalValue;
           input[positional] = coerce(props[positional]!, posRaw);
         }
         for (const [name, node] of Object.entries(props)) {
@@ -482,6 +513,22 @@ export async function runCli(
           const supplied = opts[name];
           if (supplied === undefined) continue;
           if (!assign(input, name, node, supplied)) return;
+        }
+
+        // Filter flags (cork_query): merge on top of any blob-supplied filters. Values stay raw
+        // strings — parseQueryFilters owns coercion (booleans accept "true"/"false").
+        if (filterFlagKeys.length > 0) {
+          const blobF = input["filters"];
+          const filters: Record<string, unknown> =
+            blobF && typeof blobF === "object" && !Array.isArray(blobF) ? { ...(blobF as Record<string, unknown>) } : {};
+          let touched = false;
+          for (const k of filterFlagKeys) {
+            const supplied = opts[k];
+            if (supplied === undefined) continue;
+            filters[k] = String(supplied);
+            touched = true;
+          }
+          if (touched) input["filters"] = filters;
         }
 
         // Variant subcommand: build the union object — a blob-supplied field is the base, the
@@ -584,6 +631,28 @@ export async function runCli(
           knownFlags.set(canonicalise(flagFor(name)), flagFor(name));
         }
         sub.action(makeAction(v));
+
+        // Top-level verb: pool actions + fill are also PROGRAM-level commands — `ch exercise …`
+        // = `ch prepare pool exercise …`, `ch fill …` = `ch prepare order taker-fill …`. Same
+        // flags, same action body; a name already taken at the top level is skipped (lint-tested).
+        const verb = TOP_LEVEL_VERBS[tool.name]?.(kebab(v.value));
+        if (verb !== undefined && !program.commands.some((c) => c.name() === verb || c.aliases().includes(verb))) {
+          const top = baseOptions(
+            program
+              .command(verb)
+              .description(`${firstSentence(v.description ?? verb)} (= ch ${tool.cliPath.join(" ")} ${kebab(v.value)})`),
+          );
+          const topRegistered = new Set<string>();
+          for (const [name, node] of Object.entries(props)) {
+            if (union.field === name) continue;
+            fieldOption(top, topRegistered, name, node);
+          }
+          for (const [name, node0] of Object.entries(v.props)) {
+            if (name === union.disc) continue;
+            fieldOption(top, topRegistered, name, resolveNode(node0, defs));
+          }
+          top.action(makeAction(v));
+        }
       }
     }
   }

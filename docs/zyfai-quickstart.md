@@ -94,9 +94,14 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   tool is its own subcommand with its own `--help` and `--explain` (`pool` and `order` are
   the canonical spellings; the MCP tool names keep the internal `phoenix`/`orders`, which the CLI
   still accepts as aliases), and a mistyped action gets a
-  did-you-mean instead of a cryptic error. Scalar fields are plain flags (spelling is forgiving:
-  `--pool-id`, `--poolid` and `--poolId` are one flag); object-valued fields take a JSON string
-  (`--filters '{…}'`, `--for-self '{…}'`); amount fields accept exact human sugar (`1000e18`,
+  did-you-mean instead of a cryptic error. The 13 pool actions and `fill` are also top-level
+  verbs — `ch exercise …` = `ch prepare pool exercise …`, `ch fill …` = `ch prepare order
+  taker-fill …`. Scalar fields are plain flags (spelling is forgiving:
+  `--pool-id`, `--poolid` and `--poolId` are one flag); on `ch query` every known filter key is
+  itself a flag (`--pool-id`, `--rfq-id`, `--status`, `--collateral-asset` … — no JSON needed;
+  `--filters '{…}'` still works, and a flag overrides the same key in the blob), and `ch query
+  rfq` is accepted for `rfqs`; other object-valued fields take a JSON string
+  (`--for-self '{…}'`); amount fields accept exact human sugar (`1000e18`,
   `95e16`, `1_000000` — expanded by integer math, never floats); `--chain-id` takes network names
   too (`arbitrum`, `mainnet`, `base`, `sepolia`).
 - **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
@@ -144,9 +149,8 @@ read you can run right now (all responses below were captured live).
 Look one asset up by address to see what the registry actually knows about it:
 
 ```sh
-ch query registry-assets --chain-id 42161 --json \
-  --filters '{"address":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
-# alternative — the rest in one --input blob:
+ch query registry-assets --chain-id 42161 --address 0x444868B6e8079ac2c55eea115250f92C2b2c4D14 --json
+# alternative — the same key in a filters blob:
 ch query registry-assets --chain-id 42161 --input '{"filters":{"address":"0x4448…4D14"}}' --json
 ```
 ```jsonc
@@ -209,8 +213,9 @@ This is the go/no-go check for a pair, before you think about terms:
 
 ```sh
 ch query registry-oracle --chain-id 42161 --json \
-  --filters '{"collateralAsset":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2","referenceAsset":"0x444868B6e8079ac2c55eea115250f92C2b2c4D14"}'
-# alternative — the rest in one --input blob:
+  --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
+  --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14
+# alternative — the same keys in a filters blob:
 ch query registry-oracle --chain-id 42161 --input '{"filters":{…same…}}' --json
 ```
 ```jsonc
@@ -363,7 +368,9 @@ cST/cPT addresses, oracle, and resolved constraint — before anything exists on
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
 ch query market-predict --chain-id 42161 --json \
-  --filters "{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}"
+  --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
+  --reference-asset 0x444868B6e8079ac2c55eea115250f92C2b2c4D14 \
+  --expiry "$EXP" --recipe 0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D
 # alternative — the rest in one --input blob (`--json` stays the bare output flag):
 ch query market-predict --chain-id 42161 --json \
   --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0x444868B6e8079ac2c55eea115250f92C2b2c4D14\",\"expiry\":\"$EXP\",\"recipe\":\"0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D\"}}"
@@ -430,8 +437,8 @@ Then watch for answers — this is also how you'd browse what others are asking:
 
 ```sh
 ch query rfqs --chain-id 42161                                    # all open RFQs
-ch query rfqs --chain-id 42161 --filters '{"rfqId":"rfq_…"}'      # one RFQ with all its answers
-# alternative — the rest in one --input blob:
+ch query rfq --chain-id 42161 --rfq-id 'rfq_…'                    # one RFQ with all its answers
+# alternative — the same key in a filters blob:
 ch query rfqs --chain-id 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
 ```
 
@@ -467,7 +474,7 @@ order's own bytes:
 
 ```sh
 ch query orderbook --chain-id 42161 --json \
-  --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
+  --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78
 # alternative:
 ch query orderbook --chain-id 42161 --json \
   --input '{"filters":{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}}'
@@ -516,12 +523,13 @@ for you. Three commands: re-verify, build, dry-run.
 ```sh
 # 1. re-verify the market on-chain (the book is discovery only)
 ch query market --chain-id 42161 --json \
-  --filters '{"poolId":"0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78"}'
+  --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
-ch prepare order taker-fill --chain-id 42161 --account 0xYOUR_SAFE --client-request-id buy-0001 --json \
+ch fill --chain-id 42161 --account 0xYOUR_SAFE --client-request-id buy-0001 --json \
   --order-hash 0x9cf3b9c9a331518beb88a417fa3075a66c78775ede1d4afafc17f13dadf2df05 \
   --fill-making-amount 100000000000000
+#    (`fill` is the top-level verb for `ch prepare order taker-fill` — both work)
 #    (alternative — the canonical wire blob behind the positional chainId:)
 ch prepare order 42161 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"buy-0001","action":{"type":"taker-fill","orderHash":"0x9cf3…df05","fillMakingAmount":"100000000000000"}}'
@@ -589,7 +597,7 @@ counterparty needed, so it works exactly when the market is stressed.
 ```sh
 # replace 0xYOUR_SAFE (used for both account and receiver); REF (dUSDC) is 6-dec, CA (sUSDe) 18-dec
 # amounts use exact sugar: 1000e18 cST in, floor 0.95 sUSDe out, at most 1 dUSDC (1_000000) in
-ch prepare pool exercise --chain-id 42161 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
+ch exercise --chain-id 42161 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
   --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78 \
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
   --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
@@ -627,8 +635,8 @@ a two-party trade, and the roles are easy to mix up:
 Find open rollover orders:
 
 ```sh
-ch query flows --chain-id 42161 --filters '{"kind":"orders"}'
-# alternative:
+ch query flows --chain-id 42161 --kind orders
+# alternative — the same key in a filters blob:
 ch query flows --chain-id 42161 --input '{"filters":{"kind":"orders"}}'
 ```
 ```text
@@ -695,7 +703,9 @@ Streamable HTTP endpoint with `/healthz` and `/docs/signing`.)
 
 **CLI:** put `bin/` on PATH → `ch <command> [action] [--flags…] [--json] [--rpc-url <url>]
 [--explain]`. Every action/kind is a subcommand with its fields as flags
-(`ch prepare pool exercise --pool-id … --cst-shares-in 1000e18`), amount fields take exact
+(`ch prepare pool exercise --pool-id … --cst-shares-in 1000e18`), the pool actions + `fill` are
+also top-level verbs (`ch exercise …`, `ch fill …`), query filter keys are flags
+(`ch query orderbook --pool-id …`), amount fields take exact
 human sugar (`1000e18`, `1_000000`), objects ride as JSON-string flag values, and the canonical
 wire blob (`--input '{…}'`) works everywhere; a bare `--json` switches the output from prose to
 the raw envelope. Runtime is **Bun** (pinned), not Node.
