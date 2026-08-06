@@ -69,6 +69,18 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
     expect((await client.listTools()).tools).toHaveLength(9);
   });
 
+  it("GET/DELETE /mcp are refused in stateless mode — 405 + Allow: POST (no dangling SSE streams)", async () => {
+    // The SDK transport would open a server-initiated SSE stream on GET even though a stateless
+    // per-request server can never push to it (verified empirically) — the handler refuses
+    // non-POST up front, using the spec's "MAY respond 405" allowance.
+    const handler = createHttpHandler({});
+    for (const method of ["GET", "DELETE"]) {
+      const res = await handler(new Request("http://cork.test/mcp", { method, headers: { accept: "application/json, text/event-stream" } }));
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("POST");
+    }
+  });
+
   it("healthz and /docs/signing serve without auth; unknown routes 404", async () => {
     const handler = createHttpHandler({ token: "sekrit" });
     const health = await handler(new Request("http://cork.test/healthz"));

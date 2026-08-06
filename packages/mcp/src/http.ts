@@ -1,9 +1,12 @@
 // Streamable HTTP projection of the same MCP server (Phase 2a of the remote-deploy plan). One
 // fetch handler (Request → Response) serves three routes:
-//   POST/GET/DELETE /mcp   — the MCP Streamable HTTP endpoint (SDK web-standard transport,
+//   POST /mcp              — the MCP Streamable HTTP endpoint (SDK web-standard transport,
 //                            STATELESS: sessionIdGenerator undefined + a fresh createCorkServer
 //                            per request — the SDK-recommended stateless shape; our dispatch is
-//                            stateless by construction, so no session state exists to lose)
+//                            stateless by construction, so no session state exists to lose).
+//                            GET/DELETE are refused 405 (spec allowance): with no sessions and
+//                            no server-initiated messages, a GET-opened SSE stream could only
+//                            dangle — connection-pinning waste on a public deployment.
 //   GET /healthz           — 200 + BUILD_VERSION (liveness for the container orchestrator)
 //   GET /docs/signing      — the DOC_TOPICS signing body as text/markdown (same constant as the
 //                            capabilities topic and the initialize instructions — zero drift)
@@ -49,6 +52,18 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
         return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "unauthorized: this deployment requires Authorization: Bearer <token>" }, id: null }), {
           status: 401,
           headers: { "content-type": "application/json", "www-authenticate": "Bearer" },
+        });
+      }
+      // Stateless means server-initiated streams cannot exist: each request gets a fresh server
+      // that dies with the response, so a GET-opened SSE stream would hang forever carrying
+      // nothing — pure resource waste (and a cheap way to pin connections on a public
+      // deployment). The SDK transport would happily open one (verified empirically), so GET and
+      // DELETE (session teardown — no sessions exist) are refused HERE with the spec's own
+      // escape hatch: "the server MAY respond 405 Method Not Allowed".
+      if (req.method !== "POST") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: `${req.method} is not served: this deployment is stateless (no server-initiated streams, no sessions) — POST JSON-RPC messages to this endpoint` }, id: null }), {
+          status: 405,
+          headers: { "content-type": "application/json", allow: "POST" },
         });
       }
       // Stateless mode: a fresh server + transport per request. tools/list and every handler are
