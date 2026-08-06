@@ -20,7 +20,7 @@ position into two ERC-20 legs:
 
 | Term | Meaning | Who holds it |
 |---|---|---|
-| **REF** | the asset your user is exposed to and wants cover on. Live RFQs currently cover **dUSDC** and **fUSDT**; the registry lists 11 approved assets — read the list, don't assume | the user |
+| **REF** | the asset your user is exposed to and wants cover on. The registry lists the approved assets — read the list, don't assume | the user |
 | **CA** | the liquid collateral asset paid out on cover (pilot: **sUSDe**, `0x211Cc4DD…5fE5d2`, 18 dec) | pool |
 | **cST** | the cover / "swap" token — right to swap REF→CA at the market's tracked rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token — the underwriter's leg + premium | **bond.credit (supply)** |
