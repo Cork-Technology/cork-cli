@@ -247,7 +247,7 @@ Conventions the live flow uses (all visible in today's open RFQs):
 Then watch for answers — this is also how you'd browse what others are asking:
 
 ```sh
-ch query rfqs --chainid 42161                                    # all open RFQs (17 open right now)
+ch query rfqs --chainid 42161                                    # all open RFQs
 ch query rfqs --chainid 42161 --filters '{"rfqId":"rfq_…"}'      # one RFQ with all its answers
 # alternative — filters in the blob instead of a flag:
 ch query rfqs --chainid 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
@@ -299,9 +299,11 @@ ch query orderbook --chainid 42161 --json \
   "remainingMakingAmount": "100000000000000"
 } ] }
 ```
-(This row is live today for the same dUSDC/sUSDe pair — it executes the RFQ answer shown above.
-Its pinned expiry differs from our 7-day example derivation, so its `poolId` differs too; query
-with *your* poolId from step 1c.)
+(A real row captured at the time of writing, for the same dUSDC/sUSDe pair — it executes the RFQ
+answer shown above; its pinned expiry differs from our 7-day example, hence a different `poolId`.
+**Never reuse a hash from a document**: the venue's re-quote loop cancels and reposts orders
+within hours — this very row died the same day it was captured. Query with *your* poolId from
+step 1c and pick a currently-OPEN row.)
 
 The venue row carries the order's own struct fields (`salt`/`maker`/…/`extension`) verbatim — pass
 them straight to the decoder:
@@ -455,7 +457,8 @@ partials; PartialSettler requires them).
 
 ## 4. `cork-mcp-cli` — the integration kit
 
-**One typed core, two surfaces.** The same 9-tool dispatch is exposed as an **MCP server** (stdio)
+**One typed core, two surfaces.** The same 9-tool dispatch is exposed as an **MCP server** (stdio
+or Streamable HTTP)
 and a **CLI** (`ch`). It reads live chain + venue state, runs Cork's math **bit-exact** (ported and
 verified wei-for-wei against on-chain reads), and **builds unsigned bytes/typed-data**. It **never
 signs, never custodies, never broadcasts** — the one side-effecting tool only relays a payload *you*
@@ -463,10 +466,13 @@ already signed to the venue.
 
 **Install (MCP):**
 ```sh
-claude mcp add cork-defi -- "$(which bun)" /path/to/cork-helper-cli/packages/mcp/src/bin.ts
+# from a clone of github.com/Cork-Technology/cork-cli
+claude mcp add cork-defi -- "$(which bun)" /path/to/cork-cli/packages/mcp/src/bin.ts
 # health check — a good install returns exactly 9 tools:
 #   call cork_capabilities with no args
 ```
+(The same server also runs from the built binary — `ch mcp` for stdio, `ch mcp --http` for a
+Streamable HTTP endpoint with `/healthz` and `/docs/signing`.)
 **CLI:** put `bin/` on PATH → `ch <command> [positional] [--flags…] [--json] [--rpc-url <url>]
 [--explain]`. Input goes in as flags named after the schema's own fields (objects as JSON-string
 flag values), or as one blob via `--input '{…}'`; a bare `--json` switches the output from prose to
@@ -677,8 +683,8 @@ The CLI and the MCP server are the **same 9-tool core** — install the server t
 Code (or any MCP client) instead of the shell:
 
 ```sh
-# from the cloned repo; use an ABSOLUTE bun path so the spawned server can find it
-claude mcp add cork-defi -- "$(which bun)" /ABSOLUTE/PATH/TO/cork-helper-cli/packages/mcp/src/bin.ts
+# from a clone of github.com/Cork-Technology/cork-cli; ABSOLUTE bun path so the spawned server finds it
+claude mcp add cork-defi -- "$(which bun)" /ABSOLUTE/PATH/TO/cork-cli/packages/mcp/src/bin.ts
 
 # health check — expect: cork-defi … ✓ Connected
 claude mcp list

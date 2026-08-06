@@ -1,4 +1,4 @@
-# cork-helper-cli
+# cork-cli
 
 TypeScript monorepo implementing the Cork Phoenix **MCP server + CLI over one typed core**
 (RFC 011). All 9 tools are live across phases 1–4 — state reads, bit-exact math, byte decode,
