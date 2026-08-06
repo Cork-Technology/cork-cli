@@ -54,7 +54,7 @@
       "name": "cork_prepare_phoenix",
       "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
       "descriptionTokensApprox": 222,
-      "inputSchemaSha256": "1617850c31fc704432068fa09adca838e73eb8789f735f1560f844e276263eb6",
+      "inputSchemaSha256": "e8f3a1b684e25447a896a7b7322d6ca035c4971f6ad255c29bd1ce129eec2f48",
       "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
       "annotations": {
         "title": "Cork: build unsigned Phoenix bundle",
@@ -66,7 +66,7 @@
       "name": "cork_prepare_orders",
       "description": "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit. Example — Signable maker order: sell 1 sUSDe for 1 vbUSDC: {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-order-0001\",\"action\":{\"type\":\"maker-order\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"side\":\"SELL\",\"makerAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"takerAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"makingAmount\":\"1000000000000000000\",\"takingAmount\":\"1000000\",\"expirySeconds\":3600}}",
       "descriptionTokensApprox": 172,
-      "inputSchemaSha256": "107968e6fdb2eec1ebaa09628b23cda6003ff6b04ceb608a9af60fe9f4519c1d",
+      "inputSchemaSha256": "c90db090669a94f01f55fc4faba9a366ac32f51c1e5c791c474976b4a631ca96",
       "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
       "annotations": {
         "title": "Cork: build signable order",
