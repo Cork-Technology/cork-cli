@@ -7,7 +7,7 @@ below were read live from chain; still, **treat this doc as orientation and pull
 values from the tool** (`ch query protocol-config`), never hardcode them.
 
 This is a two-part handoff: (1) a compact model of what Cork gives you and where your agent plugs
-in, and (2) `cork-mcp-cli` — a helper you drive from an MCP client or the shell to read state,
+in, and (2) `cork-cli` — a helper you drive from an MCP client or the shell to read state,
 derive markets, build unsigned transactions, and simulate them. It never signs and never holds
 funds.
 
@@ -651,7 +651,7 @@ carries your side of the fill.
 
 ---
 
-## 4. `cork-mcp-cli` — the integration kit
+## 4. `cork-cli` — the integration kit
 
 **One typed core, two surfaces.** The same 9-tool dispatch is exposed as an **MCP server** (stdio
 or Streamable HTTP) and a **CLI** (`ch`). It reads live chain + venue state, runs Cork's math
@@ -770,17 +770,19 @@ its whitelist *enabled* would refuse that adapter, so every purchase would rever
 a knob you can turn — this item exists so nobody asks for a gated pool and then wonders why nothing
 fills.
 
-**C. Two approvals to two different spenders — and one approval you should NOT grant.**
-The premium you pay (CA, sUSDe) must be approved to the **1inch exchange**. The REF you hand in on
-exercise must be approved to **Cork's pool manager**. It's the same `approve` call with two
-different spenders — easy to wire wrong, and your allow-list must permit both explicitly. And do
-**not** approve the cST to the pool manager: when you exercise, the pool manager moves your cST
-through an internal transfer path that skips the allowance check whenever the token's owner is the
-caller (source-verified 2026-07-28: the 4-arg `PoolShare.transferFrom` skips `_spendAllowance` when
-`sender == owner`). A cST approval can therefore never legitimately be spent — it just sits there
-as standing risk. The same goes for cPT if you ever exit an underwriter position. One exception: if
-you route through your own `*ForSelf` wrapper, the cST does need approving — **to that wrapper**,
-never to the pool manager.
+**C. Know which spender model your route uses — and one approval you should NOT grant.**
+On the **raw route**, two approvals go to two different spenders: the premium you pay (CA, sUSDe)
+is approved to the **1inch exchange**, and the REF you hand in on exercise to **Cork's pool
+manager**. It's the same `approve` call with two different spenders — easy to wire wrong, and your
+allow-list must permit both explicitly. On the **`*ForSelf` adapter route, every approval goes to
+the adapter itself** — CA for the fill, REF *and cST* for the exercise — never to the LOP or the
+pool manager (each action's exact needs are machine-readable in the artifact's
+`data.forSelf.allowances`). On either route, do **not** approve the cST to the pool manager: when
+you exercise, the pool manager moves your cST through an internal transfer path that skips the
+allowance check whenever the token's owner is the caller (source-verified 2026-07-28: the 4-arg
+`PoolShare.transferFrom` skips `_spendAllowance` when `sender == owner`). A cST approval to the
+pool manager can therefore never legitimately be spent — it just sits there as standing risk. The
+same goes for cPT if you ever exit an underwriter position.
 
 **D. `exercise` has no built-in slippage protection.** The only bounds on what you receive and pay
 are the `min*`/`max*` numbers you pass in yourself (and the call can also be blocked by the
@@ -813,8 +815,10 @@ you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
    in `example/contracts` (one address, 14 entrypoints covering the pool actions and the 1inch
    fill); you audit, vet, and deploy it — or extend your own `*ForSelf`/AdapterProxy to the same
    shape.
-3. **Load the whitelist** for the loop (your own AdapterProxy routes, not raw Cork): the 1inch
-   fill route, `exercise`/`exerciseOther`, and the approvals (CA→LOP, REF→PoolManager).
+3. **Load the whitelist** for the loop (your own adapter routes, not raw Cork): the fill and
+   exercise routes (`fillOrderForSelf`, `exerciseForSelf`/`exerciseOtherForSelf` — or your
+   equivalents) and the approvals for the route you chose (§5, item C — adapter route:
+   CA/REF/cST → the adapter; raw route: CA→LOP, REF→PoolManager).
 4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`market-predict`,
    RFQ with `submit rfq-open` / watch `rfqs`, **simulate every artifact before signing**, fill with
    `taker-fill` (target pinned), exercise with `prepare_phoenix`, reconcile with `track`.
