@@ -34,7 +34,7 @@ follows the oracle inside wide speed limits — what the live RFQ flow uses toda
 `liquidity_only`).
 
 **You are the demand side:** you buy cST cover on a position your yield agent manages, and you
-**exercise** it on impairment. bond.credit ("Bond" below) is the supply side; it prices and sells
+**exercise** it on impairment. The underwriter (bond.credit in the pilot) is the supply side; it prices and sells
 the cover and holds cPT. Settlement is atomic on **1inch LOP v4** with **just-in-time (JIT)
 minting** of cST/cPT inside the fill — no pre-funded inventory.
 
@@ -48,8 +48,8 @@ plain reads — you sign/broadcast with your own stack.
 | # | Step | What happens | Tool |
 |---|---|---|---|
 | 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `derive-market`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
-| 2 | **Bond mints cST and creates a limit order (to sell)** | Bond answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | Bond's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
-| 3 | **Zyfai buys Bond's cST** (by filling Bond's limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
+| 2 | **The underwriter mints cST and creates a limit order (to sell)** | The underwriter answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | The underwriter's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
+| 3 | **Zyfai buys the underwriter's cST** (by filling their limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
 | 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare pool` → `exercise` / `exercise-other` |
 
 One piece of one-time prep per CA/REF pair comes before step 1: deploying the pair's rate oracle
@@ -118,7 +118,7 @@ The pair used throughout, for reference:
 | **REF** — what the user is exposed to and covers | dUSDC | `0x444868B6e8079ac2c55eea115250f92C2b2c4D14` | 6 |
 | **CA** — what the user is paid out in on exercise | sUSDe | `0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2` | 18 |
 
-Your user holds **cST** (the cover); Bond holds **cPT** (the underwriter's leg). In the tool, CA is
+Your user holds **cST** (the cover); the underwriter holds **cPT** (the principal leg). In the tool, CA is
 `collateralAsset` and REF is `referenceAsset`.
 
 ---
@@ -257,7 +257,7 @@ most one whole anchor per day (`rateChangePerDayMax`) with a total budget of thr
 (`rateChangeCapacityMax`). Those speed limits are the product: a slow bleed is tracked, a flash
 crash is rate-limited — which is what makes the worst case computable (`ch compute` →
 `impairment-floor`). The **fixed** recipe instead pins the rate forever (both change limits zero).
-Either way, **these four numbers are literally what Bond's order will sign**, and the market's
+Either way, **these four numbers are literally what the underwriter's order will sign**, and the market's
 identity is derived from them.
 
 **Stop 6 — the identity check.**
@@ -279,7 +279,7 @@ you just made:
 | Cover style | `modes` (`liquidity_only` pairs with the liquidity recipe) + the venue's `packageIds` |
 
 Note what the RFQ does **not** carry: the constraint. The four numbers get resolved and pinned
-when Bond *signs the order* (step 2) — your recipe choice determines them, but the anchor is read
+when the underwriter *signs the order* (step 2) — your recipe choice determines them, but the anchor is read
 at signing time. That's why deriving, quoting, and signing close together matters (step 1c).
 
 **Pre-RFQ checklist:**
@@ -444,10 +444,10 @@ ch query rfqs --chain-id 42161 --input '{"filters":{"rfqId":"rfq_…"}}'
 
 ---
 
-### Step 2 — Bond mints cST and creates a limit order (to sell)
+### Step 2 — The underwriter mints cST and creates a limit order (to sell)
 
-This step is Bond's, not yours — but you can watch every part of it, and you should verify the
-result before buying. Bond answers your RFQ with priced options. Here's a real answer captured from
+This step is the underwriter's, not yours — but you can watch every part of it, and you should verify the
+result before buying. The underwriter answers your RFQ with priced options. Here's a real answer captured from
 the venue (RFQ `rfq_kzbbztw3mfyws9zz3335m8cw`, dUSDC/sUSDe, liquidity_only):
 
 ```jsonc
@@ -461,11 +461,11 @@ the venue (RFQ `rfq_kzbbztw3mfyws9zz3335m8cw`, dUSDC/sUSDe, liquidity_only):
 } ] }
 ```
 
-Bond then rests a signed **SELL** limit order on the venue book executing that quote: `makerAsset` =
+The underwriter then rests a signed **SELL** limit order on the venue book executing that quote: `makerAsset` =
 the cST, `takerAsset` = CA (your premium). A note on "mints": the cST usually does **not** exist yet
 when the order is posted. The signed order *carries* the market's recipe and constraint — which is
 what pins the cST address (step 1c) — and the actual mint happens **inside your fill**, funded by
-Bond's collateral. Economically, Bond mints cST and sells it to you; mechanically, the mint and your
+the underwriter's collateral. Economically, the underwriter mints cST and sells it to you; mechanically, the mint and your
 purchase are one atomic transaction.
 
 Find the resting order for your market, and inspect exactly what a fill of it would do before you
@@ -510,12 +510,12 @@ ch decode order --chain-id 42161 --input '{"data":{…the signed order row…}}'
   "constraint": { "rateMin": "1", "rateMax": "2051135217108776914", /* … */ },
   "enableJitMint": true, "permits": 1 } } }  // ← the fill WILL mint the cST just-in-time
 ```
-If step 1c showed `exists: false`, there may be no orders yet — you're the first mover, and Bond's
+If step 1c showed `exists: false`, there may be no orders yet — you're the first mover, and the underwriter's
 SELL is the order whose first fill creates the market.
 
 ---
 
-### Step 3 — Zyfai buys Bond's cST (by filling Bond's limit order)
+### Step 3 — Zyfai buys the underwriter's cST (by filling their limit order)
 
 Your users are ERC-1271 smart accounts, so fills use `fillContractOrderArgs` — the tool selects that
 for you. Three commands: re-verify, build, dry-run.
@@ -581,7 +581,7 @@ signature with the same `isValidSignature` staticcall the fill performs, and `ch
 cross-checks your listing premium against the cited RFQ option, refusing an obvious
 percent-vs-fraction mix-up. It's still the road less traveled for the pilot: you depend on a filler
 showing up, and your resting order is exposed to the shares-address race (step 2's dead-row warning
-applies to you then). Fill Bond's SELL (above) as the default; confirm the BUY path with Cork
+applies to you then). Fill the underwriter's SELL (above) as the default; confirm the BUY path with Cork
 before relying on it.
 
 </details>
