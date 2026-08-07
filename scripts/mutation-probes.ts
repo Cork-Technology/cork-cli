@@ -913,6 +913,16 @@ const CATALOG: Mutant[] = [
     replace: "",
     tests: [T.rpc],
   },
+  {
+    // Mid-call switch flag dropped: the failover still heals, but rpcWarn can no longer disclose
+    // that reads in one result may mix two endpoints (possibly at different block heights) — a
+    // silent-disclosure defect, the exact class the deferred-rpcWarn design exists to prevent.
+    id: "failover-midcall-flag-dropped",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "          resolved.failedOverInCall = true;",
+    replace: "",
+    tests: [T.rpc, T.mr],
+  },
   // ── venue transport (datasources/venue.ts): fail-fast admission + consecutive-failure reset —
   //    each mutant turns the breaker into either a lock-out or a no-op ───────────────────────
   {

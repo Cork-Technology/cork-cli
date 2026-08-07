@@ -95,8 +95,17 @@ export async function getDep(ctx: HandlerContext, chainId: number): Promise<{ de
 
 /** Transparency warning when chain reads fell back to a community RPC (not the configured default). */
 export function rpcWarn(r: ResolvedRpc): Array<{ code: string; message: string }> {
+  // A mid-call switch is disclosed even when the heal landed back on the default tier: reads
+  // earlier in the same result may have been served by the previous endpoint, and two nodes can
+  // sit at different block heights — the caller deserves to know the result may mix moments.
+  const midCall = r.failedOverInCall
+    ? ` — the endpoint failed MID-CALL and reads failed over to ${hostOf(r.url)}; reads earlier in this result may have been served by the previous endpoint (possibly at a different block height)`
+    : "";
+  if (r.failedOverInCall && r.source !== "chainlist") {
+    return [{ code: "rpc_fallback", message: `the resolved RPC endpoint failed during this call${midCall}` }];
+  }
   return r.source === "chainlist"
-    ? [{ code: "rpc_fallback", message: `configured default RPC was unreachable; used a public chainlist endpoint (${hostOf(r.url)}) for chain reads` }]
+    ? [{ code: "rpc_fallback", message: `configured default RPC was unreachable; used a public chainlist endpoint (${hostOf(r.url)}) for chain reads${midCall}` }]
     : [];
 }
 

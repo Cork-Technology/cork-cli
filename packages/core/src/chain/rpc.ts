@@ -22,6 +22,11 @@ export interface ResolvedRpc {
   url: string;
   client: PublicClient;
   source: "explicit" | "default" | "chainlist";
+  /** Set by the failover client when it SWITCHED endpoints mid-call: reads earlier in the same
+   *  result may have been served by the previous endpoint (two nodes can sit at different block
+   *  heights). rpcWarn discloses it — the one fallback event a source check alone cannot see,
+   *  because a chainlist→default heal lands back on source:"default". */
+  failedOverInCall?: boolean;
 }
 
 // Committed defaults. NOTE: these Tenderly gateway URLs embed access tokens and are intentionally
@@ -420,6 +425,7 @@ function mkFailoverResolved(chainId: number, url: string, source: "default" | "c
         if (next.url !== resolved.url) {
           resolved.url = next.url;
           if (next.source !== "explicit") resolved.source = next.source;
+          resolved.failedOverInCall = true;
           inner = requestFor(next.url, chainId);
         }
         return inner(args); // the single retry; a second transport failure propagates as-is

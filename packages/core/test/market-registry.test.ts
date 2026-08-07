@@ -568,6 +568,26 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
     expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
   });
 
+  it("a MID-CALL RPC failover is disclosed in rpc_fallback — even when the heal landed back on the default tier, which a source check alone cannot see", async () => {
+    const resolved = {
+      url: "https://healed.example/rpc",
+      source: "default" as const,
+      failedOverInCall: true,
+      client: { readContract: async () => ORACLE, getCode: async () => "0x" } as never,
+    };
+    const env = await runTool(
+      "cork_prepare_market",
+      { chainId: 42161, clientRequestId: "reg-mkt-fo01", action: { type: "deploy-fixed-oracle", rate: "1000000000000000000" } },
+      { nowSeconds: 1n, resolveRpc: async () => resolved },
+    );
+    expect(env.state).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "rpc_fallback");
+    expect(w, "mid-call failover must be disclosed").toBeDefined();
+    expect(w!.message).toContain("MID-CALL");
+    expect(w!.message).toContain("healed.example"); // host of the endpoint that finished the call
+    expect(w!.message).toContain("earlier in this result"); // the mixing caveat itself
+  });
+
   it("deploy-fixed-oracle builds deployFixedRateOracle(rate) calldata and detects an existing oracle via getCode", async () => {
     const PREDICTED = "0xB3bFce4cC9319F1E311e0367E7A9f57022dFA732";
     const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0003", action: { type: "deploy-fixed-oracle", rate: WAD.toString() } }, {

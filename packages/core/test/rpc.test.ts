@@ -317,6 +317,7 @@ describe("same-call failover (the failover-wrapped client)", () => {
     expect(served).toEqual([MAINNET_DEFAULT, B]); // one failure, one retry — no third attempt
     expect(r?.url).toBe(B); // mutated in place → rpcWarn/rpcProvenance built at envelope time disclose B
     expect(r?.source).toBe("chainlist");
+    expect(r?.failedOverInCall).toBe(true); // the mid-call switch is flagged for disclosure (rpcWarn)
     expect(h.state.breaker[MAINNET_DEFAULT]?.failures).toBeGreaterThan(0); // the real failure fed the breaker
     expect(h.state.chosen[1]?.url).toBe(B); // the NEXT call starts on B
     // the failover re-resolve probes the just-failed default ONCE (attempts:1), not cfg.attempts times
@@ -331,6 +332,7 @@ describe("same-call failover (the failover-wrapped client)", () => {
     const r = await resolveRpc(1, undefined, CFG, h.deps);
     await expect(r!.client.request({ method: "eth_chainId" })).rejects.toThrow("execution reverted");
     expect(r?.url).toBe(MAINNET_DEFAULT); // unchanged
+    expect(r?.failedOverInCall).toBeUndefined(); // no switch → no mid-call disclosure
     expect(h.state.breaker[MAINNET_DEFAULT]).toBeUndefined();
     expect(h.calls.probe).toHaveLength(0); // no re-resolution
   });
