@@ -805,7 +805,7 @@ existing `*ForSelf` / AdapterProxy routes (`supplyForSelf`/`withdrawForSelf`/…
 Aave/Morpho/Euler) — and whitelist *that* instead.
 
 **Cork's reference adapter now exists and is proven end-to-end.** `CorkForSelfAdapter`
-(`example/contracts` in this repo) is the `*ForSelf` twin of the whole surface: one address, 14
+([`Cork-Technology/cork-periphery`](https://github.com/Cork-Technology/cork-periphery)) is the `*ForSelf` twin of the whole surface: one address, 14
 entrypoints (the 13 pool actions plus `fillOrderForSelf`), custody-free (it pulls, spends, and
 sweeps back in a single transaction), every output structurally delivered to the calling Safe —
 **no receiver parameter exists anywhere on it** — every fill bound on-chain to a named Cork
@@ -866,7 +866,7 @@ you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
 1. **Stand up the tool** — `claude mcp add` (or `ch` on PATH), confirm `cork_capabilities` returns 9
    tools. Optional: `CORK_RPC_URL` (own node), `ENVIO_API_TOKEN` (decentralized reads).
 2. **Audit and deploy the receiver-forcing adapter** — Cork's reference `CorkForSelfAdapter` lives
-   in `example/contracts` (one address, 14 entrypoints covering the pool actions and the 1inch
+   in [`Cork-Technology/cork-periphery`](https://github.com/Cork-Technology/cork-periphery) (one address, 14 entrypoints covering the pool actions and the 1inch
    fill); you audit, vet, and deploy it — or extend your own `*ForSelf`/AdapterProxy to the same
    shape.
 3. **Load the whitelist** for the loop (your own adapter routes, not raw Cork): the fill and

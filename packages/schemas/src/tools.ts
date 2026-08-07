@@ -313,7 +313,7 @@ export const PreparePhoenixInput = z.object({
   deadlineAt: UnixSeconds.optional(),
   forSelf: z
     .strictObject({
-      adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf pool adapter (example/contracts shape) — not a Cork deployment; its CORK() binding is verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address token allowances"),
+      adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf pool adapter (Cork-Technology/cork-periphery shape) — not a Cork deployment; its CORK() binding is verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address token allowances"),
     })
     .optional()
     .describe("emit the action as a DIRECT call to a Cork ForSelf ADAPTER (the *ForSelf twin of the action — e.g. exercise → exerciseForSelf) instead of a Bundler3 bundle — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The adapter's entrypoints carry NO receiver/owner parameters: outputs are structurally delivered to the calling account, inputs are pulled from it against allowances granted TO THE ADAPTER, and any unspent cap returns in the same transaction (custody-free). The action's receiver (and owner) must therefore equal `account`. fundingMode is ignored on this path — there are no funding or sweep legs to build. Not applicable to the authority ops"),
@@ -450,7 +450,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
       ),
     forSelf: z
       .strictObject({
-        adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf fill adapter (example/contracts shape) — not a Cork deployment; its CORK()/LOP() bindings are verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address an allowance"),
+        adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf fill adapter (Cork-Technology/cork-periphery shape) — not a Cork deployment; its CORK()/LOP() bindings are verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address an allowance"),
         poolId: MarketId.describe("the Cork market this fill must belong to — the wrapper binds the order's asset pair to this pool ON-CHAIN (checked after the fill, so a just-in-time order whose market is created during the fill still passes) and reverts OrderAssetsNotInMarket otherwise"),
         deadlineSeconds: z.number().int().min(1).max(86400).default(1800).describe("RELATIVE deadline for the wrapper's own deadline check, seconds from now — re-anchors to the clock on every call; pass deadlineAt for byte-stable retries"),
         deadlineAt: UnixSeconds.optional().describe("absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes [K2]"),

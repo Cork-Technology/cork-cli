@@ -1,5 +1,5 @@
 // ForSelf surface: encoders cross-checked against foundry (`cast calldata` / `forge inspect`
-// fixtures generated from example/contracts — the Solidity source of truth), plus the
+// fixtures generated from Cork-Technology/cork-periphery — the Solidity source of truth), plus the
 // tool-level forSelf modes on cork_prepare_orders taker-fill and cork_prepare_phoenix.
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData } from "viem";

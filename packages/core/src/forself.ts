@@ -1,6 +1,6 @@
 // Cork ForSelf adapter surface — unsigned-artifact encoders for parameter-blind session-key
 // wallets (the Zyfai integration shape). The adapters are EXAMPLE contracts Cork authors and
-// the integrator audits/vets/deploys (example/contracts in this repo): every entrypoint
+// the integrator audits/vets/deploys (the Cork-Technology/cork-periphery repo): every entrypoint
 // structurally forces the destination to msg.sender, so a (contract, selector) whitelist that
 // cannot see call parameters stays safe. This module builds calldata FOR those adapters — it
 // deploys nothing, signs nothing, and treats the adapter address as caller-supplied

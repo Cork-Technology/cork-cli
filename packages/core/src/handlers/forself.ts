@@ -1,5 +1,5 @@
 // ForSelf-mode prepare handlers: emit unsigned artifacts that call an INTEGRATOR-DEPLOYED
-// Cork ForSelf adapter (example/contracts shape) instead of the Bundler3 / raw-LOP paths —
+// Cork ForSelf adapter (cork-periphery shape) instead of the Bundler3 / raw-LOP paths —
 // the artifact a parameter-blind session-key wallet (the Zyfai integration) signs. The
 // adapter address is caller-supplied integrator config, never a Cork deployment; because the
 // caller will be granting that address token allowances, its on-chain bindings (the pinned
