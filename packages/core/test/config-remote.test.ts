@@ -25,7 +25,8 @@ const REMOTE_OK = {
       whitelistManager: "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE",
     },
     // a chain the bundled copy does NOT know — proves remote-first override works
-    "8453": {
+    // (was 8453 until the Base shadow stack entered the bundled copy, 2026-08-07)
+    "11155111": {
       poolManager: "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
       constraintAdapter: "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A",
     },
@@ -77,7 +78,7 @@ describe("resolveConfig precedence", () => {
     expect(d.saved).toHaveLength(1);
     expect(d.saved[0]?.defaults).toBeTruthy();
     resetConfigMemo();
-    const dep = await resolveDeployment(8453, deps({ remote: REMOTE_OK }));
+    const dep = await resolveDeployment(11155111, deps({ remote: REMOTE_OK }));
     expect(dep.deployment?.poolManager).toBe("0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC"); // remote-only chain served
   });
 
@@ -211,7 +212,7 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
     // served the fetched-good copy, NOT the bundled fallback
     expect(r.source).toBe("cache");
     expect(r.warning?.code).toBe("config_fetch_failed");
-    expect(r.defaults.deployments["8453"]).toBeDefined(); // 8453 exists ONLY in REMOTE_OK, not bundled
+    expect(r.defaults.deployments["11155111"]).toBeDefined(); // 11155111 exists ONLY in REMOTE_OK, not bundled
     // the good defaults survive on disk; only a failedAt back-off marker is added
     expect(d.saved).toHaveLength(1);
     expect(d.saved[0]?.defaults).toBeDefined();
@@ -231,7 +232,7 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
     const r = await resolveConfig(d);
     expect(r.source).toBe("cache");
     expect(r.warning?.code).toBe("config_fetch_failed");
-    expect(r.defaults.deployments["8453"]).toBeDefined();
+    expect(r.defaults.deployments["11155111"]).toBeDefined();
     expect(d.fetches()).toBe(0); // back-off honored — no network attempt
   });
 

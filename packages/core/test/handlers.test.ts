@@ -162,7 +162,7 @@ describe("chain-read failures map to envelopes (never raw exceptions)", () => {
   });
 });
 
-describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 still ungated)", () => {
+describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shadow-stack reads promoted 2026-08-07; 11155111 still ungated)", () => {
   it("pool-whitelist is configured on BOTH chains now → offline resolver yields requires_rpc, not unknown_deployment", async () => {
     const env = await runTool(
       "cork_query",
@@ -192,13 +192,23 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 stil
     expect(d.corkAdapter).toBe("0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed");
   });
 
-  it("query on a chain with no deployment at all (8453) → unknown_deployment, not requires_rpc", async () => {
+  it("query on a chain with no deployment at all (11155111) → unknown_deployment, not requires_rpc", async () => {
+    const env = await runTool(
+      "cork_query",
+      { chainId: 11155111, resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+  });
+
+  it("query on 8453 now resolves the shadow-stack deployment → requires_rpc when offline, no longer unknown_deployment", async () => {
     const env = await runTool(
       "cork_query",
       { chainId: 8453, resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
-    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
 });
 
@@ -660,7 +670,7 @@ describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3
   });
 
   it("order on a chain with no known LOP: struct + traits decode, hash honestly null", async () => {
-    const env = await runTool("cork_decode", { kind: "order", data: ORDER_REC, chainId: 8453, format: "concise" }, { nowSeconds: NOW });
+    const env = await runTool("cork_decode", { kind: "order", data: ORDER_REC, chainId: 11155111, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
     expect((env.data as { orderHash: unknown }).orderHash).toBeNull();
     expect(env.warnings[0]?.code).toBe("no_lop");

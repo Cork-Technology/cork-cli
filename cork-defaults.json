@@ -1,7 +1,8 @@
 {
   "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
   "schemaVersion": 1,
-  "updated": "2026-07-22",
+  "updated": "2026-08-07",
+  "$shadowComment": "8453 (Base) + the 42161 'arbitrum-shadow' profile are the phoenix LIVE SHADOW stack (campaign phoenix-forself-extension-20260808-r1, deployed 2026-08-07 from phoenix commit c8172892 via the Safe Singleton Factory, identical CREATE2 addresses on both chains; runtime hashes chain-verified against Filip's shadow-release bundle). Stage: partner-preview, review_level: unreviewed — adopted into committed defaults by explicit owner-side override 2026-08-07. Base has NO bundler3/registry/rollover entries yet (not part of the shadow vector; registry redeploy is pending), so bundle-funded prepare paths stay gated on 8453 while ForSelf/read paths work.",
   "deployments": {
     "1": {
       "poolManager": "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
@@ -16,11 +17,18 @@
       "corkAdapter": "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
       "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
       "whitelistManager": "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A"
+    },
+    "8453": {
+      "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+      "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+      "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+      "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6"
     }
   },
   "lopAddresses": {
     "1": "0x111111125421cA6dc452d289314280a0f8842A65",
-    "42161": "0x111111125421cA6dc452d289314280a0f8842A65"
+    "42161": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "8453": "0x111111125421cA6dc452d289314280a0f8842A65"
   },
   "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only — the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement); legacy = recognized-but-refused older layouts (v2 both chains; v1 is mainnet-only and LOP v3 era).",
   "fusionSettlements": {
@@ -38,6 +46,12 @@
       "arbitrum-legacy": {
         "poolManager": "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
         "constraintAdapter": "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E"
+      },
+      "arbitrum-shadow": {
+        "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+        "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+        "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+        "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6"
       }
     }
   },
