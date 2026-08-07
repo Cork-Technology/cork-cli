@@ -11,6 +11,7 @@
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
 import type { PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
+import { controllerViewsAbi } from "./market-registry.ts";
 import type { Market } from "./types.ts";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
@@ -252,10 +253,20 @@ export async function predictShares(
     swapFeePercentage?: bigint;
   },
 ): Promise<PredictSharesResult> {
+  // 0. Generation consistency, same rule as the 2.1.0 port: read shares from the pool
+  //    manager THIS controller creates on (its own binding), config as fallback.
+  let poolManager = args.poolManager;
+  try {
+    poolManager = getAddress(
+      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: "CORK_POOL_MANAGER" }),
+    );
+  } catch {
+    /* keep the configured fallback */
+  }
   // 1. Direct read — a non-zero swapToken means the pool exists; both addresses are pinned.
   try {
     const [principalToken, swapToken] = (await client.readContract({
-      address: args.poolManager,
+      address: poolManager,
       abi: sharesAbi,
       functionName: "shares",
       args: [args.poolId],
@@ -273,7 +284,7 @@ export async function predictShares(
       account: args.adapter,
       calls: [
         { to: args.controller, data: createData },
-        { to: args.poolManager, data: buildSharesCall(args.poolId) },
+        { to: poolManager, data: buildSharesCall(args.poolId) },
       ],
     });
     const last = simulated.results[1];

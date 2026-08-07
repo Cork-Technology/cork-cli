@@ -104,6 +104,11 @@ export const accessControlAbi = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 
+/** The controller's own pool-manager binding — the pool manager its createNewPool creates on. */
+export const controllerViewsAbi = parseAbi([
+  "function CORK_POOL_MANAGER() view returns (address)",
+]);
+
 /** DefaultCorkController.createNewPool — used in state-override simulations to predict the cST
  *  of a not-yet-created pool. Field order is load-bearing: unwind fee BEFORE swap fee. */
 export const controllerCreatePoolAbi = parseAbi([
@@ -405,10 +410,25 @@ export async function predictShares(
     preCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[];
   },
 ): Promise<PredictSharesResult> {
+  // 0. Generation consistency: shares must be read from the pool manager THIS controller
+  //    creates pools on — the controller's own on-chain binding — not from whichever
+  //    deployment the config currently defaults to. The two diverge whenever a new phoenix
+  //    generation is promoted before this registry generation is redeployed against it
+  //    (observed 2026-08-07: v1.3.0-rc.1 default + the v1.1-bound registry would otherwise
+  //    simulate creation on one pool manager and read shares from the other, predicting
+  //    nothing). args.poolManager survives as the fallback when the controller won't answer.
+  let poolManager = args.poolManager;
+  try {
+    poolManager = getAddress(
+      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: "CORK_POOL_MANAGER" }),
+    );
+  } catch {
+    /* keep the configured fallback */
+  }
   // 1. Direct read — a non-zero swapToken means the pool exists; both addresses are pinned.
   try {
     const [principalToken, swapToken] = (await client.readContract({
-      address: args.poolManager,
+      address: poolManager,
       abi: sharesAbi,
       functionName: "shares",
       args: [args.poolId],
@@ -430,7 +450,7 @@ export async function predictShares(
       calls: [
         ...pre.map((c) => ({ to: c.to, data: c.data })),
         { to: args.controller, data: createData },
-        { to: args.poolManager, data: buildSharesCall(args.poolId) },
+        { to: poolManager, data: buildSharesCall(args.poolId) },
       ],
       stateOverrides: [
         { address: args.controller, stateDiff: [{ slot: roleMemberSlot(POOL_CREATOR_ROLE, args.adapter), value: toHex(1n, { size: 32 }) }] },

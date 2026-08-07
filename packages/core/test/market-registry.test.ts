@@ -465,6 +465,42 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false); // anchor-derived identity does not drift with the rate
   });
 
+  it("share prediction is GENERATION-consistent: reads target the controller's own pool manager, not the config default", async () => {
+    // The mixed-generation shape observed live 2026-08-07: the config's default deployment
+    // is phoenix v1.3.0-rc.1 while this registry's controller still creates pools on the
+    // v1.1 pool manager. The prediction must follow the CONTROLLER's binding — simulate
+    // creation there AND read shares there — or it predicts nothing.
+    const CONTROLLER_PM = "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // v1.1, ≠ config default
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
+      (c) => {
+        if (c.functionName === "isRecipe") return true;
+        if (c.functionName === "source") return 1;
+        if (c.functionName === "lookupWrapper") return GT.oracle;
+        if (c.functionName === "getRate") return GT.rate;
+        if (c.functionName === "resolve") return GT.constraint;
+        if (c.functionName === "CORK_POOL_MANAGER") return CONTROLLER_PM; // the controller's own binding
+        if (c.functionName === "shares") {
+          // The discriminating assertion: a shares read against ANY other pool manager —
+          // in particular the config default — is the generation bug this test pins.
+          expect(c.address.toLowerCase()).toBe(CONTROLLER_PM.toLowerCase());
+          return [ZERO, ZERO]; // pool does not exist yet
+        }
+        throw new Error(`unexpected ${c.functionName}`);
+      },
+      {
+        simulateCalls: (a) => {
+          const last = a.calls[a.calls.length - 1]!;
+          expect(last.to.toLowerCase()).toBe(CONTROLLER_PM.toLowerCase()); // shares leg follows the controller too
+          return { results: a.calls.map((_, i) => (i === a.calls.length - 1 ? { status: "success", data: "0x" + sharesWord(GT.cpt) + sharesWord(GT.cst) } : { status: "success", data: "0x" })) };
+        },
+      },
+    ));
+    expect(env.state).toBe("ok");
+    const d = env.data as { shares: { corkSwapToken: string; source: string } };
+    expect(d.shares.corkSwapToken.toLowerCase()).toBe(GT.cst);
+    expect(d.shares.source).toBe("simulated");
+  });
+
   it("a refusing recipe → recipe_refused naming the contract's own error", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx((c) => {
       if (c.functionName === "isRecipe") return true;

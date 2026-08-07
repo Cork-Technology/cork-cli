@@ -953,6 +953,18 @@ const CATALOG: Mutant[] = [
     tests: [T.venueTransport],
   },
 
+  // ── share-prediction generation consistency (controller binding outranks config) ──────────
+  {
+    // Override dropped: the prediction reads shares from the CONFIG default pool manager
+    // while the controller creates on ITS OWN — the exact mixed-generation shape observed
+    // live 2026-08-07 (v1.3.0-rc.1 default + v1.1-bound registry) that predicts nothing.
+    id: "predict-shares-controller-binding-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: "    poolManager = getAddress(\n      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }),\n    );",
+    replace: "    void (await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }));",
+    tests: [T.mr],
+  },
+
   // ── ForSelf caller-gate generation (WHITELIST() binding + account pre-flight) ─────────────
   {
     // WHITELIST() binding comparator inverted: a correctly-bound adapter becomes a conflict

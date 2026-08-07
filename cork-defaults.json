@@ -2,7 +2,7 @@
   "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
   "schemaVersion": 1,
   "updated": "2026-08-07",
-  "$shadowComment": "8453 (Base) + the 42161 'arbitrum-shadow' profile are the phoenix LIVE SHADOW stack (campaign phoenix-forself-extension-20260808-r1, deployed 2026-08-07 from phoenix commit c8172892 via the Safe Singleton Factory, identical CREATE2 addresses on both chains; runtime hashes chain-verified against Filip's shadow-release bundle). Stage: partner-preview, review_level: unreviewed — adopted into committed defaults by explicit owner-side override 2026-08-07. Base has NO bundler3/registry/rollover entries yet (not part of the shadow vector; registry redeploy is pending), so bundle-funded prepare paths stay gated on 8453 while ForSelf/read paths work.",
+  "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix/releases/tag/v1.3.0-rc.1, published 2026-08-07, prerelease): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified against Filip's release bundle, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). The PREVIOUS Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']. Registry + rollover entries still bind the v1.1 stack — their redeploys against the new pool manager are pending.",
   "deployments": {
     "1": {
       "poolManager": "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
@@ -12,16 +12,17 @@
       "whitelistManager": "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE"
     },
     "42161": {
-      "poolManager": "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
-      "constraintAdapter": "0x248B24114D6e7df0b28AED21f7814cc0dBDB9120",
-      "corkAdapter": "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
+      "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+      "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+      "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
       "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
-      "whitelistManager": "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A"
+      "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6"
     },
     "8453": {
       "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
       "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
       "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+      "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
       "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6"
     }
   },
@@ -51,11 +52,12 @@
         "poolManager": "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
         "constraintAdapter": "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E"
       },
-      "arbitrum-shadow": {
-        "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
-        "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
-        "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
-        "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6"
+      "arbitrum-v1.1": {
+        "poolManager": "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
+        "constraintAdapter": "0x248B24114D6e7df0b28AED21f7814cc0dBDB9120",
+        "corkAdapter": "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
+        "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+        "whitelistManager": "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A"
       }
     }
   },
