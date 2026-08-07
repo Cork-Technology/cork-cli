@@ -466,11 +466,13 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   });
 
   it("share prediction is GENERATION-consistent: reads target the controller's own pool manager, not the config default", async () => {
-    // The mixed-generation shape observed live 2026-08-07: the config's default deployment
-    // is phoenix v1.3.0-rc.1 while this registry's controller still creates pools on the
-    // v1.1 pool manager. The prediction must follow the CONTROLLER's binding — simulate
-    // creation there AND read shares there — or it predicts nothing.
-    const CONTROLLER_PM = "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // v1.1, ≠ config default
+    // The mixed-generation shape proven live during the 2026-08-07 v1.3.0-rc.1 dry run
+    // (and the exact shape the pending registry redeploy will create): the registry's
+    // controller creates pools on ONE phoenix generation's pool manager while the config
+    // default points at ANOTHER. The prediction must follow the CONTROLLER's binding —
+    // simulate creation there AND read shares there — or it predicts nothing. Here the
+    // controller binds the v1.3 pool manager while the config default is still v1.1.
+    const CONTROLLER_PM = "0x02803Bb52D2184f906F45B50C66AA969C2E37263"; // v1.3, ≠ config default
     const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;

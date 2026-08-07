@@ -189,7 +189,7 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shad
     expect(env.state).toBe("ok");
     const d = env.data as { bundler3: string; corkAdapter: string };
     expect(d.bundler3).toBe("0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13");
-    expect(d.corkAdapter).toBe("0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD"); // v1.3.0-rc.1
+    expect(d.corkAdapter).toBe("0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed");
   });
 
   it("query on a chain with no deployment at all (11155111) → unknown_deployment, not requires_rpc", async () => {

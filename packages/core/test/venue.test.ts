@@ -1203,7 +1203,7 @@ describe("taker-fill of an auction-priced resting order", () => {
       (c) => {
         switch (c.functionName) {
           case "CORK":
-            return "0x02803Bb52D2184f906F45B50C66AA969C2E37263"; // 42161 poolManager (v1.3.0-rc.1)
+            return "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // 42161 poolManager
           case "LOP":
             return LOP;
           case "market":
