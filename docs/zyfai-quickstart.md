@@ -104,6 +104,11 @@ trimmed real response (read live 2026-08-06) and a short note on what to check. 
   (`--for-self '{…}'`); amount fields accept exact human sugar (`1000e18`,
   `95e16`, `1_000000` — expanded by integer math, never floats); `--chain-id` takes network names
   too (`arbitrum`, `mainnet`, `base`, `sepolia`).
+- **Treat `--client-request-id` as the name of the request, not a random string.** Retrying the
+  same thing? Reuse the id — that is what makes retries safe (the venue dedupes on it, and the
+  same id with a *different* payload is refused as `venue_conflict`). Doing a new thing? New id,
+  always. For orders this is load-bearing: the id decides which cancellation slot the order
+  occupies on-chain, and two live orders sharing an id can kill each other.
 - **The canonical wire form still works everywhere** — `--input '{…}'` (or `--json '{…}'`) with
   the full object, `--action`/`--params` blobs, and the older `ch prepare pool 42161 --action
   '{…}'` shape (`phoenix` works there too) are all unchanged; flags override blob keys, so a saved blob is reusable. Some
@@ -522,6 +527,9 @@ for you. Three commands: re-verify, build, dry-run.
 
 ```sh
 # 1. re-verify the market on-chain (the book is discovery only)
+#    NOTE: if the market doesn't exist yet (step 1c said `exists: false`), this read FAILS with
+#    chain_read_failed — that is the expected pre-creation state, not a problem. Your fill is what
+#    creates the market. Verify the order's carried constraint with `ch decode order` instead.
 ch query market --chain-id 42161 --json \
   --pool-id 0x6b02971336d7749ee305284f1c3ca6cac35562812e1466bab527014de1ae7a78
 
@@ -544,6 +552,10 @@ creates the market if it's new and mints the cST to your Safe, pulling the CA pr
 the same transaction. What to check:
 - An `unsigned_artifact` warning on the prepare is expected — it's calldata only. Require
   `wouldRevert: false` from the simulate.
+- **Only one fill ever lands, so size it for everything you want.** Cork orders use 1inch's *bit*
+  invalidator: the first fill — of any size — consumes the whole order. If you take half of the
+  underwriter's size, the other half is dead, not waiting. Going back for seconds means waiting
+  for a fresh order.
 - The result's `data.execution` block names the exact completion path (sign → decode-verify →
   broadcast → reconcile); `ch capabilities --topic signing` is the full reference.
 - **If the prepare warns `jit_side_mismatch` / `stale_share_prediction`, stop** — that resting order
@@ -609,6 +621,13 @@ Build with `--rpc-url <your node>` so the funding legs resolve — without an ex
 still builds, but with `fundingLegs: 0` and a `funding_needs_rpc` warning (funding-leg resolution is
 deliberately offline by default). Then sign with your Safe stack, routing the call through your
 `*ForSelf` adapter so `receiver` is forced to the Safe (§5, item A).
+
+**Mind the clock while signatures are collected:** every prepared bundle expires — the default
+deadline is 30 minutes from when it was built. A Safe signing ceremony that takes longer than that
+produces a transaction that reverts on arrival. If your ceremony can be slow, build with
+`--deadline-seconds 7200` (up to 24 h) or pin an absolute `--deadline-at <unix seconds>` — the
+absolute form also makes a retried prepare byte-identical, so a re-run doesn't invalidate
+signatures already collected.
 
 Once that adapter is deployed, skip the routing step and build the twin call directly: add
 `--for-self '{"adapter":"0xYOUR_ADAPTER"}'` and the artifact becomes a single `exerciseForSelf`
