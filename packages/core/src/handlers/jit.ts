@@ -126,7 +126,7 @@ export async function buildTakerJitInteraction(args: {
       }
       const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
       if (!adapterRoles.granted) {
-        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — this fill will revert until both are granted (a governance action)` });
+        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — this fill will revert until both are granted (a governance action)` });
       }
       const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
       warnings.push(...res.warnings);
@@ -252,9 +252,9 @@ export async function prepareJitLegacy(args: {
     if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
       return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.json before signing anything" }], ctx }) };
     }
-    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, configurator: legacyRegistry.CONFIGURATOR_ROLE });
+    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, second: legacyRegistry.CONFIGURATOR_ROLE, secondLabel: "CONFIGURATOR" });
     if (!adapterRoles.granted) {
-      warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
+      warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
     }
     const reg = { address: mr.registry, abi: legacyRegistry.marketRegistryAbi } as const;
     const [found, entry] = await client.readContract({ ...reg, functionName: "lookupRecipe", args: [mode] });

@@ -180,17 +180,35 @@ describe("resolveRollover", () => {
 });
 
 describe("deploymentProfiles in the bundled defaults", () => {
-  // 2026-07-22 promotion: the announced Arbitrum deployment (formerly the arbitrum-staging
-  // shadow) is now the primary; the pre-launch read-path pair survives as arbitrum-legacy
-  // (3 calibration pools live on the old PM, none API-listed — verified via HyperSync scan).
-  it("the primary 42161 deployment carries the full tx-path contract set (announced 2026-07-22, bindings verified on-chain)", async () => {
+  // 2026-08-07 promotion: phoenix v1.3.0-rc.1 (published prerelease, identical CREATE2
+  // addresses on 42161 + 8453) is now the primary, adopted together with market-registry
+  // 0.3.2; the previous production stack — where the venue's existing markets still live
+  // until it migrates — survives as arbitrum-v1.1, the pre-launch pair as arbitrum-legacy.
+  it("the primary 42161 deployment carries the v1.3.0-rc.1 tx-path contract set (bindings verified on-chain 2026-08-07)", async () => {
     const cfg = await resolveConfig();
     expect(cfg.defaults.deployments["42161"]).toMatchObject({
-      poolManager: "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
-      corkAdapter: "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed", // CORK() = the PM above
+      poolManager: "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+      corkAdapter: "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD", // CORK() = the PM above
       bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13", // adapter BUNDLER3() = this
+      whitelistManager: "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
+    });
+    // Base carries the SAME set except bundler3 (Morpho's per-chain deployment, read
+    // from the adapter's own BUNDLER3() immutable on Base).
+    expect(cfg.defaults.deployments["8453"]).toMatchObject({
+      poolManager: "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+      corkAdapter: "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+      bundler3: "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+    });
+  });
+  it("the arbitrum-v1.1 profile keeps the previous production stack fully reachable", async () => {
+    const cfg = await resolveConfig();
+    const v11 = cfg.defaults.deploymentProfiles?.["42161"]?.["arbitrum-v1.1"];
+    expect(v11).toMatchObject({
+      poolManager: "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
+      corkAdapter: "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
       whitelistManager: "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A",
     });
+    expect(cfg.defaults.deployments["42161"]?.poolManager).not.toBe(v11?.poolManager);
   });
   it("the arbitrum-legacy profile keeps the old read-path pair reachable", async () => {
     const cfg = await resolveConfig();

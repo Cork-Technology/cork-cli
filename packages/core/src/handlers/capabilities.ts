@@ -9,16 +9,21 @@ import type { Envelope } from "@cork/schemas";
 export async function handleCapabilities(input: { topic?: string; search?: string }, ctx: HandlerContext): Promise<Envelope> {
   if (input.topic === "verify") {
     // Independently re-derive each deployed address from (deployer, salt, initCodeHash) [C10].
+    // Entries carry their own deployer where it is not the Safe Singleton Factory — the
+    // market-registry 0.3.2 set is guarded CREATE2 from the AtomicDeployer (guard provenance
+    // included so the effective salt is itself re-derivable from the deploy calldata).
     const verifications = CREATE2_ATTESTATIONS.map((a) => ({
       name: a.name,
-      ...verifyCreate2({ deployer: CREATE2_DEPLOYER, salt: a.salt, initCodeHash: a.initCodeHash, expected: a.expected }),
+      ...verifyCreate2({ deployer: a.deployer ?? CREATE2_DEPLOYER, salt: a.salt, initCodeHash: a.initCodeHash, expected: a.expected }),
+      deployer: a.deployer ?? CREATE2_DEPLOYER,
       salt: a.salt,
       initCodeHash: a.initCodeHash,
+      ...(a.guard ? { guard: a.guard } : {}),
     }));
     const allMatch = verifications.every((v) => v.match);
     return envelope({
       state: allMatch ? "ok" : "conflict",
-      data: { deployer: CREATE2_DEPLOYER, verifications },
+      data: { defaultDeployer: CREATE2_DEPLOYER, verifications },
       chainId: 1,
       source: "config",
       ...(allMatch ? {} : { warnings: [{ code: "create2_mismatch", message: "a deployed address did not reproduce from its salt+initCodeHash" }] }),

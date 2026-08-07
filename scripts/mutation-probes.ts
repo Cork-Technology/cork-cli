@@ -153,9 +153,20 @@ const CATALOG: Mutant[] = [
   {
     id: "roles-gate-comparator",
     file: "packages/core/src/market-registry.ts",
-    find: "return { hasCreator, hasConfigurator, granted: hasCreator && hasConfigurator };",
-    replace: "return { hasCreator, hasConfigurator, granted: hasCreator || hasConfigurator };",
+    find: "return { hasCreator, hasSecond, secondRole, granted: hasCreator && hasSecond };",
+    replace: "return { hasCreator, hasSecond, secondRole, granted: hasCreator || hasSecond };",
     tests: [T.mr, T.venue],
+  },
+  {
+    // Generation probe disabled: every controller is treated as pre-0.3.2, so the pre-flight
+    // checks CONFIGURATOR on a controller whose adapter actually needs FEE_MANAGER — the
+    // missing-grant warning names the WRONG governance action (or stays green after a partial
+    // grant). Killed by the 0.3.2-generation tests, which stub FEE_MANAGER_ROLE() answering.
+    id: "roles-generation-probe-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: '      second = (await client.readContract({ address: controller, abi: controllerViewsAbi, functionName: "FEE_MANAGER_ROLE" })) as `0x${string}`;\n      secondRole = "FEE_MANAGER";',
+    replace: '      throw new Error("mutant: generation probe disabled");',
+    tests: [T.mr],
   },
   {
     // Swapped role constant: both reads become CONFIGURATOR, so the mixed-state stub reports

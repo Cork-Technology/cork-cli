@@ -37,16 +37,23 @@ export function deploymentFor(chainId: number): CorkDeployment | undefined {
 export const CREATE2_DEPLOYER = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as const;
 
 /**
- * CREATE2 attestations: (salt from phoenix config/prod.toml [sepolia.bytes32]) + (initCodeHash =
- * keccak of the Sourcify creation bytecode) → the deployed address. Verified empirically: cast
- * reproduces `expected` from these exact inputs (see create2 verify test). Lets any caller
- * independently re-derive the address instead of trusting a hardcoded value [C10].
+ * CREATE2 attestations: (deployer, salt, initCodeHash) → the deployed address. Verified
+ * empirically: local keccak reproduces `expected` from these exact inputs (see create2 verify
+ * test). Lets any caller independently re-derive the address instead of trusting a hardcoded
+ * value [C10]. `deployer` defaults to the Safe Singleton Factory; the market-registry 0.3.2 set
+ * was deployed by the AtomicDeployer in ONE guarded-CREATE2 batch — for those entries `salt` is
+ * the EFFECTIVE CREATE2 salt keccak256(abi.encodePacked(guardSender, rawSalt)), and the guard
+ * inputs are recorded so the derivation is reproducible from the deploy calldata alone.
  */
 export interface Create2Attestation {
   name: string;
   salt: `0x${string}`;
   initCodeHash: `0x${string}`;
   expected: `0x${string}`;
+  /** CREATE2 deployer; omitted = CREATE2_DEPLOYER (the Safe Singleton Factory). */
+  deployer?: `0x${string}`;
+  /** AtomicDeployer guard provenance: salt = keccak256(abi.encodePacked(guardSender, rawSalt)). */
+  guard?: { rawSalt: `0x${string}`; guardSender: `0x${string}` };
 }
 
 export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
@@ -56,54 +63,81 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x2e1204abee27192079350f3f17779da88e1940a2ac222eb9f3e5a66060f682cb",
     expected: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
   },
-  // MarketRegistry 2.1.0 set (Arbitrum One, block 489540043) — extracted from the deploy
-  // broadcast (market-registry-api @ a929458, contracts tag 2.1.0): one global salt
-  // (config/deployment.toml) across all seven contracts, each deployed as a Safe-Singleton-
-  // Factory CALL carrying salt ++ initCode. initCodeHash = keccak of the broadcast's raw init
-  // code (creation bytecode ++ abi-encoded constructor args; the MarketRegistry creation
-  // bytecode is byte-identical to the repo's pinned artifact). Every entry locally re-derived
-  // and matched against the live address 2026-08-03 — the guard that matters here, because the
-  // PREVIOUS registry generation still answers 2.1.0-shaped calls with misdecoded garbage.
+  // MarketRegistry 0.3.2 set (42161 block 491971103 / 8453 block 49648442 — identical
+  // addresses, ONE AtomicDeployer batch per chain with identical inputs) — extracted from the
+  // deploy broadcast (market-registry-private tag 0.3.2). The AtomicDeployer itself is Safe-
+  // Singleton-Factory CREATE2 (salt ++ initCode calldata); the eight protocol contracts are
+  // CREATE2 FROM the AtomicDeployer under ONE guarded salt: keccak256(abi.encodePacked(
+  // deploySender, rawSalt)) — the anti-squatting guard in script/AtomicDeployer.sol. Every
+  // entry locally re-derived and matched against BOTH chains' live addresses 2026-08-07.
+  {
+    name: "atomicDeployer",
+    salt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9",
+    initCodeHash: "0xf71b94e19de5f98f8ced603caa2a4953479ae71e87f018dc3bc24429027ff448",
+    expected: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+  },
   {
     name: "marketRegistry",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0x8f00d5974b2a67f9deff93a2aa8736dc65f53c92f328645c5c54b84d8e6effca",
-    expected: "0x47C3AF38435Db64D9400c30575E4c10482c0752D",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x30c197c6fec24ca9bb19afbed9d36753cab192be627853d26489e3c3df8241ac",
+    expected: "0xF5323F305360A792284814a7EDe78c2209A1DC94",
   },
   {
     name: "corkLimitOrderAdapter",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0x1faa890d96aa499bc8443ec3623caa1b3e2c386e58dd700abb355576cb473d0a",
-    expected: "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x92a5ea42b19652513c11203e4a6e32881cc33b77ff41c6f59db7800a7e933d89",
+    expected: "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE",
   },
   {
     name: "wrapperRateConsumerFactory",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0xf0e2e2ae81bfd800019dc457f2570b5ee3117e83ca4c28a00c6d00c998f60334",
-    expected: "0xDb8bd7eEA5322Df5c6c079c7D11C1b27F56e2007",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x9f7d017bc7ba9128c4ab4246dce99fd10de9611f0e0955a7247ab1e08afdb225",
+    expected: "0xF64c9d502531Cd87f9CB2994092FB56d02a21812",
   },
   {
     name: "fixedRateOracleFactory",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0xca113bcfe0d99e2f4ee3f4a759ca7fa375f7896b74d6481d016b3190a081da7e",
-    expected: "0xE899a11994eC6b8B50A1F7cbfD546fd260BbB0c5",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x2bc263ef45c96cfc64807511369b436baa56cdf256f32390564e6f33801dc02a",
+    expected: "0x7766d44d40329B3e15302531eb4C0D2578031Acb",
   },
   {
     name: "aggregatorAdapterFactory",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0x397a81563982f52d45fb670653a897c8bb0e9ef2b34a2e76f4fba95f353eff96",
-    expected: "0xB1d34dca3c63CCEF1239D0432Bedcf4031c172c2",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x41055e120e8153a192624fc07ab38327cb481b814855b7b960a523de61f03224",
+    expected: "0xf2aa4c2FEA4e6e0FF8de30C07C4f54fC86A93BbB",
   },
   {
-    name: "liquidityRecipe",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0x652104243f9b8bf6124fbb9217bacccd244d3ebf39d50686c2613e2722c6f8d3",
-    expected: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D",
+    name: "liquidityPriceRecipe",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0xdefdfe13fd8c98cf3bcc959b37b8a57b1594177e47424b020b9a1210ea1a4612",
+    expected: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291",
+  },
+  {
+    name: "liquidityNavRecipe",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0xa9c19c296b017a6d7d7fe156a12b0519814556e5f1cabd5f9a6bd2a41f94fb26",
+    expected: "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506",
   },
   {
     name: "fixedRateRecipe",
-    salt: "0x6160b6f62415f62bf2aba6b76e3ba35b84b38d39acce87a9d84ea17c1f1c07ef",
-    initCodeHash: "0xc02b880184834fb0c7906af45fd67f33ac5732495aa57ab4a130e7b06d4d98c7",
-    expected: "0xA85cFa6E66f301a18D182A8304f5C4afEf5b4682",
+    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
+    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x9edfd2059bfb00e96739ef0b4297b1d73588a0d761f82f15c93aab3bb217f31e",
+    expected: "0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D",
   },
 ];

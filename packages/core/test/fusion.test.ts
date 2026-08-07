@@ -366,7 +366,7 @@ describe("runTool: cork_prepare_orders maker-order + auction (offline, pure loca
           makerAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
           takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610",
           auction: { durationSeconds: 3600, initialRateBump: "500000" },
-          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", constraint },
+          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", constraint },
         },
       },
       { nowSeconds: NOW, resolveRpc: async () => null },
@@ -377,7 +377,7 @@ describe("runTool: cork_prepare_orders maker-order + auction (offline, pure loca
     expect(d.fusion).toBeDefined();
     // BOTH decoders read the same composed blob.
     const jit = decodeJitExtension(d.extension);
-    expect(jit.params.recipe.toLowerCase()).toBe("0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d");
+    expect(jit.params.recipe.toLowerCase()).toBe("0xd27c7bb8564db019b41d9c48d1abced9a7d90291");
     const m = d.typedData.message;
     const order: LopOrder = { salt: BigInt(m.salt!), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount!), takingAmount: BigInt(m.takingAmount!), makerTraits: BigInt(m.makerTraits!) };
     const dec = decodeFusionOrder(order, d.extension, 42161);
@@ -404,7 +404,7 @@ describe("decode order on a COMPOSED extension (auction + JIT): BOTH labels", ()
           makingAmount: "1000000000000000000",
           takingAmount: "1000000",
           auction: { durationSeconds: 3600, initialRateBump: "500000" },
-          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D", constraint },
+          jitMarket: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", constraint },
         },
       },
       { nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
@@ -416,7 +416,7 @@ describe("decode order on a COMPOSED extension (auction + JIT): BOTH labels", ()
     const d = env.data as { fusion?: Record<string, unknown>; jit?: Record<string, unknown> };
     expect(d.fusion).toBeDefined();
     expect(d.jit).toBeDefined();
-    expect(String(d.jit!["recipe"]).toLowerCase()).toBe("0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d");
+    expect(String(d.jit!["recipe"]).toLowerCase()).toBe("0xd27c7bb8564db019b41d9c48d1abced9a7d90291");
     expect(d.fusion!["postInteractionGated"]).toBe(false);
   });
 });

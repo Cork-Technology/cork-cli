@@ -227,7 +227,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             }
             const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
             if (!adapterRoles.granted) {
-              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, CONFIGURATOR: ${adapterRoles.hasConfigurator}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
+              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
             }
             const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
             warnings.push(...res.warnings);

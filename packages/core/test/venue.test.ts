@@ -1006,10 +1006,10 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
   // ── taker-side JIT: the walkthrough's canonical settle path (underwriter lifts a BUY order,
   // takerInteraction mints the cST into the fill gap) ──────────────────────────────────────
   describe("jitMarket on taker-fill", () => {
-    const REG = "0x47C3AF38435Db64D9400c30575E4c10482c0752D";
-    const ADAPTER = "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B";
-    const CONTROLLER = "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172";
-    const LIQ = "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D";
+    const REG = "0xF5323F305360A792284814a7EDe78c2209A1DC94";
+    const ADAPTER = "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE";
+    const CONTROLLER = "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1";
+    const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
     const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
     const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
     const ORACLE = "0x00000000000000000000000000000000000000fe";
@@ -1203,7 +1203,7 @@ describe("taker-fill of an auction-priced resting order", () => {
       (c) => {
         switch (c.functionName) {
           case "CORK":
-            return "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // 42161 poolManager
+            return "0x02803Bb52D2184f906F45B50C66AA969C2E37263"; // 42161 poolManager (v1.3.0-rc.1)
           case "LOP":
             return LOP;
           case "market":

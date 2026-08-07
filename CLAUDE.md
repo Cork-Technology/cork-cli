@@ -330,28 +330,41 @@ ForSelf-mode prepares and the taker-fill liveness/ERC-1271 checks DO use the def
 adapter-binding verification and chain-vs-venue liveness are security reads, so they run whenever
 any endpoint resolves and disclose honestly when none does.)
 
-Per-chain deployment coverage: chainId 1 and chainId 42161 are both **full** (all 5 contracts;
-prepare + all reads). The 42161 set was announced 2026-07-22 and its bindings verified on-chain
-(adapter `CORK()` = poolManager, adapter `BUNDLER3()` = bundler3, both settlers'
-`CORK_POOL_MANAGER()` = poolManager). chainId 8453 (Base) is **partial** as of 2026-08-07: the
-phoenix LIVE SHADOW stack (pool manager `0x02803B…7263`, constraintAdapter, corkAdapter
-`0xfa8A…72AD`, whitelistManager — identical CREATE2 addresses on 42161, mirrored there as
-`deploymentProfiles["42161"]["arbitrum-shadow"]`) — chain-verified against Filip's shadow-release
-bundle and adopted into `cork-defaults.json` by explicit override of the "shadow addresses stay
-out of config" thread ruling (Heri, 2026-08-07). No bundler3/registry/rollover on 8453 yet, so
-bundle-funded prepares stay gated there; no pools exist on the Base pool manager yet, so market
-reads honestly return `chain_read_failed` until the first JIT fill creates one. The pre-launch
+Per-chain deployment coverage: chainId 1 is **full** on its own stack. chainId 42161 and 8453
+both default to **phoenix v1.3.0-rc.1 + market-registry 0.3.2** (both published 2026-08-07,
+identical CREATE2 addresses on both chains, generations ALIGNED: the 0.3.2 adapter's controller
+binds the v1.3 pool manager `0x02803B…7263`; per-chain bundler3 read from the deployed
+CorkAdapter's own `BUNDLER3()` — `0x1FA4…8C13` on 42161, `0x6BFd…20C4` on Base). All five
+phoenix contracts + the full registry stack on both chains, so prepare + all reads + the whole
+JIT/derive path work — but **no pools exist on the v1.3 pool manager yet** (market reads
+`chain_read_failed` until markets are created there), the adapter's POOL_CREATOR + FEE_MANAGER
+grant is pending one Safe signature (prepares warn `roles_not_granted` naming FEE_MANAGER until
+it lands), and pair oracles are seeded on Base but mostly undeployed on 42161 (resolve needs the
+`additionalData` anchor until a pair's wrapper deploys). The venue's EXISTING markets still live
+on the previous Arbitrum production stack, preserved as
+`deploymentProfiles["42161"]["arbitrum-v1.1"]` (old PM `0x4d0ab6…`; rollover still binds THIS
+generation — its redeploy is pending; share prediction stays correct across any such split
+because `predictShares` follows the CONTROLLER's own `CORK_POOL_MANAGER()` binding,
+mutation-probed). The pre-launch
 Arbitrum pair (old PM `0xc2De…54AE` with 3
 non-API-listed calibration pools) survives as `deploymentProfiles["42161"]["arbitrum-legacy"]`. A real mainnet pool for examples/tests:
 `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` (current list:
 `api-phoenix.cork.tech/v1/pools/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the vnet —
 querying it on chainId 1 without a vnet RPC yields `chain_read_failed`, by design.
 
-**MarketRegistry 2.1.0 (Arbitrum One only; Base has NO registry — only the phoenix shadow stack,
-see per-chain coverage above).** The whole registry stack
-was redeployed from scratch 2026-07-31 under a new CREATE2 salt — **every address changed**
-(registry `0x47C3…752D`, adapter `0x2307…d65B`, wrapper + fixed-rate + aggregator-adapter
-factories, two approved recipes, curator Safe; all verified on-chain 2026-08-03). The previous
+**MarketRegistry 2.1.0-model, contracts release 0.3.2 (Arbitrum One + Base, identical
+addresses).** The whole registry stack was redeployed 2026-08-07 against the v1.3.0-rc.1 pool
+manager — **every address changed again** (registry `0xF532…DC94`, adapter `0x1b75…c7CE`,
+wrapper + fixed-rate + aggregator-adapter factories, THREE approved recipes — LiquidityPrice,
+LiquidityNav (nav is NEW), FixedRate — one AtomicDeployer batch per chain under a guarded
+CREATE2 salt, all locally re-derived + verified on-chain on BOTH chains 2026-08-07; attestations
+in packages/core/src/config.ts). Base arrived seeded (5 denominations, 4 feeds, 5 assets, pair
+wrappers); 42161's fresh registry is asset-seeded but most pair wrappers are undeployed. The
+0.3.2 controller splits fee authority into FEE_MANAGER_ROLE — `readAdapterRoles` detects the
+generation from the controller's own `FEE_MANAGER_ROLE()` view and checks POOL_CREATOR +
+FEE_MANAGER there (CONFIGURATOR on older controllers), mutation-probed; the grant is pending one
+Safe signature as of 2026-08-07. The 0.3.0 predecessor (registry `0x47C3…752D`, v1.1-bound,
+verified 2026-08-03) is superseded — git history keeps its record. The previous
 generation is still live and is dangerous precisely because it still ANSWERS: 2.1.0-shaped calls
 against it decode into plausible nonsense (empirically: `getRecipes` returns ABI offsets as
 "addresses" with total=640, no revert). The tool's guard is the INTEGRATOR-sanctioned one —

@@ -30,10 +30,10 @@ const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on
 const REF = "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc"; // waArbUSDCn (the captured ground-truth pair)
 const ACCT = "0xc0ffee0000000000000000000000000000000001";
 // The 2.1.0 deployment set (cork-defaults.json, verified on-chain 2026-08-03).
-const REG = "0x47C3AF38435Db64D9400c30575E4c10482c0752D";
-const ADAPTER = "0x230758CB5d5B222091A6ac3c1d557Cd395cDd65B";
-const CONTROLLER = "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172";
-const LIQ = "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D";
+const REG = "0xF5323F305360A792284814a7EDe78c2209A1DC94";
+const ADAPTER = "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE";
+const CONTROLLER = "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1";
+const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ORACLE = "0x00000000000000000000000000000000000000fe";
 
@@ -194,9 +194,9 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
     }));
     expect(env.state).toBe("ok");
     const d = env.data as { contractsVersion: string; scale: string; items: Array<{ address: string; source: string; registryMatches: boolean; argsKnown: boolean; constants: Record<string, string>; args: { type: string } }> };
-    // The config's release tag, echoed verbatim ("0.3.0" = the contracts-release label the
+    // The config's release tag, echoed verbatim ("0.3.2" = the contracts-release label the
     // registry read API serves; "2.1.0" remains the GENERATION name in prose/docs).
-    expect(d.contractsVersion).toBe("0.3.0");
+    expect(d.contractsVersion).toBe("0.3.2");
     expect(d.items[0]?.source).toBe("price");
     expect(d.items[0]?.registryMatches).toBe(true);
     expect(d.items[0]?.argsKnown).toBe(true);
@@ -466,13 +466,14 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   });
 
   it("share prediction is GENERATION-consistent: reads target the controller's own pool manager, not the config default", async () => {
-    // The mixed-generation shape proven live during the 2026-08-07 v1.3.0-rc.1 dry run
-    // (and the exact shape the pending registry redeploy will create): the registry's
-    // controller creates pools on ONE phoenix generation's pool manager while the config
-    // default points at ANOTHER. The prediction must follow the CONTROLLER's binding —
-    // simulate creation there AND read shares there — or it predicts nothing. Here the
-    // controller binds the v1.3 pool manager while the config default is still v1.1.
-    const CONTROLLER_PM = "0x02803Bb52D2184f906F45B50C66AA969C2E37263"; // v1.3, ≠ config default
+    // The mixed-generation shape proven live during the 2026-08-07 v1.3.0-rc.1 dry run:
+    // the registry's controller creates pools on ONE phoenix generation's pool manager
+    // while the config default points at ANOTHER. The prediction must follow the
+    // CONTROLLER's binding — simulate creation there AND read shares there — or it
+    // predicts nothing. The constant here must DIFFER from the current config default
+    // (v1.3) or this test loses its discriminating power — hence the v1.1 pool manager,
+    // the exact pairing an old-generation registry would present today.
+    const CONTROLLER_PM = "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // v1.1, ≠ config default
     const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
@@ -720,9 +721,11 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   // The roles pre-flight has three meaningful states, and each catches a different mutant class.
   // Both-missing is asserted above; the two below cover the branches that became load-bearing
   // when the grant landed on-chain (block 491025419, 2026-08-04).
-  const rolesStub = (hasRole: (c: StubCall) => boolean, opts: { code?: Record<string, string>; poolIdOf?: (addr: string) => `0x${string}` } = {}) =>
+  const rolesStub = (hasRole: (c: StubCall) => boolean, opts: { code?: Record<string, string>; poolIdOf?: (addr: string) => `0x${string}`; pre?: (c: StubCall) => unknown } = {}) =>
     stubRpc(
       (c) => {
+        const pre = opts.pre?.(c);
+        if (pre !== undefined) return pre;
         if (c.functionName === "poolId" && opts.poolIdOf) return opts.poolIdOf(c.address);
         if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
         if (c.functionName === "MARKET_REGISTRY") return REG;
@@ -780,6 +783,39 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     expect(w).toBeDefined();
     expect(w?.message).toContain("POOL_CREATOR: true");
     expect(w?.message).toContain("CONFIGURATOR: false");
+  });
+
+  // keccak256("FEE_MANAGER_ROLE") — the value the 0.3.2 controller's own view returns.
+  const FEE_MANAGER_ROLE = "0x6c0757dc3e6b28b2580c03fd9e96c274acf4f99d91fbec9b418fa1d70604ff1c";
+
+  /** rolesStub, 0.3.2-generation flavor: the controller ANSWERS FEE_MANAGER_ROLE(), so the
+   *  required set becomes POOL_CREATOR + FEE_MANAGER (the exact grant the rollout's pending
+   *  Safe signature carries). */
+  const feeGenStub = (hasRole: (c: StubCall) => boolean) =>
+    rolesStub(hasRole, { pre: (c) => (c.functionName === "FEE_MANAGER_ROLE" ? FEE_MANAGER_ROLE : undefined) });
+
+  it("0.3.2 controller (FEE_MANAGER_ROLE answers): the missing role is named FEE_MANAGER, not CONFIGURATOR (mutation killer: generation probe dropped)", async () => {
+    // The live 2026-08-07 state: POOL_CREATOR + FEE_MANAGER both pending one Safe signature.
+    // A probe-dropped mutant would check CONFIGURATOR instead and misreport which grant is owed.
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
+      nowSeconds: 1_790_000_000n,
+      resolveRpc: feeGenStub((c) => c.args?.[0] === POOL_CREATOR_ROLE),
+    });
+    expect(env.state).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "roles_not_granted");
+    expect(w).toBeDefined();
+    expect(w?.message).toContain("POOL_CREATOR: true");
+    expect(w?.message).toContain("FEE_MANAGER: false");
+    expect(w?.message).not.toContain("CONFIGURATOR");
+  });
+
+  it("0.3.2 controller with BOTH roles granted → silent (the post-signature state)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
+      nowSeconds: 1_790_000_000n,
+      resolveRpc: feeGenStub((c) => c.args?.[0] === POOL_CREATOR_ROLE || c.args?.[0] === FEE_MANAGER_ROLE),
+    });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false);
   });
 
   it("online auto-resolve with an UNDEPLOYED oracle: the share simulation prepends the fill's own deploy (mutation killer for the preCalls branch)", async () => {

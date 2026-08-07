@@ -54,7 +54,7 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
 describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry read API", () => {
   const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
   const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610"; // sUSDS (registered on Arbitrum)
-  const LIQ = "0xA39d552802b2D3A9be6F5DCDD2C6961DaeD1234D"; // LiquidityRecipe (approved)
+  const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291"; // LiquidityRecipe (approved)
   const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}`; // abi.encode(1e18)
   const API = process.env.CORK_MARKET_API ?? "https://zian-b.feat.cork.tech";
 

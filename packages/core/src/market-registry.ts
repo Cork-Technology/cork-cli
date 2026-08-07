@@ -104,9 +104,12 @@ export const accessControlAbi = parseAbi([
   "function hasRole(bytes32 role, address account) view returns (bool)",
 ]);
 
-/** The controller's own pool-manager binding — the pool manager its createNewPool creates on. */
+/** The controller's own self-descriptive views: its pool-manager binding (the pool manager its
+ *  createNewPool creates on) and the fee-authority role constant that only the 0.3.2-generation
+ *  controller exposes — the generation marker for the adapter's required role set. */
 export const controllerViewsAbi = parseAbi([
   "function CORK_POOL_MANAGER() view returns (address)",
+  "function FEE_MANAGER_ROLE() view returns (bytes32)",
 ]);
 
 /** DefaultCorkController.createNewPool — used in state-override simulations to predict the cST
@@ -130,13 +133,29 @@ export async function readAdapterRoles(
   client: PublicClient,
   controller: `0x${string}`,
   adapter: `0x${string}`,
-  roles: { creator?: `0x${string}`; configurator?: `0x${string}` } = {},
-): Promise<{ hasCreator: boolean; hasConfigurator: boolean; granted: boolean }> {
-  const [hasCreator, hasConfigurator] = await Promise.all([
+  roles: { creator?: `0x${string}`; second?: `0x${string}`; secondLabel?: string } = {},
+): Promise<{ hasCreator: boolean; hasSecond: boolean; secondRole: string; granted: boolean }> {
+  // The controller's own surface decides which SECOND role the adapter needs (chain outranks
+  // config): the 0.3.2-generation controller splits fee authority into FEE_MANAGER_ROLE — a
+  // public constant view that answers, and the role the rollout grants alongside POOL_CREATOR
+  // — while earlier controllers gate fees behind CONFIGURATOR_ROLE. The probed value is used
+  // as the role id itself, so even a renamed hash follows the deployed truth. An explicit
+  // roles.second override (the pre-2.1.0 legacy path) skips the probe.
+  let second = roles.second;
+  let secondRole = roles.secondLabel ?? "CONFIGURATOR";
+  if (second === undefined) {
+    try {
+      second = (await client.readContract({ address: controller, abi: controllerViewsAbi, functionName: "FEE_MANAGER_ROLE" })) as `0x${string}`;
+      secondRole = "FEE_MANAGER";
+    } catch {
+      second = CONFIGURATOR_ROLE;
+    }
+  }
+  const [hasCreator, hasSecond] = await Promise.all([
     client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [roles.creator ?? POOL_CREATOR_ROLE, adapter] }),
-    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [roles.configurator ?? CONFIGURATOR_ROLE, adapter] }),
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [second, adapter] }),
   ]);
-  return { hasCreator, hasConfigurator, granted: hasCreator && hasConfigurator };
+  return { hasCreator, hasSecond, secondRole, granted: hasCreator && hasSecond };
 }
 
 // ── Recipe constants catalog (mirrors the read API's hand-maintained annotation layer) ──────
@@ -149,11 +168,17 @@ export interface RecipeCatalogEntry {
   args: { type: string; display: string } | null;
 }
 export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
-  "0xa39d552802b2d3a9be6f5dcdd2c6961daed1234d": {
+  // 0.3.2 recipes (identical addresses on 42161 + 8453; constant getters probed live on the
+  // deployed contracts 2026-08-07 — both liquidity flavors carry the same band constants).
+  "0xd27c7bb8564db019b41d9c48d1abced9a7d90291": {
     constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
     args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
   },
-  "0xa85cfa6e66f301a18d182a8304f5c4afef5b4682": {
+  "0x1cf1ef3f0d2f59bf26a373ce7dcf0f88612c1506": {
+    constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
+    args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
+  },
+  "0x6d838136bbbe7d34ce8dddc431ce1bb4a1f9d98d": {
     constants: ["WINDOW_WIDTH"],
     args: { type: "()", display: "no payload — the fixed-rate recipe rejects any additionalData" },
   },
