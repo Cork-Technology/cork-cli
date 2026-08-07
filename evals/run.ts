@@ -133,7 +133,15 @@ async function main() {
   }
   const client = new Anthropic(hasExplicitCreds ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
   const only = process.env.CORK_EVAL_ONLY;
-  const tasks = TASKS.filter((t) => (only ? t.id === only : process.env.EVAL_HELD_OUT ? true : !t.heldOut));
+  const onlySet = only ? new Set(only.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+  const tasks = TASKS.filter((t) => (onlySet ? onlySet.has(t.id) : process.env.EVAL_HELD_OUT ? true : !t.heldOut));
+  // A filter that matches nothing must FAIL, not report an empty run: under EVAL_GATE the n>0
+  // short-circuit below would otherwise pass a zero-task run — a green no-op (class C13), the
+  // same failure mode as bun test's bare-filename filter and vitest's -t with no match.
+  if (onlySet && tasks.length === 0) {
+    console.error(`CORK_EVAL_ONLY matched no tasks (${[...onlySet].join(", ")}) — valid ids are in evals/tasks.ts`);
+    process.exit(2);
+  }
 
   const results: TaskResult[] = [];
   for (const task of tasks) {
