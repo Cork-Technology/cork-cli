@@ -217,6 +217,10 @@ const chainStubAnswer = (c: { functionName: string }, over: { cork?: string; lop
         return over.cork ?? MAINNET_DEPLOYMENT.poolManager;
       case "LOP":
         return over.lop ?? LOP_ADDRESSES[1]!;
+      case "WHITELIST":
+        // The default fixture models the CURRENT (caller-gate) adapter generation;
+        // pre-gate-generation tests stub their own refusal.
+        return MAINNET_DEPLOYMENT.whitelistManager;
       case "market":
         return over.market ?? { collateralAsset: COLLATERAL, referenceAsset: REFERENCE, expiryTimestamp: NOW + 10_000n, rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 1n, rateChangeCapacityMax: 1n, rateOracle: "0x00000000000000000000000000000000000000f0" };
       case "shares":

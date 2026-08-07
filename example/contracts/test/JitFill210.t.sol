@@ -207,14 +207,12 @@ contract JitFill210Test is ForkBase {
     function _predictCst(JitBuild memory b) internal {
         uint256 snapshot = vm.snapshotState();
         vm.prank(JIT_ADAPTER);
-        ICorkControllerMinimal(CONTROLLER).createNewPool(
-            ICorkControllerMinimal.PoolCreationParams({
-                pool: b.jitMarket,
-                unwindSwapFeePercentage: 0,
-                swapFeePercentage: 0,
-                isWhitelistEnabled: false
+        ICorkControllerMinimal(CONTROLLER)
+            .createNewPool(
+                ICorkControllerMinimal.PoolCreationParams({
+                pool: b.jitMarket, unwindSwapFeePercentage: 0, swapFeePercentage: 0, isWhitelistEnabled: false
             })
-        );
+            );
         (, b.predictedCst) = cork.shares(b.poolId);
         assertTrue(b.predictedCst != address(0), "snapshot creation produced no cST");
         b.domainSeparator = IERC2612Minimal(b.predictedCst).DOMAIN_SEPARATOR();
@@ -322,7 +320,7 @@ contract JitFill210Test is ForkBase {
     ///      genuine JIT fill presented under the WRONG pool id still reverts, unwinding
     ///      the created market, the mint, and the payment together.
     function test_jitOrder_wrongPoolIdStillReverts() public {
-        (, , IOrderMixinMinimal.Order memory order, bytes memory extension) = _buildJitOrder();
+        (,, IOrderMixinMinimal.Order memory order, bytes memory extension) = _buildJitOrder();
 
         deal(JIT_COLLATERAL, maker, 1e18);
         vm.prank(maker);

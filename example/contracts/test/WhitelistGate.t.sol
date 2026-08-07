@@ -90,10 +90,7 @@ contract WhitelistGateTest is ForkBase {
 
     function _depositParams(uint256 amount) internal view returns (CorkPoolForSelfBase.DepositForSelfParams memory) {
         return CorkPoolForSelfBase.DepositForSelfParams({
-            poolId: POOL_ID,
-            collateralAssetsIn: amount,
-            minCptAndCstSharesOut: 0,
-            deadline: block.timestamp
+            poolId: POOL_ID, collateralAssetsIn: amount, minCptAndCstSharesOut: 0, deadline: block.timestamp
         });
     }
 
@@ -174,9 +171,7 @@ contract WhitelistGateTest is ForkBase {
         vm.expectRevert(rejection);
         combinedAdapter.exerciseForSelf(CorkPoolForSelfBase.ExerciseForSelfParams(POOL_ID, 0, 0, 0, deadline));
         vm.expectRevert(rejection);
-        combinedAdapter.exerciseOtherForSelf(
-            CorkPoolForSelfBase.ExerciseOtherForSelfParams(POOL_ID, 0, 0, 0, deadline)
-        );
+        combinedAdapter.exerciseOtherForSelf(CorkPoolForSelfBase.ExerciseOtherForSelfParams(POOL_ID, 0, 0, 0, deadline));
         vm.expectRevert(rejection);
         combinedAdapter.unwindDepositForSelf(CorkPoolForSelfBase.UnwindDepositForSelfParams(POOL_ID, 0, 0, deadline));
         vm.expectRevert(rejection);
@@ -193,8 +188,8 @@ contract WhitelistGateTest is ForkBase {
     ///====== THE FILL PATH ======///
 
     function _sellCstOrder() internal returns (IOrderMixinMinimal.Order memory order, bytes memory signature) {
-        // Maker inventory: seed shares as a listed participant, hand them to the maker.
-        _listMarket(safe); // may be redundant per test; harmless when already listed
+        // Maker inventory: seed shares while the market is still ungated (every fill test
+        // gates AFTER this helper), hand them to the maker.
         uint256 sharesOut = _seedShares(combinedAdapter, 20e18);
         vm.prank(safe);
         assertTrue(IERC20(cst).transfer(maker, sharesOut / 2), "seed maker");

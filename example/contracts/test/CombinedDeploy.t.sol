@@ -45,9 +45,7 @@ contract CombinedDeployTest is ForkBase {
     function test_constructorRejectsMispairedWhitelistManager() public {
         address shadowWlm = 0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6;
         address shadowPm = 0x02803Bb52D2184f906F45B50C66AA969C2E37263;
-        vm.expectRevert(
-            abi.encodeWithSelector(ForSelfCommon.WhitelistManagerMismatch.selector, shadowPm, POOL_MANAGER)
-        );
+        vm.expectRevert(abi.encodeWithSelector(ForSelfCommon.WhitelistManagerMismatch.selector, shadowPm, POOL_MANAGER));
         new CorkForSelfAdapter(POOL_MANAGER, shadowWlm, LOP);
         // An address that is not a whitelist manager at all fails the same self-check
         // (its CORK_POOL_MANAGER() staticcall cannot answer), just less legibly.

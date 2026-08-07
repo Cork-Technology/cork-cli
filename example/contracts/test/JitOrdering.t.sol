@@ -5,9 +5,9 @@ import {Test} from "forge-std/Test.sol";
 
 import {CorkLopFillForSelfAdapter} from "../src/CorkLopFillForSelfAdapter.sol";
 import {CorkLopFillForSelfBase} from "../src/base/CorkLopFillForSelfBase.sol";
+import {ForSelfCommon} from "../src/base/ForSelfCommon.sol";
 import {MarketId} from "../src/interfaces/ICorkPoolManagerMinimal.sol";
 import {IOrderMixinMinimal} from "../src/interfaces/IOrderMixinMinimal.sol";
-import {ForSelfCommon} from "../src/base/ForSelfCommon.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockJitLop, MockJitPoolManager, MockWhitelistManager} from "./mocks/MockJitProtocols.sol";
 

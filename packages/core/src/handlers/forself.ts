@@ -88,10 +88,21 @@ export async function verifyForSelfBindings(args: {
       warnings,
     };
   }
+  // All binding reads issued together (one multicall round trip on known chains). The
+  // WHITELIST() probe rides along but keeps its own error classification: unlike CORK/LOP
+  // — whose refusal means "not a ForSelf adapter" — its refusal identifies the pre-gate
+  // GENERATION, so it must never trip the shared catch below.
+  let wlProbe: { kind: "answered"; value: string } | { kind: "refused" } | { kind: "transport" };
+  let boundCork: string;
+  let boundLop: string | undefined;
   try {
-    const [boundCork, boundLop] = await Promise.all([
+    [boundCork, boundLop, wlProbe] = await Promise.all([
       client.readContract({ address: adapter, abi: forSelfBindingAbi, functionName: "CORK" }),
       lop ? client.readContract({ address: adapter, abi: forSelfBindingAbi, functionName: "LOP" }) : Promise.resolve(undefined),
+      client
+        .readContract({ address: adapter, abi: forSelfBindingAbi, functionName: "WHITELIST" })
+        .then((value): typeof wlProbe => ({ kind: "answered", value }))
+        .catch((err): typeof wlProbe => ({ kind: isTransportFailure(err) ? "transport" : "refused" })),
     ]);
     const corkOk = boundCork.toLowerCase() === poolManager.toLowerCase();
     const lopOk = lop === undefined || (boundLop !== undefined && boundLop.toLowerCase() === lop.toLowerCase());
@@ -124,11 +135,11 @@ export async function verifyForSelfBindings(args: {
     };
   }
 
-  // Generation probe — OPTIONAL by design: `WHITELIST()` only exists on the caller-gate
-  // generation, and a revert here is a legitimate older deployment, not an accusation.
-  let callerGate: boolean | undefined;
-  try {
-    const boundWl = await client.readContract({ address: adapter, abi: forSelfBindingAbi, functionName: "WHITELIST" });
+  // Resolve the generation probe — OPTIONAL by design: `WHITELIST()` only exists on the
+  // caller-gate generation, and a refusal is a legitimate older deployment, not an
+  // accusation; a transport blip proves nothing either way (attribution discipline).
+  if (wlProbe.kind === "answered") {
+    const boundWl = wlProbe.value;
     if (whitelistManager !== undefined && boundWl.toLowerCase() !== whitelistManager.toLowerCase()) {
       return {
         gate: envelope({
@@ -142,13 +153,9 @@ export async function verifyForSelfBindings(args: {
         warnings,
       };
     }
-    callerGate = true;
-  } catch (err) {
-    // Attribution discipline again: only the contract's own refusal proves the older
-    // generation; a transport blip proves nothing either way.
-    callerGate = isTransportFailure(err) ? undefined : false;
+    return { warnings, callerGate: true };
   }
-  return { warnings, callerGate };
+  return { warnings, callerGate: wlProbe.kind === "refused" ? false : undefined };
 }
 
 /** The informational disclosure every ForSelf artifact carries. */
@@ -215,9 +222,11 @@ export async function prepareForSelfTakerFill(args: {
   warnings.push(...bind.warnings);
   // Caller-gate coherence (generation-aware): a caller-gate adapter re-checks the ACCOUNT
   // against the pool whitelist AFTER the fill, so an unlisted account's fill can only
-  // revert. isWhitelisted is structurally true on ungated markets (and on ids that do not
-  // exist yet — a JIT market only becomes gated by its own creation, which the post-fill
-  // check covers on-chain), so one unconditional read is the whole pre-flight.
+  // revert. isWhitelisted is structurally true on ungated markets, so one unconditional
+  // read is the whole pre-flight. Advance notice only, never authoritative for JIT
+  // markets: a not-yet-created id can already read gated (activation is a pre-creation
+  // act) AND creation overwrites the gate state from its own parameters mid-fill — the
+  // adapter's post-fill check reads the end state either way.
   if (bind.callerGate === true && resolved && dep?.whitelistManager) {
     try {
       const accountOk = await resolved.client.readContract({

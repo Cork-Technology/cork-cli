@@ -106,8 +106,6 @@ contract DeployForSelfAdapter is Script {
         // forever. The adapter constructor enforces this too — checking here as well
         // turns an on-chain revert into a readable pre-broadcast error.
         address served = IWhitelistManagerMinimal(whitelistManager).CORK_POOL_MANAGER();
-        require(
-            served == poolManager, WhitelistManagerNotForPoolManager(whitelistManager, served, poolManager)
-        );
+        require(served == poolManager, WhitelistManagerNotForPoolManager(whitelistManager, served, poolManager));
     }
 }
