@@ -19,6 +19,10 @@ import {ICorkPoolManagerMinimal, Market, MarketId} from "../src/interfaces/ICork
 ///      - POOL_ID is a live, unexpired sUSDe pool listed by api-phoenix.cork.tech.
 abstract contract ForkBase is Test {
     address internal constant POOL_MANAGER = 0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2;
+    /// @dev The WhitelistManager proxy PAIRED with POOL_MANAGER — its set-once
+    ///      `CORK_POOL_MANAGER()` reverse pointer reads POOL_MANAGER on-chain (verified
+    ///      live 2026-08-07), which is what the adapter constructor enforces.
+    address internal constant WHITELIST_MANAGER = 0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A;
     address internal constant LOP = 0x111111125421cA6dc452d289314280a0f8842A65;
     MarketId internal constant POOL_ID =
         MarketId.wrap(0xd68978649ebc410d7f1825cae666483d300ca4e6905531df029687d2c19fe259);
@@ -38,9 +42,9 @@ abstract contract ForkBase is Test {
 
     function setUp() public virtual {
         require(block.chainid == 42_161, "run with --fork-url <Arbitrum One RPC>");
-        poolAdapter = new CorkPoolForSelfAdapter(POOL_MANAGER);
-        lopAdapter = new CorkLopFillForSelfAdapter(POOL_MANAGER, LOP);
-        combinedAdapter = new CorkForSelfAdapter(POOL_MANAGER, LOP);
+        poolAdapter = new CorkPoolForSelfAdapter(POOL_MANAGER, WHITELIST_MANAGER);
+        lopAdapter = new CorkLopFillForSelfAdapter(POOL_MANAGER, WHITELIST_MANAGER, LOP);
+        combinedAdapter = new CorkForSelfAdapter(POOL_MANAGER, WHITELIST_MANAGER, LOP);
 
         safe = makeAddr("safe");
         marketParams = cork.market(POOL_ID);

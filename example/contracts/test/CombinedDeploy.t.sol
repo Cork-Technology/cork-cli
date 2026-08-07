@@ -25,14 +25,34 @@ contract CombinedDeployTest is ForkBase {
 
     function test_immutablesPinnedAtDeploy() public view {
         assertEq(address(combinedAdapter.CORK()), POOL_MANAGER);
+        assertEq(address(combinedAdapter.WHITELIST()), WHITELIST_MANAGER);
         assertEq(address(combinedAdapter.LOP()), LOP);
     }
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForSelfCommon.ZeroAddress.selector);
-        new CorkForSelfAdapter(address(0), LOP);
+        new CorkForSelfAdapter(address(0), WHITELIST_MANAGER, LOP);
         vm.expectRevert(ForSelfCommon.ZeroAddress.selector);
-        new CorkForSelfAdapter(POOL_MANAGER, address(0));
+        new CorkForSelfAdapter(POOL_MANAGER, address(0), LOP);
+        vm.expectRevert(ForSelfCommon.ZeroAddress.selector);
+        new CorkForSelfAdapter(POOL_MANAGER, WHITELIST_MANAGER, address(0));
+    }
+
+    /// @dev The pairing self-check, against REAL contracts: both Cork stacks are live on
+    ///      this fork, so a genuinely mispaired (poolManager, whitelistManager) exists to
+    ///      test with — the SHADOW stack's WhitelistManager serves the shadow pool
+    ///      manager, not this one, and its reverse pointer says so on-chain.
+    function test_constructorRejectsMispairedWhitelistManager() public {
+        address shadowWlm = 0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6;
+        address shadowPm = 0x02803Bb52D2184f906F45B50C66AA969C2E37263;
+        vm.expectRevert(
+            abi.encodeWithSelector(ForSelfCommon.WhitelistManagerMismatch.selector, shadowPm, POOL_MANAGER)
+        );
+        new CorkForSelfAdapter(POOL_MANAGER, shadowWlm, LOP);
+        // An address that is not a whitelist manager at all fails the same self-check
+        // (its CORK_POOL_MANAGER() staticcall cannot answer), just less legibly.
+        vm.expectRevert();
+        new CorkForSelfAdapter(POOL_MANAGER, LOP, LOP);
     }
 
     /// @dev Group A -> Group B -> Group C -> LOP fill, all through one deployed address.

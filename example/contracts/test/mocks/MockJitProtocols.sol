@@ -34,6 +34,34 @@ contract MockJitPoolManager {
     }
 }
 
+/// @dev A whitelist manager double for the ordering tests: serves one pool manager
+///      (satisfying the adapter constructor's reverse-pointer self-check) and gates all
+///      markets with one switch — these tests only ever use a single market id. The
+///      enforcement rule mirrors the real one: ungated => always true, gated =>
+///      membership. Only the ORDERING property is proven against this double; the real
+///      WhitelistManager behavior is proven on fork in `WhitelistGate.t.sol`.
+contract MockWhitelistManager {
+    address public immutable CORK_POOL_MANAGER;
+    bool public gated;
+    mapping(address => bool) public listed;
+
+    constructor(address poolManager) {
+        CORK_POOL_MANAGER = poolManager;
+    }
+
+    function setGated(bool value) external {
+        gated = value;
+    }
+
+    function setListed(address account, bool value) external {
+        listed[account] = value;
+    }
+
+    function isWhitelisted(MarketId, address account) external view returns (bool) {
+        return !gated || listed[account];
+    }
+}
+
 /// @dev A limit-order protocol that mimics the parts of a fill this wrapper depends on:
 ///      it reads the target out of the first 20 bytes of `args`, optionally creates the
 ///      market mid-fill (standing in for the maker pre-interaction that a Cork JIT order
@@ -44,9 +72,19 @@ contract MockJitLop {
     MockJitPoolManager public immutable POOL_MANAGER;
     bool public immutable CREATES_MARKET;
 
+    /// @dev When set, market creation also ACTIVATES the market's whitelist — the exact
+    ///      order of operations the real controller's `createNewPool` performs
+    ///      (activateMarketWhitelist inside pool creation), which is what makes a
+    ///      pre-fill whitelist check unsound for just-in-time markets.
+    MockWhitelistManager public gateOnCreate;
+
     constructor(MockJitPoolManager poolManager, bool createsMarket) {
         POOL_MANAGER = poolManager;
         CREATES_MARKET = createsMarket;
+    }
+
+    function setGateOnCreate(MockWhitelistManager whitelistManager) external {
+        gateOnCreate = whitelistManager;
     }
 
     function hashOrder(IOrderMixinMinimal.Order calldata order) external pure returns (bytes32) {
@@ -62,8 +100,12 @@ contract MockJitLop {
         bytes calldata args
     ) external payable returns (uint256 makingAmount, uint256 takingAmount, bytes32 orderHash) {
         // The maker's pre-interaction runs here in a real fill; for a JIT order that is
-        // what brings the market into existence.
-        if (CREATES_MARKET) POOL_MANAGER.create();
+        // what brings the market into existence — and, when the creation parameters say
+        // so, what activates its whitelist (the controller does both in createNewPool).
+        if (CREATES_MARKET) {
+            POOL_MANAGER.create();
+            if (address(gateOnCreate) != address(0)) gateOnCreate.setGated(true);
+        }
 
         address target = address(bytes20(args[0:20]));
         makingAmount = order.makingAmount;

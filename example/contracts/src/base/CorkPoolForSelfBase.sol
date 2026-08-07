@@ -32,10 +32,14 @@ import {ForSelfCommon} from "./ForSelfCommon.sol";
 ///         Derived input amounts (the pool rate can move within the call) are handled as
 ///         pull-a-cap-then-refund, never preview-then-exact-pull.
 ///
-///         When a market's whitelist is enabled, THIS contract's address must be
-///         whitelisted (the pool manager checks its direct caller) — which, for a wrapper
-///         SHARED by many accounts, opens that market to everyone. See the README's
-///         shared-vs-per-account note before relying on a market whitelist.
+///         When a market's whitelist is enabled, TWO addresses must pass: the pool
+///         manager checks its direct caller (this contract, so this contract's address
+///         must be whitelisted), and this contract checks the REAL caller — every
+///         entrypoint requires `isWhitelisted(poolId, msg.sender)` against the same
+///         on-chain WhitelistManager. A shared instance therefore no longer opens a
+///         gated market to everyone: each calling Safe must be whitelisted itself (one
+///         whitelist add per Safe). Ungated markets are unaffected — the check is
+///         always true for them. See the README's whitelist section.
 ///
 ///         Note the share tokens are never approved to the pool manager by anyone: it
 ///         moves cST out of its own caller with a gated overload that skips that check
@@ -61,6 +65,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function depositForSelf(DepositForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cptAndCstSharesOut)
     {
@@ -88,6 +93,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function mintForSelf(MintForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsIn)
     {
@@ -116,6 +122,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function unwindSwapForSelf(UnwindSwapForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cstSharesOut, uint256 referenceAssetsOut, uint256 fee)
     {
@@ -148,6 +155,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function unwindExerciseForSelf(UnwindExerciseForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsIn, uint256 referenceAssetsOut, uint256 fee)
     {
@@ -181,6 +189,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function unwindExerciseOtherForSelf(UnwindExerciseOtherForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsIn, uint256 cstSharesOut, uint256 fee)
     {
@@ -216,6 +225,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function swapForSelf(SwapForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cstSharesIn, uint256 referenceAssetsIn, uint256 fee)
     {
@@ -250,6 +260,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function exerciseForSelf(ExerciseForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsOut, uint256 referenceAssetsIn, uint256 fee)
     {
@@ -285,6 +296,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function exerciseOtherForSelf(ExerciseOtherForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsOut, uint256 cstSharesIn, uint256 fee)
     {
@@ -322,6 +334,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function unwindDepositForSelf(UnwindDepositForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cptAndCstSharesIn)
     {
@@ -344,6 +357,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function unwindMintForSelf(UnwindMintForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 collateralAssetsOut)
     {
@@ -366,6 +380,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function redeemForSelf(RedeemForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 referenceAssetsOut, uint256 collateralAssetsOut)
     {
@@ -392,6 +407,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function withdrawForSelf(WithdrawForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cptSharesIn, uint256 actualCollateralAssetsOut, uint256 actualReferenceAssetsOut)
     {
@@ -415,6 +431,7 @@ abstract contract CorkPoolForSelfBase is ForSelfCommon {
     function withdrawOtherForSelf(WithdrawOtherForSelfParams calldata params)
         external
         nonReentrant
+        onlyWhitelistedCaller(params.poolId)
         checkDeadline(params.deadline)
         returns (uint256 cptSharesIn, uint256 actualCollateralAssetsOut, uint256 actualReferenceAssetsOut)
     {

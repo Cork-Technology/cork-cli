@@ -952,6 +952,37 @@ const CATALOG: Mutant[] = [
     replace: "",
     tests: [T.venueTransport],
   },
+
+  // ── ForSelf caller-gate generation (WHITELIST() binding + account pre-flight) ─────────────
+  {
+    // WHITELIST() binding comparator inverted: a correctly-bound adapter becomes a conflict
+    // and a wrong-list adapter sails through — the caller would grant an allowance to an
+    // adapter gating against the wrong whitelist.
+    id: "forself-wl-binding-comparator",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "if (whitelistManager !== undefined && boundWl.toLowerCase() !== whitelistManager.toLowerCase()) {",
+    replace: "if (whitelistManager !== undefined && boundWl.toLowerCase() === whitelistManager.toLowerCase()) {",
+    tests: [T.forself],
+  },
+  {
+    // Generation gate flipped on the pool path: the account leg of the whitelist pre-flight
+    // runs for PRE-gate adapters (false alarm — nothing on-chain checks the account there)
+    // and is skipped for caller-gate adapters (the real revert goes unwarned).
+    id: "forself-wl-callergate-account-gate",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "...(bind.callerGate === true ? { account: input.account } : {}),",
+    replace: "...(bind.callerGate !== true ? { account: input.account } : {}),",
+    tests: [T.forself],
+  },
+  {
+    // Fill-path account verdict inverted: the unlisted account's fill warning never fires —
+    // the fill reverts CallerNotWhitelisted on-chain with zero advance notice.
+    id: "forself-wl-fill-account-verdict",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "if (accountOk === false) {",
+    replace: "if (accountOk !== false) {",
+    tests: [T.forself],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

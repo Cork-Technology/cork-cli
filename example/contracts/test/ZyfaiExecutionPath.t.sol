@@ -8,7 +8,7 @@ import {CorkLopFillForSelfBase} from "../src/base/CorkLopFillForSelfBase.sol";
 import {MarketId} from "../src/interfaces/ICorkPoolManagerMinimal.sol";
 import {IOrderMixinMinimal} from "../src/interfaces/IOrderMixinMinimal.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockJitLop, MockJitPoolManager} from "./mocks/MockJitProtocols.sol";
+import {MockJitLop, MockJitPoolManager, MockWhitelistManager} from "./mocks/MockJitProtocols.sol";
 
 interface IERC7579Account {
     function executeFromExecutor(bytes32 mode, bytes calldata executionCalldata)
@@ -116,7 +116,8 @@ contract ZyfaiExecutionPathTest is Test {
         MockERC20 cst = new MockERC20();
         MockJitPoolManager pm = new MockJitPoolManager(address(collateral), address(cst));
         MockJitLop lop = new MockJitLop(pm, true);
-        CorkForSelfAdapter adapter = new CorkForSelfAdapter(address(pm), address(lop));
+        MockWhitelistManager wlm = new MockWhitelistManager(address(pm));
+        CorkForSelfAdapter adapter = new CorkForSelfAdapter(address(pm), address(wlm), address(lop));
 
         cst.mint(address(lop), 10e18); // the maker's inventory
         collateral.mint(SAFE, 1e18); // the account's money

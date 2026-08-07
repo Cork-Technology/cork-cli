@@ -14,5 +14,8 @@ import {ForSelfCommon} from "./base/ForSelfCommon.sol";
 ///         allowances. Both underlying protocols are pinned as immutables at deployment.
 ///         EXAMPLE CODE — the integrator must audit, vet, and deploy it themselves.
 contract CorkForSelfAdapter is CorkPoolForSelfBase, CorkLopFillForSelfBase {
-    constructor(address cork, address lop) ForSelfCommon(cork) CorkLopFillForSelfBase(lop) {}
+    constructor(address cork, address whitelistManager, address lop)
+        ForSelfCommon(cork, whitelistManager)
+        CorkLopFillForSelfBase(lop)
+    {}
 }

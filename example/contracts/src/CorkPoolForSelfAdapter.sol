@@ -10,5 +10,5 @@ import {ForSelfCommon} from "./base/ForSelfCommon.sol";
 /// @notice Standalone deployment of the pool-manager ForSelf surface (Fix 1).
 ///         EXAMPLE CODE — the integrator must audit, vet, and deploy it themselves.
 contract CorkPoolForSelfAdapter is CorkPoolForSelfBase {
-    constructor(address cork) ForSelfCommon(cork) {}
+    constructor(address cork, address whitelistManager) ForSelfCommon(cork, whitelistManager) {}
 }

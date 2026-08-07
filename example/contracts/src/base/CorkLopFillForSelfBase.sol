@@ -159,6 +159,13 @@ abstract contract CorkLopFillForSelfBase is ForSelfCommon {
         // and costs nothing in safety: a failure reverts the whole transaction, undoing
         // the payment along with everything else.
         _requireOrderIsForPool(params.poolId, address(uint160(params.order.makerAsset)), takerAsset);
+        // Same post-fill placement for the caller-whitelist gate, same reason: a
+        // just-in-time market's whitelist is activated INSIDE pool creation (the
+        // controller's createNewPool), i.e. inside this very fill — a pre-check would
+        // read the pre-creation state (ungated) and admit a caller the market gates.
+        // For already-existing markets the timing is indifferent, so one placement
+        // serves both shapes.
+        _requireCallerWhitelisted(params.poolId);
 
         IERC20(takerAsset).forceApprove(address(LOP), 0);
         _sweep(takerAsset);

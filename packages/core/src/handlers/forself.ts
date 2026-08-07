@@ -12,6 +12,7 @@ import { decodeJitExtension } from "../market-registry.ts";
 import { buildTakerFill } from "../orders.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
+import { whitelistManagerAbi } from "../chain/abis.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
@@ -38,7 +39,14 @@ export function forSelfPairAllowed(
 
 /** Verify a caller-supplied ForSelf adapter's pinned-protocol bindings on-chain. `wantLop`
  *  distinguishes the fill surface (combined/LOP adapters expose LOP()) from the pool-only
- *  surface (CORK() only). Returns a conflict envelope, warnings, or nothing to report. */
+ *  surface (CORK() only). Returns a conflict envelope, warnings, or nothing to report —
+ *  plus `callerGate`, the adapter's GENERATION: `true` when it exposes `WHITELIST()`
+ *  (the caller-gate generation, which enforces isWhitelisted(poolId, msg.sender) on
+ *  every entrypoint), `false` when the view reverts (a pre-gate deployment — legitimate,
+ *  e.g. the 2026-08-07 shadow instance), `undefined` when transport left it unknowable.
+ *  A `WHITELIST()` that ANSWERS but names a different whitelist manager than the chain's
+ *  deployment config is a binding conflict like any other: the caller gate would consult
+ *  the wrong list. */
 export async function verifyForSelfBindings(args: {
   client: PublicClient | null;
   ctx: HandlerContext;
@@ -46,8 +54,9 @@ export async function verifyForSelfBindings(args: {
   adapter: `0x${string}`;
   poolManager: `0x${string}`;
   lop?: `0x${string}` | undefined;
-}): Promise<{ gate?: Envelope; warnings: Warning[] }> {
-  const { client, ctx, chainId, adapter, poolManager, lop } = args;
+  whitelistManager?: `0x${string}` | undefined;
+}): Promise<{ gate?: Envelope; warnings: Warning[]; callerGate?: boolean | undefined }> {
+  const { client, ctx, chainId, adapter, poolManager, lop, whitelistManager } = args;
   const warnings: Warning[] = [];
   const unverified = (why: string): { warnings: Warning[] } => {
     warnings.push({
@@ -114,7 +123,32 @@ export async function verifyForSelfBindings(args: {
       warnings,
     };
   }
-  return { warnings };
+
+  // Generation probe — OPTIONAL by design: `WHITELIST()` only exists on the caller-gate
+  // generation, and a revert here is a legitimate older deployment, not an accusation.
+  let callerGate: boolean | undefined;
+  try {
+    const boundWl = await client.readContract({ address: adapter, abi: forSelfBindingAbi, functionName: "WHITELIST" });
+    if (whitelistManager !== undefined && boundWl.toLowerCase() !== whitelistManager.toLowerCase()) {
+      return {
+        gate: envelope({
+          state: "conflict",
+          data: { adapter, expected: { whitelistManager }, onChain: { whitelist: boundWl } },
+          chainId,
+          source: "chain",
+          warnings: [{ code: "adapter_binding_mismatch", message: `the ForSelf adapter ${adapter} pins a DIFFERENT WhitelistManager (${boundWl}) than this tool's ${chainId} deployment config (${whitelistManager}) — its caller gate would consult the wrong whitelist. Do not sign; verify the adapter address with your integrator` }],
+          ctx,
+        }),
+        warnings,
+      };
+    }
+    callerGate = true;
+  } catch (err) {
+    // Attribution discipline again: only the contract's own refusal proves the older
+    // generation; a transport blip proves nothing either way.
+    callerGate = isTransportFailure(err) ? undefined : false;
+  }
+  return { warnings, callerGate };
 }
 
 /** The informational disclosure every ForSelf artifact carries. */
@@ -174,11 +208,32 @@ export async function prepareForSelfTakerFill(args: {
   if (!dep) {
     warnings.push({ code: "unknown_deployment", message: `no Cork deployment configured for chainId ${chainId} — the ForSelf adapter's CORK() binding and the pool coherence pre-flight were SKIPPED; verify the adapter independently before granting it an allowance` });
   }
-  const bind: { gate?: Envelope; warnings: Warning[] } = dep
-    ? await verifyForSelfBindings({ client: resolved?.client ?? null, ctx, chainId, adapter: forSelf.adapter, poolManager: dep.poolManager, lop })
+  const bind: { gate?: Envelope; warnings: Warning[]; callerGate?: boolean | undefined } = dep
+    ? await verifyForSelfBindings({ client: resolved?.client ?? null, ctx, chainId, adapter: forSelf.adapter, poolManager: dep.poolManager, lop, whitelistManager: dep.whitelistManager })
     : { warnings: [] };
   if (bind.gate) return bind.gate;
   warnings.push(...bind.warnings);
+  // Caller-gate coherence (generation-aware): a caller-gate adapter re-checks the ACCOUNT
+  // against the pool whitelist AFTER the fill, so an unlisted account's fill can only
+  // revert. isWhitelisted is structurally true on ungated markets (and on ids that do not
+  // exist yet — a JIT market only becomes gated by its own creation, which the post-fill
+  // check covers on-chain), so one unconditional read is the whole pre-flight.
+  if (bind.callerGate === true && resolved && dep?.whitelistManager) {
+    try {
+      const accountOk = await resolved.client.readContract({
+        address: dep.whitelistManager,
+        abi: whitelistManagerAbi,
+        functionName: "isWhitelisted",
+        args: [forSelf.poolId, account],
+        ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
+      });
+      if (accountOk === false) {
+        warnings.push({ code: "not_whitelisted", message: `${account} is not whitelisted for pool ${forSelf.poolId} — this ForSelf adapter enforces a caller whitelist and the fill would revert CallerNotWhitelisted after moving the maker asset. One whitelist add per calling Safe: ask the pool operator to whitelist the account (or use a pool with no whitelist)` });
+      }
+    } catch {
+      /* best-effort: an unreadable whitelist never blocks byte-building */
+    }
+  }
   if (resolved && dep) {
     try {
       const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, forSelf.poolId, ctx.atBlock);
@@ -283,11 +338,20 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
 
   const call = buildPoolForSelfCall(action, deadline);
 
-  // Bindings + the same pool guards the Bundler3 path gets (expiry/pause/whitelist) — with
-  // the ForSelf adapter as the whitelist subject: the pool manager checks its direct caller,
-  // which on this path is the adapter; nothing checks the account itself.
+  // Bindings + the same pool guards the Bundler3 path gets (expiry/pause/whitelist). The
+  // whitelist subjects depend on the adapter's GENERATION: the pool manager always checks
+  // its direct caller (the adapter), and caller-gate adapters (WHITELIST() answers)
+  // additionally check the ACCOUNT — so the account leg of the pre-flight only runs when
+  // the deployed adapter actually enforces it.
   const resolved = await getRpc(ctx, input.chainId);
-  const bind = await verifyForSelfBindings({ client: resolved?.client ?? null, ctx, chainId: input.chainId, adapter: forSelf.adapter, poolManager: dep.poolManager });
+  const bind = await verifyForSelfBindings({
+    client: resolved?.client ?? null,
+    ctx,
+    chainId: input.chainId,
+    adapter: forSelf.adapter,
+    poolManager: dep.poolManager,
+    whitelistManager: dep.whitelistManager,
+  });
   if (bind.gate) return bind.gate;
   warnings.push(...bind.warnings);
   let tokenAddresses: Record<string, string> | undefined;
@@ -305,8 +369,10 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
           whitelistManager: dep.whitelistManager,
           corkAdapter: forSelf.adapter,
           route: "for-self",
+          callerGate: bind.callerGate,
           poolId: (action as { poolId: `0x${string}` }).poolId,
           actionType: action.type,
+          ...(bind.callerGate === true ? { account: input.account } : {}),
           expiryTimestamp: tokens.expiryTimestamp,
           nowSeconds: nowSecs,
           atBlock: ctx.atBlock,

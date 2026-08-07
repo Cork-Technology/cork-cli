@@ -12,5 +12,8 @@ import {ForSelfCommon} from "./base/ForSelfCommon.sol";
 ///         belongs to which Cork market, which is what binds a fill to a real market.
 ///         EXAMPLE CODE — the integrator must audit, vet, and deploy it themselves.
 contract CorkLopFillForSelfAdapter is CorkLopFillForSelfBase {
-    constructor(address cork, address lop) ForSelfCommon(cork) CorkLopFillForSelfBase(lop) {}
+    constructor(address cork, address whitelistManager, address lop)
+        ForSelfCommon(cork, whitelistManager)
+        CorkLopFillForSelfBase(lop)
+    {}
 }

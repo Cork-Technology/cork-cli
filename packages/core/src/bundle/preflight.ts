@@ -54,9 +54,16 @@ export interface PreflightInput {
   corkAdapter?: `0x${string}` | undefined;
   /** Which call path the adapter belongs to — alters only the whitelist WORDING, never the
    *  check: "bundler3" (default) is the CorkAdapter behind Bundler3; "for-self" is an
-   *  integrator-deployed ForSelf adapter called directly (no initiator check exists there,
-   *  so `account` should be omitted on that route). */
+   *  integrator-deployed ForSelf adapter called directly. On the for-self route, pass
+   *  `account` only for caller-gate-generation adapters (WHITELIST() answers) — earlier
+   *  ForSelf deployments check nothing about the account, so warning on it would be a
+   *  false alarm. */
   route?: "bundler3" | "for-self" | undefined;
+  /** for-self route only: the adapter's generation as probed on-chain — `true` when the
+   *  adapter enforces isWhitelisted(poolId, msg.sender) itself (its WHITELIST() view
+   *  answers), `false` when it predates the caller gate, `undefined` when unknowable.
+   *  Alters only the adapter-subject WORDING. */
+  callerGate?: boolean | undefined;
   poolId: `0x${string}`;
   actionType: PhoenixAction["type"];
   /** The declared initiator — the address the ADAPTER checks against the whitelist. */
@@ -124,7 +131,10 @@ export async function poolPreflightWarnings(input: PreflightInput): Promise<Pref
   if (initiatorOk === false) {
     out.push({
       code: "not_whitelisted",
-      message: `${account} is not whitelisted for pool ${poolId} — CorkAdapter checks the bundle's initiator() and would revert UnauthorizedSender(). Ask the pool operator to whitelist it (or use a pool with no whitelist)`,
+      message:
+        input.route === "for-self"
+          ? `${account} is not whitelisted for pool ${poolId} — this ForSelf adapter enforces a caller whitelist (its WHITELIST() gate) and would revert CallerNotWhitelisted. One whitelist add per calling Safe: ask the pool operator to whitelist the account (or use a pool with no whitelist)`
+          : `${account} is not whitelisted for pool ${poolId} — CorkAdapter checks the bundle's initiator() and would revert UnauthorizedSender(). Ask the pool operator to whitelist it (or use a pool with no whitelist)`,
     });
   }
   if (adapterOk === false) {
@@ -132,7 +142,9 @@ export async function poolPreflightWarnings(input: PreflightInput): Promise<Pref
       code: "not_whitelisted",
       message:
         input.route === "for-self"
-          ? `the ForSelf adapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks its direct caller, which on this path is the ADAPTER; nobody can reach this gated pool through it until the adapter itself is whitelisted (and whitelisting a SHARED adapter opens the pool to every account on chain — see the adapter package README)`
+          ? input.callerGate === true
+            ? `the ForSelf adapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks its direct caller, which on this path is the ADAPTER; nobody can reach this gated pool through it until the adapter itself is whitelisted. (This adapter also re-checks each CALLER against the same whitelist, so whitelisting it does NOT open the pool to other accounts — one add for the adapter, one per calling Safe)`
+            : `the ForSelf adapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks its direct caller, which on this path is the ADAPTER; nobody can reach this gated pool through it until the adapter itself is whitelisted (and whitelisting a SHARED adapter of this pre-caller-gate generation opens the pool to every account on chain — see the adapter package README)`
           : `the corkAdapter ${corkAdapter} is not whitelisted for pool ${poolId} — the pool manager checks msg.sender, which for a bundled call is the ADAPTER, not you. Even a whitelisted user cannot reach this pool through Bundler3 until the adapter itself is whitelisted`,
     });
   }

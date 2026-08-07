@@ -13,6 +13,7 @@
     "test:live": "vitest run packages/core/test/fork-parity.test.ts packages/core/test/bundle-sim.test.ts packages/core/test/rpc-live.test.ts packages/core/test/hyperrpc-live.test.ts",
     "test:coverage": "bun -e \"try { Bun.resolveSync('@vitest/coverage-v8', '.') } catch { console.error('coverage provider deliberately not installed (deps minimization — notes/dependency-audit-2026-08-06.md). Install the version MATCHING vitest, run coverage, then revert package.json+bun.lock: bun add -d @vitest/coverage-v8@3.2.7'); process.exit(3) }\" && vitest run --coverage.enabled --coverage.provider=v8 --coverage.include='packages/*/src/**' --coverage.exclude='**/bin.ts' --coverage.exclude='**/types.ts' --coverage.reporter=text --coverage.reporter=html --exclude '**/{fork-parity,bundle-sim,rpc-live,hyperrpc-live}.test.ts'",
     "test:mutation": "bun scripts/mutation-probes.ts",
+    "test:mutation:sol": "bun scripts/sol-mutation-probes.ts",
     "test:prop": "test -f experiments/proptest/core.proptest.ts && test -f experiments/proptest/fusion.proptest.ts && bun test ./experiments/proptest/core.proptest.ts ./experiments/proptest/fusion.proptest.ts",
     "build": "node scripts/build-packages.mjs",
     "verify:package": "node scripts/verify-package-layout.mjs",

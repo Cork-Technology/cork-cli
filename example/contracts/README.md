@@ -142,8 +142,10 @@ Arbitrum One (chain id 42161) at the time of writing:
 | 1inch LOP v4 | `0x111111125421cA6dc452d289314280a0f8842A65` |
 | `WhitelistManager` | `0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A` |
 
-Those two are the only contracts the adapters ever call, and the only constructor
-arguments. The just-in-time order flow additionally involves the MarketRegistry 2.1.0
+Those three are the only contracts the adapters ever call, and the only constructor
+arguments. The `WhitelistManager` pairing is self-verifying: it records on-chain which
+pool manager it serves (`CORK_POOL_MANAGER()`), and both the deploy script and the
+adapter constructor reject a mispaired set before it can exist. The just-in-time order flow additionally involves the MarketRegistry 2.1.0
 stack — named inside the *orders* the wrapper fills, never called by the wrapper itself:
 
 | | |
@@ -163,22 +165,28 @@ want address parity across chains, as with your existing adapter proxy.
 **Shared deployment is what this package ships**, matching your existing adapter-proxy shape:
 one address for every account, one thing to audit, one spender to authorise.
 `script/DeployForSelfAdapter.s.sol` deploys exactly that. It is safe for every custody
-property above. But the adapter is the identity each *upstream* access check sees, so a
-shared instance collapses two of them — know these before you rely on either:
+property above. The adapter is also the identity each *upstream* access check sees; here is
+what that means for the two identity-sensitive features:
 
-- **Market whitelisting.** If a Cork market has its whitelist enabled, the *adapter's*
-  address must be whitelisted — the pool manager checks its direct caller. Whitelisting a
-  shared adapter therefore makes that market reachable by **anyone on chain**, not just your
-  accounts. Whitelisting is off in the pilot, so this is a decision for later, not now.
+- **Market whitelisting — enforced per caller, even shared.** On a whitelist-gated market
+  TWO addresses must pass: the pool manager admits its direct caller (the adapter, so the
+  adapter's address must be whitelisted), and the adapter itself requires
+  `isWhitelisted(poolId, msg.sender)` for the REAL caller against the same on-chain
+  `WhitelistManager`. Operationally that is **one whitelist add per calling Safe** (market
+  or global list — both admit), plus one for the adapter. A shared instance therefore no
+  longer opens a gated market to everyone. On the fill path the check runs AFTER the fill,
+  because a just-in-time market's whitelist is activated inside pool creation — i.e. inside
+  the fill itself; a pre-check would read the pre-creation (ungated) state. Ungated markets
+  are unaffected: the check is structurally true for them.
 - **Private orders.** An order restricted with `allowedSender` is compared against the LOP's
   `msg.sender`, which is the adapter. Naming a shared adapter as the allowed sender makes the
   order fillable by anyone — do **not** rely on `allowedSender` through a shared deployment.
 
 Neither blocks the pilot: market whitelisting is off, and the pilot's orders are public
-rather than `allowedSender`-restricted. If either becomes load-bearing later, deploy one
-adapter per account and add `address immutable OWNER` with a `require(msg.sender == OWNER)`
-— that restores both at no ongoing cost, and the script's CREATE2 salt already gives you
-deterministic per-account addresses.
+rather than `allowedSender`-restricted. If order exclusivity becomes load-bearing later,
+deploy one adapter per account and add `address immutable OWNER` with a
+`require(msg.sender == OWNER)` — that restores it at no ongoing cost, and the script's
+CREATE2 salt already gives you deterministic per-account addresses.
 
 ## What these adapters do NOT close
 

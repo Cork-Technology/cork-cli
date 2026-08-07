@@ -166,4 +166,25 @@ describe("preflight: degradation", () => {
     const w = await run({ paused: true, bitmap: 1 << 0, whitelisted: { [USER]: false } }, "deposit", { expiryTimestamp: NOW - 1n });
     expect(codes(w)).toEqual(["pool_expired", "pool_paused", "pool_paused", "not_whitelisted"]);
   });
+
+  // ── for-self route wording is GENERATION-aware (caller-gate adapters, 2026-08-07+) ────────
+  it("for-self + callerGate: an unlisted ACCOUNT is flagged with the adapter's own gate wording", async () => {
+    const w = await run({ whitelisted: { [USER]: false } }, "deposit", { route: "for-self", callerGate: true });
+    expect(codes(w)).toEqual(["not_whitelisted"]);
+    expect(w[0]?.message).toMatch(/CallerNotWhitelisted/);
+    expect(w[0]?.message).toContain(USER);
+    expect(w[0]?.message).not.toMatch(/initiator\(\)/); // that is the Bundler3 story, not this route's
+  });
+
+  it("for-self + callerGate: the unlisted-ADAPTER wording drops the blast-radius clause", async () => {
+    const w = await run({ whitelisted: { [ADP]: false } }, "deposit", { route: "for-self", callerGate: true });
+    expect(codes(w)).toEqual(["not_whitelisted"]);
+    expect(w[0]?.message).toMatch(/does NOT open the pool/);
+  });
+
+  it("for-self WITHOUT callerGate (older adapter): the blast-radius warning stands", async () => {
+    const w = await run({ whitelisted: { [ADP]: false } }, "deposit", { route: "for-self", callerGate: false, account: undefined });
+    expect(codes(w)).toEqual(["not_whitelisted"]);
+    expect(w[0]?.message).toMatch(/opens the pool to every account on chain/);
+  });
 });

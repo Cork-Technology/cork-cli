@@ -21,11 +21,16 @@ import { encodeFunctionData, parseAbi, toFunctionSelector } from "viem";
 import type { PhoenixAction } from "@cork/schemas";
 import type { LopOrder } from "./orders.ts";
 
-/** The two pinned-protocol views every ForSelf adapter exposes — the binding check that a
- *  caller-supplied adapter address really wraps the expected pool manager / LOP. */
+/** The pinned-protocol views a ForSelf adapter exposes — the binding check that a
+ *  caller-supplied adapter address really wraps the expected pool manager / LOP.
+ *  `WHITELIST()` exists only on the caller-gate generation (2026-08-07+): those adapters
+ *  additionally pin the WhitelistManager and require isWhitelisted(poolId, msg.sender)
+ *  on every entrypoint; earlier deployments revert this view, which is how the tool
+ *  tells the generations apart. */
 export const forSelfBindingAbi = parseAbi([
   "function CORK() view returns (address)",
   "function LOP() view returns (address)",
+  "function WHITELIST() view returns (address)",
 ]);
 
 // One human-readable declaration per entrypoint, byte-identical to the Solidity structs.

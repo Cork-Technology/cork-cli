@@ -7,8 +7,9 @@ import {CorkLopFillForSelfAdapter} from "../src/CorkLopFillForSelfAdapter.sol";
 import {CorkLopFillForSelfBase} from "../src/base/CorkLopFillForSelfBase.sol";
 import {MarketId} from "../src/interfaces/ICorkPoolManagerMinimal.sol";
 import {IOrderMixinMinimal} from "../src/interfaces/IOrderMixinMinimal.sol";
+import {ForSelfCommon} from "../src/base/ForSelfCommon.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockJitLop, MockJitPoolManager} from "./mocks/MockJitProtocols.sol";
+import {MockJitLop, MockJitPoolManager, MockWhitelistManager} from "./mocks/MockJitProtocols.sol";
 
 /// @dev The market binding is checked AFTER the fill so that a just-in-time order — one
 ///      whose market is created during the fill itself — is not rejected for a market that
@@ -30,13 +31,16 @@ contract JitOrderingTest is Test {
         cst = new MockERC20();
     }
 
+    MockWhitelistManager internal wlm;
+
     function _deploy(bool createsMarketDuringFill)
         internal
         returns (CorkLopFillForSelfAdapter adapter, MockJitLop lop)
     {
         MockJitPoolManager pm = new MockJitPoolManager(address(collateral), address(cst));
         lop = new MockJitLop(pm, createsMarketDuringFill);
-        adapter = new CorkLopFillForSelfAdapter(address(pm), address(lop));
+        wlm = new MockWhitelistManager(address(pm));
+        adapter = new CorkLopFillForSelfAdapter(address(pm), address(wlm), address(lop));
 
         cst.mint(address(lop), 10e18); // the maker's inventory, held by the protocol mock
         collateral.mint(safe, 1e18);
@@ -98,5 +102,36 @@ contract JitOrderingTest is Test {
 
         assertEq(collateral.balanceOf(safe), 1e18, "payment unwound with the revert");
         assertEq(cst.balanceOf(safe), 0, "no cover delivered");
+    }
+
+    /// @dev The scenario that fixes the whitelist check's placement: a just-in-time
+    ///      market whose creation ACTIVATES its whitelist mid-fill (the controller's
+    ///      createNewPool does both). A pre-fill check would have read the pre-creation
+    ///      state — ungated, so "whitelisted" — and admitted a caller the market gates.
+    ///      The post-fill check reads the state the transaction actually ends in.
+    function test_jitMarketGatedAtCreationRejectsUnlistedCaller() public {
+        (CorkLopFillForSelfAdapter adapter, MockJitLop lop) = _deploy(true);
+        lop.setGateOnCreate(wlm);
+        assertFalse(wlm.gated(), "whitelist not yet activated before the fill");
+
+        vm.prank(safe);
+        vm.expectPartialRevert(ForSelfCommon.CallerNotWhitelisted.selector);
+        adapter.fillOrderForSelf(_params());
+
+        assertEq(collateral.balanceOf(safe), 1e18, "payment unwound with the revert");
+        assertEq(cst.balanceOf(safe), 0, "no cover delivered");
+    }
+
+    /// @dev And the admit half: same mid-fill gating, but the caller IS on the list.
+    function test_jitMarketGatedAtCreationAdmitsListedCaller() public {
+        (CorkLopFillForSelfAdapter adapter, MockJitLop lop) = _deploy(true);
+        lop.setGateOnCreate(wlm);
+        wlm.setListed(safe, true);
+
+        vm.prank(safe);
+        (uint256 making,,) = adapter.fillOrderForSelf(_params());
+
+        assertEq(making, 10e18, "fill went through");
+        assertEq(cst.balanceOf(safe), 10e18, "cover delivered to the caller");
     }
 }

@@ -337,6 +337,32 @@ describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
     expect(env.warnings[0]?.message).toContain("not a Cork ForSelf adapter");
   });
 
+  it("caller-gate adapter + gated pool: the fill warns the ACCOUNT would revert CallerNotWhitelisted", async () => {
+    const { orderHash, row } = await signedVenueRow();
+    const gatedFill = stubRpc(
+      (c) => {
+        switch (c.functionName) {
+          case "WHITELIST":
+            return MAINNET_DEPLOYMENT.whitelistManager;
+          case "isWhitelisted":
+            return String(c.args?.[1]).toLowerCase() !== ACCOUNT.toLowerCase();
+          default:
+            return chainStubAnswer(c, {});
+        }
+      },
+      { code: { [ADAPTER.toLowerCase()]: "0x60806040" } },
+    );
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0009", action: { type: "taker-fill", orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(row), resolveRpc: gatedFill },
+    );
+    expect(env.state).toBe("ok"); // build-and-warn
+    const wl = env.warnings.find((w) => w.code === "not_whitelisted");
+    expect(wl?.message.toLowerCase()).toContain(ACCOUNT.toLowerCase());
+    expect(wl?.message).toMatch(/after moving the maker asset/);
+  });
+
   it("a pair outside the pool's share×cash set warns would_revert (build-and-warn)", async () => {
     const { orderHash, row } = await signedVenueRow({ makerAsset: "0x00000000000000000000000000000000000000AA" });
     const env = await runTool(
@@ -501,5 +527,69 @@ describe("runTool: cork_prepare_phoenix forSelf", () => {
     const wl = env.warnings.find((w) => w.code === "not_whitelisted");
     expect(wl?.message).toContain("ForSelf adapter");
     expect(wl?.message).toContain(ADAPTER);
+    // This stub's adapter REFUSES WHITELIST() — the pre-caller-gate generation — so the
+    // account must never be accused (nothing on-chain checks it) and the blast-radius
+    // caveat must stand.
+    expect(env.warnings.some((w) => w.code === "not_whitelisted" && w.message.toLowerCase().includes(ACCOUNT.toLowerCase()))).toBe(false);
+    expect(wl?.message).toMatch(/pre-caller-gate generation/);
+  });
+
+  // ── the caller-gate generation (adapters exposing WHITELIST(), 2026-08-07+) ───────────────
+
+  /** A stub for a caller-gate adapter over a gated pool: WHITELIST() answers the configured
+   *  manager, and isWhitelisted answers per SUBJECT — the adapter is listed, others as given. */
+  const callerGateStub = (listed: Record<string, boolean>) =>
+    stubRpc(
+      (c) => {
+        switch (c.functionName) {
+          case "WHITELIST":
+            return MAINNET_DEPLOYMENT.whitelistManager;
+          case "isWhitelisted": {
+            const who = String(c.args?.[1]).toLowerCase();
+            return listed[who] ?? false;
+          }
+          default:
+            return chainStubAnswer(c, {});
+        }
+      },
+      { code: { [ADAPTER.toLowerCase()]: "0x60806040" } },
+    );
+
+  it("caller-gate adapter + gated pool: the unlisted ACCOUNT is flagged, not the adapter", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-ex-0006", forSelf: { adapter: ADAPTER }, action: exercise, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: callerGateStub({ [ADAPTER.toLowerCase()]: true }) },
+    );
+    expect(env.state).toBe("ok"); // build-and-warn, like every pre-flight
+    const wl = env.warnings.filter((w) => w.code === "not_whitelisted");
+    expect(wl).toHaveLength(1);
+    expect(wl[0]?.message.toLowerCase()).toContain(ACCOUNT.toLowerCase());
+    expect(wl[0]?.message).toMatch(/CallerNotWhitelisted/);
+  });
+
+  it("caller-gate adapter + both listed: no whitelist warning at all", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-ex-0007", forSelf: { adapter: ADAPTER }, action: exercise, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: callerGateStub({ [ADAPTER.toLowerCase()]: true, [ACCOUNT.toLowerCase()]: true }) },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "not_whitelisted")).toBe(false);
+  });
+
+  it("a WHITELIST() binding that names a different manager than config is a CONFLICT", async () => {
+    const wrongWlm = stubRpc(
+      (c) => (c.functionName === "WHITELIST" ? "0x000000000000000000000000000000000000dEaD" : chainStubAnswer(c, {})),
+      { code: { [ADAPTER.toLowerCase()]: "0x60806040" } },
+    );
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-ex-0008", forSelf: { adapter: ADAPTER }, action: exercise, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: wrongWlm },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");
+    expect(env.warnings[0]?.message).toContain("WhitelistManager");
   });
 });
