@@ -3,7 +3,7 @@
 import { type ChainId, Envelope, executionEthTransaction } from "@cork/schemas";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, marketRegistryAbi, ORACLE_MODE, type OracleModeName } from "../market-registry.ts";
 import { resolveMarketRegistry } from "../config-remote.ts";
-import { envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
+import { diagnoseOracleDeployFailure, envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 
 
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
@@ -74,7 +74,8 @@ export async function handlePrepareMarket(
         status = { oracle: { address: sim.result, deployed: false } };
       }
     } catch (err) {
-      warnings.push({ code: "oracle_not_deployable", message: `the deploy simulation reverted (${revertReason(err)}) — typically an unregistered asset, a missing source for this mode, or no conversion path; sending this tx would revert. Check cork_query registry-assets / registry-oracle` });
+      const reason = await diagnoseOracleDeployFailure(resolved.client, mr.registry, a.collateralAsset, a.referenceAsset, modeName, err);
+      warnings.push({ code: "oracle_not_deployable", message: `the deploy simulation reverted: ${reason}. Sending this tx would revert` });
     }
   } else {
     warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — the deployability pre-check was skipped; the calldata is exact regardless" });

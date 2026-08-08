@@ -7,7 +7,7 @@ import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeplo
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
+import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
 
 
@@ -275,7 +275,8 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: sim.result, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     } catch (err) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason: revertReason(err) }, note: `this pair cannot get a ${modeName} oracle as-registered (MissingSource / NavModeWithoutNavSource — an unregistered asset, a missing source slot, or no conversion path) — a JIT fill for it would revert` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+      const reason = await diagnoseOracleDeployFailure(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName, err);
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason }, note: `this pair cannot get a ${modeName} oracle as-registered — a JIT fill for it would revert; the reason field names the exact failure` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
   } catch (err) {
     return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
@@ -495,7 +496,7 @@ export async function resolveRecipeOracleConstraint(args: {
         const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [args.collateralAsset, args.referenceAsset, ORACLE_MODE[modeName]] });
         oracle = { address: sim.result as `0x${string}`, deployed: false, deployable: true, mode: modeName, rate: null };
       } catch (err) {
-        oracle = { address: null, deployed: false, deployable: false, mode: modeName, rate: null, reason: revertReason(err) };
+        oracle = { address: null, deployed: false, deployable: false, mode: modeName, rate: null, reason: await diagnoseOracleDeployFailure(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName, err) };
       }
     }
   }

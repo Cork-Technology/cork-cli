@@ -62,7 +62,36 @@ export const marketRegistryAbi = parseAbi([
   "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
   "function deploy(address ca, address ref, uint8 mode) returns (address wrapper)",
   "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
+  // The registry's typed reverts (IMarketRegistry, 0.3.x). Declared so viem decodes them
+  // into simulate/read error messages — which is what lets diagnoseOracleDeployFailure tell
+  // a NAMED registration failure from the unnamed CREATE2-collision class (a raw create
+  // collision bubbles EMPTY revert data, decoding to nothing).
+  "error EntryAlreadyExists()",
+  "error EntryNotFound()",
+  "error ArrayLengthMismatch()",
+  "error ZeroAddress()",
+  "error EmptyName()",
+  "error UnregisteredDenomination(string label)",
+  "error NoConversionPathToUsd(address fromUnit, uint256 maxHops)",
+  "error MissingSource(address asset, uint8 mode)",
+  "error NavModeWithoutNavSource(address ca, address ref)",
+  "error SourceTypeMismatch(uint8 expected, uint8 provided)",
+  "error RecipeNotRegistered(address recipe)",
+  "error RecipeNotContract(address recipe)",
+  "error ZeroBound()",
 ]);
+
+/** The deploy-revert error names that identify a REGISTRATION problem (as opposed to the
+ *  unnamed CREATE2-collision class) — see diagnoseOracleDeployFailure in handlers/shared.ts. */
+export const REGISTRY_DEPLOY_ERROR_NAMES = [
+  "MissingSource",
+  "NavModeWithoutNavSource",
+  "NoConversionPathToUsd",
+  "UnregisteredDenomination",
+  "SourceTypeMismatch",
+  "EntryNotFound",
+  "ZeroAddress",
+] as const;
 
 export const recipeAbi = parseAbi([
   "function source() view returns (uint8)",

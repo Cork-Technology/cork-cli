@@ -8,6 +8,7 @@ import { resolveDeployment as resolveDeploymentBuiltin } from "../config-remote.
 import { type CorkDeployment } from "../config.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
+import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
 
 export class ToolInputError extends Error {
   constructor(
@@ -237,10 +238,74 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
 
 export const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
-/** First line of a revert, with the custom error name when the ABI decoded it. */
+/** One line naming a revert, PREFERRING the decoded custom error over viem's generic
+ *  shortMessage. viem formats a decoded revert as
+ *      The contract function "deploy" reverted.
+ *      Error: NavModeWithoutNavSource(address ca, address ref)
+ *      (0x211C…, 0xdDb4…)
+ *  — the old first-match-wins scan returned the generic first line and threw the decoded
+ *  name away (which mattered from 0.3.2 on: marketRegistryAbi declares the registry's typed
+ *  errors precisely so they surface here). The args line directly under "Error:" rides
+ *  along when present. Falls back to the generic line for undecodable/empty reverts. */
 export function revertReason(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
-  return (err.message.split("\n").find((l) => l.includes("Error:") || l.includes("reverted")) ?? err.message.split("\n")[0] ?? err.message).trim();
+  const lines = err.message.split("\n");
+  const errorAt = lines.findIndex((l) => l.includes("Error:"));
+  if (errorAt >= 0) {
+    const args = lines[errorAt + 1]?.trim().startsWith("(") ? ` ${lines[errorAt + 1]?.trim()}` : "";
+    return `${lines[errorAt]?.trim()}${args}`;
+  }
+  return (lines.find((l) => l.includes("reverted")) ?? lines[0] ?? err.message).trim();
+}
+
+/** Names a reverted MarketRegistry.deploy simulation precisely, instead of the one-size
+ *  "unregistered asset / missing source / no conversion path" guess.
+ *
+ *  The registry's own failure classes revert with TYPED errors (declared on
+ *  marketRegistryAbi, so viem decodes them into the message): MissingSource,
+ *  NavModeWithoutNavSource, NoConversionPathToUsd, UnregisteredDenomination,
+ *  SourceTypeMismatch, EntryNotFound. A revert naming NONE of those is the other class,
+ *  observed live 2026-08-07 on sUSDe/sUSDS@42161: the wrapper factory's underlying
+ *  MorphoChainlinkOracleV2 CREATE2 lands on an address a PREVIOUS registry generation
+ *  already populated — the salt is keccak(ca, ref, caSource, refSource) with no
+ *  generation domain separation, both generations use the same canonical Morpho factory,
+ *  and the factory has no reuse path — so the raw create collision bubbles EMPTY revert
+ *  data. The two are told apart by re-reading the pair's registration: a fully-registered
+ *  pair whose deploy reverts without a named error is the collision, not a registration
+ *  problem. Degrades to the generic text when the follow-up reads fail. */
+export async function diagnoseOracleDeployFailure(
+  client: ResolvedRpc["client"],
+  registry: `0x${string}`,
+  collateralAsset: `0x${string}`,
+  referenceAsset: `0x${string}`,
+  mode: string,
+  err: unknown,
+): Promise<string> {
+  const reason = revertReason(err);
+  if (REGISTRY_DEPLOY_ERROR_NAMES.some((name) => reason.includes(name))) {
+    return `${reason} — a registration problem; check cork_query registry-assets / registry-denominations / registry-feeds`;
+  }
+  const registered = await Promise.all(
+    [collateralAsset, referenceAsset].map(async (addr) => {
+      try {
+        return (await client.readContract({ address: registry, abi: marketRegistryAbi, functionName: "isAsset", args: [addr] })) === true;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  if (registered.every((found) => found === true)) {
+    return (
+      `${reason} — but BOTH assets are registered and the revert names no registry error: this is the CREATE2-collision class, not a registration problem. ` +
+      `A previous registry generation already created this pair's identical underlying Morpho oracle (same canonical factory, same pair-derived salt), and the wrapper factory has no reuse path, ` +
+      `so this registry cannot deploy the pair's ${mode} wrapper until that is fixed upstream. Until then the pair can host FIXED-recipe markets only (deploy-fixed-oracle + rateOverride)`
+    );
+  }
+  const missing = [collateralAsset, referenceAsset].filter((_, i) => registered[i] === false);
+  if (missing.length > 0) {
+    return `${reason} — unregistered asset${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}; check cork_query registry-assets`;
+  }
+  return `${reason} — typically an unregistered asset, a missing source for this mode, or no conversion path; check cork_query registry-assets / registry-oracle`;
 }
 
 /** True when a failed chain call died in TRANSPORT (HTTP/timeout/socket) rather than in the

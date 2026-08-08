@@ -129,6 +129,51 @@ const CATALOG: Mutant[] = [
     replace: "void 0;",
     tests: [T.mr],
   },
+  // ── diagnoseOracleDeployFailure: the deploy-revert post-mortem's three discriminators ─────
+  {
+    // The collision verdict requires EVERY leg registered; some() would misdiagnose a
+    // half-registered pair as the CREATE2 collision.
+    id: "diagnose-collision-every-vs-some",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "if (registered.every((found) => found === true)) {",
+    replace: "if (registered.some((found) => found === true)) {",
+    tests: [T.mr],
+  },
+  {
+    // A NAMED registry error must short-circuit as a registration problem; dropping the gate
+    // would run the collision heuristic on typed reverts.
+    id: "diagnose-named-error-gate-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "if (REGISTRY_DEPLOY_ERROR_NAMES.some((name) => reason.includes(name))) {",
+    replace: "if (([] as string[]).some((name) => reason.includes(name))) {",
+    tests: [T.mr],
+  },
+  {
+    // The unregistered-leg verdict fires on the FIRST missing asset; requiring two would let a
+    // single-missing pair fall through to the generic guess.
+    id: "diagnose-missing-threshold",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "if (missing.length > 0) {",
+    replace: "if (missing.length > 1) {",
+    tests: [T.mr],
+  },
+  {
+    // revertReason MUST prefer the decoded "Error:" line — reverting to first-match-wins
+    // re-creates the bug where viem's generic shortMessage shadowed every typed error.
+    id: "revertreason-decode-preference-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: 'const errorAt = lines.findIndex((l) => l.includes("Error:"));',
+    replace: "const errorAt = -1;",
+    tests: [T.mr],
+  },
+  {
+    // The args line under "Error:" rides along only when it IS an args tuple.
+    id: "revertreason-args-gate-flipped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: 'const args = lines[errorAt + 1]?.trim().startsWith("(") ? ` ${lines[errorAt + 1]?.trim()}` : "";',
+    replace: 'const args = "";',
+    tests: [T.mr],
+  },
   {
     // NOTE: the maker and taker builders contain BYTE-IDENTICAL preCalls lines; the finds below
     // disambiguate by indentation (maker sits deeper inside handlePrepareOrders). A refactor

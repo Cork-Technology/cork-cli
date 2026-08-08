@@ -24,6 +24,7 @@ import {
   type ResolvedConstraint,
 } from "@cork/core";
 import { stubRpc, type StubCall } from "./helpers.ts";
+import { revertReason } from "../src/handlers/shared.ts";
 
 const WAD = 10n ** 18n;
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
@@ -361,6 +362,66 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("unknown_deployment");
     expect(env.warnings[0]?.message).toContain("42161");
+  });
+
+  // The deploy-revert POST-MORTEM (diagnoseOracleDeployFailure): the registry's own failure
+  // classes revert with TYPED errors; a revert naming none of them on a fully-registered pair
+  // is the CREATE2-collision class (a previous generation's identical Morpho oracle occupies
+  // the address — observed live on sUSDe/sUSDS@42161 under 0.3.2, 2026-08-07).
+  it("registry-oracle deploy revert + BOTH assets registered → the CREATE2-collision diagnosis (with the FIXED-recipe fallback)", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
+      if (c.functionName === "lookupWrapper") return ZERO;
+      if (c.functionName === "simulate:deploy") throw new Error("execution reverted"); // raw create collision: EMPTY revert data, no named error
+      if (c.functionName === "isAsset") return true;
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("ok");
+    const d = env.data as { oracle: { deployable: boolean; reason: string } };
+    expect(d.oracle.deployable).toBe(false);
+    expect(d.oracle.reason).toContain("CREATE2-collision");
+    expect(d.oracle.reason).toContain("FIXED-recipe");
+  });
+
+  it("registry-oracle deploy revert with a NAMED registry error → passed through as a registration problem, never the collision guess", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx((c) => {
+      if (c.functionName === "lookupWrapper") return ZERO;
+      if (c.functionName === "simulate:deploy") throw new Error(`Error: NavModeWithoutNavSource(${CA}, ${REF})`);
+      throw new Error(`unexpected ${c.functionName}`); // the named-error path must NOT probe isAsset
+    }));
+    expect(env.state).toBe("ok");
+    const d = env.data as { oracle: { deployable: boolean; reason: string } };
+    expect(d.oracle.deployable).toBe(false);
+    expect(d.oracle.reason).toContain("NavModeWithoutNavSource");
+    expect(d.oracle.reason).toContain("registration problem");
+    expect(d.oracle.reason).not.toContain("CREATE2-collision");
+  });
+
+  // revertReason's line preference is what makes the typed-error path work at all: viem puts
+  // its generic shortMessage ("The contract function … reverted.") ABOVE the decoded custom
+  // error, and the pre-fix scan returned whichever matched first — always the generic line.
+  it("revertReason prefers the DECODED error line (with its args line) over the generic shortMessage above it", () => {
+    const viemShaped = new Error(
+      'The contract function "deploy" reverted.\n\nError: NavModeWithoutNavSource(address ca, address ref)\n                        (0xCA, 0xREF)\n\nContract Call:\n  address: 0xF532',
+    );
+    expect(revertReason(viemShaped)).toBe("Error: NavModeWithoutNavSource(address ca, address ref) (0xCA, 0xREF)");
+  });
+
+  it("revertReason falls back to the generic reverted line when nothing decoded (the empty-data collision class)", () => {
+    expect(revertReason(new Error('The contract function "deploy" reverted.\n\nContract Call:\n  address: 0xF532'))).toBe('The contract function "deploy" reverted.');
+  });
+
+  it("registry-oracle deploy revert with an UNREGISTERED leg → names the missing asset address", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
+      if (c.functionName === "lookupWrapper") return ZERO;
+      if (c.functionName === "simulate:deploy") throw new Error("execution reverted");
+      if (c.functionName === "isAsset") return (c.args as readonly string[])[0] === CA; // ref unregistered
+      throw new Error(`unexpected ${c.functionName}`);
+    }));
+    expect(env.state).toBe("ok");
+    const d = env.data as { oracle: { deployable: boolean; reason: string } };
+    expect(d.oracle.reason).toContain(REF);
+    expect(d.oracle.reason).toContain("unregistered asset");
+    expect(d.oracle.reason).not.toContain("CREATE2-collision");
   });
 });
 
