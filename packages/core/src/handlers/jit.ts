@@ -85,7 +85,7 @@ export async function buildTakerJitInteraction(args: {
   if (valueGate) return { gate: valueGate };
   const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
   if (!mr?.adapter) {
-    return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT fills are live on Arbitrum One (42161)`, ctx) };
+    return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT fills are live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
   if (mrWarn) warnings.push(mrWarn);
   let recipe = jm.recipe;

@@ -231,7 +231,8 @@ This is the go/no-go check for a pair, before you think about terms:
 ch query registry-oracle --chain-id 8453 --json \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
-  --filters '{"mode":"nav"}'
+  --oracle-mode nav
+# (--oracle-mode is filters.mode — the bare --mode is the data-backend selector)
 # alternative — everything in one filters blob:
 ch query registry-oracle --chain-id 8453 --input '{"filters":{…same, "mode":"nav"}}' --json
 ```

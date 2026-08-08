@@ -182,7 +182,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       } else {
         const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
         if (!mr?.adapter) {
-          return unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT market orders are live on Arbitrum One (42161)`, ctx);
+          return unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT market orders are live on Arbitrum One and Base (42161, 8453)`, ctx);
         }
         if (mrWarn) warnings.push(mrWarn);
         // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,

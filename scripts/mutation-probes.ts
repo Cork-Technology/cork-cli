@@ -158,6 +158,24 @@ const CATALOG: Mutant[] = [
     tests: [T.mr],
   },
   {
+    // The one colliding filter key (mode) rides under an ALIASED flag; dropping the alias table
+    // silently removes --oracle-mode (commander rejects the flag; blob-only again).
+    id: "cli-oracle-mode-alias-dropped",
+    file: "packages/cli/src/app.ts",
+    find: 'tool.name === "cork_query" ? [["mode", "oracle-mode"] as const] : [];',
+    replace: "[];",
+    tests: [T.cli],
+  },
+  {
+    // The alias must WRITE into filters under the KEY name — accepting the flag but dropping
+    // the assignment would silently ignore --oracle-mode.
+    id: "cli-oracle-mode-merge-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "            filters[key] = String(supplied);",
+    replace: "            void String(supplied);",
+    tests: [T.cli],
+  },
+  {
     // revertReason MUST prefer the decoded "Error:" line — reverting to first-match-wins
     // re-creates the bug where viem's generic shortMessage shadowed every typed error.
     id: "revertreason-decode-preference-dropped",

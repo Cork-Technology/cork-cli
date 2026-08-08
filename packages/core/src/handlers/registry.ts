@@ -18,7 +18,7 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
 > {
   const { marketRegistry: mr, warning } = await resolveMarketRegistry(chainId);
   if (!mr) {
-    return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One (42161)`, ctx) };
+    return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {

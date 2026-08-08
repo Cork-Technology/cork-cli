@@ -5,6 +5,7 @@ import { EXIT, expandAmount, runCli } from "@cork/cli";
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
 const RCV = "0xc0ffee0000000000000000000000000000000001";
+const RCV2 = "0xc0ffee0000000000000000000000000000000002";
 
 describe("ch CLI", () => {
   it("capabilities prints the tool list, exit 0", async () => {
@@ -523,5 +524,41 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
     const r = await runCli(["query", "registry-oracle", "--chain-id", "42161", "--mode", "price", "--json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.invalid);
     expect(JSON.stringify(JSON.parse(r.stderr).error.issues)).toContain("mode");
+  });
+
+  // filters.mode is the one filter key whose bare name collides with a top-level field, so it
+  // rides under the ALIASED flag --oracle-mode. Routing proof: a bogus value must reach the
+  // registry-oracle handler's own mode gate (which fires BEFORE any chain read) and come back
+  // as ITS missing_filter teaching — not as a top-level schema error, not silently dropped.
+  const oracleModeCtx = () => ({
+    nowSeconds: NOW,
+    resolveRpc: (async () => ({ client: { readContract: async () => { throw new Error("unreached"); } } }) as never) as never,
+  });
+
+  it("--oracle-mode routes into filters.mode (the aliased flag for the colliding key)", async () => {
+    const r = await runCli(
+      ["query", "registry-oracle", "--chain-id", "42161", "--collateral-asset", RCV, "--reference-asset", RCV2, "--oracle-mode", "bogus", "--json"],
+      oracleModeCtx(),
+    );
+    expect(r.code).toBe(EXIT.unavailable);
+    const env = JSON.parse(r.stdout);
+    expect(env.warnings[0].code).toBe("missing_filter");
+    expect(env.warnings[0].message).toContain("filters.mode");
+    expect(env.warnings[0].message).toContain("bogus");
+  });
+
+  it("--oracle-mode overrides filters.mode from a --filters blob", async () => {
+    const r = await runCli(
+      ["query", "registry-oracle", "--chain-id", "42161", "--collateral-asset", RCV, "--reference-asset", RCV2, "--filters", JSON.stringify({ mode: "price" }), "--oracle-mode", "bogus", "--json"],
+      oracleModeCtx(),
+    );
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(JSON.parse(r.stdout).warnings[0].message).toContain("bogus");
+  });
+
+  it("query --help advertises --oracle-mode with its collision note", async () => {
+    const r = await runCli(["query", "--help"], { nowSeconds: NOW });
+    expect(r.stdout).toContain("--oracle-mode");
+    expect(r.stdout).toContain("filters.mode");
   });
 });

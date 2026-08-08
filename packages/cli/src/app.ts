@@ -409,6 +409,18 @@ export async function runCli(
       cmd.option(`--${flagFor(k)} <value>`, `filters.${k}`);
       knownFlags.set(canonicalise(flagFor(k)), flagFor(k));
     }
+    // A filter key that collides with a top-level field cannot ride under its own name — the
+    // bare flag must keep meaning the top-level field — so it rides under an ALIAS instead.
+    // `mode` is the one such key: top-level `mode` selects the DATA backend, while filters.mode
+    // is the pair's ORACLE mode (price|nav) — hence --oracle-mode.
+    const filterFlagAliases: ReadonlyArray<readonly [key: string, flag: string]> =
+      tool.name === "cork_query" ? [["mode", "oracle-mode"] as const] : [];
+    for (const [key, flag] of filterFlagAliases) {
+      if (cmdRegistered.has(flag)) continue;
+      cmdRegistered.add(flag);
+      cmd.option(`--${flag} <value>`, `filters.${key} (price|nav — the bare --${key} is the top-level data-mode field)`);
+      knownFlags.set(canonicalise(flag), flag);
+    }
 
     /** One action body for the parent AND every variant subcommand (closure over out/err/code). */
     const makeAction = (variant?: UnionVariant) =>
@@ -519,7 +531,7 @@ export async function runCli(
 
         // Filter flags (cork_query): merge on top of any blob-supplied filters. Values stay raw
         // strings — parseQueryFilters owns coercion (booleans accept "true"/"false").
-        if (filterFlagKeys.length > 0) {
+        if (filterFlagKeys.length > 0 || filterFlagAliases.length > 0) {
           const blobF = input["filters"];
           const filters: Record<string, unknown> =
             blobF && typeof blobF === "object" && !Array.isArray(blobF) ? { ...(blobF as Record<string, unknown>) } : {};
@@ -528,6 +540,13 @@ export async function runCli(
             const supplied = opts[k];
             if (supplied === undefined) continue;
             filters[k] = String(supplied);
+            touched = true;
+          }
+          // Aliased keys: commander camelizes the flag spelling (oracle-mode → oracleMode).
+          for (const [key, flag] of filterFlagAliases) {
+            const supplied = opts[flag.replace(/-(\w)/g, (_, c: string) => c.toUpperCase())];
+            if (supplied === undefined) continue;
+            filters[key] = String(supplied);
             touched = true;
           }
           if (touched) input["filters"] = filters;
