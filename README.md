@@ -224,6 +224,30 @@ ch compute cst-swap-rate --explain  # scoped to one variant
 ch compute --explain --json         # the same contract as JSON Schema
 ```
 
+**Full command reference:** [`docs/cli.md`](docs/cli.md) — every command with a one-liner, grouped
+by workflow, chain-agnostic.
+
+**Vocabulary.** The taxonomy in one line: a **cork-pool** is one expiry of a **market** (the family
+of pools over one collateral/reference pair — an *instance* of it, not an AMM pool); a
+**trading-pair** is a pair listed for trading on the LOP venue book; the **orderbook** holds that
+pair's resting orders; **rollover-orders** are orders whose execution migrates a position to a
+successor pool. Accepted synonyms (each agrees with the taxonomy) and the retired names (which
+never silently work — they answer with their replacement):
+
+| Canonical | Accepted synonyms | Retired names (teach their replacement) |
+|---|---|---|
+| `cork-pool` / `cork-pools` | `pool`/`pools`, `market-instance`/`market-instances` | `market`, `markets` |
+| `derive-cork-pool` | `derive-pool` | `derive-market`, `market-predict` |
+| `trading-pairs` | `trading-pair`, `orderbook-pairs` | `limit-order-markets` |
+| `orderbook` | `limit-orders` | — |
+| `rollover-orders` | `pool-migration-orders`, `extend-expiry-orders` | `flows` |
+| `registry-assets` / `-recipes` / `-denominations` / `-feeds` | `registered-*` family, `market-recipes` | — |
+| `registry-oracle` | `asset-pair-oracle` | — |
+| `rfqs` | `rfq` | — |
+| `compute recipe-rate-constraint` | `resolve-rate-constraint` | `resolve-recipe` |
+| `decode order` | `decode limit-order` | — |
+| `prepare market deploy-oracle` | — | `deploy-wrapper` |
+
 `ch capabilities` listing 9 tools means the CLI is wired correctly. Prefer not to touch `PATH`? The
 launcher runs the same either way — `./bin/ch capabilities` — and the long form works without the
 launcher at all: `bun packages/cli/src/bin.ts capabilities`.
