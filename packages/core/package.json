@@ -1,6 +1,6 @@
 {
   "name": "@cork/core",
-  "version": "0.0.1",
+  "version": "0.1.0-rc.1",
   "description": "Cork helper core: math ports, chain reads, Bundler3 encode/decode, and the runTool dispatch.",
   "license": "UNLICENSED",
   "private": false,
@@ -13,13 +13,25 @@
       "import": "./dist/packages/core/src/index.js"
     }
   },
-  "files": ["dist"],
-  "engines": { "node": ">=22.0.0", "bun": ">=1.3.0" },
-  "publishConfig": { "access": "restricted", "provenance": true },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "bun": ">=1.3.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
     "directory": "packages/core"
   },
-  "dependencies": { "@cork/schemas": "workspace:*", "viem": "2.55.2", "zod": "4.4.3" }
+  "dependencies": {
+    "@cork/schemas": "workspace:*",
+    "viem": "2.55.2",
+    "zod": "4.4.3"
+  }
 }

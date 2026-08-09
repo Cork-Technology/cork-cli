@@ -20,7 +20,26 @@ permissions:
   contents: read
 
 jobs:
+  # Versioning policy R1: the version is written in one place (each package's manifest); every
+  # copy — including this tag — is checked against it. A tag that disagrees fails the release.
+  version-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Tag must equal the in-source package version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          for p in packages/*/package.json; do
+            have=$(node -p "require('./$p').version")
+            if [ "$have" != "$want" ]; then
+              echo "::error::$p says $have but the tag is $GITHUB_REF_NAME — bump the manifest or fix the tag (policy R1)"; exit 1
+            fi
+          done
+          echo "all package manifests agree with $GITHUB_REF_NAME"
+
   build-primary:
+    needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
     permissions:
       contents: read
@@ -33,6 +52,7 @@ jobs:
 
   # Same commit, second independent runner, no attestation — exists only to prove determinism.
   build-shadow:
+    needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
     permissions:
       contents: read
