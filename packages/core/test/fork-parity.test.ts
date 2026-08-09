@@ -159,9 +159,9 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
     }
   });
 
-  it("cork_query market/account-state/pool-whitelist read the live pool", async () => {
+  it("cork_query cork-pool/account-state/pool-whitelist read the live pool", async () => {
     const DEV = "0xc0ffee0000000000000000000000000000000001";
-    const mkt = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
+    const mkt = await runTool("cork_query", { resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { rpcUrl: RPC!, atBlock: s.blockNumber });
     expect(mkt.state).toBe("ok");
     expect((mkt.data as { swapRate: string }).swapRate).toBe(s.onChainSwapRate.toString());
     expect((mkt.data as { market: { collateralAsset: string } }).market.collateralAsset.toLowerCase()).toBe(s.market.collateralAsset.toLowerCase());

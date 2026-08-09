@@ -36,7 +36,7 @@ describe("maturity map covers the whole surface", () => {
 describe("teaching errors", () => {
   it("closed-enum typo → nearest-value suggestion + corrected example that validates", () => {
     const query = toolByName("cork_query")!;
-    const bad = { resource: "markett", format: "concise" };
+    const bad = { resource: "cork-poool", format: "concise" };
     const parsed = query.input.safeParse(bad);
     expect(parsed.success).toBe(false);
     const t = buildTeaching("cork_query", parsed.error!.issues, bad);

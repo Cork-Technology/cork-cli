@@ -56,7 +56,13 @@ function valueAt(input: unknown, path: ReadonlyArray<PropertyKey>): unknown {
  *  to normal typo handling. */
 export const RENAMED_VALUES: Record<string, string> = {
   "deploy-wrapper": "deploy-oracle", // cork_prepare_market action.type (renamed 2026-08-06)
-  "market-predict": "derive-market", // cork_query resource (renamed 2026-08-06)
+  "market-predict": "derive-cork-pool", // cork_query resource (renamed 2026-08-06; re-pointed to the terminal name 2026-08-09 — never chain through an intermediate)
+  "resolve-recipe": "recipe-rate-constraint", // cork_compute kind (renamed 2026-08-09; outcome-named)
+  flows: "rollover-orders", // cork_query resource (renamed 2026-08-09; protocol-worded)
+  "market": "cork-pool", // cork_query resource (taxonomy rename 2026-08-09: a cork-pool is one expiry of a market)
+  "markets": "cork-pools", // cork_query resource (taxonomy rename 2026-08-09)
+  "derive-market": "derive-cork-pool", // cork_query resource (taxonomy rename 2026-08-09)
+  "limit-order-markets": "trading-pairs", // cork_query resource (taxonomy rename 2026-08-09: LOP pair listings)
 };
 
 /** Suggest the closest member of a closed value set for a likely typo (≤40% edit distance). */

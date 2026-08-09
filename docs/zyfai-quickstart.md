@@ -31,7 +31,13 @@ position into two ERC-20 legs:
 | **cST** | the cover / "swap" token — right to swap REF→CA at the market's tracked rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token — the underwriter's leg + premium | **bond.credit (supply)** |
 
-The market itself is **identified by the keccak of its `Market` struct** (`poolId`), so it is fully
+One naming rule carries the whole doc: a **cork-pool** is one concrete expiry of a **market** —
+an *instance* of it (the CLI accepts `market-instance` and `pool` as synonyms for `cork-pool`).
+Despite the word, it is **not** an AMM liquidity pool: it is a covered position tokenized into
+the two legs above. A **trading-pair** is a pair listed on the LOP venue book; the **orderbook**
+holds that pair's resting orders.
+
+The pool itself is **identified by the keccak of its on-chain `Market` struct** (`poolId`), so it is fully
 **derivable off-chain before it exists**. Markets are **short-dated (you pick the term)**, and the
 rate rules come from a **recipe** — since 2.1.0 a recipe is an approved *contract*, not a mode
 string. Three are live: **fixed** (rate pinned forever — simplest cover) and **liquidity** in two
@@ -54,9 +60,9 @@ plain reads — you sign/broadcast with your own stack.
 
 | # | Step | What happens | Tool |
 |---|---|---|---|
-| 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `derive-market`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
+| 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `derive-cork-pool`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
 | 2 | **The underwriter mints cST and creates a limit order (to sell)** | The underwriter answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | The underwriter's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
-| 3 | **Zyfai buys the underwriter's cST** (by filling their limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `market`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
+| 3 | **Zyfai buys the underwriter's cST** (by filling their limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `cork-pool`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
 | 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare pool` → `exercise` / `exercise-other` |
 
 One piece of one-time prep per CA/REF pair comes before step 1: deploying the pair's rate oracle
@@ -100,7 +106,7 @@ returns **unsigned** artifacts or plain reads — you sign with your own Safe st
   and runnable today.
 - **Commands read like English: the action is a subcommand, its fields are flags.**
   `ch prepare pool exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
-  `ch compute resolve-recipe --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
+  `ch compute recipe-rate-constraint --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
   tool is its own subcommand with its own `--help` and `--explain` (`pool` and `order` are
   the canonical spellings; the MCP tool names keep the internal `phoenix`/`orders`, which the CLI
   still accepts as aliases), and a mistyped action gets a
@@ -256,19 +262,19 @@ answer:
 
 **Stop 5 — recipes: the actual terms of the cover.**
 Step 1b lists the three approved recipe contracts. To see what a recipe would *actually commit you
-to* on your pair, ask it — `resolve-recipe` is the very staticcall a fill runs (the recipe here is
+to* on your pair, ask it — `recipe-rate-constraint` is the very staticcall a fill runs (the recipe here is
 **LiquidityNav**, the nav flavor this pair needs):
 
 ```sh
-ch compute resolve-recipe --chain-id 8453 --json \
+ch compute recipe-rate-constraint --chain-id 8453 --json \
   --recipe 0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506 \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca
 # alternative — the canonical wire blob:
-ch compute --chain-id 8453 --input '{"params":{"kind":"resolve-recipe","recipe":"0x1cF1…C1506","collateralAsset":"0x211C…5d2","referenceAsset":"0xc125…A2Ca"}}' --json
+ch compute --chain-id 8453 --input '{"params":{"kind":"recipe-rate-constraint","recipe":"0x1cF1…C1506","collateralAsset":"0x211C…5d2","referenceAsset":"0xc125…A2Ca"}}' --json
 ```
 ```jsonc
-{ "kind": "resolve-recipe", "recipe": "0x1cF1ef3F…C1506", "source": "nav",
+{ "kind": "recipe-rate-constraint", "recipe": "0x1cF1ef3F…C1506", "source": "nav",
   "constraint": { "rateMin": "1", "rateMax": "1745028354384705016",
                   "rateChangePerDayMax": "872514177192352508",
                   "rateChangeCapacityMax": "2617542531577057524" },
@@ -287,7 +293,7 @@ way, **these four numbers are literally what the underwriter's order will sign**
 identity is derived from them.
 
 **Stop 6 — the identity check.**
-`derive-market` (step 1c) is the final dry-run: it folds your four choices through the registry —
+`derive-cork-pool` (step 1c) is the final dry-run: it folds your four choices through the registry —
 predicts the oracle, resolves the constraint, derives the `poolId` and the cST/cPT addresses, and
 tells you whether the pool already exists. Nothing is deployed or signed; it is the same
 derivation a JIT fill runs on-chain.
@@ -312,7 +318,7 @@ at signing time. That's why deriving, quoting, and signing close together matter
 1. REF appears in `registry-assets` (and carries the source slot your view needs).
 2. `registry-oracle` says the pair is `deployed` or at least `deployable` — in the mode you mean.
 3. The recipe address came from `registry-recipes` on-chain, not from a doc or a chat message.
-4. `derive-market` returns a full identity and the expiry you want.
+4. `derive-cork-pool` returns a full identity and the expiry you want.
 5. `packageIds` and `notionalAssets` units confirmed with your Cork contact (venue conventions).
 
 </details>
@@ -390,7 +396,7 @@ items
 - **fixed** (`0x6d83…D98D`) — the rate is pinned at creation and can never move. Simplest cover.
 
 To see the exact rate limits a recipe would impose on your pair (the same math a fill runs, checked
-bit-for-bit against chain): `ch compute` → `resolve-recipe` with the recipe address.
+bit-for-bit against chain): `ch compute` → `recipe-rate-constraint` with the recipe address.
 
 #### 1c. Pick the CA and the term, then derive the market
 
@@ -403,19 +409,19 @@ before anything exists on-chain:
 
 ```sh
 EXP=$(date -u -d '+7 days' +%s)
-ch query derive-market --chain-id 8453 --json \
+ch query derive-cork-pool --chain-id 8453 --json \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --expiry "$EXP" --recipe 0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506
 # alternative — the rest in one --input blob (`--json` stays the bare output flag):
-ch query derive-market --chain-id 8453 --json \
+ch query derive-cork-pool --chain-id 8453 --json \
   --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca\",\"expiry\":\"$EXP\",\"recipe\":\"0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506\"}}"
 ```
 ```jsonc
 { "state": "ok", "data": {
   "recipe": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506", "source": "nav",
   "oracle": { "address": "0x0846D8849887fC377891E716D3bF4ad46208aA82", "deployed": true, "mode": "nav", "rate": "872514177192352508" },
-  "market": { "poolId": "0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953",
+  "pool": { "poolId": "0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953",
               "exists": false,
               "constraint": { "rateMin": "1", "rateMax": "1745028354384705016",
                               "rateChangePerDayMax": "872514177192352508", "rateChangeCapacityMax": "2617542531577057524" } },
@@ -427,7 +433,7 @@ ch query derive-market --chain-id 8453 --json \
 What to check:
 - **`oracle.deployed`** — if `false` the prediction still works (the fill deploys it itself), but you
   can pre-deploy with `ch prepare market` → `deploy-oracle` (permissionless, idempotent).
-- **`market.exists`** — `false` means the first fill creates the market; `true` means it's live.
+- **`pool.exists`** — `false` means the first fill creates the pool (the market's first expiry); `true` means it's live.
 - **`corkSwapToken`** is the **cST** you'll buy; **`corkPrincipalToken`** is the cPT.
 - **`constraint`** — the four rate limits. These are literally what gets embedded in a signed order;
   once an order carrying them is signed, the market identity is **pinned** and no longer drifts.
@@ -568,7 +574,7 @@ for you. Three commands: re-verify, build, dry-run.
 #    NOTE: if the market doesn't exist yet (step 1c said `exists: false`), this read FAILS with
 #    chain_read_failed — that is the expected pre-creation state, not a problem. Your fill is what
 #    creates the market. Verify the order's carried constraint with `ch decode order` instead.
-ch query market --chain-id 8453 --json \
+ch query cork-pool --chain-id 8453 --json \
   --pool-id 0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
@@ -696,14 +702,14 @@ live there), and the mechanics below are unchanged when it does.
 Find open rollover orders:
 
 ```sh
-ch query flows --chain-id 8453 --kind orders
+ch query rollover-orders --chain-id 8453 --kind orders
 # alternative — the same key in a filters blob:
-ch query flows --chain-id 8453 --input '{"filters":{"kind":"orders"}}'
+ch query rollover-orders --chain-id 8453 --input '{"filters":{"kind":"orders"}}'
 ```
 ```text
 OK  ·  ch query  ·  chain 8453
 
-resource               flows
+resource               rollover-orders
 kind                   orders
 count                  0          # none open right now — a normal result
 items
@@ -724,7 +730,7 @@ user for that carry is your own off-chain pricing decision.
 > **Tool status (your action item).** `ch` builds the **supply side** of rollover today (`ch prepare
 > orders` → `rollover-intent`, then `ch submit` → `rollover-order`) — what a cPT-holder posts. It
 > does **not** yet build the **filler** transaction or the REF→premium swap that you need. So for
-> now: discover with `flows`, then build and sign the `fill` with your own stack (entrypoint below).
+> now: discover with `rollover-orders`, then build and sign the `fill` with your own stack (entrypoint below).
 > A filler-side `ch prepare` action is a natural next addition — confirm the current path with Cork.
 
 <details>
@@ -803,15 +809,15 @@ reconciliation want an Envio token (`ENVIO_API_TOKEN`) — generate one at
 
 **Venue reads can lag; chain wins.** The book/RFQ/fill feeds come from Cork's off-chain indexer,
 which can trail chain head — so for anything time-sensitive (an order right before a fill, status
-right after one), verify against chain (`ch query market`, `ch track`) rather than trusting the
+right after one), verify against chain (`ch query cork-pool`, `ch track`) rather than trusting the
 feed. Details on the read backends, if you want them:
 
 <details>
 <summary>Read backends and how to force one (expand)</summary>
 
-The venue-backed reads (`orderbook`, `rfqs`, `fills`, `flows`, `markets`) are served by
+The venue-backed reads (`orderbook`, `rfqs`, `fills`, `rollover-orders`, `cork-pools`) are served by
 api-phoenix, Cork's indexer. The decentralized paths are `lite-decentralized` (direct RPC chain
-reads — already the default for `market` / `account-state` / `derive-market`) and
+reads — already the default for `cork-pool` / `account-state` / `derive-cork-pool`) and
 `full-decentralized` (HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports
 more than one backend you can force it with `mode` on `ch query`, and every result's
 `provenance.mode` says which one answered. When indexer and chain disagree, chain wins — the
@@ -917,7 +923,7 @@ you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
    exercise routes (`fillOrderForSelf`, `exerciseForSelf`/`exerciseOtherForSelf` — or your
    equivalents) and the approvals for the route you chose (§5, item C — adapter route:
    CA/REF/cST → the adapter; raw route: CA→LOP, REF→PoolManager).
-4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`derive-market`,
+4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`derive-cork-pool`,
    RFQ with `submit rfq-open` / watch `rfqs`, **simulate every artifact before signing**, fill with
    `taker-fill` (target pinned), exercise with `prepare_phoenix`, reconcile with `track`.
 5. **Confirm ownership + timeline back to Cork** — Cork needs no protocol change from you; it needs to

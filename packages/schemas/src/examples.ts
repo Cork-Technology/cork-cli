@@ -36,11 +36,11 @@ export interface ToolExample {
 /** 2–3 worked examples per tool; the FIRST is the one inlined into the wire description. */
 export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_query: [
-    { title: "Read a pool's full live market state (demo pool, vnet)", input: { resource: "market", filters: { poolId: DEMO_POOL_ID } } },
+    { title: "Read a cork-pool's full live market state (demo pool, vnet)", input: { resource: "cork-pool", filters: { poolId: DEMO_POOL_ID } } },
     { title: "Token balances an account holds in a pool", input: { resource: "account-state", filters: { poolId: DEMO_POOL_ID, account: DEMO_ACCOUNT } } },
     { title: "Deployed Cork contract addresses (no RPC needed)", input: { resource: "protocol-config" } },
     { title: "Open RFQs awaiting quotes (underwriter discovery feed; add filters.rfqId for one record with all answers)", input: { resource: "rfqs", chainId: 42161, filters: { state: "open", withAnswers: true } } },
-    { title: "Predict a market before it exists: pool id + cST/cPT + constraint for a pair (Arbitrum; recipe = the approved liquidity recipe CONTRACT)", input: { resource: "derive-market", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiry: "1900000000", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
+    { title: "Predict a market before it exists: pool id + cST/cPT + constraint for a pair (Arbitrum; recipe = the approved liquidity recipe CONTRACT)", input: { resource: "derive-cork-pool", chainId: 42161, filters: { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiry: "1900000000", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
     { title: "The approved recipe contracts with their live constants + argument shapes (Arbitrum)", input: { resource: "registry-recipes", chainId: 42161 } },
     { title: "Enumerate a pool's whitelist rows (event-derived; global rows ride along)", input: { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: DEMO_POOL_ID } } },
   ],
@@ -48,7 +48,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     { title: "How much cST + reference does 1 sUSDe out cost right now?", input: { params: { kind: "cst-swap-rate", poolId: DEMO_POOL_ID, collateralAssetsOut: "1000000000000000000" } } },
     { title: "Rollover premium floor (pure math, no RPC)", input: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } } },
     { title: "Worst-case impairment floor over 1 day", input: { params: { kind: "impairment-floor", poolId: DEMO_POOL_ID, horizonSeconds: 86400 } } },
-    { title: "Ask a recipe what constraint it imposes on a pair — THE step that produces what a JIT order signs (Arbitrum)", input: { chainId: 42161, params: { kind: "resolve-recipe", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
+    { title: "Ask a recipe what constraint it imposes on a pair — THE step that produces what a JIT order signs (Arbitrum)", input: { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", args: "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000" } } },
     { title: "Current decayed price of a Fusion dutch-auction order (pin the moment with at.timestamp)", input: { at: { timestamp: "1787962200" }, params: { kind: "dutch-auction-price", order: { salt: "72116775394861435818731221900729193628876322478708569", maker: DEMO_ACCOUNT, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "904625697166532776746648320380374280103671755200316906558262375061821325312", extension: "0x0000006e0000006e0000006e0000006e0000006e0000003700000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e00384000000000000002ad5004c60e16e54d5007c80ce329adde5b51ef5000000000000006a922100000e100f4240020aae6003840493e0038400000000000000" } } } },
   ],
   cork_decode: [
@@ -116,14 +116,14 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   cork_query: {
     status: "activated",
     variants: {
-      market: { status: "activated" },
+      "cork-pool": { status: "activated" },
       "account-state": { status: "activated", reason: "balances + funding allowances (corkAdapter + Permit2 spenders)" },
       "pool-whitelist": { status: "activated" },
       "protocol-config": { status: "activated" },
-      markets: { status: "activated", reason: "centralized (venue /v1/pools) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },
+      "cork-pools": { status: "activated", reason: "centralized (venue /v1/pools) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },
       "whitelisted-addresses": { status: "activated", reason: "event-derived enumeration (WhitelistManager add/remove/enable events over HyperSync, needs ENVIO token) + live-view [K7] verification when an RPC resolves; single-account checks are pool-whitelist" },
-      flows: { status: "activated", reason: "centralized (/v1/rollover, filters.kind orders|fills|contracts); kind fills|contracts also full-decentralized via HyperSync" },
-      "limit-order-markets": { status: "activated", reason: "venue-backed (centralized mode)" },
+      "rollover-orders": { status: "activated", reason: "centralized (/v1/rollover, filters.kind orders|fills|contracts); kind fills|contracts also full-decentralized via HyperSync" },
+      "trading-pairs": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
       fills: { status: "activated", reason: "centralized (venue) or full-decentralized (HyperSync OrderFilled scan)" },
       "registry-assets": { status: "activated", reason: "MarketRegistry 2.1.0 chain views — Arbitrum One (42161): two named source slots (priceSource/navSource) + token self-description; filters.address for a single asset" },
@@ -132,7 +132,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "registry-recipes": { status: "activated", reason: "2.1.0 recipes-as-contracts: address + source + description + live constants + args annotation (isRecipe is the only membership gate) — 42161" },
       "registry-denominations": { status: "activated", reason: "2.1.0 label→unit map with display-label resolution (pseudo-unit table + unit symbol); labelHash is the identity — 42161" },
       "registry-feeds": { status: "activated", reason: "2.1.0 directed conversion-feed edges with live aggregator answers (decimals drift visible) — 42161" },
-      "derive-market": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
+      "derive-cork-pool": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
     },
   },
   cork_compute: {
@@ -143,8 +143,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
       "dutch-auction-price": { status: "activated", reason: "pure local pricing of 1inch Fusion v3.1 dutch-auction orders, reconstructed from the order's own extension bytes [K3]; wei-exact vs the deployed settlement getters on mainnet+Arbitrum (incl. a real production order); at.timestamp pins the moment, baseFeeWei omitted = upper-bound" },
-      "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the constraint math it would build on is already live as resolve-recipe)" },
-      "resolve-recipe": { status: "activated", reason: "2.1.0 recipe.resolve staticcall — THE step that produces the constraint a JIT order signs (42161). The pre-2.1.0 percentage-band math survives behind legacy:true + CORK_ENABLE_DEPRECATED=1" },
+      "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the constraint math it would build on is already live as recipe-rate-constraint)" },
+      "recipe-rate-constraint": { status: "activated", reason: "2.1.0 recipe.resolve staticcall — THE step that produces the constraint a JIT order signs (42161). The pre-2.1.0 percentage-band math survives behind legacy:true + CORK_ENABLE_DEPRECATED=1" },
     },
   },
   cork_decode: {

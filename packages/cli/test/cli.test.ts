@@ -331,13 +331,21 @@ describe("variant subcommands (English-first grammar, 2026-08-06)", () => {
     expect(r.stderr).toContain("did you mean 'exercise'");
   });
 
-  it("the renamed deploy-oracle keeps its old CLI spelling as an alias", async () => {
+  it("resolve-rate-constraint is the outcome-named alias of compute recipe-rate-constraint", async () => {
+    // Offline: the missing_filter envelope naming the recipe-rate-constraint kind proves the alias
+    // routed to the canonical variant rather than dying as an unknown subcommand.
+    const r = await runCli(["compute", "resolve-rate-constraint", "--chain-id", "8453", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(JSON.parse(r.stdout).warnings[0].message).toMatch(/^recipe-rate-constraint needs/);
+  });
+
+  it("the pre-rename deploy-wrapper spelling is NOT a silent alias — it teaches instead", async () => {
     const r = await runCli(
       ["prepare", "market", "deploy-wrapper", "--chainid", "42161", "--clientrequestid", "alias-0002", "--collateral-asset", RCV, "--reference-asset", "0xc0ffee0000000000000000000000000000000002", "--json"],
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
-    expect(r.code).toBe(EXIT.ok);
-    expect(JSON.parse(r.stdout).data.kind).toBe("deploy-oracle");
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("deploy-oracle");
   });
 
   it("chainId accepts network names — `--chainid arbitrum` means 42161", async () => {
@@ -473,31 +481,60 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
     expect(seen.some((u) => u.includes("/rfqs"))).toBe(true);
   });
 
-  it("ch query market-predict routes to the renamed derive-market resource (CLI alias)", async () => {
-    // Offline: derive-market without its required filters is a missing_filter envelope — an
-    // envelope AT ALL proves the old spelling passed schema validation as the new resource.
-    const r = await runCli(["query", "market-predict", "--chain-id", "42161", "--json"], { nowSeconds: NOW });
+  it("a taxonomy-agreeing shorthand routes to the terminal resource (derive-pool → derive-cork-pool)", async () => {
+    // Offline: derive-cork-pool without its required filters is a missing_filter envelope — an
+    // envelope AT ALL proves the shorthand passed schema validation as the new resource.
+    for (const ali of ["rollover-orders", "pool-migration-orders", "extend-expiry-orders"]) {
+      const ro = await runCli(["query", ali, "--chain-id", "1", "--kind", "bogus", "--json"], { nowSeconds: NOW });
+      expect(JSON.stringify(JSON.parse(ro.stderr).error.issues), ali).toContain("'orders' | 'fills' | 'contracts'"); // reached rollover-orders' own kind validation, offline
+    }
+    const op = await runCli(["query", "orderbook-pairs", "--chain-id", "1", "--mode", "lite-decentralized", "--json"], { nowSeconds: NOW });
+    expect(JSON.parse(op.stdout).warnings[0].message, "orderbook-pairs").toContain("trading-pairs"); // the mode gate names the terminal resource, offline
+    for (const [ali, canon] of [["registered-assets", "registry-assets"], ["registered-recipes", "registry-recipes"], ["registered-denominations", "registry-denominations"], ["registered-feeds", "registry-feeds"], ["market-recipes", "registry-recipes"], ["asset-pair-oracle", "registry-oracle"]] as const) {
+      const rr = await runCli(["query", ali, "--chain-id", "1", "--json"], { nowSeconds: NOW, resolveRpc: async () => null });
+      const env = JSON.parse(rr.stdout);
+      expect(env.warnings[0].code, ali).toBe("unknown_deployment"); // routed to the registry handler (no registry on chain 1), offline
+      void canon;
+    }
+    const dl = await runCli(["decode", "limit-order", "--data", "{bad", "--chainid", "1", "--json"], { nowSeconds: NOW });
+    expect(JSON.parse(dl.stderr).error.tool, "limit-order -> decode order").toBe("cork_decode");
+    const lo = await runCli(["query", "limit-orders", "--chain-id", "1", "--pool-id", "notahex", "--json"], { nowSeconds: NOW });
+    expect(JSON.parse(lo.stderr).error.issues[0].path, "limit-orders -> orderbook").toContain("filters"); // reached orderbook's filter validation
+    const mi = await runCli(["query", "market-instance", "--chain-id", "42161", "--json"], { nowSeconds: NOW });
+    expect(JSON.parse(mi.stdout).warnings[0].message).toContain("cork-pool"); // market-instance → cork-pool (missing_filter names the terminal resource)
+    const r = await runCli(["query", "derive-pool", "--chain-id", "42161", "--json"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.unavailable);
     const env = JSON.parse(r.stdout);
     expect(env.warnings[0].code).toBe("missing_filter");
-    expect(env.warnings[0].message).toMatch(/^derive-market requires/);
+    expect(env.warnings[0].message).toMatch(/^derive-cork-pool requires/);
+  });
+
+  it("PRE-RENAME values are NOT silent aliases — the positional form teaches the rename too", async () => {
+    // Old names must never quietly work: without an alias entry, `ch query market` falls
+    // through to the wire schema and gets the same renamed-to teaching a blob would.
+    for (const [old, renamed] of [["market", "cork-pool"], ["markets", "cork-pools"], ["derive-market", "derive-cork-pool"], ["market-predict", "derive-cork-pool"], ["limit-order-markets", "trading-pairs"], ["flows", "rollover-orders"]] as const) {
+      const r = await runCli(["query", old, "--chain-id", "42161", "--json"], { nowSeconds: NOW });
+      expect(r.code, old).toBe(EXIT.invalid);
+      const payload = JSON.parse(r.stderr);
+      expect(payload.error.issues[0].suggestion, old).toBe(`"${old}" was renamed to "${renamed}"`);
+    }
   });
 
   it("an OLD wire value in a blob teaches the rename — in prose AND in the JSON issues shape", async () => {
     const argvBase = ["query", "--input", JSON.stringify({ resource: "market-predict", chainId: 42161 })];
     const prose = await runCli(argvBase, { nowSeconds: NOW });
     expect(prose.code).toBe(EXIT.invalid);
-    expect(prose.stderr).toContain('"market-predict" was renamed to "derive-market"');
+    expect(prose.stderr).toContain('"market-predict" was renamed to "derive-cork-pool"');
     const json = await runCli([...argvBase, "--json"], { nowSeconds: NOW });
     const payload = JSON.parse(json.stderr);
     // Teaching issues ARE the issues (path/expected/received/suggestion) — the documented shape.
-    expect(payload.error.issues[0].suggestion).toBe('"market-predict" was renamed to "derive-market"');
+    expect(payload.error.issues[0].suggestion).toBe('"market-predict" was renamed to "derive-cork-pool"');
     expect(payload.error.issues[0].path).toBe("resource");
   });
 
   it("prose enum-typo help prints the suggestion sentence verbatim (no double wrapping)", async () => {
-    const r = await runCli(["query", "--input", JSON.stringify({ resource: "makret", chainId: 1 })], { nowSeconds: NOW });
-    expect(r.stderr).toContain('did you mean "market"?');
+    const r = await runCli(["query", "--input", JSON.stringify({ resource: "orderbok", chainId: 1 })], { nowSeconds: NOW });
+    expect(r.stderr).toContain('did you mean "orderbook"?');
     expect(r.stderr).not.toContain("did you mean did you mean");
   });
 

@@ -871,17 +871,17 @@ const CATALOG: Mutant[] = [
     // reading the rfqs feed.
     id: "cli-resource-alias-dropped",
     file: "packages/cli/src/app.ts",
-    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };',
-    replace: 'const RESOURCE_ALIASES: Record<string, string> = { "market-predict": "derive-market" };',
+    find: 'const RESOURCE_ALIASES: Record<string, string> = {\n  rfq: "rfqs",',
+    replace: 'const RESOURCE_ALIASES: Record<string, string> = {',
     tests: [T.cli],
   },
   {
     // The renamed-resource alias dropped: ch query market-predict would fail the resource enum
-    // instead of routing to derive-market — old CLI scripts break silently at the surface.
+    // instead of routing to derive-cork-pool — old CLI scripts break silently at the surface.
     id: "cli-resource-rename-dropped",
     file: "packages/cli/src/app.ts",
-    find: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };',
-    replace: 'const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs" };',
+    find: '  "derive-pool": "derive-cork-pool",\n',
+    replace: "",
     tests: [T.cli],
   },
   {
@@ -890,7 +890,17 @@ const CATALOG: Mutant[] = [
     // gap this map exists to close (levenshtein distance exceeds the typo cap for both renames).
     id: "teaching-rename-map-dropped",
     file: "packages/schemas/src/teaching.ts",
-    find: '"market-predict": "derive-market", // cork_query resource (renamed 2026-08-06)',
+    find: '"resolve-recipe": "recipe-rate-constraint", // cork_compute kind (renamed 2026-08-09; outcome-named)',
+    replace: "",
+    tests: [T.teaching],
+  },
+  {
+    // The taxonomy-rename teaching entry dropped: an old-surface caller sending resource
+    // "market" gets a bare enum error instead of the renamed-to pointer at "cork-pool"
+    // (levenshtein's 40% cap cannot bridge market → cork-pool).
+    id: "teaching-taxonomy-rename-dropped",
+    file: "packages/schemas/src/teaching.ts",
+    find: '"market": "cork-pool", // cork_query resource (taxonomy rename 2026-08-09: a cork-pool is one expiry of a market)',
     replace: "",
     tests: [T.teaching],
   },

@@ -243,7 +243,7 @@ export async function getLopFills(deps: VenueDeps, p: { chainId: number; orderHa
 
 /** GET /v1/limit-orders/markets — enumerable cPT/cST markets. */
 export async function getLopMarkets(deps: VenueDeps, chainId: number, page: PageParams = {}): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "limit-order-markets");
+  return asList(await getJson(deps, `/limit-orders/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "trading-pairs");
 }
 
 export interface RolloverOrdersParams extends PageParams {

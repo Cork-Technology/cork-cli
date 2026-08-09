@@ -93,7 +93,7 @@ describe("MCP server in-memory roundtrip", () => {
 
   it("filters-level ToolInputError (no teaching payload) still yields a conforming error envelope", async () => {
     const client = await connectedClient();
-    const res = await client.callTool({ name: "cork_query", arguments: { resource: "market", filters: { poolId: "not-hex" }, pageSize: 25, format: "concise" } });
+    const res = await client.callTool({ name: "cork_query", arguments: { resource: "cork-pool", filters: { poolId: "not-hex" }, pageSize: 25, format: "concise" } });
     expect(res.isError).toBe(true);
     const env = res.structuredContent as { state: string; warnings: Array<{ code: string; message: string }> };
     expect(env.state).toBe("unavailable");
@@ -103,7 +103,7 @@ describe("MCP server in-memory roundtrip", () => {
 
   it("non-ToolInputError exceptions become internal_error envelopes (first line only, no stack)", async () => {
     const client = await connectedClient();
-    // A venueFetch that throws a non-Error rides the internal path via cork_query markets.
+    // A venueFetch that throws a non-Error rides the internal path via cork_query cork-pools.
     const res = await client.callTool({ name: "cork_capabilities", arguments: { topic: "definitely-not-a-topic-xyz", format: "concise" } });
     // unknown topic is a HANDLED unavailable, not an exception — assert the distinction holds:
     const env = res.structuredContent as { state: string; warnings: Array<{ code: string }> };

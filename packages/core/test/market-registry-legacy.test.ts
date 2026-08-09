@@ -108,17 +108,17 @@ describe("deprecation gate (CORK_ENABLE_DEPRECATED)", () => {
     expect(env.warnings.some((w) => w.code === "deprecated")).toBe(true);
   });
 
-  it("compute resolve-recipe legacy:true is gated the same way", async () => {
-    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "resolve-recipe", legacy: true, mode: "liquidity", rate: WAD.toString() } }, ctx(() => {
+  it("compute recipe-rate-constraint legacy:true is gated the same way", async () => {
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", legacy: true, mode: "liquidity", rate: WAD.toString() } }, ctx(() => {
       throw new Error("must not read chain");
     }));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("deprecated_gated");
   });
 
-  it("compute resolve-recipe legacy:true WITH the env runs the old parity-checked band math", async () => {
+  it("compute recipe-rate-constraint legacy:true WITH the env runs the old parity-checked band math", async () => {
     process.env["CORK_ENABLE_DEPRECATED"] = "1";
-    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "resolve-recipe", legacy: true, mode: "liquidity", rate: WAD.toString() } }, ctx((c) => {
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", legacy: true, mode: "liquidity", rate: WAD.toString() } }, ctx((c) => {
       if (c.functionName === "lookupRecipe") return [true, LIQ_BANDS];
       if (c.functionName === "applyBands") return applyBandsLocal(LIQ_BANDS, WAD);
       throw new Error(`unexpected ${c.functionName}`);

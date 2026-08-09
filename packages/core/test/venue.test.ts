@@ -96,7 +96,7 @@ describe("cork_query venue-backed resources", () => {
     const seen: Seen[] = [];
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc", chainId: 42161 }] } }], seen),
     );
     expect(env.state).toBe("ok");
@@ -150,7 +150,7 @@ describe("cork_query venue-backed resources", () => {
     );
     const orders = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 42161, filters: { fillable: "true", account: "0xc0ffee0000000000000000000000000000000001" }, pageSize: 25, format: "concise" },
+      { resource: "rollover-orders", chainId: 42161, filters: { fillable: "true", account: "0xc0ffee0000000000000000000000000000000001" }, pageSize: 25, format: "concise" },
       ctx,
     );
     expect(orders.state).toBe("ok");
@@ -160,7 +160,7 @@ describe("cork_query venue-backed resources", () => {
 
     const contracts = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 42161, filters: { kind: "contracts", account: "0xc0ffee0000000000000000000000000000000001" }, pageSize: 25, format: "concise" },
+      { resource: "rollover-orders", chainId: 42161, filters: { kind: "contracts", account: "0xc0ffee0000000000000000000000000000000001" }, pageSize: 25, format: "concise" },
       ctx,
     );
     expect(contracts.state).toBe("ok");
@@ -181,7 +181,7 @@ describe("cork_query venue-backed resources", () => {
   it("still rejects centralized mode for live chain reads", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "market", chainId: 1, mode: "centralized", filters: { poolId: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
+      { resource: "cork-pool", chainId: 1, mode: "centralized", filters: { poolId: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
       ctxWith([]),
     );
     expect(env.state).toBe("unavailable");
@@ -191,7 +191,7 @@ describe("cork_query venue-backed resources", () => {
   it("venue outage is honest (venue_unreachable), not a crash or a fabrication", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
       { nowSeconds: NOW, venueFetch: async () => { throw new Error("ECONNREFUSED"); } },
     );
     expect(env.state).toBe("unavailable");
@@ -672,7 +672,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
   it("bare-array venue responses parse as lists (shape tolerance)", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "limit-order-markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "trading-pairs", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([{ match: "/limit-orders/markets", body: [{ poolId: "0x1" }, { poolId: "0x2" }] }]),
     );
     expect(env.state).toBe("ok");
@@ -826,7 +826,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
         return new Response(JSON.stringify({ items: [{ i: n }], next_cursor: `c${n}` }), { status: 200 });
       },
     };
-    const env = await runTool("cork_query", { resource: "markets", chainId: 42161, pageSize: 5, maxPages: 3, format: "concise" }, ctx);
+    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, pageSize: 5, maxPages: 3, format: "concise" }, ctx);
     expect(env.state).toBe("ok");
     const pg = pgOf(env);
     expect(pg.complete).toBe(false);
@@ -840,7 +840,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
   it("a venue that repeats a cursor is a CONFLICT (the venue contradicts itself), not a silent stop", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([{ match: "/pools", body: { items: [{ x: 1 }], next_cursor: "loop" } }]),
     );
     expect(env.state).toBe("conflict");
@@ -864,7 +864,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
   it("hasMore:false on the first page → complete in one page, no warning", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc" }], hasMore: false } }]),
     );
     expect(env.state).toBe("ok");
@@ -875,7 +875,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
   it("hasMore:true but no cursor to continue → incomplete (cursor_absent), disclosed not hidden", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xa" }], hasMore: true } }]),
     );
     expect(env.state).toBe("ok");

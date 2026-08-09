@@ -168,10 +168,10 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(od.deployed).toBe(api.status === "live");
   }, 60_000);
 
-  it("resolve-recipe matches POST /v1/42161/resolve wei-for-wei (liquidity + anchor)", async () => {
+  it("recipe-rate-constraint matches POST /v1/42161/resolve wei-for-wei (liquidity + anchor)", async () => {
     const ours = await runTool(
       "cork_compute",
-      { chainId: 42161, params: { kind: "resolve-recipe", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");
@@ -187,11 +187,11 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
   it("derive-market matches POST /v1/42161/market/predict (oracle address; identity when both derive one)", async () => {
     const ours = await runTool(
       "cork_query",
-      { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");
-    const od = ours.data as { oracle: { address: string; deployed: boolean; rate?: string }; market: { poolId: string; exists: boolean } | null; shares: { corkSwapToken: string; corkPrincipalToken: string } | null };
+    const od = ours.data as { oracle: { address: string; deployed: boolean; rate?: string }; pool: { poolId: string; exists: boolean } | null; shares: { corkSwapToken: string; corkPrincipalToken: string } | null };
     const api = await apiPost<{ oracle: { address: string; deployed: boolean; rate: { raw: string } | null }; market: { pool_id: string; exists: boolean } | null; shares: { shares_token: string; principal_token: string } | null }>(
       "/v1/42161/market/predict",
       { recipe: LIQ, collateral_asset: CA, reference_asset: REF, expiry: "1900000000", args: ANCHOR_ARGS },
@@ -200,9 +200,9 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(od.oracle.address.toLowerCase()).toBe(api.oracle.address.toLowerCase());
     expect(od.oracle.deployed).toBe(api.oracle.deployed);
     // Identity is rate-conditioned pre-creation; only compare when both derived one on the same rate.
-    if (od.market && api.market && od.oracle.rate === api.oracle.rate?.raw) {
-      expect(od.market.poolId).toBe(api.market.pool_id);
-      expect(od.market.exists).toBe(api.market.exists);
+    if (od.pool && api.market && od.oracle.rate === api.oracle.rate?.raw) {
+      expect(od.pool.poolId).toBe(api.market.pool_id);
+      expect(od.pool.exists).toBe(api.market.exists);
       if (od.shares && api.shares) {
         expect(od.shares.corkSwapToken.toLowerCase()).toBe(api.shares.shares_token.toLowerCase());
         expect(od.shares.corkPrincipalToken.toLowerCase()).toBe(api.shares.principal_token.toLowerCase());

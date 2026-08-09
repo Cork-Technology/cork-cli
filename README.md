@@ -164,12 +164,12 @@ chainlist fallback); pass your own RPC (variant B, or `--rpc-url` on the CLI) on
 Arbitrum (chainId 42161) is a **full** deployment like mainnet (bindings verified on-chain): reads,
 bundle building, orders, and the MarketRegistry 2.1.0 resources
 (registry-assets / registry-oracle / registry-recipes / registry-denominations / registry-feeds /
-derive-market, plus `cork_prepare_market` oracle deploys) all work there. `derive-market` derives
-the market a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved constraint,
-pool id, and cST/cPT tokens — before anything is deployed or signed; the identity is pinned the
-moment an order carrying that constraint is signed.
+derive-cork-pool, plus `cork_prepare_market` oracle deploys) all work there. `derive-cork-pool`
+derives the pool a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved
+constraint, pool id, and cST/cPT tokens — before anything is deployed or signed; the identity is
+pinned the moment an order carrying that constraint is signed.
 
-The venue-backed surfaces (orderbook, fills, rollover order feed via `flows`, the RFQ discovery
+The venue-backed surfaces (orderbook, fills, rollover order feed via `rollover-orders`, the RFQ discovery
 feed via `rfqs`, and submission of orders / RFQ opens / RFQ answers) are served from
 `api-phoenix.cork.tech` and labeled `provenance.mode: "centralized"`; rollover orders are buildable
 offline (`prepare orders`, CorkSettler EIP-712) and reconciles are chain-verified against the
@@ -243,7 +243,7 @@ which is usually what you want by hand — every discriminated action/kind is it
 variant-scoped `--help`/`--explain`:
 
 ```sh
-ch query market --chain-id 1 --pool-id 0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05
+ch query cork-pool --chain-id 1 --pool-id 0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05
 ```
 
 Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden. Flag
@@ -342,7 +342,7 @@ Implemented + tested:
 - **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1),
   plus a plain-English `summary` of what those legs do; also LOP orders, single logs, and whole receipts.
 - **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
-  (chain-backed, block-pinnable); resolve-recipe (2.1.0: the `recipe.resolve` staticcall — the step
+  (chain-backed, block-pinnable); recipe-rate-constraint (2.1.0: the `recipe.resolve` staticcall — the step
   that produces the constraint a JIT order carries and signs).
 - **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
   legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
@@ -365,13 +365,13 @@ Implemented + tested:
   and filling one invalidates the others.
 - **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode)` oracle-wrapper txs and
   `deployFixedRateOracle(rate)` fixed-rate oracle txs (permissionless, idempotent; Arbitrum).
-- **cork_query** — chain reads (market / account-state incl. balances + funding allowances for both
-  spenders / pool-whitelist / protocol-config / registry-assets / registry-oracle /
-  registry-recipes / registry-denominations / registry-feeds / derive-market — predict a market's
-  oracle, pool id, constraint, and cST/cPT before it exists); venue-backed reads (markets,
-  orderbook, fills, limit-order-markets, flows, rfqs — incl. single-RFQ lookup via
-  `filters.rfqId`); an event-derived subset (markets, fills, flows) also serves
-  `full-decentralized` mode over HyperSync.
+- **cork_query** — chain reads (cork-pool — one expiry of a market / account-state incl. balances +
+  funding allowances for both spenders / pool-whitelist / protocol-config / registry-assets /
+  registry-oracle / registry-recipes / registry-denominations / registry-feeds / derive-cork-pool —
+  predict a pool's oracle, pool id, constraint, and cST/cPT before it exists); venue-backed reads
+  (cork-pools, orderbook, fills, trading-pairs — the LOP pair listings, flows, rfqs — incl.
+  single-RFQ lookup via `filters.rfqId`); an event-derived subset (cork-pools, fills, flows) also
+  serves `full-decentralized` mode over HyperSync.
 - **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run
   on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt, orderHash /
   submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer [K7]).

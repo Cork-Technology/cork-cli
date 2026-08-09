@@ -154,14 +154,45 @@ function levenshtein(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
-/** Old variant spellings kept routable after a rename (schema advertises only the new name). */
-const VARIANT_ALIASES: Record<string, string[]> = { "deploy-oracle": ["deploy-wrapper"] };
+/** Variant-subcommand aliases — taxonomy-AGREEING synonyms only (PRE-RENAME action names are
+ *  deliberately not here; they fall through to the did-you-mean/renamed-to teaching).
+ *  resolve-rate-constraint is the outcome-named synonym: the call returns ONE rate constraint
+ *  (the struct a JIT order carries; cf. RecipeRejectedConstraint, phoenix's ConstraintRateAdapter),
+ *  resolved by the recipe named in --recipe — the canonical spelling mirrors recipe.resolve. */
+const VARIANT_ALIASES: Record<string, string[]> = {
+  "recipe-rate-constraint": ["resolve-rate-constraint"],
+  order: ["limit-order"], // decode: the kind decodes exactly a LOP limit order
+};
 
-/** Alternate resource spellings accepted at the CLI: the singular `rfq`, and the pre-rename
- *  `market-predict` (wire value renamed to derive-market; the old spelling stays routable here,
- *  exactly like the deploy-wrapper variant alias). Blobs stay wire-exact — aliases apply to the
- *  positional and flag forms only. */
-const RESOURCE_ALIASES: Record<string, string> = { rfq: "rfqs", "market-predict": "derive-market" };
+/** Alternate resource spellings accepted at the CLI: the singular forms and shorthands that
+ *  AGREE with the current taxonomy (a cork-pool is one expiry of a market; LOP pair listings
+ *  are trading-pairs). PRE-RENAME values are deliberately NOT aliased: an old name must never
+ *  silently work — it falls through to the wire schema, where RENAMED_VALUES rejects it with
+ *  its "was renamed to" teaching (market/markets/derive-market/limit-order-markets/
+ *  market-predict all teach their terminal names). Every alias targets the TERMINAL name.
+ *  Blobs stay wire-exact — aliases apply to the positional and flag forms only. */
+const RESOURCE_ALIASES: Record<string, string> = {
+  rfq: "rfqs",
+  pool: "cork-pool",
+  pools: "cork-pools",
+  "market-instance": "cork-pool", // the taxonomy-teaching synonym: a pool is an INSTANCE of a market
+  "market-instances": "cork-pools",
+  "derive-pool": "derive-cork-pool",
+  "limit-orders": "orderbook",
+  "pool-migration-orders": "rollover-orders",
+  "extend-expiry-orders": "rollover-orders",
+  "orderbook-pairs": "trading-pairs",
+  // The registered-* family: every registry-* table whose rows ARE "registered X". registry-oracle
+  // is deliberately excluded (it is a STATUS lookup, not a table) — its synonym is asset-pair-oracle
+  // (the wrapper is keyed on the (CA, REF) pair; the fixed-rate path keys on --rate instead).
+  "registered-assets": "registry-assets",
+  "registered-recipes": "registry-recipes",
+  "registered-denominations": "registry-denominations",
+  "registered-feeds": "registry-feeds",
+  "market-recipes": "registry-recipes", // recipes are MARKET-level terms
+  "asset-pair-oracle": "registry-oracle", // the protocol-worded synonym (flows serves rollover orders/fills/contracts) // the item-named synonym (every sibling resource is a plural of its item; the LOP is the Limit Order Protocol)
+  "trading-pair": "trading-pairs",
+};
 
 /** Pool actions + fill are also TOP-LEVEL verbs: `ch exercise …` = `ch prepare pool exercise …`,
  *  `ch fill …` = `ch prepare order taker-fill …`. The authority ops stay namespaced. */
@@ -349,7 +380,7 @@ export async function runCli(
     const defs = schema?.$defs ?? {};
     const props = Object.fromEntries(Object.entries(schema?.properties ?? {}).map(([k, n]) => [k, resolveNode(n, defs)]));
     const required = schema?.required ?? [];
-    // One positional, for the first required scalar — `ch query market`, `ch decode calldata`.
+    // One positional, for the first required scalar — `ch query cork-pool`, `ch decode calldata`.
     const positional = required.find((r) => props[r] && isScalarNode(props[r]!));
     // The discriminated-union field (action/params/subject), if the tool has one: each of its
     // variants becomes a SUBCOMMAND (`ch prepare phoenix exercise …`) with the variant's own
@@ -361,7 +392,7 @@ export async function runCli(
     const baseOptions = (c: Command): Command =>
       c
         // commander v12 silently ignores extra positional args by default — a typo like
-        // `ch query market <poolId>` (input belongs in a flag) must error, not half-run.
+        // `ch query cork-pool <poolId>` (input belongs in a flag) must error, not half-run.
         .allowExcessArguments(false)
         .option("--json [json]", "with a value: tool input as JSON. Bare: print JSON instead of prose.")
         .option("--input <json>", "tool input as a JSON string (unambiguous form of --json <json>)")

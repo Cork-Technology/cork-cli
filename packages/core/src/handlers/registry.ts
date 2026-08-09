@@ -232,7 +232,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     // registry-oracle — two keying families, one resource:
     //  · filters.rate → the FIXED-RATE oracle for that rate (keyed on the rate, not a pair);
     //  · filters.collateralAsset+referenceAsset [+ filters.mode price|nav] → the pair's wrapper.
-    // The oracle:{address,deployed,deployable,…} shape is shared with derive-market +
+    // The oracle:{address,deployed,deployable,…} shape is shared with derive-cork-pool +
     // cork_prepare_market, so oracle.address is one reusable path across those tools.
     if (filters.rate !== undefined) {
       if (filters.collateralAsset || filters.referenceAsset) {
@@ -283,18 +283,18 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
   }
 }
 
-/** The DEPRECATED pre-2.1.0 resolve-recipe (percentage bands × live rate via the old registry's
+/** The DEPRECATED pre-2.1.0 recipe-rate-constraint (percentage bands × live rate via the old registry's
  *  applyBands, bit-parity self-checked) — preserved behind the deprecation gate. */
 export async function handleComputeResolveRecipeLegacy(
   input: { format: "concise" | "full" },
-  p: { kind: "resolve-recipe"; mode?: string | undefined; rate?: string | undefined; collateralAsset?: `0x${string}` | undefined; referenceAsset?: `0x${string}` | undefined },
+  p: { kind: "recipe-rate-constraint"; mode?: string | undefined; rate?: string | undefined; collateralAsset?: `0x${string}` | undefined; referenceAsset?: `0x${string}` | undefined },
   ctx: HandlerContext,
   chainId: ChainId,
 ): Promise<Envelope> {
   if (!deprecatedEnabled()) {
-    return unavailable(chainId, "deprecated_gated", deprecatedGateMessage("legacy resolve-recipe (pre-2.1.0 percentage-band math)", "In 2.1.0 a recipe resolves its own constraint — drop `legacy` and pass the recipe CONTRACT ADDRESS."), ctx);
+    return unavailable(chainId, "deprecated_gated", deprecatedGateMessage("legacy recipe-rate-constraint (pre-2.1.0 percentage-band math)", "In 2.1.0 a recipe resolves its own constraint — drop `legacy` and pass the recipe CONTRACT ADDRESS."), ctx);
   }
-  if (p.mode === undefined) return unavailable(chainId, "missing_filter", "legacy resolve-recipe needs `mode` (the old registry's exact case-sensitive mode string)", ctx);
+  if (p.mode === undefined) return unavailable(chainId, "missing_filter", "legacy recipe-rate-constraint needs `mode` (the old registry's exact case-sensitive mode string)", ctx);
   const { marketRegistry: mr, warning } = await resolveMarketRegistryLegacy(chainId);
   if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
@@ -315,7 +315,7 @@ export async function handleComputeResolveRecipeLegacy(
       rate = BigInt(p.rate);
     } else {
       if (!p.collateralAsset || !p.referenceAsset) {
-        return unavailable(chainId, "missing_filter", "legacy resolve-recipe needs either an explicit rate, or collateralAsset+referenceAsset to read the pair's live oracle rate", ctx);
+        return unavailable(chainId, "missing_filter", "legacy recipe-rate-constraint needs either an explicit rate, or collateralAsset+referenceAsset to read the pair's live oracle rate", ctx);
       }
       const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [p.collateralAsset, p.referenceAsset] });
       oracle = sim.result;
@@ -410,8 +410,8 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
 }
 
 /** Shared 2.1.0 recipe/oracle/constraint resolution — the exact sequence a fill's _resolveOracle
- *  runs, and the one place its rules live so cork_compute resolve-recipe, cork_query
- *  derive-market, and the JIT maker-order prepare can never disagree:
+ *  runs, and the one place its rules live so cork_compute recipe-rate-constraint, cork_query
+ *  derive-cork-pool, and the JIT maker-order prepare can never disagree:
  *  1. recipe from an explicit address, or DEPRECATED mode sugar over the config hints;
  *  2. isRecipe — the only membership gate (no unverified path);
  *  3. source() decides the oracle family (ENUM TRAP: RecipeSource ≠ OracleMode ordering —
@@ -528,7 +528,7 @@ export async function staticResolveConstraint(
   }
 }
 
-/** derive-market: derive the market a JIT LOP fill would produce for (collateralAsset,
+/** derive-cork-pool: derive the pool a JIT LOP fill would produce for (collateralAsset,
  *  referenceAsset, expiry, recipe [+args/rate]) BEFORE it exists — the recipe's oracle (+ live
  *  rate), the OFF-CHAIN-resolved constraint, pool id, cST/cPT tokens, and whether the pool
  *  already exists. Composes the shared recipe resolution + our verified computeMarketId + a
@@ -538,7 +538,7 @@ export async function staticResolveConstraint(
  *  the identity would be an invention. */
 export async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || (filters.recipe === undefined && filters.mode === undefined)) {
-    return unavailable(chainId, "missing_filter", "derive-market requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
+    return unavailable(chainId, "missing_filter", "derive-cork-pool requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
   }
   if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
     // Well-formed inputs that violate a domain rule → envelope (exit 3), not a throw — same class
@@ -570,7 +570,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     // oracle has no code and forces agents to deploy the wrapper just to learn the share
     // addresses (the walkthrough calls that behavior out as a caveat).
     if (oracle.address === null) {
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), market: null, shares: null }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` }], ...rpc(), ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, input: inputEcho, recipe, source, oracle: oracleEcho, ...(constraint ? { constraint: { ...constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" } } : {}), pool: null, shares: null }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, { code: "oracle_not_deployable", message: `this pair cannot get a ${source} oracle as-registered (${oracle.reason ?? "unregistered asset / missing source or conversion path"}) — a JIT fill would revert; nothing further can be predicted` }], ...rpc(), ctx });
     }
     if (oracle.deployed && oracle.rate === 0n) return unavailable(chainId, "chain_read_failed", "the rate oracle reports a ZERO rate (RateUnavailable) — a fill creating this market would revert and the identity cannot be derived", ctx);
     // Identity: constraint + oracle → Market struct → LOCAL poolId (verified computeMarketId).
@@ -617,7 +617,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
         recipe,
         source,
         oracle: oracleEcho,
-        market: { poolId: derived.poolId, exists: shares.exists, scale: "the constraint is ABSOLUTE rates, 1e18 = 1.0", constraint },
+        pool: { poolId: derived.poolId, exists: shares.exists, scale: "the constraint is ABSOLUTE rates, 1e18 = 1.0", constraint },
         shares: shares.cst || shares.cpt ? { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } : null,
       },
       chainId,

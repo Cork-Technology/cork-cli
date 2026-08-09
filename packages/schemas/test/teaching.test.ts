@@ -2,7 +2,7 @@
 // variant, not blindly echo the tool's first example (which would silently change the caller's
 // action/resource and teach the wrong move). Agent-facing surface — asserted here directly.
 import { describe, expect, it } from "vitest";
-import { PrepareMarketInput, QueryInput, buildTeaching, nearestValue, TOOL_EXAMPLES } from "@cork/schemas";
+import { ComputeInput, PrepareMarketInput, QueryInput, buildTeaching, nearestValue, TOOL_EXAMPLES } from "@cork/schemas";
 
 describe("nearestValue — closed-enum typo suggestion", () => {
   it("suggests the closest legal member for a near typo", () => {
@@ -31,9 +31,9 @@ describe("buildTeaching — corrected example matches the failing variant", () =
     expect(variant(TOOL_EXAMPLES.cork_compute![0]!.input)).not.toBe("impairment-floor");
   });
 
-  it("cork_query derive-market input → the derive-market example", () => {
-    const t = buildTeaching("cork_query", [], { resource: "derive-market" });
-    expect(variant(t.example?.input)).toBe("derive-market");
+  it("cork_query derive-cork-pool input → the derive-cork-pool example", () => {
+    const t = buildTeaching("cork_query", [], { resource: "derive-cork-pool" });
+    expect(variant(t.example?.input)).toBe("derive-cork-pool");
   });
 
   it("cork_prepare_orders cancel input → the cancel example", () => {
@@ -97,7 +97,24 @@ describe("buildTeaching — enum-typo issue enrichment", () => {
     const parsed = QueryInput.safeParse(input);
     expect(parsed.success).toBe(false);
     const t = buildTeaching("cork_query", parsed.success ? [] : parsed.error.issues, input);
-    expect(t.issues[0]?.suggestion).toBe('"market-predict" was renamed to "derive-market"');
+    expect(t.issues[0]?.suggestion).toBe('"market-predict" was renamed to "derive-cork-pool"');
+  });
+
+  it("the taxonomy-renamed resources teach their new names, end-to-end through the real schema", () => {
+    // "market" → "cork-pool" is the mutation-probed anchor; the other three ride the same map.
+    for (const [old, renamed] of [
+      ["market", "cork-pool"],
+      ["markets", "cork-pools"],
+      ["derive-market", "derive-cork-pool"],
+      ["limit-order-markets", "trading-pairs"],
+      ["flows", "rollover-orders"],
+    ] as const) {
+      const input = { resource: old, chainId: 1 };
+      const parsed = QueryInput.safeParse(input);
+      expect(parsed.success).toBe(false);
+      const t = buildTeaching("cork_query", parsed.success ? [] : parsed.error.issues, input);
+      expect(t.issues[0]?.suggestion).toBe(`"${old}" was renamed to "${renamed}"`);
+    }
   });
 
   it("an OLD wire value teaches its rename through a discriminated union (deploy-wrapper)", () => {
@@ -110,6 +127,14 @@ describe("buildTeaching — enum-typo issue enrichment", () => {
     expect(parsed.success).toBe(false);
     const t = buildTeaching("cork_prepare_market", parsed.success ? [] : parsed.error.issues, input);
     expect(t.issues.map((i) => i.suggestion)).toContain('"deploy-wrapper" was renamed to "deploy-oracle"');
+  });
+
+  it("the pre-rename compute kind resolve-recipe teaches recipe-rate-constraint (mutation-probed)", () => {
+    const input = { chainId: 8453, params: { kind: "resolve-recipe", recipe: "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca" } };
+    const parsed = ComputeInput.safeParse(input);
+    expect(parsed.success).toBe(false);
+    const t = buildTeaching("cork_compute", parsed.success ? [] : parsed.error.issues, input);
+    expect(t.issues.map((i) => i.suggestion)).toContain('"resolve-recipe" was renamed to "recipe-rate-constraint"');
   });
 
   it("the rename map does NOT misfire when the new name is absent from the failing field's legal set", () => {

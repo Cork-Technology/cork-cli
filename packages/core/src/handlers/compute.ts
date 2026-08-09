@@ -85,14 +85,14 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     }
   }
 
-  if (p.kind === "resolve-recipe") {
+  if (p.kind === "recipe-rate-constraint") {
     // 2.1.0: ask the recipe CONTRACT what four rate limits it would impose (a staticcall to
     // recipe.resolve) — THE step that produces the constraint you sign into a JIT order. The
     // registry's percentage-band math is gone from the public surface; p.legacy reaches the
     // deprecated pre-2.1.0 bands behind the gate.
     if (p.legacy) return handleComputeResolveRecipeLegacy(input, p, ctx, chainId);
     if (!p.collateralAsset || !p.referenceAsset) {
-      return unavailable(chainId, "missing_filter", "resolve-recipe needs collateralAsset + referenceAsset (the pair the constraint is for), plus recipe (the approved recipe CONTRACT ADDRESS; mode survives as deprecated sugar). Optional: args (recipe additionalData hex), rate (FIXED recipes), rateOracle (explicit oracle)", ctx);
+      return unavailable(chainId, "missing_filter", "recipe-rate-constraint needs collateralAsset + referenceAsset (the pair the constraint is for), plus recipe (the approved recipe CONTRACT ADDRESS; mode survives as deprecated sugar). Optional: args (recipe additionalData hex), rate (FIXED recipes), rateOracle (explicit oracle)", ctx);
     }
     const r = await getRegistry(ctx, chainId);
     if (r.gate) return r.gate;
@@ -142,7 +142,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     return handleComputeDutchAuction(input, p, ctx);
   }
   // The one deliberately-gated kind left, naming its REAL blocker and unblock condition.
-  return unavailable(chainId, "phase_gated", "rfq-quote would RECOMMEND a price — a pricing-model/product decision that is deliberately deferred, not missing infrastructure. The registry band math it would build on is already live as cork_compute resolve-recipe; discover open RFQs with cork_query rfqs and answer them with cork_submit rfq-answer. A Fusion-style decaying-premium order (compute dutch-auction-price is live) is one modeled-quote-free alternative — see notes/fusion-integration-plan.md", ctx);
+  return unavailable(chainId, "phase_gated", "rfq-quote would RECOMMEND a price — a pricing-model/product decision that is deliberately deferred, not missing infrastructure. The registry band math it would build on is already live as cork_compute recipe-rate-constraint; discover open RFQs with cork_query rfqs and answer them with cork_submit rfq-answer. A Fusion-style decaying-premium order (compute dutch-auction-price is live) is one modeled-quote-free alternative — see notes/fusion-integration-plan.md", ctx);
 }
 
 /**

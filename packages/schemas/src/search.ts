@@ -16,22 +16,22 @@ export interface SearchHint {
 
 export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   cork_query: [
-    { variant: "market", text: "live market state pool tuple rates read on-chain snapshot" },
-    { variant: "markets", text: "list all pools markets discovery enumerate" },
+    { variant: "cork-pool", text: "live market state pool tuple rates read on-chain snapshot one expiry" },
+    { variant: "cork-pools", text: "list all pools markets discovery enumerate" },
     { variant: "account-state", text: "balances account holdings tokens positions owned" },
     { variant: "pool-whitelist", text: "whitelist whitelisted allowed access check account" },
     { variant: "whitelisted-addresses", text: "whitelisted addresses list rows per pool" },
-    { variant: "flows", text: "flows user action history activity past actions timeline" },
+    { variant: "rollover-orders", text: "flows rollover orders fills contracts user action history activity past actions timeline" },
     { variant: "orderbook", text: "orderbook open resting limit orders book depth quotes" },
     { variant: "fills", text: "fills executed trades trade history filled orders past swaps" },
-    { variant: "limit-order-markets", text: "limit order markets trading pairs listed" },
+    { variant: "trading-pairs", text: "limit order markets trading pairs listed limit-order-markets" },
     { variant: "protocol-config", text: "deployed contract addresses protocol config fees bounds" },
     { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets price source nav source denomination" },
     { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price nav mode fixed rate oracle exists" },
     { variant: "registry-recipes", text: "recipes approved recipe contracts addresses constraint policy liquidity fixed constants args isRecipe" },
     { variant: "registry-denominations", text: "denominations labels units USD ETH USDS label hash case sensitive currency" },
     { variant: "registry-feeds", text: "conversion feeds chainlink aggregator edges base quote live answer decimals drift usd graph" },
-    { variant: "derive-market", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses market-predict" },
+    { variant: "derive-cork-pool", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses market-predict derive-market" },
     { variant: "rfqs", text: "rfq request for quote list open requests answers underwriter discovery feed poll" },
   ],
   cork_compute: [
@@ -41,7 +41,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "rollover-premium-floor", text: "rollover premium floor minimum guaranteed" },
     { variant: "impairment-floor", text: "impairment floor worst case horizon rate limited depeg loss" },
     { variant: "rfq-quote", text: "rfq request for quote market maker" },
-    { variant: "resolve-recipe", text: "resolve recipe constraint four rate limits sign order staticcall anchor rate additionalData" },
+    { variant: "recipe-rate-constraint", text: "resolve recipe constraint four rate limits sign order staticcall anchor rate additionalData" },
   ],
   cork_decode: [
     { variant: "calldata", text: "decode calldata bytes hex explain transaction bundler3 multicall legs what does this do" },

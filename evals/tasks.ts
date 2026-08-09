@@ -40,13 +40,13 @@ const SIGNED_TX = DEMO_SIGNED_TX;
 
 export const TASKS: EvalTask[] = [
   // ── reads ──────────────────────────────────────────────────────────────
-  { id: "read-market", prompt: `Read the current on-chain state of Cork pool ${P} and tell me the swap rate.`, expect: { tool: "cork_query", params: { resource: "market" }, state: "ok", answer: /0\.8|800000000000000000/, maxCalls: 2 } },
+  { id: "read-market", prompt: `Read the current on-chain state of Cork pool ${P} and tell me the swap rate.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /0\.8|800000000000000000/, maxCalls: 2 } },
   { id: "read-balances", prompt: `What token balances does account ${A} hold in Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "account-state" }, state: "ok", maxCalls: 2 } },
   { id: "read-config", prompt: "Which contract address is the Cork adapter deployed at on mainnet?", expect: { tool: "cork_query", params: { resource: "protocol-config" }, state: "ok", answer: /0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407/i, maxCalls: 2 } },
   { id: "read-whitelist", prompt: `Is ${A} whitelisted on Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "pool-whitelist" }, state: "ok", answer: /not whitelisted|false|no\b/i, maxCalls: 2 } },
   { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b0\b|zero|no (resting )?orders|empty/i, maxCalls: 2 } },
   { id: "whitelist-enumerate", prompt: "List ALL whitelisted addresses across Cork pools (the full enumeration, not a single-account check).", expect: { tool: "cork_query", params: { resource: "whitelisted-addresses" }, state: "ok", answer: /a11ce/i, maxCalls: 2 } },
-  { id: "rollover-feed", prompt: "Show me the currently fillable Cork rollover orders on Arbitrum (chain 42161).", expect: { tool: "cork_query", params: { resource: "flows" }, state: "ok", maxCalls: 2 } },
+  { id: "rollover-feed", prompt: "Show me the currently fillable Cork rollover orders on Arbitrum (chain 42161).", expect: { tool: "cork_query", params: { resource: "rollover-orders" }, state: "ok", maxCalls: 2 } },
   // ── compute ────────────────────────────────────────────────────────────
   { id: "price-swap", prompt: `How much cST and reference asset would it cost right now to take 1 sUSDe (1e18) of collateral out of Cork pool ${P}?`, expect: { tool: "cork_compute", params: { params: { kind: "cst-swap-rate" } }, state: "ok", maxCalls: 2 } },
   { id: "price-unwind", prompt: `Quote the unwind: putting 5e18 collateral back into Cork pool ${P} — what comes out?`, expect: { tool: "cork_compute", params: { params: { kind: "unwind-rate" } }, state: "ok", maxCalls: 2 } },
@@ -76,12 +76,12 @@ export const TASKS: EvalTask[] = [
   {
     id: "resolve-constraint",
     prompt: `Resolve the four rate limits that the approved liquidity recipe contract 0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291 would impose on collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on Arbitrum (chain 42161) — the values a JIT order carries.`,
-    expect: { tool: "cork_compute", params: { params: { kind: "resolve-recipe", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
+    expect: { tool: "cork_compute", params: { params: { kind: "recipe-rate-constraint", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
   },
   {
     id: "predict-market",
     prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract 0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291. Report the derived pool id plus the cST and cPT contracts.`,
-    expect: { tool: "cork_query", params: { resource: "derive-market", filters: { recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
+    expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
   // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the
@@ -104,8 +104,8 @@ export const TASKS: EvalTask[] = [
 
   // ── HELD OUT (never tune descriptions against these) ───────────────────
   { id: "ho-mode-reject", heldOut: true, prompt: `Read Cork pool ${P} state using the centralized data mode.`, expect: { tool: "cork_query", params: { mode: "centralized" }, state: "unavailable", code: "mode_unavailable", maxCalls: 3 } },
-  { id: "ho-wrong-then-right", heldOut: true, prompt: `Get me the swap fee percentage of Cork pool ${P}.`, expect: { tool: "cork_query", params: { resource: "market" }, state: "ok", answer: /5e16|50000000000000000|0\.05/, maxCalls: 3 } },
+  { id: "ho-wrong-then-right", heldOut: true, prompt: `Get me the swap fee percentage of Cork pool ${P}.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /5e16|50000000000000000|0\.05/, maxCalls: 3 } },
   { id: "ho-authority", heldOut: true, prompt: `Prepare a Permit2 onboarding for token 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 spender 0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407, request id "eval-auth-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "authority-onboard" } }, state: "ok", maxCalls: 2 } },
   { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x2222222222222222222222222222222222222222222222222222222222222222 (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
-  { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "market" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
+  { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
 ];

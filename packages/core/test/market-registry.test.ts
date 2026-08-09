@@ -425,7 +425,7 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
   });
 });
 
-describe("cork_query derive-market (2.1.0: recipe contract + off-chain constraint)", () => {
+describe("cork_query derive-cork-pool (2.1.0: recipe contract + off-chain constraint)", () => {
   const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(withBinding(handler), opts) });
   // Live-captured ground truth: the identical Market struct hash across generations.
   const GT = {
@@ -439,20 +439,20 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   const sharesWord = (a: string) => "000000000000000000000000" + a.replace(/^0x/, "").toLowerCase();
 
   it("missing recipe AND mode → missing_filter (no chain call)", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000" } }, ctx(() => { throw new Error("must not read chain"); }));
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000" } }, ctx(() => { throw new Error("must not read chain"); }));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("missing_filter");
     expect(env.warnings[0]?.message).toContain("recipe");
   });
 
   it("ca === ref is a domain-rule envelope (invalid_pair), not a throw", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", recipe: LIQ } }, ctx(() => 0));
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: CA, expiry: "1900000000", recipe: LIQ } }, ctx(() => 0));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_pair");
   });
 
   it("full prediction (deployed oracle, pool NOT created): local pool_id parity, simulated cST/cPT, drift notice teaches signing pins it", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
         if (c.functionName === "source") return 1; // PRICE
@@ -473,14 +473,14 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
       },
     ));
     expect(env.state).toBe("ok");
-    const d = env.data as { recipe: string; source: string; oracle: { deployed: boolean; rate: string }; market: { poolId: string; exists: boolean; constraint: { rateMin: string } }; shares: { corkSwapToken: string; corkPrincipalToken: string; source: string } };
+    const d = env.data as { recipe: string; source: string; oracle: { deployed: boolean; rate: string }; pool: { poolId: string; exists: boolean; constraint: { rateMin: string } }; shares: { corkSwapToken: string; corkPrincipalToken: string; source: string } };
     expect(d.recipe).toBe(LIQ);
     expect(d.source).toBe("price");
     expect(d.oracle.deployed).toBe(true);
     expect(BigInt(d.oracle.rate)).toBe(GT.rate);
-    expect(d.market.poolId).toBe(GT.poolId); // end-to-end parity with the live endpoint
-    expect(d.market.exists).toBe(false);
-    expect(BigInt(d.market.constraint.rateMin)).toBe(GT.constraint.rateMin);
+    expect(d.pool.poolId).toBe(GT.poolId); // end-to-end parity with the live endpoint
+    expect(d.pool.exists).toBe(false);
+    expect(BigInt(d.pool.constraint.rateMin)).toBe(GT.constraint.rateMin);
     expect(d.shares.corkSwapToken.toLowerCase()).toBe(GT.cst);
     expect(d.shares.corkPrincipalToken.toLowerCase()).toBe(GT.cpt);
     expect(d.shares.source).toBe("simulated");
@@ -493,7 +493,7 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
     // resolves from the anchor in args; the share simulation prepends the same permissionless
     // deploy the fill performs. Nothing has to be deployed first.
     const anchorArgs = `0x${WAD.toString(16).padStart(64, "0")}`;
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx(
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: anchorArgs } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
         if (c.functionName === "source") return 1;
@@ -515,10 +515,10 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
       },
     ));
     expect(env.state).toBe("ok");
-    const d = env.data as { oracle: { deployed: boolean }; market: { poolId: string; exists: boolean }; shares: { corkSwapToken: string; source: string }; constraint?: unknown };
+    const d = env.data as { oracle: { deployed: boolean }; pool: { poolId: string; exists: boolean }; shares: { corkSwapToken: string; source: string }; constraint?: unknown };
     expect(d.oracle.deployed).toBe(false);
-    expect(d.market.poolId).toBe(GT.poolId); // same identity as the deployed-oracle case: address + constraint are identical
-    expect(d.market.exists).toBe(false);
+    expect(d.pool.poolId).toBe(GT.poolId); // same identity as the deployed-oracle case: address + constraint are identical
+    expect(d.pool.exists).toBe(false);
     expect(d.shares.corkSwapToken.toLowerCase()).toBe(GT.cst);
     expect(d.shares.source).toBe("simulated");
     const note = env.warnings.find((w) => w.code === "oracle_not_deployed");
@@ -535,7 +535,7 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
     // (v1.3) or this test loses its discriminating power — hence the v1.1 pool manager,
     // the exact pairing an old-generation registry would present today.
     const CONTROLLER_PM = "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2"; // v1.1, ≠ config default
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx(
       (c) => {
         if (c.functionName === "isRecipe") return true;
         if (c.functionName === "source") return 1;
@@ -566,7 +566,7 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   });
 
   it("a refusing recipe → recipe_refused naming the contract's own error", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx((c) => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ } }, ctx((c) => {
       if (c.functionName === "isRecipe") return true;
       if (c.functionName === "source") return 1;
       if (c.functionName === "lookupWrapper") return ZERO;
@@ -580,7 +580,7 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   });
 
   it("mode sugar resolves via config hints with a deprecation_notice", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-market", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", mode: "liquidity" } }, ctx((c) => {
       if (c.functionName === "isRecipe") {
         expect(String(c.args?.[0]).toLowerCase()).toBe(LIQ.toLowerCase());
         return true;
@@ -596,11 +596,11 @@ describe("cork_query derive-market (2.1.0: recipe contract + off-chain constrain
   });
 });
 
-describe("cork_compute resolve-recipe (2.1.0: the recipe resolves its own constraint)", () => {
+describe("cork_compute recipe-rate-constraint (2.1.0: the recipe resolves its own constraint)", () => {
   const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1n, resolveRpc: stubRpc(withBinding(handler)) });
 
   it("resolves against the LIVE oracle and returns the four raw values an order carries", async () => {
-    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "resolve-recipe", recipe: LIQ, collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
       if (c.functionName === "isRecipe") return true;
       if (c.functionName === "source") return 1;
       if (c.functionName === "lookupWrapper") return ORACLE;
@@ -621,13 +621,13 @@ describe("cork_compute resolve-recipe (2.1.0: the recipe resolves its own constr
   });
 
   it("missing pair → missing_filter teaching the 2.1.0 shape", async () => {
-    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "resolve-recipe", recipe: LIQ } }, ctx(() => { throw new Error("must not read chain"); }));
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ } }, ctx(() => { throw new Error("must not read chain"); }));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("missing_filter");
   });
 
   it("a refusing recipe (e.g. fixed-rate with an undeployed oracle) → recipe_refused with guidance", async () => {
-    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "resolve-recipe", recipe: LIQ, collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
       if (c.functionName === "isRecipe") return true;
       if (c.functionName === "source") return 2; // FIXED
       if (c.functionName === "resolve") throw new Error("execution reverted: RateOracleNotDeployed(0x211C…, 0x7F65…)");

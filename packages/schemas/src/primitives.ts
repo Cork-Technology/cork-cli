@@ -32,7 +32,7 @@ export const Bytes32 = hex<`0x${string}`>(/^0x[0-9a-fA-F]{64}$/, "expected 0x-pr
 
 /** Cork MarketId = keccak256(abi.encode(Market)) — 8-field struct hash [C1]. */
 export const MarketId = Bytes32.describe(
-  "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'markets' or api-phoenix.cork.tech/v1/pools/",
+  "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
 ).meta({ id: "MarketId" });
 
 const U256_MAX = (1n << 256n) - 1n;

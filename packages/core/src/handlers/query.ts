@@ -17,7 +17,7 @@ import { PERMIT2_ADDRESS } from "./submit.ts";
 
 
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
-const VENUE_RESOURCES = new Set(["markets", "orderbook", "fills", "limit-order-markets", "flows", "rfqs"]);
+const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
 
 /** One event-derived resource's scan, shared by the HyperSync backfill AND the live-tail RPC merge
  *  so the two legs can never scan different addresses/topics or decode differently. `key` yields a
@@ -87,11 +87,11 @@ async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScan
 async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   const kind = filters.kind ?? "orders";
   const structural =
-    input.resource === "orderbook" || input.resource === "limit-order-markets"
+    input.resource === "orderbook" || input.resource === "trading-pairs"
       ? `'${input.resource}' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)`
       : input.resource === "rfqs"
         ? "'rfqs' cannot be served in full-decentralized mode: RFQ requests and answers are off-chain venue JSON that never binds and emits no events, by design — omit mode or use 'centralized'"
-        : input.resource === "flows" && kind === "orders"
+        : input.resource === "rollover-orders" && kind === "orders"
         ? "flows kind='orders' cannot be served in full-decentralized mode: pre-commitment rollover orders emit no events; use kind='fills' or kind='contracts', or centralized mode for the order feed"
         : null;
   if (structural) return unavailable(chainId, "mode_unavailable", structural, ctx);
@@ -107,7 +107,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
     // Build the per-resource scan ONCE (address/topics/decoder/filter); both the HyperSync backfill
     // and the live-tail RPC merge below run it, so they can never diverge.
     let spec: HsScanSpec;
-    if (input.resource === "markets") {
+    if (input.resource === "cork-pools") {
       // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
       const cfg = await resolveConfig();
       const pms = new Set<string>();
@@ -203,7 +203,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       state: "ok",
       data: {
         resource: input.resource,
-        ...(input.resource === "flows" ? { kind } : {}),
+        ...(input.resource === "rollover-orders" ? { kind } : {}),
         count: items.length,
         items,
         ...(archiveHeight !== undefined ? { archiveHeight } : {}),
@@ -266,13 +266,13 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     // Default/centralized: the as-built venue (api-phoenix). Mode is explicit, never a silent
     // substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
     if (input.mode !== undefined && input.mode !== "centralized") {
-      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (markets, fills, flows kind=fills|contracts)`, ctx);
+      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (cork-pools, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
     const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), pageSize: input.pageSize, maxPages: input.maxPages };
     try {
       let traversal: PageTraversal;
-      if (input.resource === "markets") {
+      if (input.resource === "cork-pools") {
         traversal = await collectVenuePages(paging, async (cursor) => {
           const list = await getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize });
           return filters.poolId ? { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) } : list;
@@ -288,7 +288,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         });
       } else if (input.resource === "fills") {
         traversal = await collectVenuePages(paging, (cursor) => getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
-      } else if (input.resource === "limit-order-markets") {
+      } else if (input.resource === "trading-pairs") {
         traversal = await collectVenuePages(paging, (cursor) => getLopMarkets(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "rfqs") {
         // Single get by id, or the discovery feed (server default: state=open, newest first).
@@ -330,7 +330,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         state: !traversal.complete && traversal.reason === "cursor_repeated" ? "conflict" : "ok",
         data: {
           resource: input.resource,
-          ...(input.resource === "flows" ? { kind: filters.kind ?? "orders" } : {}),
+          ...(input.resource === "rollover-orders" ? { kind: filters.kind ?? "orders" } : {}),
           count: traversal.items.length,
           items: traversal.items,
           pagination: {
@@ -372,8 +372,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.resource === "registry-assets" || input.resource === "registry-oracle" || input.resource === "registry-recipes" || input.resource === "registry-denominations" || input.resource === "registry-feeds") {
     return handleQueryRegistry(input, filters, chainId, ctx);
   }
-  // derive-market — the registry+adapter derivation of a market that may not exist yet.
-  if (input.resource === "derive-market") {
+  // derive-cork-pool — the registry+adapter derivation of a pool that may not exist yet.
+  if (input.resource === "derive-cork-pool") {
     return handleQueryMarketPredict(input, filters, chainId, ctx);
   }
   const { dep, depWarn } = await getDep(ctx, chainId);
@@ -384,7 +384,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     return envelope({ state: "ok", data: { resource: input.resource, chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", warnings: depWarn, ctx });
   }
 
-  const chainResources = new Set(["market", "account-state", "pool-whitelist"]);
+  const chainResources = new Set(["cork-pool", "account-state", "pool-whitelist"]);
   if (!chainResources.has(input.resource)) {
     // Unreachable today (every enum resource routes above) — kept so a future enum addition
     // fails honestly instead of falling into the poolId-gated chain-read path below.
@@ -409,7 +409,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
 
   try {
-    if (input.resource === "market") {
+    if (input.resource === "cork-pool") {
       const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock);
       return envelope({
         state: "ok",

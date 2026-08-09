@@ -107,7 +107,7 @@ describe("runTool: cork_query", () => {
   it("chain resources are requires_rpc when no RPC can be resolved", async () => {
     // Inject a resolver that yields nothing, so this deterministically exercises the no-RPC branch
     // offline (the built-in resolver would otherwise reach the committed default over the network).
-    const env = await runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_query", { resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
@@ -141,10 +141,10 @@ describe("chain-read failures map to envelopes (never raw exceptions)", () => {
     expect(env.warnings[0]?.message).not.toContain("long viem detail"); // trimmed, not a stack dump
   });
 
-  it("query market: revert → unavailable + chain_read_failed", async () => {
+  it("query cork-pool: revert → unavailable + chain_read_failed", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } },
       { nowSeconds: NOW, resolveRpc: throwingResolver },
     );
     expect(env.state).toBe("unavailable");
@@ -195,7 +195,7 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shad
   it("query on a chain with no deployment at all (11155111) → unknown_deployment, not requires_rpc", async () => {
     const env = await runTool(
       "cork_query",
-      { chainId: 11155111, resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { chainId: 11155111, resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } },
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
     expect(env.warnings[0]?.code).toBe("unknown_deployment");
@@ -204,7 +204,7 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shad
   it("query on 8453 now resolves the shadow-stack deployment → requires_rpc when offline, no longer unknown_deployment", async () => {
     const env = await runTool(
       "cork_query",
-      { chainId: 8453, resource: "market", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { chainId: 8453, resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } },
       { nowSeconds: NOW, resolveRpc: async () => null },
     );
     expect(env.state).toBe("unavailable");
@@ -373,7 +373,7 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
 describe("input hardening + format semantics", () => {
   it("malformed filters.poolId / filters.account → ToolInputError (CLI exit 2)", async () => {
     await expect(
-      runTool("cork_query", { resource: "market", pageSize: 25, format: "concise", filters: { poolId: "not-a-pool" } }, { nowSeconds: NOW }),
+      runTool("cork_query", { resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: "not-a-pool" } }, { nowSeconds: NOW }),
     ).rejects.toBeInstanceOf(ToolInputError);
     await expect(
       runTool("cork_query", { resource: "account-state", pageSize: 25, format: "concise", filters: { poolId: POOL, account: "0x123" } }, { nowSeconds: NOW }),
@@ -381,7 +381,7 @@ describe("input hardening + format semantics", () => {
   });
 
   it("query data mode: unsupported modes fail loudly; chain results are labeled", async () => {
-    const gated = await runTool("cork_query", { resource: "market", mode: "centralized", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const gated = await runTool("cork_query", { resource: "cork-pool", mode: "centralized", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(gated.state).toBe("unavailable");
     expect(gated.warnings[0]?.code).toBe("mode_unavailable");
 
@@ -1011,7 +1011,7 @@ describe("filters contract: parser and schema description stay in lockstep", () 
   it("an unknown filter key fails BEFORE any venue/chain call, with the known-key list", async () => {
     const err = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 1, filters: { poolID: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 1, filters: { poolID: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
       {
         nowSeconds: 1n,
         venueFetch: async () => {

@@ -72,7 +72,7 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
   it("markets: decodes MarketCreated across configured PMs (primary + staging profile)", async () => {
     const seen: Array<{ fromBlock: number; address?: string[] }> = [];
     const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }, seen), resolveRpc: noRpc };
-    const env = await runTool("cork_query", { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("full-decentralized");
     const d = env.data as { count: number; items: Array<Record<string, unknown>>; archiveHeight: number };
@@ -90,7 +90,7 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }, seen), resolveRpc: noRpc };
     const env = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 42161, mode: "full-decentralized", filters: { kind: "contracts", account: OWNER }, pageSize: 25, format: "concise" },
+      { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized", filters: { kind: "contracts", account: OWNER }, pageSize: 25, format: "concise" },
       ctx,
     );
     expect(env.state).toBe("ok");
@@ -106,8 +106,8 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({}) };
     for (const input of [
       { resource: "orderbook", chainId: 42161, mode: "full-decentralized" },
-      { resource: "limit-order-markets", chainId: 42161, mode: "full-decentralized" },
-      { resource: "flows", chainId: 42161, mode: "full-decentralized" }, // kind defaults to orders
+      { resource: "trading-pairs", chainId: 42161, mode: "full-decentralized" },
+      { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized" }, // kind defaults to orders
     ]) {
       const env = await runTool("cork_query", { ...input, pageSize: 25, format: "concise" }, ctx);
       expect(env.state).toBe("unavailable");
@@ -120,7 +120,7 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({}) };
     const env = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 1, mode: "full-decentralized", filters: { kind: "fills" }, pageSize: 25, format: "concise" },
+      { resource: "rollover-orders", chainId: 1, mode: "full-decentralized", filters: { kind: "fills" }, pageSize: 25, format: "concise" },
       ctx,
     );
     expect(env.state).toBe("unavailable");
@@ -140,7 +140,7 @@ describe("loadHyperSync honesty (no injection)", () => {
   it("runTool surfaces the load failure as hypersync_unavailable", async () => {
     const prev = process.env.ENVIO_API_TOKEN;
     delete process.env.ENVIO_API_TOKEN;
-    const env = await runTool("cork_query", { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("hypersync_unavailable");
     if (prev) process.env.ENVIO_API_TOKEN = prev;
@@ -194,7 +194,7 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     const seen: Array<{ fromBlock: number; address?: string[] }> = [];
     const env = await runTool(
       "cork_query",
-      { resource: "flows", chainId: 42161, mode: "full-decentralized", filters: { kind: "fills", orderDigest: DIGEST }, pageSize: 25, format: "concise" },
+      { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized", filters: { kind: "fills", orderDigest: DIGEST }, pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: fakeSource(byTopic, seen), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
@@ -237,7 +237,7 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     };
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: partial },
     );
     expect(env.state).toBe("ok");
@@ -251,7 +251,7 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
   it("a source that omits `complete` is treated as complete (no false pagination warning)", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
@@ -301,7 +301,7 @@ describe("full-decentralized live-tail merge: recent RPC events top up the Hyper
   it("merges a market created in the tail (beyond archiveHeight) and discloses it", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       {
         nowSeconds: NOW,
         hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }),
@@ -319,7 +319,7 @@ describe("full-decentralized live-tail merge: recent RPC events top up the Hyper
   it("a tail row already in the backfill is not double-counted (dedup by identity)", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       {
         nowSeconds: NOW,
         hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }),
@@ -337,7 +337,7 @@ describe("full-decentralized live-tail merge: recent RPC events top up the Hyper
   it("a range-capped RPC degrades to an honest warning, not a failed read", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: tailRpc({ head: ARCHIVE + 50, throwOn: "getLogs" }) },
     );
     expect(env.state).toBe("ok");
@@ -350,7 +350,7 @@ describe("full-decentralized live-tail merge: recent RPC events top up the Hyper
   it("no merge when the archive head is already at/above chain head", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "markets", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: tailRpc({ head: ARCHIVE }) },
     );
     expect(env.state).toBe("ok");

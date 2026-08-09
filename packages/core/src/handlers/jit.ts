@@ -110,7 +110,7 @@ export async function buildTakerJitInteraction(args: {
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
     if (!constraint) {
-      return { gate: unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute resolve-recipe)", ctx) };
+      return { gate: unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute recipe-rate-constraint)", ctx) };
     }
     warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — taker-side JIT pre-flights (adapter bindings, roles, recipe, oracle, verify, cST side-match) were SKIPPED; the interaction is built from the caller-supplied constraint but unverified" });
   } else {

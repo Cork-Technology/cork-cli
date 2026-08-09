@@ -58,7 +58,7 @@ describe("parseChecksums", () => {
 describe("updateDecision", () => {
   const base = {
     currentVersion: "v1.0.0",
-    argv: ["query", "markets"] as string[],
+    argv: ["query", "cork-pools"] as string[],
     env: {} as Record<string, string | undefined>,
     stderrIsTTY: true,
     cache: null as UpdateCache | null,
@@ -92,7 +92,7 @@ describe("updateDecision", () => {
       { env: { CI: "1" } },
       { env: { CORK_NO_UPDATE_NOTIFIER: "1" } },
       { env: { CORK_JSON: "1" } },
-      { argv: ["query", "markets", "--json"] },
+      { argv: ["query", "cork-pools", "--json"] },
       { argv: ["mcp"] },
       { argv: ["self-update"] },
       { argv: ["__update-check"] },
