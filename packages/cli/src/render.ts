@@ -150,12 +150,26 @@ export function renderEnvelope(env: unknown, tool: ToolDef): string {
   return `${parts.join("\n")}\n`;
 }
 
+/** The stderr JSON error payload the CLI emits — also renderError's input. `issues` stays
+ *  unknown on purpose: teaching issues and raw zod issues differ in shape, and the renderer
+ *  walks whichever arrived defensively. */
+export interface CliErrorPayload {
+  error: {
+    code?: string;
+    tool?: string;
+    message?: string;
+    issues?: unknown;
+    remediation?: string;
+    example?: unknown;
+  };
+}
+
 /** Structured failures, for a person. The JSON form stays on stderr when JSON is requested. */
-export function renderError(payload: Record<string, unknown>): string {
-  const e = (payload["error"] ?? payload) as Record<string, unknown>;
-  const parts: string[] = [`ERROR  ${scalar(e["code"] ?? "error")}`];
-  if (e["message"]) parts.push("", wrapped(String(e["message"]), 2));
-  const issues = e["issues"];
+export function renderError(payload: CliErrorPayload): string {
+  const e = payload.error;
+  const parts: string[] = [`ERROR  ${scalar(e.code ?? "error")}`];
+  if (e.message) parts.push("", wrapped(String(e.message), 2));
+  const issues = e.issues;
   if (Array.isArray(issues) && issues.length > 0) {
     parts.push("", "Problems");
     for (const raw of issues) {
@@ -171,7 +185,7 @@ export function renderError(payload: Record<string, unknown>): string {
       if (i["suggestion"]) parts.push(wrapped(`→ ${i["suggestion"]}`, 4));
     }
   }
-  if (e["remediation"]) parts.push("", wrapped(String(e["remediation"]), 2));
-  if (e["example"]) parts.push("", "Working example", `  ${JSON.stringify(e["example"])}`);
+  if (e.remediation) parts.push("", wrapped(String(e.remediation), 2));
+  if (e.example) parts.push("", "Working example", `  ${JSON.stringify(e.example)}`);
   return `${parts.join("\n")}\n`;
 }

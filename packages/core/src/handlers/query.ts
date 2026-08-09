@@ -15,7 +15,6 @@ import { parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { PERMIT2_ADDRESS } from "./submit.ts";
 
-
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
 
@@ -24,19 +23,31 @@ const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pa
  *  stable per-row identity for de-duplicating the (block-disjoint) tail against the backfill. */
 interface HsScanSpec {
   fromBlock: number;
-  address: string[];
-  topics: Array<string[] | null>;
+  address: `0x${string}`[];
+  topics: Array<`0x${string}`[] | null>;
   decode: (logs: HyperSyncLog[]) => Array<Record<string, unknown>>;
   postFilter: (rows: Array<Record<string, unknown>>) => Array<Record<string, unknown>>;
   key: (row: Record<string, unknown>) => string;
 }
 
-/** The two JSON-RPC calls the live-tail needs; the resolved viem client answers both (cast at this
- *  boundary — raw eth_getLogs with array topics is awkward to express in viem's typed surface). */
+/** The two JSON-RPC calls the live-tail needs — a structural subset of viem's PublicClient, so the
+ *  resolved client satisfies it with no cast. blockNumber/transactionHash are nullable in the RPC
+ *  log shape (pending logs); a bounded historical range never yields those, and we filter anyway. */
 interface LiveTailClient {
   getBlockNumber(): Promise<bigint>;
-  request(args: { method: "eth_getLogs"; params: [{ fromBlock: string; toBlock: string; address: string[]; topics: Array<string[] | null> }] }): Promise<Array<{ address: string; topics: string[]; data: string; blockNumber: string; transactionHash: string }>>;
+  request(args: {
+    method: "eth_getLogs";
+    params: [{ fromBlock: `0x${string}`; toBlock: `0x${string}`; address: `0x${string}`[]; topics: Array<`0x${string}`[] | null> }];
+  }): Promise<Array<{ address: `0x${string}`; topics: `0x${string}`[]; data: `0x${string}`; blockNumber: `0x${string}` | null; transactionHash: `0x${string}` | null }>>;
 }
+
+/** Per-token funding-allowance report on account-state reads: both spender layers, plus the
+ *  Permit2-internal (user, token, spender=adapter) allowance the permit2 funding leg consumes. */
+type FundingAllowances = {
+  spenders: { corkAdapter: `0x${string}`; permit2: `0x${string}` };
+  note: string;
+  byToken: Record<string, { corkAdapter: bigint; permit2: bigint; permit2Internal: { amount: bigint; expiration: number; expired: boolean } | null }>;
+};
 
 type LiveTailResult =
   | { status: "no-rpc" } // nothing configured / a wrong-chain explicit endpoint — skip silently
@@ -61,18 +72,19 @@ async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScan
     return { status: "no-rpc" };
   }
   if (!rpc) return { status: "no-rpc" };
-  const client = rpc.client as unknown as LiveTailClient;
+  const client: LiveTailClient = rpc.client;
   try {
     const head = Number(await client.getBlockNumber());
     if (!Number.isFinite(head) || head <= archiveHeight) return { status: "current" };
-    const toHex = (n: number) => `0x${n.toString(16)}`;
+    const toHex = (n: number): `0x${string}` => `0x${n.toString(16)}`;
     // Bounded to (archiveHeight, head]: disjoint from the backfill by block number, so a small,
     // recent-only range that ordinary public RPCs serve even when they refuse deep history.
     const logs = await client.request({
       method: "eth_getLogs",
       params: [{ fromBlock: toHex(archiveHeight + 1), toBlock: toHex(head), address: spec.address, topics: spec.topics }],
     });
-    const rows = spec.postFilter(spec.decode(logs.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: Number(l.blockNumber), transactionHash: l.transactionHash }))));
+    const mined = logs.filter((l): l is typeof l & { blockNumber: `0x${string}`; transactionHash: `0x${string}` } => l.blockNumber !== null && l.transactionHash !== null);
+    const rows = spec.postFilter(spec.decode(mined.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: Number(l.blockNumber), transactionHash: l.transactionHash }))));
     return { status: "merged", rows, headBlock: head };
   } catch (err) {
     return { status: "error", message: `live-tail eth_getLogs via ${hostOf(rpc.url)} failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
@@ -110,7 +122,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
     if (input.resource === "cork-pools") {
       // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
       const cfg = await resolveConfig();
-      const pms = new Set<string>();
+      const pms = new Set<`0x${string}`>();
       const primary = cfg.defaults.deployments[String(chainId)];
       if (primary) pms.add(primary.poolManager);
       for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
@@ -145,7 +157,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       const { rollover } = await resolveRollover(chainId);
       if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId}`, ctx);
       if (kind === "fills") {
-        const topics: Array<string[] | null> = [ROLLOVER_FILL_TOPICS];
+        const topics: Array<`0x${string}`[] | null> = [ROLLOVER_FILL_TOPICS];
         if (filters.orderDigest) topics.push([filters.orderDigest]);
         spec = {
           fromBlock: rollover.seededAtBlock,
@@ -448,7 +460,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // Allowances that gate the funding UX [funding.ts]: erc20-approve mode pulls
       // initiator→ADAPTER (erc20TransferFrom on the adapter), permit2 mode needs the token
       // approved to the canonical Permit2. Only readable where the adapter is configured.
-      let allowances: Record<string, unknown> | undefined;
+      let allowances: FundingAllowances | undefined;
       if (dep.corkAdapter) {
         const alw = (token: `0x${string}`, spender: `0x${string}`) =>
           client.readContract({ address: token, abi: erc20Abi, functionName: "allowance", args: [filters.account!, spender], ...blockOpt });

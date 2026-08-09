@@ -5,7 +5,7 @@ import { Envelope, TrackInput } from "@cork/schemas";
 import { computeMarketId } from "../marketid.ts";
 import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
-import { classifyBitInvalidator, classifyRemainingRaw, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan } from "../orders.ts";
+import { classifyBitInvalidator, classifyRemainingRaw, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, type LopOnChainStatus } from "../orders.ts";
 import { JIT_EVENTS } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
@@ -13,6 +13,27 @@ import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/v
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
 
+/** [K7] chain-verification payload on rollover-order reconcile results: the settler's live
+ *  orderStatus view, plus (when a logs endpoint resolves) the digest's labeled event history —
+ *  either leg can ride alone; every gap is disclosed as a warning, never faked. */
+type RolloverChainVerification = {
+  leg?: string;
+  settler?: `0x${string}`;
+  chainStatus?: ReturnType<typeof chainStatusName>;
+  venueStatus?: string;
+  consistent?: boolean;
+  events?: ReturnType<typeof labelLogs>;
+};
+
+/** [K7] chain-verification payload on lop-order reconcile results: the live LOP invalidator. */
+type LopChainVerification = {
+  leg: string;
+  lop: `0x${string}`;
+  maker: `0x${string}`;
+  onChainStatus: LopOnChainStatus["status"];
+  remainingMakingAmount?: bigint;
+  cancellable: boolean;
+};
 
 export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
@@ -169,7 +190,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
 
           // ── [K7] chain verification legs (best-effort; every gap is disclosed, never faked) ──
           const warnings: Array<{ code: string; message: string }> = [];
-          let chainVerification: Record<string, unknown> | undefined;
+          let chainVerification: RolloverChainVerification | undefined;
           const { rollover } = await resolveRollover(chainId);
           const settlerAddr = typeof order.settler === "string" ? (order.settler as `0x${string}`) : undefined;
           const resolved = settlerAddr ? await getRpc(ctx, chainId) : null;
@@ -268,7 +289,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         }
         if (fills.items.length > 0 || bookRow) {
           const warnings: Array<{ code: string; message: string }> = [];
-          let chainVerification: Record<string, unknown> | undefined;
+          let chainVerification: LopChainVerification | undefined;
           // maker + makerTraits from the book row (resting) or the first fill row (historical).
           const src = (bookRow?.order as Record<string, unknown> | undefined) ?? bookRow ?? (fills.items[0] as Record<string, unknown> | undefined);
           const maker = typeof src?.maker === "string" ? (src.maker as `0x${string}`) : undefined;
@@ -281,11 +302,11 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               const onChain =
                 plan.mode === "bit"
                   ? classifyBitInvalidator(
-                      (await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] })) as bigint,
+                      await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] }),
                       plan.mask,
                     )
                   : classifyRemainingRaw(
-                      (await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, hash as `0x${string}`] })) as bigint,
+                      await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, hash as `0x${string}`] }),
                     );
               chainVerification = {
                 leg: `LOP ${plan.mode}-invalidator (live RPC)`,

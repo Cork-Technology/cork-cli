@@ -53,18 +53,28 @@ function leafName(tool: ToolDef): string {
   return tool.cliPath[tool.cliPath.length - 1]!;
 }
 
-interface SchemaNode {
+/** The CLI's structural view of a JSON-Schema node — a supertype of what zod v4 emits
+ *  (ToolInputSchema), so the wire document assigns into it with no cast. `properties` admits
+ *  boolean sub-schemas because the spec does (zod never emits one for our inputs; `objectProps`
+ *  filters them defensively). A type alias, not an interface, so the implicit index signature
+ *  keeps it assignable to plain JSON-object types. */
+type SchemaNode = {
   type?: string | string[];
   enum?: unknown[];
   const?: unknown;
   pattern?: string;
   description?: string;
-  properties?: Record<string, SchemaNode>;
+  properties?: Record<string, SchemaNode | boolean>;
   required?: string[];
   $ref?: string;
   $defs?: Record<string, SchemaNode>;
   anyOf?: SchemaNode[];
   oneOf?: SchemaNode[];
+};
+
+/** A node's object-valued properties (boolean sub-schemas dropped — zod never emits them here). */
+function objectProps(props: SchemaNode["properties"]): Record<string, SchemaNode> {
+  return Object.fromEntries(Object.entries(props ?? {}).filter((e): e is [string, SchemaNode] => typeof e[1] === "object"));
 }
 
 /**
@@ -234,14 +244,14 @@ function discriminatedUnion(props: Record<string, SchemaNode>, defs: Record<stri
     const variants: UnionVariant[] = [];
     for (const raw of list) {
       const b = resolveNode(raw, defs);
-      const p = b.properties ?? {};
-      const d = (["type", "kind"] as const).find((k) => typeof (p[k] as SchemaNode | undefined)?.const === "string");
+      const p = objectProps(b.properties);
+      const d = (["type", "kind"] as const).find((k) => typeof p[k]?.const === "string");
       if (!d || (disc && d !== disc)) {
         disc = undefined;
         break;
       }
       disc = d;
-      variants.push({ value: (p[d] as SchemaNode).const as string, raw, props: p, ...(b.description !== undefined ? { description: b.description } : {}) });
+      variants.push({ value: p[d]!.const as string, raw, props: p, ...(b.description !== undefined ? { description: b.description } : {}) });
     }
     if (disc && variants.length === list.length) return { field, disc, variants };
   }
@@ -333,7 +343,7 @@ export async function runCli(
   // sees it (commander binds one long flag per option; spelling tolerance lives here).
   const knownFlags = new Map<string, string>();
   for (const tool of REGISTRY) {
-    const s = inputJsonSchema(tool.name) as SchemaNode;
+    const s: SchemaNode = inputJsonSchema(tool.name);
     for (const prop of Object.keys(s?.properties ?? {})) knownFlags.set(canonicalise(flagFor(prop)), flagFor(prop));
   }
 
@@ -376,9 +386,9 @@ export async function runCli(
 
   for (const tool of REGISTRY) {
     const parent = tool.cliPath.length > 1 ? groupFor(tool.cliPath[0]!) : program;
-    const schema = inputJsonSchema(tool.name) as SchemaNode;
+    const schema: SchemaNode = inputJsonSchema(tool.name);
     const defs = schema?.$defs ?? {};
-    const props = Object.fromEntries(Object.entries(schema?.properties ?? {}).map(([k, n]) => [k, resolveNode(n, defs)]));
+    const props = Object.fromEntries(Object.entries(objectProps(schema.properties)).map(([k, n]) => [k, resolveNode(n, defs)]));
     const required = schema?.required ?? [];
     // One positional, for the first required scalar — `ch query cork-pool`, `ch decode calldata`.
     const positional = required.find((r) => props[r] && isScalarNode(props[r]!));
@@ -473,13 +483,14 @@ export async function runCli(
         if (opts["explain"]) {
           // Variant-scoped explain: same renderer, with the union field narrowed to this branch
           // (raw node, refs intact) — `ch prepare phoenix exercise --explain` documents exercise.
-          let schemaDoc = inputJsonSchema(tool.name) as SchemaNode;
+          let schemaDoc: SchemaNode = inputJsonSchema(tool.name);
           let cli = `ch ${tool.cliPath.join(" ")}`;
           if (variant && union) {
-            const p = { ...(schemaDoc.properties ?? {}) } as Record<string, SchemaNode>;
-            const fieldRaw = p[union.field] ?? {};
-            const unionKey = fieldRaw.oneOf ? "oneOf" : "anyOf";
-            p[union.field] = { ...fieldRaw, [unionKey]: [variant.raw] } as SchemaNode;
+            const p: Record<string, SchemaNode | boolean> = { ...(schemaDoc.properties ?? {}) };
+            const fieldRaw = p[union.field];
+            const fieldObj = typeof fieldRaw === "object" ? fieldRaw : {};
+            const unionKey = fieldObj.oneOf ? "oneOf" : "anyOf";
+            p[union.field] = { ...fieldObj, [unionKey]: [variant.raw] };
             schemaDoc = { ...schemaDoc, properties: p };
             cli += ` ${kebab(variant.value)}`;
           }
@@ -633,7 +644,7 @@ export async function runCli(
             err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
             code = EXIT.invalid;
           } else {
-            const payload = { error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] } };
+            const payload = { error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] ?? String(e) } };
             err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
             code = EXIT.error;
           }

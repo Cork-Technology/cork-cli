@@ -188,9 +188,10 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         envelope: { orderDataType: ORDER_DATA_TYPEHASH },
       });
       const out = mapPost(res, (body, replay) => ({ kind: "rollover-order", accepted: true, replay, orderDigest: body.orderDigest ?? localDigest, localDigest }));
-      // Venue digest disagreement is a conflict, not a success — surface it [K7].
+      // Venue digest disagreement is a conflict, not a success — surface it [K7]. Read the
+      // venue's own response body (the same boundary mapPost read), not the envelope back.
       if (out.state === "ok") {
-        const venueDigest = (out.data as { orderDigest?: unknown }).orderDigest;
+        const venueDigest = ((res.body ?? {}) as Record<string, unknown>).orderDigest;
         if (typeof venueDigest === "string" && venueDigest.toLowerCase() !== localDigest.toLowerCase()) {
           return envelope({
             state: "conflict",

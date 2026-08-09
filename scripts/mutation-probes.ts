@@ -52,6 +52,8 @@ const T = {
   forself: "packages/core/test/forself.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
+  hypersync: "packages/core/test/hypersync.test.ts",
+  decodeJit: "packages/core/test/decode-jit-order.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
 };
 
@@ -347,9 +349,37 @@ const CATALOG: Mutant[] = [
     // guard hides the JIT commitment on exactly the rows where a taker most needs it.
     id: "decode-order-labels-exclusive-again",
     file: "packages/core/src/handlers/decode.ts",
-    find: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x") {',
-    replace: '  let jit: Record<string, unknown> | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
+    find: '  let jit: JitLabel | undefined;\n  if (extension !== undefined && extension !== "0x") {',
+    replace: '  let jit: JitLabel | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
     tests: [T.fusion],
+  },
+  // ── type-sweep behavior gates (2026-08-09): runtime narrowing that replaced casts ─────────
+  {
+    // The ok-path decode result must CARRY the positive salt-binding verdict; dropping the
+    // spread silently removes a verification field consumers act on.
+    id: "decode-saltbinding-verdict-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "data: { ...base, ...saltBinding, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },",
+    replace: "data: { ...base, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },",
+    tests: [T.decodeJit],
+  },
+  {
+    // Recipe constants keep only bigint answers (the cast this gate replaced would have let a
+    // misdecoded value flow into display); flipping the gate drops every real constant.
+    id: "registry-constant-bigint-gate-flipped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: 'if (typeof v === "bigint") constants[name] = v.toString();',
+    replace: 'if (typeof v !== "bigint") constants[name] = String(v);',
+    tests: [T.mr],
+  },
+  {
+    // The live-tail merge keeps only MINED logs; flipping the filter merges nothing (or
+    // pending garbage) and the disclosed liveTail.merged count lies.
+    id: "livetail-mined-filter-flipped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "l.blockNumber !== null && l.transactionHash !== null",
+    replace: "l.blockNumber === null && l.transactionHash === null",
+    tests: [T.hypersync],
   },
   // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
   // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──

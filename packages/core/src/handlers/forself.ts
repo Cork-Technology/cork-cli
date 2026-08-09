@@ -8,6 +8,7 @@
 import type { PublicClient } from "viem";
 import { type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
+import type { AuctionPriceReport } from "../fusion.ts";
 import { decodeJitExtension } from "../market-registry.ts";
 import { buildTakerFill } from "../orders.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
@@ -179,7 +180,7 @@ export async function prepareForSelfTakerFill(args: {
   fillMakingAmount?: bigint | undefined;
   maximumTakingAmount?: bigint | undefined;
   auctionCap?: bigint | undefined;
-  auctionData?: Record<string, unknown> | undefined;
+  auctionData?: AuctionPriceReport | undefined;
   priorWarnings: Warning[];
 }): Promise<Envelope> {
   const { ctx, chainId, account, lop, forSelf, signed, auctionData, priorWarnings } = args;

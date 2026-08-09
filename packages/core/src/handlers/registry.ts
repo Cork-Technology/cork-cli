@@ -59,8 +59,17 @@ async function registryBindingMismatch(client: ResolvedRpc["client"], chainId: C
   return undefined;
 }
 
+/** One shaped source slot of a registry asset: named enum members where the ordinal is known,
+ *  the raw ordinal otherwise (a future contract enum member must not crash the read). */
+interface AssetSourceShape {
+  address: `0x${string}`;
+  sourceType: (typeof SOURCE_TYPE)[number] | number;
+  sourceInterface: (typeof SOURCE_INTERFACE)[number] | number;
+  denomination: string;
+}
+
 /** Shape an on-chain AssetSource into the API-parity object (absent slot ⇒ null). */
-function shapeAssetSource(s: { addr: `0x${string}`; sourceType: number; sourceInterface: number; denomination: string }): Record<string, unknown> | null {
+function shapeAssetSource(s: { addr: `0x${string}`; sourceType: number; sourceInterface: number; denomination: string }): AssetSourceShape | null {
   if (s.addr === ZERO_ADDR) return null;
   return { address: s.addr, sourceType: SOURCE_TYPE[s.sourceType] ?? s.sourceType, sourceInterface: SOURCE_INTERFACE[s.sourceInterface] ?? s.sourceInterface, denomination: s.denomination };
 }
@@ -84,7 +93,19 @@ async function tokenMeta(client: RegistryClient, addr: `0x${string}`): Promise<{
 /** One recipe's live self-description: source()/description()/REGISTRY() + catalogued constants
  *  (values always read live; a constant the contract no longer answers is silently dropped,
  *  matching the read API). Catalog absence is not a gate — argsKnown:false, still resolvable. */
-async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, configuredRegistry: `0x${string}`): Promise<Record<string, unknown>> {
+interface RecipeMeta {
+  address: `0x${string}`;
+  /** Named source when the ordinal is known ("nav" | "price" | "fixed"), the raw ordinal otherwise. */
+  source: RecipeSourceName | number;
+  description: string | null;
+  constants: Record<string, string>;
+  registry: `0x${string}` | null;
+  registryMatches: boolean;
+  argsKnown: boolean;
+  args: { type: string; display: string } | null;
+}
+
+async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, configuredRegistry: `0x${string}`): Promise<RecipeMeta> {
   const r = { address: recipe, abi: recipeAbi } as const;
   const [source, description, boundRegistry] = await Promise.all([
     client.readContract({ ...r, functionName: "source" }),
@@ -97,8 +118,8 @@ async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, con
     await Promise.all(
       catalog.constants.map(async (name) => {
         try {
-          const v = (await client.readContract({ address: recipe, abi: constantGetterAbi(name), functionName: name })) as unknown as bigint;
-          constants[name] = v.toString();
+          const v = await client.readContract({ address: recipe, abi: constantGetterAbi(name), functionName: name });
+          if (typeof v === "bigint") constants[name] = v.toString();
         } catch {
           /* dropped: the contract no longer answers this getter */
         }
@@ -107,11 +128,11 @@ async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, con
   }
   return {
     address: recipe,
-    source: RECIPE_SOURCE[source as number] ?? source,
+    source: RECIPE_SOURCE[source] ?? source,
     description,
     constants,
     registry: boundRegistry,
-    registryMatches: boundRegistry !== null && String(boundRegistry).toLowerCase() === configuredRegistry.toLowerCase(),
+    registryMatches: boundRegistry !== null && boundRegistry.toLowerCase() === configuredRegistry.toLowerCase(),
     argsKnown: Boolean(catalog),
     args: catalog?.args ?? null,
   };
@@ -209,7 +230,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
             client.readContract({ address: aggregator, abi: aggregatorV3Abi, functionName: "decimals" }),
             client.readContract({ address: aggregator, abi: aggregatorV3Abi, functionName: "latestRoundData" }),
           ]);
-          const [, answer, , updatedAt] = round as unknown as readonly [bigint, bigint, bigint, bigint, bigint];
+          const [, answer, , updatedAt] = round;
           return { answer: answer.toString(), decimals: Number(decimals), updatedAt: updatedAt.toString() };
         } catch {
           return null;

@@ -17,9 +17,10 @@ export interface ExplainDoc {
   cli: string;
   phase: number;
   description: string;
-  // The advertised JSON Schema — typed as unknown because inputJsonSchema() returns unknown; the
-  // formatter narrows it defensively (a non-object schema renders as "no input").
-  inputSchema: unknown;
+  /** The JSON-Schema document to render: the zod-emitted tool schema, or the variant-spliced
+   *  view the CLI builds for `ch <tool> <variant> --explain` — a JSON object either way; the
+   *  formatter walks it defensively. */
+  inputSchema: Record<string, unknown>;
 }
 
 type Schema = Record<string, unknown>;

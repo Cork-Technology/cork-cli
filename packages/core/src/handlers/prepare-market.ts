@@ -5,12 +5,16 @@ import { buildDeployFixedRateOracleCall, buildDeployOracleCall, marketRegistryAb
 import { resolveMarketRegistry } from "../config-remote.ts";
 import { diagnoseOracleDeployFailure, envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 
-
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
  *  deploy-oracle = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
  *  and a NAV wrapper at different addresses); deploy-fixed-oracle =
  *  MarketRegistry.deployFixedRateOracle(rate) (keyed on the RATE, no pair). Both are
  *  permissionless + idempotent on-chain; the pre-flight read is best-effort disclosure. */
+
+/** The `oracle:{address,deployed}` status block — the same shape cork_query registry-oracle and
+ *  derive-cork-pool report, so the three surfaces cannot drift. Empty when no RPC resolved. */
+type OracleStatus = { oracle?: { address: `0x${string}`; deployed: boolean } };
+
 export async function handlePrepareMarket(
   input: { chainId: ChainId; clientRequestId: string; action: { type: "deploy-oracle"; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; mode?: "price" | "nav" } | { type: "deploy-fixed-oracle"; rate: string }; format: "concise" | "full" },
   ctx: HandlerContext,
@@ -32,7 +36,7 @@ export async function handlePrepareMarket(
     const rate = BigInt(a.rate);
     if (rate === 0n) return unavailable(chainId, "invalid_order_terms", "a zero fixed rate cannot have an oracle — the FixedRateOracle constructor reverts on 0; sending this tx would revert", ctx);
     const calldata = buildDeployFixedRateOracleCall(rate);
-    let status: Record<string, unknown> = {};
+    let status: OracleStatus = {};
     if (resolved) {
       try {
         const predicted = await resolved.client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [rate] });
@@ -61,7 +65,7 @@ export async function handlePrepareMarket(
   const calldata = buildDeployOracleCall(a.collateralAsset, a.referenceAsset, modeName);
 
   // Best-effort status read (calldata building is pure; the tx is safe either way).
-  let status: Record<string, unknown> = {};
+  let status: OracleStatus = {};
   if (resolved) {
     try {
       const wrapper = await resolved.client.readContract({ ...reg, functionName: "lookupWrapper", args: [a.collateralAsset, a.referenceAsset, ORACLE_MODE[modeName]] });

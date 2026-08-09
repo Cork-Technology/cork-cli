@@ -3,7 +3,7 @@
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../orders.ts";
-import { decodeJitExtension } from "../market-registry.ts";
+import { decodeJitExtension, type ResolvedConstraint } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
@@ -12,8 +12,44 @@ import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { envelope, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
-
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
+
+/** Best-effort Fusion label on decoded orders: the auction summary, or the legacy classification. */
+type FusionLabel =
+  | { settlement: `0x${string}`; classification: string; auction: { startTime: bigint; duration: bigint; initialRateBump: bigint; points: number }; postInteractionGated: boolean; note: string }
+  | { classification: "legacy"; note: string };
+
+/** Best-effort JIT label on decoded orders, discriminated on the adapter generation. */
+type JitLabel =
+  | {
+      generation: "2.1.0";
+      adapter: `0x${string}`;
+      collateralAsset: `0x${string}`;
+      referenceAsset: `0x${string}`;
+      expiryTimestamp: bigint;
+      recipe: `0x${string}`;
+      rateOverride: bigint;
+      constraint: ResolvedConstraint & { scale: string };
+      additionalData: `0x${string}`;
+      swapFeePercentage: bigint;
+      unwindSwapFeePercentage: bigint;
+      enableJitMint: boolean;
+      permits: number;
+      note: string;
+    }
+  | {
+      generation: "legacy (pre-2.1.0)";
+      adapter: `0x${string}`;
+      collateralAsset: `0x${string}`;
+      referenceAsset: `0x${string}`;
+      expiryTimestamp: bigint;
+      mode: string;
+      swapFeePercentage: bigint;
+      unwindSwapFeePercentage: bigint;
+      enableJitMint: boolean;
+      permits: number;
+      note: string;
+    };
 
 /** Parse a caller-supplied order RECORD (e.g. a typedData.message round-trip) into a LopOrder.
  *  Field-by-field validation with teachable paths; extra keys are ignored (we reconstruct from
@@ -82,7 +118,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
   }
   // Fusion labeling (best-effort): when the extension carries an auction amount-getter, summarize
   // it — decode only, never a guess; a non-Fusion or unparseable extension just skips the label.
-  let fusion: Record<string, unknown> | undefined;
+  let fusion: FusionLabel | undefined;
   if (extension !== undefined && extension !== "0x") {
     try {
       const f = decodeFusionOrder(order, extension, chainId);
@@ -107,7 +143,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
   // non-JIT extension just skips the label [K3: reconstructed from the bytes, never guessed].
   // NOT exclusive with the fusion label: a Cork-native auction order composes BOTH (amount
   // getters + JIT preInteraction in one blob) and a taker needs to see both commitments.
-  let jit: Record<string, unknown> | undefined;
+  let jit: JitLabel | undefined;
   if (extension !== undefined && extension !== "0x") {
     try {
       const d = decodeJitExtension(extension);
@@ -160,6 +196,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
     ...(jit ? { jit } : {}),
   };
   // Extension binding: OrderLib enforces salt.low160 == keccak256(extension).low160 at fill.
+  let saltBinding: { saltBoundToExtension: true } | undefined;
   if (extension !== undefined && extension !== "0x") {
     const bound = (order.salt & DECODE_U160) === (BigInt(keccak256(extension)) & DECODE_U160);
     if (!bound) {
@@ -172,13 +209,13 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
         ctx,
       });
     }
-    (base as Record<string, unknown>).saltBoundToExtension = true;
+    saltBinding = { saltBoundToExtension: true };
   }
   // Cross-check a caller-claimed hash against the local reconstruction [K3].
   if (claimedOrderHash !== undefined && orderHash !== null && claimedOrderHash.toLowerCase() !== orderHash.toLowerCase()) {
     return envelope({
       state: "conflict",
-      data: { ...base, claimedOrderHash },
+      data: { ...base, ...saltBinding, claimedOrderHash },
       chainId,
       source: "config",
       warnings: [...warnings, { code: "digest_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash` }],
@@ -187,7 +224,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
   }
   return envelope({
     state: "ok",
-    data: { ...base, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },
+    data: { ...base, ...saltBinding, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },
     chainId,
     source: "config",
     warnings,

@@ -264,8 +264,16 @@ const ORDER_TYPES = {
   ],
 } as const;
 
-export function lopDomain(chainId: number, verifyingContract: `0x${string}`) {
-  return { name: DOMAIN_NAME, version: DOMAIN_VERSION, chainId, verifyingContract } as const;
+/** The 1inch LOP v4 EIP-712 domain — the exact shape signers pass to eth_signTypedData_v4. */
+export interface LopDomain {
+  name: typeof DOMAIN_NAME;
+  version: typeof DOMAIN_VERSION;
+  chainId: number;
+  verifyingContract: `0x${string}`;
+}
+
+export function lopDomain(chainId: number, verifyingContract: `0x${string}`): LopDomain {
+  return { name: DOMAIN_NAME, version: DOMAIN_VERSION, chainId, verifyingContract };
 }
 
 /** EIP-712 hash of a LOP order against the router domain (equals the on-chain order hash). */

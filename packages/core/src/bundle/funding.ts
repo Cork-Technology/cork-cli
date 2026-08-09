@@ -27,8 +27,14 @@ export const generalAdapterAbi = parseAbi([
  *  `decodeBundle` labels these legs without further work). */
 export const bundlerSweepAbi = parseAbi(["function erc20Transfer(address token, address receiver, uint256 amount)"]);
 
-/** For each action, the tokens the adapter must hold and which param supplies the max amount. */
-type FundReq = { role: TokenRole; field: string };
+/** Distributes keyof over the action union: the set of field names any variant declares. */
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+type PhoenixActionField = KeysOfUnion<PhoenixAction> & string;
+
+/** For each action, the tokens the adapter must hold and which param supplies the max amount.
+ *  `field` is checked against the real action union, so a renamed schema field breaks the build
+ *  here instead of silently funding nothing. */
+type FundReq = { role: TokenRole; field: PhoenixActionField };
 const FUNDING_TABLE: Partial<Record<PhoenixAction["type"], FundReq[]>> = {
   mint: [{ role: "collateral", field: "maxCollateralAssetsIn" }],
   deposit: [{ role: "collateral", field: "collateralAssetsIn" }],
@@ -108,10 +114,12 @@ export interface FundingPlan {
 /**
  * Config-driven field access: FUNDING_TABLE/BURN_TABLE field names are correlated with
  * `action.type` by construction, which TS cannot prove across the union — the one narrow
- * escape hatch, kept in a single place instead of scattered casts.
+ * escape hatch, kept in a single place instead of scattered casts. The field NAMES are
+ * compile-checked against the union (PhoenixActionField); only the name↔variant pairing
+ * stays a runtime fact.
  */
-function actionField(action: PhoenixAction, field: string): string | undefined {
-  return (action as unknown as Record<string, string | undefined>)[field];
+function actionField(action: PhoenixAction, field: PhoenixActionField): string | undefined {
+  return (action as Partial<Record<PhoenixActionField, string>>)[field];
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

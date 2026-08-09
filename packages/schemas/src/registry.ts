@@ -187,8 +187,15 @@ function inlineAnonymousDefs(doc: unknown): unknown {
  *  is one-place unit/format teaching on shared primitives (spec-legal per JSON Schema 2020-12 /
  *  SEP-2106; Claude+OpenAI follow $ref). Anonymous extractions are folded back inline so
  *  discriminator consts stay visible in place. */
-export function inputJsonSchema(name: ToolName): unknown {
+export function inputJsonSchema(name: ToolName): ToolInputSchema {
   const t = toolByName(name);
   if (!t) throw new Error(`unknown tool: ${name}`);
-  return inlineAnonymousDefs(z.toJSONSchema(t.input, { io: "input", reused: "ref" }));
+  // The inliner rebuilds the document generically (unknown-walking); structurally it is the same
+  // object schema zod emitted — every tool input is a z.object — asserted once at this boundary.
+  return inlineAnonymousDefs(z.toJSONSchema(t.input, { io: "input", reused: "ref" })) as ToolInputSchema;
 }
+
+/** The JSON-Schema document a tool input advertises: zod v4's own emitted type, rooted at an
+ *  object schema (`type: "object"`) because every tool input is a z.object. Consumers get real
+ *  keyword typing (`properties`, `oneOf`, `$defs`, …) instead of `unknown`. */
+export type ToolInputSchema = z.core.JSONSchema.ObjectSchema;

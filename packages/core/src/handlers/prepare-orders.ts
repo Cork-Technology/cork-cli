@@ -7,14 +7,41 @@ import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtensio
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
-import { buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
+import { type AuctionPriceReport, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, jitValueGate, prepareJitLegacy } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, jitValueGate, type LegacyJitReport, prepareJitLegacy, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 import { resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
+/** Maker-side 2.1.0 JIT report echoed in `data.jit` — the base always rides; the verified half is
+ *  filled only when an RPC resolved and the pre-flights ran. Legacy maker orders carry
+ *  LegacyJitReport instead. */
+type MakerJitReport = {
+  adapter: `0x${string}`;
+  hook: string;
+  recipe: `0x${string}`;
+  enableJitMint: boolean;
+  source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
+  oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
+  derivedPoolId?: `0x${string}`;
+  constraint?: ResolvedConstraint;
+  identity?: string;
+  predictedCorkSwapToken?: `0x${string}`;
+  permitNote?: string;
+};
+
+/** Maker-side auction plan echoed in `data.fusion`: what the signed extension commits to. */
+interface MakerAuctionPlan {
+  settlement: `0x${string}`;
+  role: string;
+  auction: { startTime: string; durationSeconds: string; initialRateBump: string; points: Array<{ rateBump: string; timeDelta: string }>; scale: string };
+  phase: "pre-start" | "decaying" | "floor";
+  takerPaysCeiling: string;
+  takerPaysNow: string;
+  floorTakingAmount: string;
+}
 
 export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
@@ -154,7 +181,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // share addresses are PINNED at signing; on-chain staleness protection is recipe.verify. ──
     let extension = action.extension;
     const warnings: Array<{ code: string; message: string }> = [];
-    let jitData: Record<string, unknown> | undefined;
+    let jitData: MakerJitReport | LegacyJitReport | undefined;
     if (action.jitMarket) {
       if (action.extension !== undefined && action.extension !== "0x") {
         throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and jitMarket are mutually exclusive — jitMarket BUILDS the extension" }]);
@@ -321,7 +348,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // settlement rides as a pure AMOUNT GETTER (no postInteraction → fills stay permissionless);
     // the signed takingAmount is the FLOOR and the price decays down to it. Composes with the
     // JIT extension above: one blob, one salt binding. Pure local byte-building — no RPC. ──
-    let fusionData: Record<string, unknown> | undefined;
+    let fusionData: MakerAuctionPlan | undefined;
     if (action.auction) {
       if (action.extension !== undefined && action.extension !== "0x") {
         throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and auction are mutually exclusive — auction BUILDS the amount-getter extension fields" }]);
@@ -594,7 +621,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       }
       // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.
       let interaction = action.interaction;
-      let jitData: Record<string, unknown> | undefined;
+      let jitData: TakerJitReport | undefined;
       const jitWarnings: Array<{ code: string; message: string }> = [];
       if (action.jitMarket) {
         if (action.interaction !== undefined) {
@@ -612,7 +639,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // window. Default the cap to the curve's CEILING instead: valid at ANY broadcast time
       // (the getter only ever charges less; the cap is a threshold, not a payment), with the
       // current/floor prices reported so the taker sees what they are agreeing to.
-      let auctionData: Record<string, unknown> | undefined;
+      let auctionData: AuctionPriceReport | undefined;
       let auctionCap: bigint | undefined;
       if (signed.extension !== undefined && signed.extension !== "0x") {
         let auctionDec: DecodedFusionOrder | undefined;

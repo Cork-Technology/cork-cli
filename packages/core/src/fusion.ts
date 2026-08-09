@@ -368,3 +368,17 @@ export function decodeFusionOrder(order: LopOrder, extension: Hex, chainId: numb
     saltBoundToExtension: (order.salt & U160) === (BigInt(keccak256(extension)) & U160),
   };
 }
+
+/** The taker-facing price report a fill of an auction-priced resting order carries
+ *  (`data.auction` on taker-fill results, raw and forSelf alike). Amounts are decimal strings
+ *  in the taker asset's base units. */
+export type AuctionPriceReport = {
+  settlement: `0x${string}`;
+  phase: "pre-start" | "decaying" | "floor";
+  currentTakerPays: string;
+  ceilingTakerPays: string;
+  floorTakerPays: string;
+  decayEndsAt: string;
+  takerIsGetterWhitelisted: boolean;
+  priceBasis: string;
+};

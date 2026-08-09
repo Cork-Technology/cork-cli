@@ -46,7 +46,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       // One worked example inline (shipped input examples measurably raise parameter accuracy);
       // the full example set + filled templates live behind cork_capabilities [C13].
       description: t.description + descriptionExample(t.name),
-      inputSchema: inputJsonSchema(t.name) as { type: "object" },
+      inputSchema: inputJsonSchema(t.name),
       outputSchema: ENVELOPE_SCHEMA,
       annotations: {
         title: t.title,

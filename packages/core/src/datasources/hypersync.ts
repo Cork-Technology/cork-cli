@@ -196,12 +196,53 @@ function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
   return l.topics.filter((t): t is string => t != null) as [Hex, ...Hex[]];
 }
 
-function meta(l: HyperSyncLog) {
-  // blockNumber rides as a decimal string — chain integers are strings on the wire (F10).
+/** Fields every decoded row carries. blockNumber rides as a decimal string — chain integers are
+ *  strings on the wire (F10). Row types below are type aliases (not interfaces) so their implicit
+ *  index signatures keep them assignable to the generic row plumbing (Record<string, unknown>). */
+export type LogMeta = {
+  blockNumber: string;
+  txHash: string;
+  emitter: string;
+};
+
+function meta(l: HyperSyncLog): LogMeta {
   return { blockNumber: String(l.blockNumber), txHash: l.transactionHash, emitter: l.address };
 }
 
-export function decodeMarketRows(logs: HyperSyncLog[]): Array<Record<string, unknown>> {
+/** One MarketCreated event: a cork-pool coming into existence on a pool manager. */
+export type MarketRow = LogMeta & {
+  poolId: Hex;
+  referenceAsset: Address;
+  collateralAsset: Address;
+  expiry: string;
+  rateOracle: Address;
+  corkPrincipalToken: Address;
+  corkSwapToken: Address;
+  poolManager: string;
+};
+
+/** One RolloverContractDeployed event from the rollover factory. */
+export type CloneRow = LogMeta & {
+  owner: Address;
+  rolloverContract: Address;
+  factory: string;
+};
+
+/** One settled rollover leg, discriminated on `leg` — the three settler events differ in shape. */
+export type RolloverFillRow = LogMeta & { orderDigest: Hex; filler: Address } & (
+  | { leg: "ROLLOVER"; subFiller: Address; srcCstProvided: string; dstCstProduced: string }
+  | { leg: "PREMIUM"; subFiller: Address; premiumPayer: Address; premium: string }
+  | { leg: "RECLAIM"; recipientRolloverContract: Address; amount: string }
+);
+
+/** One 1inch LOP OrderFilled event. */
+export type LopFillRow = LogMeta & {
+  orderHash: Hex;
+  remainingAmount: string;
+  lop: string;
+};
+
+export function decodeMarketRows(logs: HyperSyncLog[]): MarketRow[] {
   return logs.flatMap((l) => {
     try {
       const d = decodeEventLog({ abi: marketCreatedAbi, topics: strictTopics(l), data: l.data as Hex });
@@ -212,7 +253,7 @@ export function decodeMarketRows(logs: HyperSyncLog[]): Array<Record<string, unk
   });
 }
 
-export function decodeCloneRows(logs: HyperSyncLog[]): Array<Record<string, unknown>> {
+export function decodeCloneRows(logs: HyperSyncLog[]): CloneRow[] {
   return logs.flatMap((l) => {
     try {
       const d = decodeEventLog({ abi: cloneDeployedAbi, topics: strictTopics(l), data: l.data as Hex });
@@ -223,8 +264,8 @@ export function decodeCloneRows(logs: HyperSyncLog[]): Array<Record<string, unkn
   });
 }
 
-export function decodeRolloverFillRows(logs: HyperSyncLog[]): Array<Record<string, unknown>> {
-  return logs.flatMap((l): Array<Record<string, unknown>> => {
+export function decodeRolloverFillRows(logs: HyperSyncLog[]): RolloverFillRow[] {
+  return logs.flatMap((l): RolloverFillRow[] => {
     try {
       const d = decodeEventLog({ abi: rolloverFillAbis, topics: strictTopics(l), data: l.data as Hex });
       if (d.eventName === "RolloverLegFilled") {
@@ -240,7 +281,7 @@ export function decodeRolloverFillRows(logs: HyperSyncLog[]): Array<Record<strin
   });
 }
 
-export function decodeLopFillRows(logs: HyperSyncLog[]): Array<Record<string, unknown>> {
+export function decodeLopFillRows(logs: HyperSyncLog[]): LopFillRow[] {
   return logs.flatMap((l) => {
     try {
       const d = decodeEventLog({ abi: lopFilledAbi, topics: strictTopics(l), data: l.data as Hex });

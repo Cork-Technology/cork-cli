@@ -16,7 +16,7 @@
 //  - ENUM TRAP: RecipeSource is NAV=0,PRICE=1,FIXED=2 while OracleMode/SourceType are
 //    PRICE=0,NAV=1 — inverted. Never pass one where the other is expected.
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
-import type { PublicClient } from "viem";
+import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import type { Market } from "./types.ts";
 
@@ -213,9 +213,11 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
   },
 };
 
-/** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out). */
-export function constantGetterAbi(name: string) {
-  return [{ type: "function" as const, name, stateMutability: "view" as const, inputs: [], outputs: [{ type: "uint256" as const }] }];
+/** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out).
+ *  Typed as plain `Abi` (the name is a runtime value, so viem cannot infer the return type);
+ *  callers narrow the read result at runtime. */
+export function constantGetterAbi(name: string): Abi {
+  return [{ type: "function", name, stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }];
 }
 
 // ── JIT hook payload (2.1.0 shape) + 1inch v4 extension building ────────────────────────────

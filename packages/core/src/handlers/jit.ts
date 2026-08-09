@@ -74,7 +74,7 @@ export async function buildTakerJitInteraction(args: {
   taker: `0x${string}`;
   order: LopOrder;
   orderExtension: `0x${string}` | undefined;
-}): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: Record<string, unknown>; warnings: Array<{ code: string; message: string }> }> {
+}): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: TakerJitReport; warnings: Array<{ code: string; message: string }> }> {
   const { ctx, chainId, lop, jm } = args;
   const warnings: Array<{ code: string; message: string }> = [];
   const nowSecs = nowSecondsOf(ctx);
@@ -105,7 +105,7 @@ export async function buildTakerJitInteraction(args: {
   let constraint: ResolvedConstraint | undefined = jm.constraint
     ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
     : undefined;
-  let jit: Record<string, unknown> = { adapter: mr.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
+  let jit: TakerJitReport = { adapter: mr.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
 
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
@@ -198,6 +198,36 @@ export async function buildTakerJitInteraction(args: {
   return { interaction, jit, warnings };
 }
 
+
+/** Taker-side JIT report echoed in `data.jit`. The base triple always rides; the verified half
+ *  is filled only when an RPC resolved and the pre-flights ran (degrades with a
+ *  funding_needs_rpc warning otherwise). */
+export type TakerJitReport = {
+  adapter: `0x${string}`;
+  hook: string;
+  recipe: `0x${string}`;
+  source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
+  oracle?: { address: `0x${string}` | null; deployed: boolean };
+  derivedPoolId?: `0x${string}`;
+  constraint?: ResolvedConstraint;
+  predictedCorkSwapToken?: `0x${string}`;
+  permitNote?: string;
+};
+
+/** Legacy (pre-2.1.0) JIT report echoed in `data.jit` — same base/verified split. */
+export type LegacyJitReport = {
+  generation: "legacy (pre-2.1.0)";
+  adapter: `0x${string}`;
+  hook: string;
+  mode: string;
+  enableJitMint: boolean;
+  oracle?: `0x${string}`;
+  rateAtPrepare?: bigint;
+  derivedPoolId?: `0x${string}`;
+  resolvedConstraints?: ReturnType<typeof legacyRegistry.deriveJitMarket>["resolved"];
+  predictedCorkSwapToken?: `0x${string}`;
+};
+
 /** The DEPRECATED pre-2.1.0 JIT extension build (mode-string extraData against the OLD adapter,
  *  bands resolved at fill time) — preserved behind the deprecation gate because the OLD adapter
  *  still holds both controller roles on-chain (verified 2026-08-03): until governance grants
@@ -209,7 +239,7 @@ export async function prepareJitLegacy(args: {
   jm: { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: string; mode?: string | undefined; swapFeePercentage: string; unwindSwapFeePercentage: string; enableJitMint: boolean; permits?: Array<{ token: `0x${string}`; value: string; deadline: string; v: number; r: `0x${string}`; s: `0x${string}` }> | undefined };
   makerAsset: `0x${string}`;
   takerAsset: `0x${string}`;
-}): Promise<{ gate: Envelope } | { gate?: undefined; extension: `0x${string}`; jitData: Record<string, unknown>; warnings: Array<{ code: string; message: string }> }> {
+}): Promise<{ gate: Envelope } | { gate?: undefined; extension: `0x${string}`; jitData: LegacyJitReport; warnings: Array<{ code: string; message: string }> }> {
   const { chainId, ctx, lop, jm } = args;
   if (!deprecatedEnabled()) {
     return { gate: unavailable(chainId, "deprecated_gated", deprecatedGateMessage("jitMarket.legacy (the pre-2.1.0 mode-string JIT flow against the old adapter)", "The 2.1.0 flow carries a recipe ADDRESS and the resolved constraint — drop `legacy`, pass jitMarket.recipe (+ constraint or an RPC to auto-resolve it)."), ctx) };
@@ -235,7 +265,7 @@ export async function prepareJitLegacy(args: {
   };
   const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
   const extension = legacyRegistry.buildJitExtension(mr.adapter, legacyRegistry.encodeJitExtraData(jitParams, permits));
-  let jitData: Record<string, unknown> = { generation: "legacy (pre-2.1.0)", adapter: mr.adapter, hook: "preInteraction (maker-side)", mode, enableJitMint: jm.enableJitMint };
+  let jitData: LegacyJitReport = { generation: "legacy (pre-2.1.0)", adapter: mr.adapter, hook: "preInteraction (maker-side)", mode, enableJitMint: jm.enableJitMint };
   warnings.push({ code: "rate_drift_notice", message: "LEGACY generation: market identity follows the LIVE oracle rate — the derived pool id is only stepwise-stable, and a drifted rate reverts the fill with OrderNotForPool (by design, as a staleness guard)" });
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
@@ -263,7 +293,7 @@ export async function prepareJitLegacy(args: {
     }
     const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [jm.collateralAsset, jm.referenceAsset] });
     const oracle = sim.result;
-    const rate = (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint;
+    const rate = await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" });
     if (rate === 0n) {
       return { gate: unavailable(chainId, "chain_read_failed", "the pair's rate oracle reports a ZERO rate — the fill would revert RateUnavailable", ctx) };
     }

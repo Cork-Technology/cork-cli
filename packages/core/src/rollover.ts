@@ -81,9 +81,17 @@ const DOMAIN_TYPES = {
   ],
 } as const;
 
-/** The CorkSettler EIP-712 domain (ERC-5267-verified on both live Arbitrum settlers). */
-export function corkSettlerDomain(chainId: number, settler: Address) {
-  return { name: "CorkSettler", version: "1.0.0", chainId, verifyingContract: settler } as const;
+/** The CorkSettler EIP-712 domain — the exact shape signers pass to eth_signTypedData_v4
+ *  (ERC-5267-verified on both live Arbitrum settlers). */
+export interface CorkSettlerDomain {
+  name: "CorkSettler";
+  version: "1.0.0";
+  chainId: number;
+  verifyingContract: Address;
+}
+
+export function corkSettlerDomain(chainId: number, settler: Address): CorkSettlerDomain {
+  return { name: "CorkSettler", version: "1.0.0", chainId, verifyingContract: settler };
 }
 
 /** Domain separator as the settler computes it (equals on-chain `DOMAIN_SEPARATOR()`). */
@@ -314,14 +322,64 @@ export interface RolloverIntentResult {
   intent: RolloverIntentStruct;
   rolloverIntentHash: Hex;
   orderDigest: Hex;
-  domain: ReturnType<typeof corkSettlerDomain>;
+  domain: CorkSettlerDomain;
   types: typeof ORDER_DATA_TYPES;
   primaryType: "OrderData";
   /** ERC-7683 orderDataType for the venue POST envelope. */
   orderDataType: Hex;
   /** Ready-to-POST /v1/rollover/orders body (venue wire conventions: decimal strings,
    *  lowercased addresses); `signature` is left as an instruction for the caller. */
-  venuePost: Record<string, unknown>;
+  venuePost: RolloverVenuePost;
+}
+
+/** The /v1/rollover/orders POST body this builder emits. Numeric struct fields become decimal
+ *  strings and addresses are lowercased (venue wire conventions); the hook arrays are typed
+ *  empty because this builder never attaches hooks — a caller composing hooks builds its own
+ *  payload and relays it through cork_submit, which re-verifies the commitments. */
+export interface RolloverVenuePost {
+  chainId: number;
+  order: {
+    user: string;
+    settler: string;
+    fillerHint: string;
+    exclusiveFiller: string;
+    srcCstToken: string;
+    dstCstToken: string;
+    premiumToken: string;
+    rolloverContract: string;
+    originChainId: string;
+    destinationChainId: string;
+    openDeadline: string;
+    fillDeadline: string;
+    orderSalt: string;
+    orderSize: string;
+    minPremiumPerShare: string;
+    allowPartialFills: boolean;
+    allowUnderfill: boolean;
+    premiumPaymentMode: number;
+    rolloverIntentHash: Hex;
+    rolloverParams: {
+      srcCstToken: string;
+      dstCstToken: string;
+      minCaReceived: string;
+      minSharesOut: string;
+      srcPoolId: Hex;
+      dstPoolId: Hex;
+      settler: string;
+    };
+  };
+  intent: {
+    rolloverContract: string;
+    deadline: string;
+    nonce: string;
+    preRolloverHooks: never[];
+    midRolloverHooks: never[];
+    postRolloverHooks: never[];
+    premiumHooks: never[];
+  };
+  /** Placeholder instruction — the caller replaces it with the EIP-712 signature. */
+  signature: string;
+  envelope: { orderDataType: Hex };
 }
 
 /** Build a signable rollover order: OrderData typed-data + the locally-recomputed zero-digest
@@ -374,7 +432,7 @@ export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult
   const orderDigest = computeOrderDigest(a.chainId, order);
 
   const lc = (addr: Address) => addr.toLowerCase();
-  const venuePost = {
+  const venuePost: RolloverVenuePost = {
     chainId: a.chainId,
     order: {
       user: lc(order.user),
