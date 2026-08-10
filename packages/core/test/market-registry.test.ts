@@ -324,11 +324,14 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
       throw new Error(`unexpected ${c.functionName}`);
     }));
     expect(env.state).toBe("ok");
-    const d = env.data as { mode: string; modeNote?: string; oracle: { address: string; deployed: boolean; rate: string } };
+    const d = env.data as { mode: string; modeNote?: string; oracle: { address: string; deployed: boolean; rate: string; rateScale: string } };
     expect(d.mode).toBe("price");
     expect(d.modeNote).toContain("defaulted"); // the applied default is disclosed in data, not a warning
     expect(d.oracle.deployed).toBe(true);
     expect(BigInt(d.oracle.rate)).toBe(WAD);
+    // Audit R1.5: the pair family's rate label (the fixed family already had one) — rides
+    // INSIDE the shared oracle shape so derive-cork-pool inherits the same self-description.
+    expect(d.oracle.rateScale).toContain("1e18 = 1.0");
   });
 
   it("registry-oracle mode 'nav' keys a DIFFERENT wrapper (OracleMode.NAV = 1)", async () => {

@@ -22,6 +22,8 @@ describe("cork_decode order — JIT extension labeling", () => {
     expect(String(d.jit["adapter"]).toLowerCase()).toBe("0xea15bf1e5565181ed8678ccff39d797272858505");
     expect(d.jit["mode"]).toBe("liquidity");
     expect(String(d.jit["note"])).toContain("LEGACY");
+    // The legacy label carries the same fee fields at the same 1e18=1% base — same labels.
+    expect((d.jit["scales"] as Record<string, string>).swapFeePercentage).toContain("1e18 = 1%");
   });
 
   it("a 2.1.0 extension decodes with recipe + carried constraint + permit count", async () => {
@@ -59,6 +61,13 @@ describe("cork_decode order — JIT extension labeling", () => {
     expect((jit["constraint"] as Record<string, string>)["rateMax"]).toBe((2n * 10n ** 18n).toString());
     expect(jit["permits"]).toBe(1);
     expect(jit["enableJitMint"]).toBe(true);
+    // Audit R1.3: the carried fee/override values are raw and shape-identical across the
+    // 1e18=1% / 1e18=1.0 families — the label must place each in ITS family, never the other's.
+    const scales = jit["scales"] as Record<string, string>;
+    expect(scales.swapFeePercentage).toContain("1e18 = 1%");
+    expect(scales.swapFeePercentage).not.toContain("1e18 = 1.0");
+    expect(scales.rateOverride).toContain("1e18 = 1.0");
+    expect(scales.rateOverride).not.toContain("1e18 = 1%");
   });
 
   it("a non-JIT, non-Fusion extension gets NO jit label (no guessing)", async () => {

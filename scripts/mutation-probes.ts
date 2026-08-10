@@ -1356,6 +1356,43 @@ const CATALOG: Mutant[] = [
     replace: "data: { kind: p.kind, ...floor, scales }",
     tests: [T.handlers],
   },
+  {
+    // account-state decimals silently hardcode 18: a 6-dec reference balance reads 10^12 too
+    // small and nothing errors — the exact defect class R1.2 exists to prevent. The stub answers
+    // 6, so the killer assertion distinguishes read-from-token from assumed.
+    id: "units-accountstate-decimals-hardcoded",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const decimals = { collateral: Number(collateralDecimals), reference: Number(referenceDecimals), corkSwapToken: 18, corkPrincipalToken: 18 };",
+    replace: "const decimals = { collateral: 18, reference: 18, corkSwapToken: 18, corkPrincipalToken: 18 };",
+    tests: [T.handlers],
+  },
+  {
+    // The decoded JIT label places the carried fee in the WAD family — a signer reading the
+    // decode before signing sees a 100x lie about the fee the fill would set.
+    id: "units-decode-jit-fee-label-swapped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)"',
+    replace: 'swapFeePercentage: "1e18 = 1.0 (WAD)"',
+    tests: [T.decodeJit],
+  },
+  {
+    // track marketRef labels the market bounds as the percent family — the verifier surface
+    // (consulted precisely when something already disagrees) misstates the scale 100x.
+    id: "units-track-market-label-swapped",
+    file: "packages/core/src/handlers/track.ts",
+    find: 'market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)"',
+    replace: 'market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: 1e18 = 1%"',
+    tests: [T.handlers],
+  },
+  {
+    // The auction surplus label migrates to the neighboring 1e5 fee base — uint8/uint16/uint32
+    // Fusion fields are shape-indistinguishable, so the label IS the only discriminator.
+    id: "units-auction-surplus-label-swapped",
+    file: "packages/core/src/handlers/compute.ts",
+    find: 'protocolSurplusFeePercent: "1e2 base (under fillability.surplus)"',
+    replace: 'protocolSurplusFeePercent: "1e5 base (under fillability.surplus)"',
+    tests: [T.fusion],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

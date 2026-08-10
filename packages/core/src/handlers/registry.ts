@@ -287,7 +287,9 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
     if (wrapper !== ZERO_ADDR) {
       const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+      // rateScale rides INSIDE the shared oracle shape (audit R1.5): the fixed-rate family
+      // already labels its rate at the top level; the pair family was the unlabeled half.
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     try {
       // Simulating the real deploy (not re-deriving CREATE2 off-chain) is deliberate: the salt
@@ -582,7 +584,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     warnings.push(...res.warnings);
     if (res.gate) return res.gate;
     const { recipe, source, oracle, constraint } = res;
-    const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate } : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
+    const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
     // Identity needs an oracle ADDRESS, not a deployed oracle: the pool id's only oracle-derived
     // input is the address (already predicted via the simulated deploy — the same one the fill
     // will run), and the constraint can resolve from the recipe's anchor fallback. Nothing has to

@@ -152,6 +152,12 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     expect(d.at.source).toContain("pinned");
     expect(d.fillability.gated).toBe(false);
     expect(d.scales.rateBump).toContain("1e7");
+    // Audit R1.4: the three previously-unlabeled Fusion bases. Each label must state ITS base
+    // and not a neighbor's — these uint8/uint16/uint32 fields are shape-indistinguishable.
+    expect(d.scales.gasBumpEstimate).toContain("1e7");
+    expect(d.scales.gasPriceEstimate).toContain("1000 = 1 gwei");
+    expect(d.scales.protocolSurplusFeePercent).toContain("1e2");
+    expect(d.scales.protocolSurplusFeePercent).not.toContain("1e5");
   });
 
   it("warns makingamount_exceeds_order when the priced makingAmount is larger than the order [N2]", async () => {
@@ -228,10 +234,12 @@ describe("runTool: cork_compute dutch-auction-price", () => {
   it("cork_decode order labels the real fixture as a Fusion order", async () => {
     const env = await runTool("cork_decode", { kind: "order", data: realFixture.order, chainId: 42161, format: "concise" }, { nowSeconds: 0n });
     expect(env.state).toBe("ok");
-    const f = (env.data as { fusion?: { classification: string; postInteractionGated: boolean; auction: { points: number } } }).fusion;
+    const f = (env.data as { fusion?: { classification: string; postInteractionGated: boolean; auction: { points: number }; scales: Record<string, string> } }).fusion;
     expect(f?.classification).toBe("current");
     expect(f?.postInteractionGated).toBe(true);
     expect(f?.auction.points).toBe(1);
+    // Audit R1.3 (fusion half): the raw initialRateBump is base-1e7 — labeled on the label.
+    expect(f?.scales.initialRateBump).toContain("1e7");
   });
 });
 

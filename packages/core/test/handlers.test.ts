@@ -469,7 +469,7 @@ describe("runTool: cork_track", () => {
     const wrong = `0x${"0".repeat(64)}` as const;
     const mismatch = await runTool("cork_track", { mode: "verify", subject: { kind: "artifact", artifact }, expect: { artifactDigest: wrong }, format: "concise" }, { nowSeconds: NOW });
     expect(mismatch.state).toBe("conflict");
-    expect(mismatch.warnings[0]?.code).toBe("digest_mismatch");
+    expect(mismatch.warnings[0]?.code).toBe("artifact_digest_mismatch");
   });
 
   it("marketRef needs RPC; orderHash fails honestly offline", async () => {
@@ -702,7 +702,7 @@ describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3
       { nowSeconds: NOW },
     );
     expect(env.state).toBe("conflict");
-    expect(env.warnings.some((w) => w.code === "digest_mismatch")).toBe(true);
+    expect(env.warnings.some((w) => w.code === "order_hash_mismatch")).toBe(true);
   });
 
   it("order: a salt not bound to the supplied extension is a conflict (InvalidExtension at fill)", async () => {
@@ -953,6 +953,27 @@ describe("runTool: cork_compute", () => {
   });
 });
 
+describe("track marketRef output scales + offline mismatch path (audit R1.6)", () => {
+  it("labels swapRate/market like the cork-pool read; a non-matching poolId is a conflict, with data intact", async () => {
+    // The fixture market does NOT hash to POOL, so this also exercises the marketid_mismatch
+    // branch offline (previously fork-parity-only) — the scales must ride on conflict too:
+    // a verifier reads the raw WAD rates precisely when something already disagrees.
+    const env = await runTool(
+      "cork_track",
+      { mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(poolStateClient(), "default") },
+    );
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("marketid_mismatch");
+    const d = env.data as { verified: boolean; scales: Record<string, string> };
+    expect(d.verified).toBe(false);
+    expect(d.scales.swapRate).toContain("1e18 = 1.0");
+    expect(d.scales.market).toContain("1e18 = 1.0");
+    expect(d.scales.market).not.toContain("1e18 = 1%");
+    expect(d.scales.unitsTopic).toBe(UNITS_TOPIC_REFERENCE);
+  });
+});
+
 describe("cork-pool output scales — the units-topic contract on the most-read resource (audit R1)", () => {
   it("labels the fee fields 1e18 = 1% and the rates 1e18 = 1.0, routing to the units topic", async () => {
     // The collision this guards: swapFeePercentage (1e18 = 1%) and swapRate (1e18 = 1.0) are
@@ -983,7 +1004,9 @@ describe("cork-pool output scales — the units-topic contract on the most-read 
       expect(d.scales[k], k).toContain("1e18 = 1.0");
       expect(d.scales[k], k).not.toContain("1e18 = 1%");
     }
-    expect(d.scales.reference).toBe(UNITS_TOPIC_REFERENCE);
+    // `unitsTopic`, not `reference`: scales maps field names to labels, and other reads (e.g.
+    // account-state) have a real field NAMED reference — the pointer key must never collide.
+    expect(d.scales.unitsTopic).toBe(UNITS_TOPIC_REFERENCE);
   });
 });
 
@@ -1036,6 +1059,10 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
             return [SUSDE, SUSDE];
           case "balanceOf":
             return 5n;
+          case "decimals":
+            // Deliberately NOT 18: the account-state decimals assertion must prove the value is
+            // READ from the token, not assumed — a hardcoded-18 regression reads 6 ≠ 18 here.
+            return 6;
           case "allowance":
             // 2-arg = ERC-20 allowance (uint256); 3-arg = Permit2-internal (amount, expiration, nonce).
             return (args.args?.length ?? 0) === 3 ? [777n, 0, 0] : 777n;
@@ -1078,12 +1105,18 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
       { nowSeconds: NOW, resolveRpc: async () => stubResolved(mkClient(NOW + 1n)) },
     );
     expect(env.state).toBe("ok");
-    const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> } };
+    const d = env.data as { allowances: { spenders: Record<string, string>; byToken: Record<string, { corkAdapter: string; permit2: string }> }; decimals: Record<string, number>; scales: Record<string, string> };
     expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
     expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
     // permit2Internal is the Permit2-INTERNAL (user, token, spender=adapter) allowance the
     // permit2 funding leg actually consumes (F18); expiration 0 = no permit granted yet.
     expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777", permit2Internal: { amount: "777", expiration: 0, expired: false } });
+    // Audit R1.2: balances/allowances are native base units and now say so, with per-role
+    // decimals READ from the tokens (the stub answers 6 — an 18 here means a hardcode crept in);
+    // cST/cPT stay the protocol-invariant 18.
+    expect(d.decimals).toEqual({ collateral: 6, reference: 6, corkSwapToken: 18, corkPrincipalToken: 18 });
+    expect(d.scales.balances).toContain("native base units");
+    expect(d.scales.unitsTopic).toBe(UNITS_TOPIC_REFERENCE);
   });
 });
 

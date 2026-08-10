@@ -100,7 +100,7 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
     name: "units",
     aliases: ["scales", "decimals", "wad", "fixed-point"],
     summary:
-      "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats, which have already cost this surface one guard. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
+      "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats — for your OWN conversions; guards that predict a venue verdict instead replicate the venue's own arithmetic exactly. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
     body: `# Numeric units and scales
 
 Ten scale conventions live on this surface — the table below is exhaustive. (The footgun audit
@@ -165,17 +165,24 @@ plausible nonsense rather than failing.
 
 ## Converting safely
 
-- **Strings on the wire, integers in the math.** Every scaled value crosses the boundary as a
-  decimal string and is compared in exact integer arithmetic. Floats have already cost this surface
-  one guard: an exactly-100x scale divergence slipped through because \`410 / (0.041 * 100)\`
-  evaluates to \`99.99999999999999\`, just under the threshold.
+- **Strings on the wire, integers in the math — with one deliberate exception.** Your OWN
+  conversions and economics use exact integer arithmetic over the decimal strings; floats have
+  already cost this surface one guard (an exactly-100x divergence slipped through because
+  \`410 / (0.041 * 100)\` evaluates to \`99.99999999999999\`). But a guard whose job is to PREDICT a
+  venue's verdict replicates the venue's own arithmetic exactly — the premium acceptance band runs
+  the venue's \`Number.parseFloat\` contract, float and all, because a predictor more exact than
+  the thing it predicts gives wrong predictions. Each side of a boundary uses the arithmetic of
+  the contract it enforces.
 - **Mind the silent laundering window.** Between 2^53 and 1e21 a JSON *number* parses to a rounded
   float that still stringifies without an exponent, so a corrupted value looks pristine downstream.
   That window covers roughly 0.01 to 1000 tokens at 18 decimals — most real trades.
 - **Never rescale an amount.** A raw base-unit integer passes through verbatim; convert human input
   by the token's own decimals and keep the whole-number part.
-- **Read the output labels.** cst-swap-rate, unwind-rate, impairment-floor AND the cork-pool read
-  return a \`scales\` block plus collateralDecimals/referenceDecimals. Do not assume 18.
+- **Read the output labels.** cst-swap-rate, unwind-rate, impairment-floor, the cork-pool and
+  account-state reads, and track marketRef all return a \`scales\` block (the chain-pair reads also
+  carry the pair's decimals); decoded JIT/Fusion order labels and dutch-auction-price label their
+  raw fields too, and registry-oracle/derive report \`oracle.rateScale\` beside the rate. Do not
+  assume 18.
 - **Timestamps are absolute unix SECONDS**, bounded to year 2100 — a millisecond value
   (\`Date.now()\`) is rejected with teaching rather than accepted as an immortal deadline.`,
     searchText:

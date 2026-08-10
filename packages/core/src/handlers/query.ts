@@ -453,7 +453,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             // slash-composite keys are not addressable by a consumer doing scales[field].
             market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
             constraintState: "lastAdjustedRate: 1e18 = 1.0 (WAD)",
-            reference: UNITS_TOPIC_REFERENCE,
+            unitsTopic: UNITS_TOPIC_REFERENCE,
           },
         },
         chainId,
@@ -471,7 +471,14 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       const blockOpt = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
       const bal = (token: `0x${string}`) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });
-      const [collateral, reference, corkSwapToken, corkPrincipalToken] = await Promise.all([bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt)]);
+      const dec = (token: `0x${string}`) =>
+        client.readContract({ address: token, abi: erc20Abi, functionName: "decimals", ...blockOpt });
+      // Decimals ride along (audit R1.2): balances/allowances are native base units, and without
+      // the per-role decimals a 6-dec reference balance reads 10^12 too small on an 18-dec
+      // assumption. cST/cPT are always 18 (protocol invariant, same claim as the compute labels).
+      const [collateral, reference, corkSwapToken, corkPrincipalToken, collateralDecimals, referenceDecimals] = await Promise.all([
+        bal(tokens.collateral), bal(tokens.reference), bal(tokens.cst), bal(tokens.cpt), dec(tokens.collateral), dec(tokens.reference),
+      ]);
       // Allowances that gate the funding UX [funding.ts]: erc20-approve mode pulls
       // initiator→ADAPTER (erc20TransferFrom on the adapter), permit2 mode needs the token
       // approved to the canonical Permit2. Only readable where the adapter is configured.
@@ -515,7 +522,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
       }
       const tokensOut = { collateral: tokens.collateral, reference: tokens.reference, corkSwapToken: tokens.cst, corkPrincipalToken: tokens.cpt, expiryTimestamp: tokens.expiryTimestamp };
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, tokens: tokensOut, ...(allowances ? { allowances } : {}) }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+      const decimals = { collateral: Number(collateralDecimals), reference: Number(referenceDecimals), corkSwapToken: 18, corkPrincipalToken: 18 };
+      // Pointer key is `unitsTopic`, NOT `reference`: scales maps field names to labels, and
+      // `reference` IS a field here (the token role) — the pointer must never look like a label.
+      const scales = { balances: "native base units of each token — convert by decimals[role]", allowances: "native base units of each token per spender (uint256.max = unlimited standing approval)", unitsTopic: UNITS_TOPIC_REFERENCE };
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, decimals, tokens: tokensOut, ...(allowances ? { allowances } : {}), scales }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
     }
 
     // pool-whitelist (wlm presence checked above)

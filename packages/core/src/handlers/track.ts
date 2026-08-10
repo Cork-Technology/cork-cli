@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): track handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, stringToHex } from "viem";
-import { Envelope, TrackInput } from "@cork/schemas";
+import { Envelope, TrackInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { computeMarketId } from "../marketid.ts";
 import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
@@ -133,7 +133,20 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
       const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
       return envelope({
         state: idMatches ? "ok" : "conflict",
-        data: { verified: idMatches, poolId: s.poolId, marketIdRecomputed: computeMarketId(s.market), swapRate: s.onChainSwapRate, market: s.market },
+        data: {
+          verified: idMatches,
+          poolId: s.poolId,
+          marketIdRecomputed: computeMarketId(s.market),
+          swapRate: s.onChainSwapRate,
+          market: s.market,
+          // Same labels as the cork-pool read (audit R1.6): this result carries the same raw
+          // WAD rates and constraint bounds, and a verifier reads them under the same collision.
+          scales: {
+            swapRate: "1e18 = 1.0 (WAD)",
+            market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
+            unitsTopic: UNITS_TOPIC_REFERENCE,
+          },
+        },
         chainId,
         source: "chain",
         block: s.blockNumber,

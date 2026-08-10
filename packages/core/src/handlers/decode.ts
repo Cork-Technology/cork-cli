@@ -16,7 +16,7 @@ import { envelope, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from
 
 /** Best-effort Fusion label on decoded orders: the auction summary, or the legacy classification. */
 type FusionLabel =
-  | { settlement: `0x${string}`; classification: string; auction: { startTime: bigint; duration: bigint; initialRateBump: bigint; points: number }; postInteractionGated: boolean; note: string }
+  | { settlement: `0x${string}`; classification: string; auction: { startTime: bigint; duration: bigint; initialRateBump: bigint; points: number }; postInteractionGated: boolean; scales: Record<string, string>; note: string }
   | { classification: "legacy"; note: string };
 
 /** Best-effort JIT label on decoded orders, discriminated on the adapter generation. */
@@ -35,6 +35,7 @@ type JitLabel =
       unwindSwapFeePercentage: bigint;
       enableJitMint: boolean;
       permits: number;
+      scales: Record<string, string>;
       note: string;
     }
   | {
@@ -48,8 +49,17 @@ type JitLabel =
       unwindSwapFeePercentage: bigint;
       enableJitMint: boolean;
       permits: number;
+      scales: Record<string, string>;
       note: string;
     };
+
+/** The fee/override labels a decoded JIT payload carries (audit R1.3): the same C1 collision as
+ *  everywhere else — a carried fee at 1e18 = 1% is byte-identical to a WAD rate, and a signer
+ *  reading the decode must not have to guess which family a raw value is in. */
+const JIT_FEE_SCALES = {
+  swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)",
+  unwindSwapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD)",
+} as const;
 
 /** Parse a caller-supplied order RECORD (e.g. a typedData.message round-trip) into a LopOrder.
  *  Field-by-field validation with teachable paths; extra keys are ignored (we reconstruct from
@@ -141,6 +151,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
         classification: f.classification,
         auction: { startTime: f.auction.startTime, duration: f.auction.duration, initialRateBump: f.auction.initialRateBump, points: f.auction.points.length },
         postInteractionGated: f.postInteraction !== null,
+        scales: { initialRateBump: "1e7 = +100% above the signed takingAmount (the floor)" },
         note: "auction-priced order — current price via cork_compute dutch-auction-price",
       };
     } catch (err) {
@@ -175,6 +186,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
         unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
         enableJitMint: d.params.enableJitMint,
         permits: d.permits.length,
+        scales: { ...JIT_FEE_SCALES, rateOverride: "ABSOLUTE, 1e18 = 1.0 (FIXED recipes only; 0 = none)" },
         note: "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
       };
     } catch {
@@ -191,6 +203,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
           unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
           enableJitMint: d.params.enableJitMint,
           permits: d.permits.length,
+          scales: { ...JIT_FEE_SCALES },
           note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
         };
       } catch {
@@ -232,7 +245,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
       data: { ...base, ...saltBinding, claimedOrderHash },
       chainId,
       source: "config",
-      warnings: [...warnings, { code: "digest_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash` }],
+      warnings: [...warnings, { code: "order_hash_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash (formerly digest_mismatch)` }],
       ctx,
     });
   }

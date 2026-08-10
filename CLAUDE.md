@@ -175,8 +175,11 @@ CLI exit codes mirror state: `0` ok · `2` invalid input · `3` unavailable · `
 unexpected. Only unparseable/format faults throw (exit 2); a well-formed input breaking a domain
 rule (equal ca/ref, fee over the 5% cap) returns an `unavailable` envelope (exit 3).
 
-Money/rate outputs are unit-labeled: cst-swap-rate/unwind-rate/impairment-floor + the cork-pool read carry a `scales`
-block plus `collateralDecimals`/`referenceDecimals` — read the labels, don't assume 18 decimals.
+Money/rate outputs are unit-labeled: the three chain compute kinds + cork-pool/account-state reads +
+track marketRef carry a `scales` block (chain-pair reads add `collateralDecimals`/`referenceDecimals`);
+decode JIT/Fusion labels, dutch-auction-price, and registry `oracle.rateScale` label their raw fields
+too — read the labels, don't assume 18 decimals. The `scales` pointer key is `unitsTopic` (never
+`reference` — that's a token role).
 `provenance.digest` / `signedArtifactDigest` are OPAQUE content tags: compare only digests produced
 by this tool. Absolute-timestamp inputs are bounded to year 2100 (a `Date.now()` ms paste is
 rejected with teaching).
