@@ -8,7 +8,7 @@
 // the tamper-evidence for the addresses we trust.
 import { describe, expect, it } from "vitest";
 import { encodePacked, keccak256 } from "viem";
-import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, resolveMarketRegistry, verifyCreate2 } from "@cork/core";
+import { CREATE2_ATTESTATIONS, CREATE2_DEPLOYER, resolveDeployment, resolveMarketRegistry, verifyCreate2 } from "@cork/core";
 
 describe("CREATE2 attestations", () => {
   it("every attestation re-derives to its expected address (local keccak, no chain)", () => {
@@ -27,19 +27,60 @@ describe("CREATE2 attestations", () => {
     }
   });
 
-  it("covers the full 0.3.2 registry set and agrees with the config the tool routes calls to, on BOTH chains", async () => {
-    const byName = Object.fromEntries(CREATE2_ATTESTATIONS.map((a) => [a.name, a.expected.toLowerCase()]));
-    for (const chainId of [42161, 8453] as const) {
-      const { marketRegistry: mr } = await resolveMarketRegistry(chainId);
-      expect(mr, String(chainId)).toBeDefined();
-      expect(byName["marketRegistry"]).toBe(mr!.registry.toLowerCase());
-      expect(byName["corkLimitOrderAdapter"]).toBe(mr!.adapter!.toLowerCase());
-      expect(byName["wrapperRateConsumerFactory"]).toBe(mr!.wrapperFactory!.toLowerCase());
-      expect(byName["fixedRateOracleFactory"]).toBe(mr!.fixedRateOracleFactory!.toLowerCase());
-      expect(byName["aggregatorAdapterFactory"]).toBe(mr!.aggregatorAdapterFactory!.toLowerCase());
-      expect(byName["liquidityPriceRecipe"]).toBe(mr!.recipes!["liquidity"]!.toLowerCase());
-      expect(byName["liquidityNavRecipe"]).toBe(mr!.recipes!["nav"]!.toLowerCase());
-      expect(byName["fixedRateRecipe"]).toBe(mr!.recipes!["fixed"]!.toLowerCase());
+  it("every `binds` declaration agrees with the config the tool routes calls to, on every bound chain", async () => {
+    // Data-driven from the attestation entries themselves (the binds field is part of the
+    // shipped attestation, rendered by topic:"verify") — not a hand-maintained mapping here
+    // that could silently miss an entry. A config edit without a matching attestation edit,
+    // or vice versa, fails this offline.
+    const bound = CREATE2_ATTESTATIONS.filter((a) => a.binds);
+    expect(bound.length).toBeGreaterThan(0);
+    for (const a of bound) {
+      for (const chainId of a.binds!.chains) {
+        const perChain =
+          a.binds!.section === "deployments"
+            ? (await resolveDeployment(chainId)).deployment
+            : (await resolveMarketRegistry(chainId)).marketRegistry;
+        expect(perChain, `${a.name}: no ${a.binds!.section} config for chain ${chainId}`).toBeDefined();
+        const value = a.binds!.path.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], perChain);
+        expect(typeof value, `${a.name}: ${a.binds!.section}[${chainId}].${a.binds!.path} missing from config`).toBe("string");
+        expect((value as string).toLowerCase(), `${a.name}: attestation disagrees with ${a.binds!.section}[${chainId}].${a.binds!.path}`).toBe(a.expected.toLowerCase());
+      }
+    }
+  });
+
+  it("covers every config-routed address: the registry set, the phoenix v1.3 stack, and the mainnet adapter", () => {
+    // Coverage guard: binds-driven agreement above can't notice a DELETED entry, so the
+    // required roster is pinned here. New config-referenced contracts join this list.
+    const names = new Set(CREATE2_ATTESTATIONS.map((a) => a.name));
+    for (const required of [
+      "corkAdapter",
+      "atomicDeployer",
+      "marketRegistry",
+      "corkLimitOrderAdapter",
+      "wrapperRateConsumerFactory",
+      "fixedRateOracleFactory",
+      "aggregatorAdapterFactory",
+      "liquidityPriceRecipe",
+      "liquidityNavRecipe",
+      "fixedRateRecipe",
+      "poolManagerV13",
+      "constraintAdapterV13",
+      "whitelistManagerV13",
+      "defaultCorkController",
+      "corkAdapterV13",
+    ]) {
+      expect(names.has(required), `attestation roster is missing ${required}`).toBe(true);
+    }
+  });
+
+  it("every registry-set and phoenix-set entry names a PUBLIC rebuildable source (repo@tag + forge path)", () => {
+    // The mainnet corkAdapter predates public tagging — the one sanctioned source-less entry.
+    for (const a of CREATE2_ATTESTATIONS) {
+      if (a.name === "corkAdapter") continue;
+      expect(a.source, `${a.name}: missing source provenance`).toBeDefined();
+      expect(a.source!.repo).toMatch(/^github\.com\/Cork-Technology\//);
+      expect(a.source!.tag.length).toBeGreaterThan(0);
+      expect(a.source!.contract).toMatch(/^[\w\-/.]+\.sol:\w+$/);
     }
   });
 });

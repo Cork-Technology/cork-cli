@@ -465,6 +465,26 @@ const CATALOG: Mutant[] = [
     replace: "[CALL_TYPEHASH, c.target, c.value, keccak256(c.callData), c.isDelegateCall, c.allowFailure]",
     tests: [T.rollover],
   },
+  // ── CREATE2 attestations: binds is the attestation↔config drift gate; salts are identity ──
+  {
+    // A binds path pointing at the WRONG config field would let the attestation and the served
+    // config drift apart while the gate stays green — the exact silent failure binds exists to
+    // prevent (registry vs adapter are different addresses, so the swap must fail the test).
+    id: "attestation-binds-path-swapped",
+    file: "packages/core/src/config.ts",
+    find: 'binds: { section: "marketRegistry", chains: [42161, 8453], path: "adapter" },',
+    replace: 'binds: { section: "marketRegistry", chains: [42161, 8453], path: "registry" },',
+    tests: [T.attest],
+  },
+  {
+    // Cross-wiring two phoenix entries' salts keeps every VALUE plausible but breaks both
+    // derivations — the local re-derivation test must catch a tampered/miscopied salt.
+    id: "attestation-phoenix-salt-swapped",
+    file: "packages/core/src/config.ts",
+    find: 'name: "poolManagerV13",\n    salt: "0xee0ccc36f7c20be262d77eed4fee79a4569918c84e94b751c375ca720bd910bb",',
+    replace: 'name: "poolManagerV13",\n    salt: "0xddcbb6a4d6a401dc57afc714560c71a1ef107c2a74589ed9fc8308243853f106",',
+    tests: [T.attest],
+  },
   // ── math ports: rounding direction is wei-for-wei parity ──────────────────────────────────
   {
     id: "muldiv-ceil-dropped",

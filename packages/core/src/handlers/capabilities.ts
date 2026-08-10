@@ -19,6 +19,11 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
       salt: a.salt,
       initCodeHash: a.initCodeHash,
       ...(a.guard ? { guard: a.guard } : {}),
+      // Rebuild pointer (public repo@tag + forge path — metadata makes the hash build-sensitive,
+      // so use THAT repo's own toolchain) and the cork-defaults fields this address must equal
+      // (the attestation↔config drift gate, test-enforced offline).
+      ...(a.source ? { source: a.source } : {}),
+      ...(a.binds ? { binds: a.binds } : {}),
     }));
     const allMatch = verifications.every((v) => v.match);
     return envelope({
