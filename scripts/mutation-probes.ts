@@ -1393,6 +1393,27 @@ const CATALOG: Mutant[] = [
     replace: 'protocolSurplusFeePercent: "1e5 base (under fillability.surplus)"',
     tests: [T.fusion],
   },
+  // ── COR-35 layer split: pattern = contract, bound = policy (Raouf ruling 2026-08-10) ───────
+  {
+    // The cap teaches itself as permanent structure — callers over-fit to a pilot bound that a
+    // short-tenor distressed market legitimately breaks; when the venue relaxes it, every
+    // integration taught "structure" here needs re-teaching.
+    id: "premium-fraction-cap-taught-as-structure",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "POLICY, not structure: pilot posture, spec-invisible, relaxable",
+    replace: "STRUCTURE, permanent: pinned by R13, never relaxable",
+    tests: [T.venue],
+  },
+  {
+    // The wire shape teaches itself as relaxable policy — the inverse over-fit: callers wait
+    // for a "relaxation" of a shape R13 pins forever (a WAD variant is a NEW field, not a
+    // loosened regex).
+    id: "premium-fraction-shape-taught-as-policy",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "STRUCTURE: the RFC-pinned wire shape",
+    replace: "POLICY: the current wire shape",
+    tests: [T.venue],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

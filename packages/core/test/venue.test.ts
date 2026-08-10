@@ -469,6 +469,31 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const atCap = await runTool("cork_submit", answer("0.5"), ctxWith([]));
     expect(atCap.state).toBe("unavailable");
     expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
+    // The cap is POLICY (pilot posture, spec-invisible, relaxable) — the message must say so
+    // and must NOT teach it as structure, or callers over-fit to a bound expected to move
+    // (COR-35 ruling: pattern = contract, bound = current policy).
+    expect(atCap.warnings[0]?.message).toContain("POLICY");
+    expect(atCap.warnings[0]?.message).toContain("relaxable");
+    expect(atCap.warnings[0]?.message).not.toContain("STRUCTURE");
+  });
+
+  it("F5: a wrong-SCALE premium (percent number / wad integer) is a STRUCTURE reject with the units-table route", async () => {
+    const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0002", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
+    // "4.1" is the book listing's percent number; "41000000000000000" is 4.1% as a wad — both
+    // are the classic cross-surface scale mistakes, both fail the R13-pinned wire shape.
+    for (const bad of ["4.1", "41000000000000000"]) {
+      const seen: Seen[] = [];
+      const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
+      expect(env.state, bad).toBe("unavailable");
+      expect(env.warnings[0]?.code, bad).toBe("invalid_order_terms");
+      // Structure, not policy: this rejection is permanent under R13 and the message says so.
+      expect(env.warnings[0]?.message, bad).toContain("STRUCTURE");
+      expect(env.warnings[0]?.message, bad).toContain("R13");
+      expect(env.warnings[0]?.message, bad).not.toContain("POLICY");
+      expect(env.warnings[0]?.message, bad).toContain(UNITS_TOPIC_REFERENCE);
+      // Fail-early means fail-LOCAL: nothing reached the venue.
+      expect(seen.filter((s) => s.method === "POST").length, bad).toBe(0);
+    }
   });
 
   it("F6: rfq-open validates the window and validUntil like its rollover sibling", async () => {

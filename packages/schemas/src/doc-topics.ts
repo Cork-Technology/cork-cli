@@ -137,7 +137,7 @@ they are the same claim, so a field description and this table can be checked ag
 | \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax (the four constraint values a JIT order carries and signs), rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
 | \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (cap 5e18 = 5%), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
 | \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing — cork_submit lop-order and the finalize listing block | cork-api v0.1.3 |
-| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\` and sibling premium fields | venue RFQ (stores verbatim, never parses your economics) |
+| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized, and sibling premium fields | venue RFQ — scale is SCHEMA-GATED at write since launch (openapi pattern \`^(0\|0\\.[0-9]{1,18})$\` = structure; the < 0.5 cap = relaxable, spec-invisible POLICY); quote ECONOMICS are stored verbatim. PINNED forever by R13 — a WAD variant would be a NEW field name |
 | \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
 | \`D5{%}\` | 1e5 base | \`5000\` | integratorFee, resolverFee (uint16, decoded from Fusion extraData) | 1inch Fusion FeeTaker |
 | \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
@@ -176,6 +176,11 @@ plausible nonsense rather than failing.
 - **Mind the silent laundering window.** Between 2^53 and 1e21 a JSON *number* parses to a rounded
   float that still stringifies without an exponent, so a corrupted value looks pristine downstream.
   That window covers roughly 0.01 to 1000 tokens at 18 decimals — most real trades.
+- **The field name IS the convention marker (versioning rule R13).** A field's unit never changes
+  in place — a new unit means a NEW field name. So a name, once learned, holds for every record
+  that will ever exist under it (\`premium_annualized\` is a fraction-string in the first record
+  and the last), and history reads never need per-record convention stamps. Corollary: when a
+  bound moves (the RFQ < 0.5 cap is pilot POLICY, not structure), the shape and name stay put.
 - **Never rescale an amount.** A raw base-unit integer passes through verbatim; convert human input
   by the token's own decimals and keep the whole-number part.
 - **Read the output labels.** cst-swap-rate, unwind-rate, impairment-floor, the cork-pool and

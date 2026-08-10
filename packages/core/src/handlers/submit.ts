@@ -48,10 +48,17 @@ export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as c
  * 400s it, so the string form was permissive by one ulp relative to the server it exists to
  * predict. Both forms are deterministic; this one is the deployed one.
  * Returns a human-readable violation, or null when the venue would accept the value.
+ *
+ * The two branches are DIFFERENT LAYERS and the messages say so (COR-35 ruling, 2026-08-10):
+ * the regex is STRUCTURE — in the published openapi.json on both write paths, and pinned by
+ * R13 (a field's unit never changes in place; a WAD variant would be a NEW field name). The
+ * < 0.5 cap is POLICY — server-enforced but spec-invisible (zod refines don't export) and
+ * pilot posture (a short-tenor distressed market could legitimately annualize above 50%).
+ * Teaching them as one thing would over-fit callers to a bound that is expected to move.
  */
 export function premiumFractionViolation(p: unknown): string | null {
-  if (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p)) return "not a decimal-fraction string";
-  if (Number.parseFloat(p) >= 0.5) return "parses to >= 0.5 — the venue decides this cap via Number.parseFloat, so a decimal within one float-ulp of 0.5 is rejected there too";
+  if (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p)) return "not a decimal-fraction string — STRUCTURE: the RFC-pinned wire shape (openapi pattern ^(0|0\\.[0-9]{1,18})$), permanent under R13 (a unit never changes in place; a WAD variant would be a NEW field name)";
+  if (Number.parseFloat(p) >= 0.5) return "parses to >= 0.5 — the venue decides this cap via Number.parseFloat, so a decimal within one float-ulp of 0.5 is rejected there too. POLICY, not structure: pilot posture, spec-invisible, relaxable — expect this bound to move someday, never the fraction shape";
   return null;
 }
 
@@ -541,7 +548,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         const p = o.premium_annualized;
         const problem = p === undefined ? null : premiumFractionViolation(p);
         if (problem !== null) {
-          return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)} (${problem}); percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface`, ctx);
+          return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)} (${problem}); percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
         }
       }
     }

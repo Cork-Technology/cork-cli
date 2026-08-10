@@ -86,6 +86,10 @@ describe("doc topic: units", () => {
       { field: "initialRateBump", marker: "1e7" },
       { field: "rateBump", marker: "1e7" },
       { field: "premium", marker: "PERCENT" },
+      // rfq-counter's typed premium: fraction-string per the venue contract, pinned by R13 —
+      // the marker is the shared "fraction" stem ("decimal-fraction STRING" in the schema,
+      // "fraction STRINGS" on the topic row).
+      { field: "premiumAnnualized", marker: "fraction" },
       { field: "minPremiumPerShare", marker: "per 1e18" },
       // NOT listed: gasPriceEstimate / integratorFee / resolverFee / whitelistDiscountNumerator /
       // surplusFeePercent. Those are Fusion DECODE OUTPUTS (fusion.ts), never tool inputs, so they
