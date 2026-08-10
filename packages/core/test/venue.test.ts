@@ -7,7 +7,7 @@ import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
 import { buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
-import { TOOL_EXAMPLES } from "@cork/schemas";
+import { TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
@@ -451,6 +451,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("quote_ref_unverifiable");
+    expect(env.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
   });
 
   it("F5: the rfq-answer 0.5 cap is decided on the string — a 17-digit just-under value passes, 0.5 fails", async () => {
@@ -549,7 +550,11 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const lopBase = await lopBaseP;
     const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]));
     expect(env.state).toBe("ok");
-    expect(env.warnings.some((w) => w.code === "premium_scale_suspect")).toBe(true);
+    const suspect = env.warnings.find((w) => w.code === "premium_scale_suspect");
+    expect(suspect).toBeDefined();
+    // The tripwire must ROUTE to the units topic, asserted on the real emission path — a
+    // constant-level check would stay green if the interpolation were dropped from the handler.
+    expect(suspect!.message).toContain(UNITS_TOPIC_REFERENCE);
   });
 
   it("quote_ref citing a diverging premium → conflict premium_scale_mismatch, NOT relayed", async () => {
@@ -564,6 +569,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     // declared 0.036 percent vs cited 3.6 percent = 1/100x divergence
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
+    expect(env.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
     expect(seen.filter((s) => s.method === "POST").length).toBe(0);
   });
 

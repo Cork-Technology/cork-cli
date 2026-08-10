@@ -121,12 +121,10 @@ describe("doc topic: units", () => {
     }
   });
 
-  it("the scale tripwires route to the topic (an error should teach the correct form, not only reject)", () => {
-    // Asserted at the source-constant level: the three premium tripwire messages interpolate
-    // UNITS_TOPIC_REFERENCE, so the routing cannot silently drop out of one of them.
-    expect(UNITS_TOPIC_REFERENCE).toBe('cork_capabilities topic:"units"');
-    expect(DOC_TOPICS.units!.name).toBe("units");
-  });
+  // Tripwire → topic routing is asserted BEHAVIORALLY in venue.test.ts (premium_scale_suspect /
+  // premium_scale_mismatch / quote_ref_unverifiable each assert their emitted message contains
+  // UNITS_TOPIC_REFERENCE on the real handler path). A constant-level check here would stay green
+  // with the interpolation deleted — exactly the placebo this suite exists to prevent.
 });
 
 describe("data.execution on prepare results (offline-buildable variants)", () => {

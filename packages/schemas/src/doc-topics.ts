@@ -100,11 +100,14 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
     name: "units",
     aliases: ["scales", "decimals", "wad", "fixed-point"],
     summary:
-      "Nine scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats, which have already cost this surface one guard. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
+      "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats, which have already cost this surface one guard. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
     body: `# Numeric units and scales
 
-Nine scale conventions live on this surface. Eight are inherited from whoever owns the value;
-exactly one is a Cork choice. The operating rule has two halves:
+Ten scale conventions live on this surface — the table below is exhaustive. (The footgun audit
+counted eight: it excluded the token-decimals baseline and the per-share hybrid, which this table
+includes.) Every row's scale is inherited from whoever owns the value — Cork's own deployed
+contracts included; this tool surface mints no scale of its own. The operating rule has two
+halves:
 
 **WAD (1e18 = 1.0) is mandatory for fields Cork mints, and forbidden for fields Cork mirrors.**
 A token owns its decimals, a deployed contract owns its fixed-point base, the venue owns its wire
@@ -113,11 +116,15 @@ once two hops both convert, nothing downstream can tell which hop was wrong.
 
 ## Notation
 
-Scales are written on two axes, following the Reserve Protocol / Trail of Bits dimensional
-convention: a precision prefix (\`D18\`, \`D7\`) plus a dimension in braces (\`{1}\` dimensionless,
-\`{%}\` percent, \`{qTok}\` a token quantum — the smallest indivisible unit). The two axes matter
-because the surface's worst collision is two fields at the SAME precision with DIFFERENT
-dimensions: \`rateMax\` is \`D18{1}\` and \`swapFeePercentage\` is \`D18{%}\`, a hundredfold apart.
+Scales are written on two axes, in the style of the Reserve Protocol / Trail of Bits dimensional
+convention: a precision prefix (\`D18\`) plus a dimension in braces (\`{1}\` dimensionless,
+\`{qTok}\` a token quantum — the smallest indivisible unit). Two pieces are CORK EXTENSIONS of
+that style, not part of the published convention: \`{%}\` as a dimension, and precision prefixes
+beyond D18/D27 (\`D7\`, \`D5\`, \`D3\`, \`D2\`). \`D18{%}\` could equally be written \`D20{1}\` —
+treating percent as a dimension is a deliberate choice, made so the field-name rule
+(\`*Percentage\` ⇒ \`{%}\`) stays visible in the notation. The two axes matter because the
+surface's worst collision is two fields at the SAME precision with DIFFERENT dimensions:
+\`rateMax\` is \`D18{1}\` and \`swapFeePercentage\` is \`D18{%}\`, a hundredfold apart.
 
 ## What 5% looks like in every scale that could hold it
 
@@ -134,9 +141,9 @@ they are the same claim, so a field description and this table can be checked ag
 | \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
 | \`D5{%}\` | 1e5 base | \`5000\` | integratorFee, resolverFee (uint16, decoded from Fusion extraData) | 1inch Fusion FeeTaker |
 | \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
-| \`{gwei}\` | 1000 = 1 gwei | \`5000\` = 5 gwei | gasPriceEstimate (uint32, auction gas-bump term — a DECODE OUTPUT, not an input) | 1inch Fusion auction extraData |
+| \`D3{gwei}\` | 1000 = 1 gwei | \`5000\` = 5 gwei | gasPriceEstimate (uint32, auction gas-bump term — a DECODE OUTPUT, not an input) | 1inch Fusion auction extraData |
 | \`{qTok}\` token quantum | the token's own smallest unit (base units) | \`2500000000000000000\` = 2.5 @18dp; \`1000000000\` = 1000 USDC @6dp | every amount: makingAmount, collateralAssetsIn, orderSize, every min*/max* bound | the token itself, via \`decimals()\` |
-| \`D18{qPremiumTok/cST}\` | base units of the premium asset per 1e18 share | \`12000000000000000\` = 0.012/share @18dp; \`12000\` @6dp | minPremiumPerShare — premium-asset base units per 1e18 (one whole) cST share | Cork rollover contract (\`floor = shares * value / 1e18\`) |
+| \`{qPremiumTok/cST}\` | base units of the premium asset per 1e18 share | \`12000000000000000\` = 0.012/share @18dp; \`12000\` @6dp | minPremiumPerShare — premium-asset base units per one WHOLE (1e18-quanta) cST share; no D-prefix: the 1e18 in the formula is the share's own decimals, not a fixed-point scaling of the ratio | Cork rollover contract (\`floor = shares * value / 1e18\`) |
 
 ## The three collisions
 
@@ -167,8 +174,8 @@ plausible nonsense rather than failing.
   That window covers roughly 0.01 to 1000 tokens at 18 decimals — most real trades.
 - **Never rescale an amount.** A raw base-unit integer passes through verbatim; convert human input
   by the token's own decimals and keep the whole-number part.
-- **Read the output labels.** cst-swap-rate, unwind-rate and impairment-floor return a \`scales\`
-  block plus collateralDecimals/referenceDecimals. Do not assume 18.
+- **Read the output labels.** cst-swap-rate, unwind-rate, impairment-floor AND the cork-pool read
+  return a \`scales\` block plus collateralDecimals/referenceDecimals. Do not assume 18.
 - **Timestamps are absolute unix SECONDS**, bounded to year 2100 — a millisecond value
   (\`Date.now()\`) is rejected with teaching rather than accepted as an immortal deadline.`,
     searchText:

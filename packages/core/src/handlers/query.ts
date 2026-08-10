@@ -441,6 +441,18 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           corkSwapToken: s.cstToken, // cST
           corkPrincipalToken: s.cptToken, // cPT
           issuedAt: s.issuedAt,
+          // Unit labels on the most-read resource (footgun audit R1: swapFeePercentage at
+          // 1e18=1% beside WAD rates was the single highest-risk unlabeled output — the two are
+          // identically shaped and 100x apart). Same convention as the compute kinds.
+          scales: {
+            swapRate: "1e18 = 1.0 (WAD)",
+            oracleRate: "1e18 = 1.0 (WAD)",
+            swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; 100x apart)",
+            unwindSwapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD)",
+            "market.rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax": "1e18 = 1.0 (WAD, absolute)",
+            "constraintState.lastAdjustedRate": "1e18 = 1.0 (WAD)",
+            reference: 'cork_capabilities topic:"units"',
+          },
         },
         chainId,
         source: "chain",
