@@ -55,6 +55,7 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
+  evalAuth: "evals/auth-mode.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
 };
 
@@ -408,6 +409,15 @@ const CATALOG: Mutant[] = [
     find: "      if (tree === parentTree) {",
     replace: "      if (false) {",
     tests: [T.port],
+  },
+  {
+    // The eval self-skip gate: dropping the skip branch re-creates the 2026-08-10 regression
+    // (CI without the secret proceeds keyless and paints main red with a 401).
+    id: "eval-auth-skip-gate-dropped",
+    file: "evals/auth-mode.ts",
+    find: '  if (env.ANTHROPIC_BASE_URL) return "ambient";\n  return "skip";',
+    replace: '  return "ambient";',
+    tests: [T.evalAuth],
   },
   // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
   // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──

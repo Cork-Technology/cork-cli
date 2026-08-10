@@ -1,5 +1,5 @@
 # apk-repository + OCI-image channel.
-# Packages each production (non-candidate) release — see "Three triggers, one gate" below:
+# Packages every release — candidates get the OCI image only; see the candidate split below:
 #
 #   1. melange builds the cork-cli apk from source at the tag, per NATIVE arch runner, with
 #      --generate-provenance (SLSA provenance as .attest.tar.gz beside each apk) and a signed index.
@@ -22,8 +22,15 @@
 #   - release: published — still fires for a release a human publishes by hand.
 #   - workflow_dispatch — operator backfill/retry (safe: the publish step refuses to overwrite
 #     any already-published apk).
-#   Candidate tags never enter this channel: one discriminator everywhere — a `-` in the tag
-#   (v0.1.0-rc.N) marks the candidate space, same rule release.yml uses for the prerelease flag.
+#   The candidate split (one discriminator everywhere: a `-` in the tag marks the candidate
+#   space, the same rule release.yml uses for the prerelease flag):
+#     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
+#       never :latest), composed from the locally-built signed apks — partners can docker/podman
+#       pull a candidate without the apk repository ever carrying it.
+#     - production tags additionally publish the apk to the cumulative Pages repository, compose
+#       the image FROM that published channel, move :latest, and run the Phala CVM deploy.
+#   apk version grammar has no hyphen: vX.Y.Z-rc.N maps to X.Y.Z_rcN (apk pre-release ordering
+#   keeps it below X.Y.Z); any OTHER hyphen suffix fails loudly instead of guessing.
 name: apk-repo
 
 on:
@@ -32,7 +39,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "release tag to package (vX.Y.Z — candidate tags are skipped by the gate)"
+        description: "release tag to package (vX.Y.Z or vX.Y.Z-rc.N — candidates build the OCI image only)"
         required: true
         type: string
     secrets:
@@ -43,7 +50,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "release tag to package (vX.Y.Z — candidate tags are skipped by the gate)"
+        description: "release tag to package (vX.Y.Z or vX.Y.Z-rc.N — candidates build the OCI image only)"
         required: true
         type: string
 
@@ -52,15 +59,33 @@ permissions:
 
 env:
   AQUA_CONFIG: packaging/aqua.yaml
-  # One resolution for all three triggers: `inputs` serves workflow_call AND workflow_dispatch;
-  # the release event carries its own tag.
-  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
 
 jobs:
+  # One resolution of tag → candidate? → apk version, consumed by every job below.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.p.outputs.tag }}
+      candidate: ${{ steps.p.outputs.candidate }}
+      apkver: ${{ steps.p.outputs.apkver }}
+    steps:
+      - id: p
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          test -n "$TAG" || { echo "::error::no tag resolved from the trigger"; exit 1; }
+          v="${TAG#v}"
+          case "$v" in
+            *-rc.*) apkver="${v%%-rc.*}_rc${v##*-rc.}"; candidate=true ;;
+            *-*)    echo "::error::unrecognized pre-release suffix in $TAG — only -rc.N maps to apk version grammar (policy R7 candidate space)"; exit 1 ;;
+            *)      apkver="$v"; candidate=false ;;
+          esac
+          { echo "tag=$TAG"; echo "candidate=$candidate"; echo "apkver=$apkver"; } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG candidate=$candidate apkver=$apkver"
+
   melange-build:
-    # Hyphen = candidate space (v0.1.0-rc.N): one rule for all three triggers, the same
-    # discriminator release.yml uses for the GitHub prerelease flag.
-    if: ${{ !contains(inputs.tag || github.event.release.tag_name, '-') }}
+    needs: plan
     strategy:
       matrix:
         include:
@@ -73,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ needs.plan.outputs.tag }}
 
       - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
@@ -84,12 +109,16 @@ jobs:
 
       - name: Substitute release identity into the spec
         env:
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.apkver }}
         run: |
-          VERSION="${TAG#v}" COMMIT="$(git rev-parse HEAD)" \
-          yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
+          # The checkout tag is substituted EXPLICITLY (candidates: package.version is the apk
+          # mapping X.Y.Z_rcN, so the spec's default checkout tag of v + package.version would
+          # name a git tag that does not exist).
+          COMMIT="$(git rev-parse HEAD)" \
+          yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.tag = strenv(TAG) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
             packaging/melange.yaml
-          yq '.package.version, .vars.commit' packaging/melange.yaml
+          yq '.package.version, .vars.commit, .pipeline[0].with.tag' packaging/melange.yaml
 
       - name: Build the apk (+ SLSA provenance, signed)
         env:
@@ -112,7 +141,10 @@ jobs:
           retention-days: 7
 
   publish-pages:
-    needs: melange-build
+    # Production only: the cumulative apk repository is the partner channel; candidates never
+    # enter it (their OCI images compose from the local build instead).
+    needs: [plan, melange-build]
+    if: ${{ needs.plan.outputs.candidate == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -163,7 +195,7 @@ jobs:
 
       - name: Publish (push gh-pages; Pages serves the branch)
         env:
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           cd site
           git config user.name "github-actions[bot]"
@@ -173,7 +205,11 @@ jobs:
           git push origin HEAD:gh-pages
 
   apko-publish:
-    needs: publish-pages
+    # Runs for EVERY release: candidates compose from the locally-built signed apks (the Pages
+    # channel never carries them), production composes FROM the published Pages repo so the image
+    # is a downstream consumer of the exact channel users `apk add` from.
+    needs: [plan, melange-build, publish-pages]
+    if: ${{ !cancelled() && needs.melange-build.result == 'success' && (needs.publish-pages.result == 'success' || needs.plan.outputs.candidate == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -190,40 +226,71 @@ jobs:
         with:
           aqua_version: v2.53.5
 
-      - name: Wait for Pages to serve the new package
+      - name: Wait for Pages to serve the new package (production)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
         env:
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          APKVER: ${{ needs.plan.outputs.apkver }}
         run: |
           url="https://cork-technology.github.io/cork-cli/apk/x86_64/APKINDEX.tar.gz"
           for i in $(seq 1 60); do
-            if curl -fsSL "$url" | tar -Oxz APKINDEX 2>/dev/null | grep -q "V:${TAG#v}"; then
-              echo "Pages serves ${TAG#v}"; exit 0
+            if curl -fsSL "$url" | tar -Oxz APKINDEX 2>/dev/null | grep -q "V:${APKVER}"; then
+              echo "Pages serves ${APKVER}"; exit 0
             fi
             echo "waiting for Pages deploy ($i/60)…"; sleep 15
           done
-          echo "Pages never served ${TAG#v}" >&2; exit 1
+          echo "Pages never served ${APKVER}" >&2; exit 1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: ${{ needs.plan.outputs.candidate == 'true' }}
+        with:
+          name: apk-x86_64
+          path: packages/x86_64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: ${{ needs.plan.outputs.candidate == 'true' }}
+        with:
+          name: apk-aarch64
+          path: packages/aarch64
+      - name: Assemble the local signed repo (candidate)
+        if: ${{ needs.plan.outputs.candidate == 'true' }}
+        env:
+          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+        run: |
+          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
+          for arch in x86_64 aarch64; do
+            (cd "packages/$arch" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+          done
+          rm -f melange.rsa
+          # The image resolves cork-cli from ./packages instead of the Pages channel: swap the
+          # spec's published repo/keyring for the local pair (the wolfi repo stays as-is).
+          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./packages"' packaging/cork-cli.apko.yaml
+          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
+          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
 
       - name: Pin the apk version in the apko spec
         env:
-          TAG: ${{ env.RELEASE_TAG }}
+          APKVER: ${{ needs.plan.outputs.apkver }}
         run: |
           # An independent `apko build` of this spec must resolve the SAME package as this run —
           # pin cork-cli to the exact version-revision instead of floating on the index head.
           # (epoch is 0 in melange.yaml; a future epoch bump must be mirrored here.)
-          PIN="cork-cli=${TAG#v}-r0" \
+          PIN="cork-cli=${APKVER}-r0" \
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
 
-      - name: Build + push the image from the published repo
+      - name: Build + push the image
         id: publish
         env:
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
+          # Candidates never move :latest (policy R7: the pointer tracks production only).
+          refs=("ghcr.io/$owner/cork-cli:$TAG")
+          [ "$CANDIDATE" = "false" ] && refs+=("ghcr.io/$owner/cork-cli:latest")
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
-          apko publish packaging/cork-cli.apko.yaml \
-            "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
+          apko publish packaging/cork-cli.apko.yaml "${refs[@]}" \
             --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation.
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
@@ -247,7 +314,10 @@ jobs:
   # Requires the PHALA_CLOUD_API_KEY secret; the determinism gate already ran before this
   # workflow's trigger (release.yml publishes only byte-identical, attested builds).
   phala-deploy:
-    needs: apko-publish
+    # Actual releases only — a candidate image never reaches the CVM; the attested production
+    # digest is what packaging/VERIFY.md's six checks bind to.
+    needs: [plan, apko-publish]
+    if: ${{ !cancelled() && needs.plan.outputs.candidate == 'false' && needs.apko-publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

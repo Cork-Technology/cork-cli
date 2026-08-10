@@ -13,7 +13,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/*/test/**/*.test.ts", "scripts/*.test.ts"],
+    include: ["packages/*/test/**/*.test.ts", "scripts/*.test.ts", "evals/*.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
     // Unit tests must be deterministic offline: serve the bundled cork-defaults.json without

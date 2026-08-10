@@ -3,8 +3,9 @@
 // in-process `runTool` with a stubbed chain (evals/stub.ts) — the LLM API is the only network.
 // Grading is programmatic over the tool-call trace: tool selection, variant/parameter accuracy,
 // outcome state, call efficiency, error-recovery, token cost. Run: `bun run eval`
-// (ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN recommended; without one, auth is expected from the
-// environment — e.g. an ANTHROPIC_BASE_URL gateway — and the run fails loud, never skips).
+// (auth is three-way, evals/auth-mode.ts: explicit key → keyed; no key but an
+// ANTHROPIC_BASE_URL gateway → keyless and failures fail LOUD; neither → self-skip green,
+// the CI/fork contract).
 //
 // Env knobs: CORK_EVAL_MODEL (default claude-sonnet-5 — owner ruling 2026-07-28: evals ALWAYS run
 // on sonnet, never haiku; haiku's raw-SDK loop has a params-as-string artifact that grades the
@@ -17,6 +18,7 @@ import { REGISTRY, inputJsonSchema, descriptionExample } from "@cork/schemas";
 import { runTool, ToolInputError } from "@cork/core";
 import { stubContext } from "./stub.ts";
 import { TASKS, type EvalTask } from "./tasks.ts";
+import { evalAuthMode } from "./auth-mode.ts";
 
 const MODEL = process.env.CORK_EVAL_MODEL ?? "claude-sonnet-5";
 const TRIALS = Number(process.env.CORK_EVAL_TRIALS ?? 1);
@@ -122,16 +124,19 @@ function pct(n: number, d: number): string {
 }
 
 async function main() {
-  // Credentials are RECOMMENDED, not required: there are many ways to reach the Claude API now
-  // (gateway/base-URL auth, ambient session plumbing, cloud-provider bindings). Without an
-  // explicit key we omit the auth headers — the SDK's documented escape hatch — and let
-  // whatever ANTHROPIC_BASE_URL points at supply auth; a genuinely unauthenticated setup
-  // fails on the first request with the provider's own error instead of silently skipping.
-  const hasExplicitCreds = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  if (!hasExplicitCreds) {
-    console.log("agent evals: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN — proceeding via ambient auth (gateway/base-URL). Setting a key explicitly is recommended for reproducible runs.");
+  // Auth is a three-way decision (evals/auth-mode.ts): an explicit key runs keyed; a configured
+  // ANTHROPIC_BASE_URL gateway runs keyless and fails LOUD if its auth is broken; NOTHING
+  // configured self-skips green — the documented CI/fork contract (a missing repo secret must
+  // not paint main red; exactly that regression shipped 2026-08-10, this restores the line).
+  const mode = evalAuthMode(process.env);
+  if (mode === "skip") {
+    console.log("agent evals: skipped — no explicit key/token and no ANTHROPIC_BASE_URL gateway configured. Wire the repo secret to enable the eval gate.");
+    return;
   }
-  const client = new Anthropic(hasExplicitCreds ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
+  if (mode === "ambient") {
+    console.log("agent evals: no explicit key — proceeding via the configured ANTHROPIC_BASE_URL gateway (auth failures fail loud). Setting a key explicitly is recommended for reproducible runs.");
+  }
+  const client = new Anthropic(mode === "keyed" ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
   const only = process.env.CORK_EVAL_ONLY;
   const onlySet = only ? new Set(only.split(",").map((s) => s.trim()).filter(Boolean)) : null;
   const tasks = TASKS.filter((t) => (onlySet ? onlySet.has(t.id) : process.env.EVAL_HELD_OUT ? true : !t.heldOut));
