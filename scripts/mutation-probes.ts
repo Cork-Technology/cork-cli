@@ -54,6 +54,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
+  port: "scripts/port-to-public.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
 };
 
@@ -380,6 +381,33 @@ const CATALOG: Mutant[] = [
     find: "l.blockNumber !== null && l.transactionHash !== null",
     replace: "l.blockNumber === null && l.transactionHash === null",
     tests: [T.hypersync],
+  },
+  // ── port-to-public transform gates (2026-08-10): a wrong port = wrong PUBLISHED tree ─────
+  {
+    // Dropping notes/ from the exclusion list leaks the private tree into the public repo.
+    id: "port-exclusion-notes-dropped",
+    file: "scripts/port-to-public.ts",
+    find: 'export const EXCLUDED_PREFIXES = ["notes/", "experiments/", "rfc/", "misc/", "slack-drafts"] as const;',
+    replace: 'export const EXCLUDED_PREFIXES = ["experiments/", "rfc/", "misc/", "slack-drafts"] as const;',
+    tests: [T.port],
+  },
+  {
+    // The anchor-drift gate is what makes a reworded private line FAIL instead of silently
+    // porting an un-repointed file (a private URL/reference reaching the public tree).
+    id: "port-anchor-gate-dropped",
+    file: "scripts/port-to-public.ts",
+    find: "    if (!content.includes(r.from)) {",
+    replace: "    if (false) {",
+    tests: [T.port],
+  },
+  {
+    // Excluded-only commits must be SKIPPED — minting empty commits with full messages is the
+    // exact misleading-history regression observed live on 2026-08-10.
+    id: "port-empty-skip-dropped",
+    file: "scripts/port-to-public.ts",
+    find: "      if (tree === parentTree) {",
+    replace: "      if (false) {",
+    tests: [T.port],
   },
   // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
   // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──
