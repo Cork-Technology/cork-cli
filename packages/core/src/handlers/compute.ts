@@ -17,8 +17,19 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
   const p = input.params;
 
   if (p.kind === "rollover-premium-floor") {
-    const floor = mulDiv(BigInt(p.dstCstProduced), BigInt(p.minPremiumPerShare), WAD, "floor");
-    return envelope({ state: "ok", data: { kind: p.kind, premiumFloor: floor }, chainId, source: "config", ctx });
+    // CEIL, not floor: parity with LibAtomicFill.computeRequiredPremium =
+    // Math.mulDiv(produced, minPremiumPerShare, 1e18, Rounding.Ceil) — the amount the settler
+    // actually transfers. (Floor understated by 1 wei on any remainder; found in the 2026-08-10
+    // numeric audit — the original test vector was remainder-free, so floor==ceil hid it.)
+    const floor = mulDiv(BigInt(p.dstCstProduced), BigInt(p.minPremiumPerShare), WAD, "ceil");
+    const scales = {
+      premiumFloor: "premium-token native base units — ceil(dstCstProduced * minPremiumPerShare / 1e18), the exact amount the settler charges",
+      minPremiumPerShare: "premium-token base units per 1e18 (one whole) dstCst share",
+      dstCstProduced: "dst cST shares, always 18-decimals",
+    };
+    const note =
+      "ExactSettler charges exactly this. PartialSettler charges each filler slot the DIFFERENCE of aggregate ceilings (ceil(cumulative*rate/1e18) - alreadyCharged), so a single slot's charge can be 1 wei below this per-fill ceiling — the order's TOTAL premium across all slots still equals ceil(totalProduced*rate/1e18)";
+    return envelope({ state: "ok", data: { kind: p.kind, premiumFloor: floor, scales, note }, chainId, source: "config", ctx });
   }
 
   // Chain-backed kinds need an RPC + addresses.
@@ -178,6 +189,11 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
   }
 
   const warnings: Array<{ code: string; message: string }> = [];
+  if (input.chainId === undefined) {
+    // Same disclosed default as decode order: settlement classification and orderHash are both
+    // keyed on chainId, and a defaulted mainnet answer for an Arbitrum order looks plausible.
+    warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The Fusion settlement classification and the EIP-712 orderHash are chain-specific; pass chainId if this order rests on another chain (e.g. 42161)" });
+  }
   if (!decoded.saltBoundToExtension) {
     return envelope({
       state: "conflict",

@@ -17,7 +17,7 @@
 // Exit codes map envelope state so scripts can branch: 0 ok, 2 invalid input,
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
-import { REGISTRY, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
+import { REGISTRY, RENAMED_VALUES, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
 import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
@@ -172,7 +172,15 @@ function levenshtein(a: string, b: string): number {
 const VARIANT_ALIASES: Record<string, string[]> = {
   "recipe-rate-constraint": ["resolve-rate-constraint"],
   order: ["limit-order"], // decode: the kind decodes exactly a LOP limit order
+  "taker-fill": ["fill"], // prepare order: the same word the top-level verb already uses
 };
+
+/** Reverse lookup (alias → canonical) for positional VALUES: `ch decode limit-order` must reach
+ *  the same place the alias comment above promises. Applied only when the canonical target is in
+ *  the positional's own enum, so a compute-side alias can never leak into decode's kind slot. */
+const VARIANT_ALIAS_TARGET: Record<string, string> = Object.fromEntries(
+  Object.entries(VARIANT_ALIASES).flatMap(([canon, aliases]) => aliases.map((a) => [a, canon])),
+);
 
 /** Alternate resource spellings accepted at the CLI: the singular forms and shorthands that
  *  AGREE with the current taxonomy (a cork-pool is one expiry of a market; LOP pair listings
@@ -373,6 +381,13 @@ export async function runCli(
         }
         return { argv: argvIn };
       }
+      // A RENAMED wire value deserves its "renamed to" pointer here too — levenshtein alone
+      // never bridges a rename (the distance exceeds the typo cap by design), and before this
+      // check the same value taught in a --json blob but not as a subcommand.
+      const renamed = RENAMED_VALUES[first];
+      if (renamed !== undefined && spec.variants.has(canonicalise(renamed))) {
+        return { error: `'${first}' was renamed to '${renamed}' — run \`ch ${spec.path.join(" ")} ${renamed} …\`` };
+      }
       const nearest = spec.variantNames.reduce(
         (best, v) => (levenshtein(canonicalise(first), canonicalise(v)) < levenshtein(canonicalise(first), canonicalise(best)) ? v : best),
         spec.variantNames[0]!,
@@ -380,6 +395,35 @@ export async function runCli(
       const hint = levenshtein(canonicalise(first), canonicalise(nearest)) <= 3 ? ` — did you mean '${nearest}'?` : "";
       const posNote = spec.positional ? `, or a ${spec.positional.flag} value` : "";
       return { error: `unknown action '${first}' for ch ${spec.path.join(" ")}${hint} (expected one of: ${spec.variantNames.join(", ")}${posNote})` };
+    }
+    // Group-level dead zone (`ch prepare exercise`): no spec path matches, and commander alone
+    // would answer "unknown command 'exercise'" with no route. When the stray operand IS a known
+    // action of one of the group's tools, name the namespace that owns it; when it is merely
+    // close to one, say which. Nothing is silently rewritten — an explicit path is the teaching.
+    const g = argvIn[0];
+    if (g !== undefined && groups.has(g)) {
+      const sub = argvIn[1];
+      const subIsCommand = sub !== undefined && !sub.startsWith("-") && groups.get(g)!.commands.some((c) => c.name() === sub || c.aliases().includes(sub));
+      if (sub !== undefined && sub !== "help" && !sub.startsWith("-") && !subIsCommand) {
+        const groupSpecs = unionSpecs.filter((s) => s.path[0] === g);
+        const owner = groupSpecs.find((s) => s.variants.has(canonicalise(sub)));
+        if (owner) {
+          const verbNote = program.commands.some((c) => c.name() === sub) ? ` (or the top-level shortcut: \`ch ${sub} …\`)` : "";
+          return { error: `'${sub}' is an action of \`ch ${owner.path.join(" ")}\` — run \`ch ${owner.path.join(" ")} ${sub} …\`${verbNote}` };
+        }
+        const renamed = RENAMED_VALUES[sub];
+        const renamedOwner = renamed !== undefined ? groupSpecs.find((s) => s.variants.has(canonicalise(renamed))) : undefined;
+        if (renamed !== undefined && renamedOwner) {
+          return { error: `'${sub}' was renamed to '${renamed}' — run \`ch ${renamedOwner.path.join(" ")} ${renamed} …\`` };
+        }
+        const cands = groupSpecs.flatMap((s) => s.variantNames.map((v) => ({ v, s })));
+        if (cands.length > 0) {
+          const nearest = cands.reduce((best, c) => (levenshtein(canonicalise(sub), canonicalise(c.v)) < levenshtein(canonicalise(sub), canonicalise(best.v)) ? c : best));
+          if (levenshtein(canonicalise(sub), canonicalise(nearest.v)) <= 3) {
+            return { error: `unknown command '${sub}' for ch ${g} — did you mean '${nearest.v}' (\`ch ${nearest.s.path.join(" ")} ${nearest.v} …\`)?` };
+          }
+        }
+      }
     }
     return { argv: argvIn };
   };
@@ -555,12 +599,15 @@ export async function runCli(
 
         // Then the ergonomic forms, which win over the JSON blob so a flag can override it.
         if (positional && positionalValue !== undefined) {
+          const aliasTarget = VARIANT_ALIAS_TARGET[positionalValue];
           const posRaw =
             positional === "chainId"
               ? (CHAIN_NAMES[positionalValue.toLowerCase()] ?? positionalValue)
               : positional === "resource"
                 ? (RESOURCE_ALIASES[positionalValue] ?? positionalValue)
-                : positionalValue;
+                : aliasTarget !== undefined && props[positional]?.enum?.includes(aliasTarget)
+                  ? aliasTarget // `ch decode limit-order` → kind "order" (alias promised, previously dead)
+                  : positionalValue;
           input[positional] = coerce(props[positional]!, posRaw);
         }
         for (const [name, node] of Object.entries(props)) {
@@ -572,7 +619,11 @@ export async function runCli(
         }
 
         // Filter flags (cork_query): merge on top of any blob-supplied filters. Values stay raw
-        // strings — parseQueryFilters owns coercion (booleans accept "true"/"false").
+        // strings — parseQueryFilters owns coercion (booleans accept "true"/"false") — EXCEPT the
+        // digits-only keys, which get the same amount sugar every schema-derived amount flag has:
+        // before this, `--rate 1e18` was refused by an error message written in the very notation
+        // the flag would not accept. Keys must stay in step with parseQueryFilters' digit fields.
+        const SUGARED_FILTER_KEYS = new Set(["rate", "expiry"]);
         if (filterFlagKeys.length > 0 || filterFlagAliases.length > 0) {
           const blobF = input["filters"];
           const filters: Record<string, unknown> =
@@ -581,7 +632,18 @@ export async function runCli(
           for (const k of filterFlagKeys) {
             const supplied = opts[k];
             if (supplied === undefined) continue;
-            filters[k] = String(supplied);
+            let v = String(supplied);
+            if (SUGARED_FILTER_KEYS.has(k) && /[_eE]/.test(v)) {
+              const ex = expandAmount(v);
+              if ("err" in ex) {
+                const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(k)}: ${ex.err}` } };
+                err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+                code = EXIT.invalid;
+                return;
+              }
+              v = ex.ok;
+            }
+            filters[k] = v;
             touched = true;
           }
           // Aliased keys: commander camelizes the flag spelling (oracle-mode → oracleMode).

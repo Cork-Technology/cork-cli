@@ -496,8 +496,21 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
       expect(env.warnings[0].code, ali).toBe("unknown_deployment"); // routed to the registry handler (no registry on chain 1), offline
       void canon;
     }
-    const dl = await runCli(["decode", "limit-order", "--data", "{bad", "--chainid", "1", "--json"], { nowSeconds: NOW });
-    expect(JSON.parse(dl.stderr).error.tool, "limit-order -> decode order").toBe("cork_decode");
+    // A REAL decode through the alias: the old assertion (error.tool on malformed data) held
+    // whether or not the alias resolved, which is how `decode limit-order` shipped dead.
+    const ORDER_JSON = JSON.stringify({
+      salt: "1",
+      maker: "0xc0ffee0000000000000000000000000000000001",
+      receiver: "0x0000000000000000000000000000000000000000",
+      makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
+      takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e",
+      makingAmount: "1000000000000000000",
+      takingAmount: "1000000",
+      makerTraits: "0",
+    });
+    const dl = await runCli(["decode", "limit-order", "--data", ORDER_JSON, "--chainid", "1", "--json"], { nowSeconds: NOW });
+    expect(dl.code, "limit-order -> decode order").toBe(EXIT.ok);
+    expect(JSON.parse(dl.stdout).data.kind, "limit-order routed to kind order").toBe("order");
     const lo = await runCli(["query", "limit-orders", "--chain-id", "1", "--pool-id", "notahex", "--json"], { nowSeconds: NOW });
     expect(JSON.parse(lo.stderr).error.issues[0].path, "limit-orders -> orderbook").toContain("filters"); // reached orderbook's filter validation
     const mi = await runCli(["query", "market-instance", "--chain-id", "42161", "--json"], { nowSeconds: NOW });
@@ -536,6 +549,55 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
     const r = await runCli(["query", "--input", JSON.stringify({ resource: "orderbok", chainId: 1 })], { nowSeconds: NOW });
     expect(r.stderr).toContain('did you mean "orderbook"?');
     expect(r.stderr).not.toContain("did you mean did you mean");
+  });
+
+  it("`ch prepare <action>` names the namespace that owns the action instead of a bare unknown-command", async () => {
+    // The dead zone: `ch exercise` and `ch prepare pool exercise` both worked while the natural
+    // middle spelling got commander's raw "unknown command 'exercise'" with no route.
+    const r = await runCli(["prepare", "exercise"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("ch prepare pool exercise");
+    expect(r.stderr).toContain("ch exercise"); // the top-level shortcut is named too
+    // An order action routes to its own namespace, not pool's.
+    const m = await runCli(["prepare", "maker-order"], { nowSeconds: NOW });
+    expect(m.code).toBe(EXIT.invalid);
+    expect(m.stderr).toContain("ch prepare order maker-order");
+    // A group-level typo still gets a did-you-mean with the full path (the prose renderer
+    // wraps long lines, so compare with whitespace collapsed).
+    const t = await runCli(["prepare", "exercize"], { nowSeconds: NOW });
+    expect(t.code).toBe(EXIT.invalid);
+    expect(t.stderr.replace(/\s+/g, " ")).toContain("did you mean 'exercise'");
+    expect(t.stderr.replace(/\s+/g, " ")).toContain("ch prepare pool exercise");
+    // Legal spellings are untouched by the group check.
+    const ok = await runCli(["prepare", "pool", "exercise", "--explain"], { nowSeconds: NOW });
+    expect(ok.code).toBe(EXIT.ok);
+  });
+
+  it("variant-subcommand path teaches RENAMED_VALUES (previously blob-only teaching)", async () => {
+    const r = await runCli(["compute", "resolve-recipe"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("'resolve-recipe' was renamed to 'recipe-rate-constraint'");
+    const m = await runCli(["prepare", "market", "deploy-wrapper"], { nowSeconds: NOW });
+    expect(m.code).toBe(EXIT.invalid);
+    expect(m.stderr).toContain("'deploy-wrapper' was renamed to 'deploy-oracle'");
+  });
+
+  it("`ch prepare order fill` is an alias of taker-fill (the word the top-level verb already uses)", async () => {
+    const r = await runCli(["prepare", "order", "fill", "--explain"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(r.stdout).toContain("taker-fill");
+  });
+
+  it("digits-only filter flags take the same amount sugar as schema-derived amount flags", async () => {
+    // Before: `--rate 1e18` was refused by a message that itself said "(1e18 = 1.0)".
+    const r = await runCli(["query", "registry-oracle", "--chain-id", "42161", "--rate", "1.05e18", "--json"], { nowSeconds: NOW, resolveRpc: async () => null });
+    // Parse must SUCCEED (sugar expanded) — the offline gate is requires_rpc, not invalid_input.
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(JSON.parse(r.stdout).warnings[0].code).toBe("requires_rpc");
+    // Fractional remainder still refuses loudly, same as amount flags.
+    const bad = await runCli(["query", "registry-oracle", "--chain-id", "42161", "--rate", "1.055e2", "--json"], { nowSeconds: NOW, resolveRpc: async () => null });
+    expect(bad.code).toBe(EXIT.invalid);
+    expect(JSON.parse(bad.stderr).error.code).toBe("invalid_amount");
   });
 
   it("filter keys are first-class flags landing under filters.*", async () => {

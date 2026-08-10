@@ -167,9 +167,16 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     else out.args = v as `0x${string}`;
   }
   if (raw?.rate !== undefined) {
-    const v = String(raw.rate);
-    if (!/^[0-9]+$/.test(v)) fail("rate", "expected an 18-decimal rate as a decimal integer string (1e18 = 1.0)");
-    else out.rate = BigInt(v);
+    // Refuse unsafe-integer JSON numbers BEFORE String() can launder the already-rounded value:
+    // a wad rate is ~1e18 > 2^53, and a wrong rate keys a wrong CREATE2 fixed-oracle address —
+    // a silently-wrong pool identity, not a visibly-wrong read. (Same guard as parseOrderRecord.)
+    if (typeof raw.rate === "number" && !Number.isSafeInteger(raw.rate)) {
+      fail("rate", "arrived as a JSON number outside JavaScript's safe-integer range — its low digits were ALREADY rounded away during JSON parsing; resend it as a decimal STRING (1e18 = 1.0)");
+    } else {
+      const v = String(raw.rate);
+      if (!/^[0-9]+$/.test(v)) fail("rate", "expected an 18-decimal rate as a decimal integer string (1e18 = 1.0)");
+      else out.rate = BigInt(v);
+    }
   }
   if (raw?.label !== undefined) out.label = String(raw.label);
   if (raw?.legacy !== undefined) {

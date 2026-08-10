@@ -118,6 +118,7 @@ Warning codes:
 | `unknown_target` | Info on ok decode tx: `to` isn't a known Cork deployment (expected for a token approve; otherwise identify before broadcasting), or no `to` (contract creation). |
 | `chainid_mismatch` | conflict (decode tx): supplied chainId contradicts the tx's own — the signature commits to the tx's chainId. |
 | `receipt_not_found` | txHash unknown/pending — a normal outcome. |
+| `chainid_defaulted` | Info on decode order / dutch-auction-price when chainId was omitted: defaulted to 1, and the EIP-712 orderHash (+ Fusion settlement classification) is CHAIN-SPECIFIC — pass chainId for a non-mainnet order. |
 | `rpc_fallback` | Info: a chainlist endpoint served the read; on mid-call failover, earlier reads in the result may be from the previous endpoint. |
 | `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Info on ok prepares: why funding legs were omitted. |
 | `recipe_not_found` | The recipe ADDRESS isn't approved on the registry (`isRecipe` is the only gate), or a deprecated `mode` name has no configured hint. |

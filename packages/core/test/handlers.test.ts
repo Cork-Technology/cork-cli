@@ -380,6 +380,18 @@ describe("input hardening + format semantics", () => {
     ).rejects.toBeInstanceOf(ToolInputError);
   });
 
+  it("filters.rate as an unsafe-integer JSON number is REFUSED, not silently rounded", async () => {
+    // A wad rate (~1e18) exceeds 2^53; JSON.parse rounds it BEFORE the handler runs, and a wrong
+    // rate keys a wrong CREATE2 fixed-oracle address — String() previously laundered it through.
+    try {
+      await runTool("cork_query", { resource: "registry-oracle", chainId: 42161, pageSize: 25, format: "concise", filters: { rate: 1050000000000000000128 } }, { nowSeconds: NOW });
+      expect.unreachable("unsafe-integer filters.rate must be refused");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ToolInputError);
+      expect(JSON.stringify((e as ToolInputError).issues)).toMatch(/safe-integer|decimal STRING/);
+    }
+  });
+
   it("query data mode: unsupported modes fail loudly; chain results are labeled", async () => {
     const gated = await runTool("cork_query", { resource: "cork-pool", mode: "centralized", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(gated.state).toBe("unavailable");
@@ -669,11 +681,37 @@ describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3
     expect(env.warnings.some((w) => w.code === "extension_salt_mismatch")).toBe(true);
   });
 
+  it("order without chainId: the mainnet default is DISCLOSED (the hash is chain-specific)", async () => {
+    const noChain = await runTool("cork_decode", { kind: "order", data: ORDER_REC, format: "concise" }, { nowSeconds: NOW });
+    expect(noChain.warnings.some((w) => w.code === "chainid_defaulted")).toBe(true);
+    const withChain = await runTool("cork_decode", { kind: "order", data: ORDER_REC, chainId: 1, format: "concise" }, { nowSeconds: NOW });
+    expect(withChain.warnings.some((w) => w.code === "chainid_defaulted")).toBe(false);
+  });
+
   it("order on a chain with no known LOP: struct + traits decode, hash honestly null", async () => {
     const env = await runTool("cork_decode", { kind: "order", data: ORDER_REC, chainId: 11155111, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
     expect((env.data as { orderHash: unknown }).orderHash).toBeNull();
     expect(env.warnings[0]?.code).toBe("no_lop");
+  });
+
+  it("order: an unsafe-integer JSON number amount is REFUSED, not laundered (MCP number-precision guard)", async () => {
+    // 123456789012345678901 parses (in any JSON.parse, including the MCP SDK's) to the float
+    // 123456789012345680000 — before this guard, String() laundered the rounded value into the
+    // struct and the recomputed orderHash with state ok and zero warnings (verified empirically
+    // over MCP stdio, 2026-08-10). The CLI's raw-text F22 guard never protected MCP callers.
+    const rounded = 123456789012345680000; // what JSON.parse would hand the handler
+    try {
+      await runTool("cork_decode", { kind: "order", data: { ...ORDER_REC, makingAmount: rounded }, format: "concise" }, { nowSeconds: NOW });
+      expect.unreachable("unsafe-integer makingAmount must be refused");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ToolInputError);
+      expect(JSON.stringify((e as ToolInputError).issues)).toMatch(/safe-integer|decimal STRING/);
+    }
+    // A SAFE integer stays accepted — it is exact, and refusing it would break benign callers.
+    const env = await runTool("cork_decode", { kind: "order", data: { ...ORDER_REC, makingAmount: 1000000 }, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    expect((env.data as { order: Record<string, string> }).order.makingAmount).toBe("1000000");
   });
 
   it("event: a settler lifecycle log decodes to named args", async () => {
@@ -808,6 +846,28 @@ describe("runTool: cork_compute", () => {
     expect(env.state).toBe("ok");
     // 1000e18 * 0.02e18 / 1e18 = 20e18
     expect((env.data as { premiumFloor: string }).premiumFloor).toBe("20000000000000000000");
+  });
+
+  it("rollover-premium-floor rounds UP on a remainder (LibAtomicFill.computeRequiredPremium parity)", async () => {
+    // produced = 1 wei-share, rate = 1: floor would say 0, the settler charges ceil(1*1/1e18) = 1.
+    // The original vector above is remainder-free (floor == ceil), which is exactly how the floor
+    // bug survived — this vector has a remainder, so a rounding flip fails loudly.
+    const env = await runTool(
+      "cork_compute",
+      { params: { kind: "rollover-premium-floor", dstCstProduced: "1", minPremiumPerShare: "1" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { premiumFloor: string }).premiumFloor).toBe("1");
+    // A larger remainder case: 1.5e18 shares at 3 wei/share = 4.5 → settler charges 5.
+    const env2 = await runTool(
+      "cork_compute",
+      { params: { kind: "rollover-premium-floor", dstCstProduced: "1500000000000000000", minPremiumPerShare: "3" }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect((env2.data as { premiumFloor: string }).premiumFloor).toBe("5");
+    // The response labels its units — this output previously carried no scales block at all.
+    expect((env2.data as { scales: Record<string, string> }).scales.premiumFloor).toContain("ceil");
   });
 
   it("chain-backed kinds are unavailable without an RPC", async () => {

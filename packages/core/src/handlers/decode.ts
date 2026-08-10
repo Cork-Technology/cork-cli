@@ -60,7 +60,16 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
     throw new ToolInputError(tool, [{ path: [...pathRoot, key], message }]);
   };
   const uint = (key: "salt" | "makingAmount" | "takingAmount" | "makerTraits"): bigint => {
-    const r = UintStr.safeParse(rec[key] === undefined ? undefined : String(rec[key]));
+    const raw = rec[key];
+    // An unsafe-integer JSON number has ALREADY been rounded by the JSON parse before this code
+    // runs — String() would launder a plausible-but-wrong value into the hash/price math with no
+    // warning (observed: 123456789012345678901 → "123456789012345680000", state ok). The CLI's
+    // raw-text guard (F22) cannot protect MCP callers, whose frames are parsed by the SDK — so
+    // the boundary must refuse here. Safe integers stay accepted: they are exact.
+    if (typeof raw === "number" && !Number.isSafeInteger(raw)) {
+      fail(key, `arrived as a JSON number outside JavaScript's safe-integer range — its low digits were ALREADY rounded away during JSON parsing and the original value cannot be recovered; resend it as a decimal STRING (all uint fields accept arbitrary-precision decimal strings)`);
+    }
+    const r = UintStr.safeParse(raw === undefined ? undefined : String(raw));
     if (!r.success) fail(key, "expected an unsigned integer as a decimal string");
     return BigInt(r.data!);
   };
@@ -115,6 +124,11 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
   const warnings: Array<{ code: string; message: string }> = [];
   if (!lop) {
     warnings.push({ code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${chainId} — the order decodes but its EIP-712 orderHash needs the verifying contract; pass a chainId with a known LOP (1, 42161) for the hash` });
+  } else if (input.chainId === undefined) {
+    // Disclosed default: the LOP v4 CONTRACT address is the same on every chain, but the EIP-712
+    // domain (and so the orderHash) is chain-specific — a silently mainnet-anchored hash for an
+    // Arbitrum order is plausible-looking and wrong, with nothing downstream to catch it.
+    warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash is CHAIN-SPECIFIC (the same order bytes hash differently per chain); pass chainId if this order rests on another chain (e.g. 42161)" });
   }
   // Fusion labeling (best-effort): when the extension carries an auction amount-getter, summarize
   // it — decode only, never a guess; a non-Fusion or unparseable extension just skips the label.

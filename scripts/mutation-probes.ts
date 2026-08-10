@@ -480,6 +480,35 @@ const CATALOG: Mutant[] = [
     replace: 'return mulDiv(amount, fee1e18, PCT_DENOM, "floor");',
     tests: [T.math, T.preview],
   },
+  {
+    // The settler charges ceil (LibAtomicFill.computeRequiredPremium, Rounding.Ceil); a floor
+    // flip understates the maker's guaranteed premium by 1 wei on any remainder — the exact bug
+    // the 2026-08-10 audit found (it had survived because the only vector was remainder-free).
+    id: "premium-floor-rounding-flipped",
+    file: "packages/core/src/handlers/compute.ts",
+    find: 'const floor = mulDiv(BigInt(p.dstCstProduced), BigInt(p.minPremiumPerShare), WAD, "ceil");',
+    replace: 'const floor = mulDiv(BigInt(p.dstCstProduced), BigInt(p.minPremiumPerShare), WAD, "floor");',
+    tests: [T.handlers],
+  },
+  // ── MCP number-precision guards: dropping either re-opens silent JSON-float laundering ──────
+  {
+    // parseOrderRecord: an unsafe-integer JSON number is already rounded by the parse; without
+    // the refusal, String() launders the rounded value into the struct/orderHash with state ok
+    // (observed empirically over MCP stdio, 2026-08-10 — the CLI's F22 guard never covered MCP).
+    id: "order-record-unsafe-number-guard-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'if (typeof raw === "number" && !Number.isSafeInteger(raw)) {',
+    replace: 'if (typeof raw === "number" && false) {',
+    tests: [T.handlers],
+  },
+  {
+    // filters.rate: same laundering path; a rounded rate keys a wrong CREATE2 oracle address.
+    id: "filters-rate-unsafe-number-guard-dropped",
+    file: "packages/core/src/handlers/filters.ts",
+    find: 'if (typeof raw.rate === "number" && !Number.isSafeInteger(raw.rate)) {',
+    replace: 'if (typeof raw.rate === "number" && false) {',
+    tests: [T.handlers],
+  },
   // ── token bucket: the impairment floor's worst case must stay a floor ─────────────────────
   {
     id: "bucket-cap-max",
@@ -1022,8 +1051,26 @@ const CATALOG: Mutant[] = [
     // unknown top-level key and the read would run unfiltered or fail obscurely.
     id: "cli-filter-flags-unnested",
     file: "packages/cli/src/app.ts",
-    find: "filters[k] = String(supplied);",
-    replace: "input[k] = String(supplied);",
+    find: "filters[k] = v;",
+    replace: "input[k] = v;",
+    tests: [T.cli],
+  },
+  {
+    // Filter-flag amount sugar (rate/expiry): dropping the expansion re-opens the "--rate 1e18
+    // refused by a message written in that very notation" wart, silently for e-notation callers.
+    id: "cli-filter-sugar-dropped",
+    file: "packages/cli/src/app.ts",
+    find: 'if (SUGARED_FILTER_KEYS.has(k) && /[_eE]/.test(v)) {',
+    replace: 'if (false && SUGARED_FILTER_KEYS.has(k) && /[_eE]/.test(v)) {',
+    tests: [T.cli],
+  },
+  {
+    // The prepare-group dead-zone teaching (`ch prepare exercise`): dropping the owner lookup
+    // regresses to commander's bare "unknown command" with no route to the namespace.
+    id: "cli-group-deadzone-teaching-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "const owner = groupSpecs.find((s) => s.variants.has(canonicalise(sub)));",
+    replace: "const owner = undefined as ReturnType<typeof unionSpecs.find>;",
     tests: [T.cli],
   },
   {

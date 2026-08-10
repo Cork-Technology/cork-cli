@@ -293,7 +293,12 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // maker + makerTraits from the book row (resting) or the first fill row (historical).
           const src = (bookRow?.order as Record<string, unknown> | undefined) ?? bookRow ?? (fills.items[0] as Record<string, unknown> | undefined);
           const maker = typeof src?.maker === "string" ? (src.maker as `0x${string}`) : undefined;
-          const traitsStr = src?.makerTraits ?? src?.maker_traits;
+          // A venue row is loosely typed here (best-effort leg, no zod gate): makerTraits as a
+          // JSON NUMBER would already be float-rounded (traits carry flag bits ≥ 2^250), and a
+          // rounded traits value plans the WRONG invalidator slot/mask — a wrong live/dead
+          // verdict, worse than no verdict [K7]. Degrade to "unverified" instead.
+          const traitsStr0 = src?.makerTraits ?? src?.maker_traits;
+          const traitsStr = typeof traitsStr0 === "number" && !Number.isSafeInteger(traitsStr0) ? undefined : traitsStr0;
           const lop = LOP_ADDRESSES[chainId];
           const resolved = maker && lop ? await getRpc(ctx, chainId) : null;
           if (maker && lop && resolved && traitsStr !== undefined) {
