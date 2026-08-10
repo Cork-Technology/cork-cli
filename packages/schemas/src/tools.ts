@@ -625,6 +625,9 @@ export const SubmitAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]"),
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
+    // Deliberately TIGHTER than the venue's own bound (it accepts up to 10000 to tolerate
+    // basis-point-era clients): this surface is percent-only by contract, so 1001..10000 here
+    // is a scale mistake worth refusing with teaching, not a value worth relaying.
     premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected"),
     expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
     nonce: UintStr,

@@ -93,10 +93,10 @@ jobs:
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: RPC resolver + registry parity against the real network
+      - name: RPC resolver + registry parity + venue negotiation contract against the real network
         env:
           CORK_RPC_LIVE: "1"
-        run: bunx vitest run packages/core/test/rpc-live.test.ts
+        run: bunx vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts
 
   # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.

@@ -15,9 +15,10 @@ const LOP_NO_PARTIAL_FILLS_FLAG = 1n << 255n;
 
 /**
  * Parse a decimal string (plain or scientific notation) into an EXACT 1e18-scaled bigint, or
- * null when it is not a finite decimal / not representable at 18 fractional digits. Scale
- * tripwires must compare integers, never floats: IEEE-754 breaks exact-threshold semantics
- * right at the boundaries the tripwires exist to police [C6].
+ * null when it is not a finite decimal / not representable at 18 fractional digits. Retained
+ * as the exact-decimal parse utility (test-pinned); note the RFQ premium checks below
+ * deliberately do NOT use it — they replicate the venue's own float-decided gates instead,
+ * because a pre-flight that predicts a specific server must fail exactly where IT fails.
  */
 export function decimalToScaled(s: string): bigint | null {
   const m = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(s.trim());
@@ -37,6 +38,36 @@ export function decimalToScaled(s: string): bigint | null {
 
 /** Canonical Uniswap Permit2 (same address on every chain). */
 export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+
+/**
+ * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-indexing-api
+ * src/modules/rfq/v1/schemas/rfq-common.schema.ts): shape by the same regex, the < 0.5 cap by
+ * the SAME `Number.parseFloat` its zod refine runs. An earlier form here decided the cap on
+ * the string ("first fractional digit >= 5") on the theory that floats falsely rejected a
+ * 17-digit "0.49999999999999999" — but the venue itself parses that value to exactly 0.5 and
+ * 400s it, so the string form was permissive by one ulp relative to the server it exists to
+ * predict. Both forms are deterministic; this one is the deployed one.
+ * Returns a human-readable violation, or null when the venue would accept the value.
+ */
+export function premiumFractionViolation(p: unknown): string | null {
+  if (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p)) return "not a decimal-fraction string";
+  if (Number.parseFloat(p) >= 0.5) return "parses to >= 0.5 — the venue decides this cap via Number.parseFloat, so a decimal within one float-ulp of 0.5 is rejected there too";
+  return null;
+}
+
+/**
+ * Resolve a cited option inside a fetched RFQ record. The venue validates citations against
+ * its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get embed
+ * we pre-flight against is READ-BOUNDED (READ_LIMIT rows, flagged `truncated`) — so a missing
+ * row proves absence only when the embed is complete. `unresolved` = the citation may exist
+ * beyond the truncation horizon; the caller relays and lets the venue's full-store check rule.
+ */
+function resolveCitedOption(rfq: Record<string, unknown>, answerId: string, optionId: string): { option: Record<string, unknown> | undefined; unresolved: boolean } {
+  const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
+  const answer = answers.find((a) => String(a.answer_id) === answerId);
+  const option = answer?.answer?.options?.find((o) => String(o.option_id) === optionId);
+  return { option, unresolved: option === undefined && rfq.truncated === true };
+}
 
 export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
@@ -320,47 +351,71 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (action.premium > 0 && action.premium < 0.1) {
         lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
       }
-      // quote_ref pre-flight [K3-style]: verify the cited option exists and the premium does not
-      // contradict it (~100x divergence = a scale mistake the venue would reject at POST).
-      // The comparison is EXACT integer arithmetic over the decimal strings — the earlier float
-      // version let an exactly-100x divergence through (410 / (0.041*100) = 99.99999999999999).
+      // quote_ref pre-flight [K3-style]: replicate the venue's own POST-time gate (post-order.ts
+      // "Verify RFQ provenance") so a bad citation fails EARLY with teaching instead of a venue
+      // 400. The venue checks, in order: the answer exists on the named RFQ, the order's maker
+      // is the RFQ's requester (attribution integrity — no stamping third-party quotes), the
+      // option exists, chain and collateral cohere with this order, and the declared premium
+      // sits inside the strict float band ratio > 10 || ratio < 0.1 — computed via
+      // Number.parseFloat on the very JSON numbers we relay, so replicating those operations
+      // bit-for-bit predicts the venue exactly. (An earlier exact-bigint form here used
+      // INCLUSIVE bounds and no premium>0 guard, refusing orders the venue accepts at exactly
+      // 10x and at zero declared premium — a relay must never out-reject its venue.)
       if (action.quoteRef) {
         const rfq = await getRfq(deps, action.quoteRef.rfqId);
         if (!rfq) return unavailable(chainId, "invalid_order_terms", `quote_ref cites unknown RFQ '${action.quoteRef.rfqId}'`, ctx);
-        const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
-        const answer = answers.find((a) => String(a.answer_id) === action.quoteRef!.answerId);
-        const option = answer?.answer?.options?.find((o) => String(o.option_id) === action.quoteRef!.optionId);
-        if (!option) return unavailable(chainId, "invalid_order_terms", `quote_ref option '${action.quoteRef.optionId}' not found in answer '${action.quoteRef.answerId}' of RFQ '${action.quoteRef.rfqId}'`, ctx);
-        const fractionScaled = option.premium_annualized === undefined ? null : decimalToScaled(String(option.premium_annualized));
-        if (fractionScaled === null || fractionScaled <= 0n) {
-          // A cited quote whose premium cannot be read means the cross-check CANNOT run — that is
-          // a conflict, not a silent skip (the silent skip was exactly the guard's blind spot).
-          return envelope({
-            state: "conflict",
-            data: { quoteRef: action.quoteRef, citedOptionPremiumAnnualized: option.premium_annualized ?? null },
-            chainId,
-            source: "service",
-            warnings: [{ code: "quote_ref_unverifiable", message: `the cited RFQ option has no parsable positive premium_annualized (got ${JSON.stringify(option.premium_annualized)}) — the premium scale cross-check cannot run; NOT relayed. Cite a valid option or drop quoteRef. RFQ premiums are FRACTION strings ("0.041" = 4.1%); full scale table: ${UNITS_TOPIC_REFERENCE}` }],
-            ctx,
-          });
+        const storedRequester = (rfq.request as Record<string, unknown> | undefined)?.requester;
+        if (typeof storedRequester === "string" && storedRequester.toLowerCase() !== action.order.maker.toLowerCase()) {
+          return unavailable(chainId, "invalid_order_terms", `quote_ref belongs to another buyer: RFQ '${action.quoteRef.rfqId}' was opened by ${storedRequester}, but this order's maker is ${action.order.maker} — the venue rejects third-party quote stamping (quote-to-fill attribution stays honest)`, ctx);
         }
-        const declaredScaled = decimalToScaled(String(action.premium));
-        const expectedPercentScaled = fractionScaled * 100n; // fraction -> percent
-        // Exact thresholds, matched to the BOOK's own acceptance band: the venue rejects a
-        // declared premium outside 10x/0.1x of the cited option (wide enough for an honest
-        // re-price, narrow enough that a scale mistake cannot pass) — enforcing the same band
-        // here fails the bad relay EARLY with teaching instead of a venue 4xx.
-        if (declaredScaled !== null && (declaredScaled >= expectedPercentScaled * 10n || declaredScaled * 10n <= expectedPercentScaled)) {
-          const expectedPercent = Number(option.premium_annualized) * 100;
-          const high = declaredScaled >= expectedPercentScaled * 10n;
-          return envelope({
-            state: "conflict",
-            data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
-            chainId,
-            source: "service",
-            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=10" : "<=1/10"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — outside the venue's own 10x acceptance band, so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036"). Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
-            ctx,
-          });
+        const { option, unresolved } = resolveCitedOption(rfq, action.quoteRef.answerId, action.quoteRef.optionId);
+        if (unresolved) {
+          // The embed is truncated and the cited answer is beyond the horizon — absence is not
+          // proven, so relay: the venue validates citations against its FULL store and 400s a
+          // genuinely bad one. Flagged, never silent (the premium cross-check cannot run here).
+          lopWarnings.push({ code: "citation_unresolved", message: `quote_ref could not be resolved client-side: RFQ '${action.quoteRef.rfqId}' serves a TRUNCATED answers embed and answer '${action.quoteRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design) and the premium cross-check is deferred to its gate` });
+        } else {
+          if (!option) return unavailable(chainId, "invalid_order_terms", `quote_ref option '${action.quoteRef.optionId}' not found in answer '${action.quoteRef.answerId}' of RFQ '${action.quoteRef.rfqId}'`, ctx);
+          const optChain = (option as { chain_id?: unknown }).chain_id;
+          if (typeof optChain === "number" && optChain !== chainId) {
+            return unavailable(chainId, "invalid_order_terms", `quote_ref option is for chain ${optChain}, not ${chainId} — the cited option must describe THIS order (venue 400)`, ctx);
+          }
+          const optCollateral = (option as { collateral_asset?: unknown }).collateral_asset;
+          if (typeof optCollateral === "string" && ![action.order.makerAsset.toLowerCase(), action.order.takerAsset.toLowerCase()].includes(optCollateral.toLowerCase())) {
+            return unavailable(chainId, "invalid_order_terms", `quote_ref option's collateral asset ${optCollateral} is not a leg of this order (${action.order.makerAsset} / ${action.order.takerAsset}) — the cited option must describe THIS order (venue 400)`, ctx);
+          }
+          // Deliberately STRICTER than the venue on one point: a cited premium that does not
+          // parse to a positive number makes the venue skip its band silently — here that is a
+          // conflict, not a silent skip (the silent skip was exactly this guard's blind spot).
+          const referenced = option.premium_annualized === undefined ? Number.NaN : Number.parseFloat(String(option.premium_annualized));
+          if (!Number.isFinite(referenced) || referenced <= 0) {
+            return envelope({
+              state: "conflict",
+              data: { quoteRef: action.quoteRef, citedOptionPremiumAnnualized: option.premium_annualized ?? null },
+              chainId,
+              source: "service",
+              warnings: [{ code: "quote_ref_unverifiable", message: `the cited RFQ option has no parsable positive premium_annualized (got ${JSON.stringify(option.premium_annualized)}) — the premium scale cross-check cannot run; NOT relayed. Cite a valid option or drop quoteRef. RFQ premiums are FRACTION strings ("0.041" = 4.1%); full scale table: ${UNITS_TOPIC_REFERENCE}` }],
+              ctx,
+            });
+          }
+          // The venue's band, operation-for-operation: fraction -> percent in float, strict
+          // inequalities, guarded on BOTH premiums being positive (a zero declared premium is
+          // accepted there — the signed amounts are the truth, premium is display metadata).
+          const referencedPercent = referenced * 100;
+          const ratio = action.premium / referencedPercent;
+          if (referencedPercent > 0 && action.premium > 0 && (ratio > 10 || ratio < 0.1)) {
+            // Display-only cleanup: 0.036*100 floats to 3.5999999999999996 — the DECISION uses
+            // that raw value (it is the venue's), the teaching message shows the human 3.6.
+            const displayPercent = Number(referencedPercent.toPrecision(12));
+            return envelope({
+              state: "conflict",
+              data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent: referencedPercent },
+              chainId,
+              source: "service",
+              warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${ratio > 10 ? ">10" : "<1/10"}x from the cited quote (${option.premium_annualized} fraction = ${displayPercent}%) — outside the venue's own strict 10x acceptance band (replicated exactly, float and all), so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036"). Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
+              ctx,
+            });
+          }
         }
       }
       // Extension commitment pre-flight: what would revert InvalidExtension at fill is caught here.
@@ -437,17 +492,19 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
     // negotiation loop; the venue broadcasts it to every underwriter, newest counter wins).
     if (action.type === "rfq-counter") {
-      // Same fraction contract as answer options (§2.1), same string-decided check: a decimal
-      // STRING < 0.5, judged on the digits so IEEE-754 rounding can't flip the boundary [C6].
-      const p = action.premiumAnnualized;
-      if (!/^(0|0\.\d{1,18})$/.test(p) || /^0\.[5-9]/.test(p)) {
-        return unavailable(chainId, "invalid_order_terms", `premiumAnnualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1% annualized) — got ${JSON.stringify(p)}; percent numbers (4.1) belong only on the book listing field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
+      // The venue's fraction contract (§2.1), replicated exactly — see premiumFractionViolation.
+      const fractionProblem = premiumFractionViolation(action.premiumAnnualized);
+      if (fractionProblem !== null) {
+        return unavailable(chainId, "invalid_order_terms", `premiumAnnualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1% annualized) — got ${JSON.stringify(action.premiumAnnualized)} (${fractionProblem}); percent numbers (4.1) belong only on the book listing field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
       }
-      // optionRef pre-flight [K3-style], mirroring lop-order's quoteRef check: one venue GET,
-      // only when the counter cites an option. The same fetch also catches the wrong-requester
-      // 403 before the POST burns its request_id. A TRUNCATED answers embed cannot prove
-      // absence (superseded answers stay citable by design), so not-found refusals only fire
-      // on a complete record — the venue's own validation stays authoritative either way.
+      // optionRef pre-flight [K3-style]: one venue GET, only when the counter cites an option.
+      // The same fetch replays the venue's own POST gate order (post-counter.ts): 404 unknown
+      // RFQ, 403 wrong requester, 410 expired, 400 bad citation — each refused here with
+      // teaching BEFORE the POST burns its request_id. A TRUNCATED answers embed cannot prove
+      // absence (superseded answers stay citable by design), so a not-found citation refuses
+      // only on a complete record and otherwise relays flagged — the venue validates against
+      // its full store either way.
+      const counterWarnings: Array<{ code: string; message: string }> = [];
       if (action.optionRef) {
         const rfq = await getRfq(deps, action.rfqId);
         if (!rfq) return unavailable(chainId, "rfq_not_found", `RFQ '${action.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
@@ -455,10 +512,13 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         if (typeof storedRequester === "string" && storedRequester.toLowerCase() !== action.requester.toLowerCase()) {
           return unavailable(chainId, "invalid_order_terms", `only the RFQ's requester may counter: RFQ '${action.rfqId}' was opened by ${storedRequester}, not ${action.requester} — the venue would 403 this on relay`, ctx);
         }
-        const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
-        const answer = answers.find((a) => String(a.answer_id) === action.optionRef!.answerId);
-        const option = answer?.answer?.options?.find((o) => String(o.option_id) === action.optionRef!.optionId);
-        if (!option && rfq.truncated !== true) {
+        if (rfq.state === "expired") {
+          return unavailable(chainId, "invalid_order_terms", `RFQ '${action.rfqId}' is expired — the venue no longer accepts counters on it (would 410 on relay); post a fresh RFQ instead`, ctx);
+        }
+        const { option, unresolved } = resolveCitedOption(rfq, action.optionRef.answerId, action.optionRef.optionId);
+        if (unresolved) {
+          counterWarnings.push({ code: "citation_unresolved", message: `optionRef could not be resolved client-side: RFQ '${action.rfqId}' serves a TRUNCATED answers embed and answer '${action.optionRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design)` });
+        } else if (!option) {
           return unavailable(chainId, "invalid_order_terms", `optionRef option '${action.optionRef.optionId}' not found in answer '${action.optionRef.answerId}' of RFQ '${action.rfqId}' — a counter's optionRef must cite an option of an answer on this RFQ (the venue would 400 this on relay); drop optionRef to counter the envelope at large`, ctx);
         }
       }
@@ -471,19 +531,17 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         ...(action.freshUntil !== undefined ? { fresh_until: action.freshUntil } : {}),
         signature: action.signature,
       });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-counter", accepted: true, replay, counterId: body.counter_id ?? null, rfqId: action.rfqId }));
+      return mapPost(res, (body, replay) => ({ kind: "rfq-counter", accepted: true, replay, counterId: body.counter_id ?? null, rfqId: action.rfqId }), counterWarnings);
     }
 
-    // rfq-answer — enforce the fraction contract on quoted options before relaying (§2.1: a
-    // decimal STRING < 0.5; a wad or percent pasted here fails at this boundary, with teaching).
+    // rfq-answer — enforce the fraction contract on quoted options before relaying (§2.1: the
+    // venue's own regex + parseFloat cap, replicated exactly — see premiumFractionViolation).
     if (action.status === "quoted") {
       for (const [i, o] of (action.options ?? []).entries()) {
         const p = o.premium_annualized;
-        // The < 0.5 cap is decided ON THE STRING (first fractional digit >= 5), never via
-        // Number(): a 17-digit "0.49999999999999999" rounds to exactly 0.5 in IEEE-754 and was
-        // falsely rejected by the float form of this check [C6].
-        if (p !== undefined && (typeof p !== "string" || !/^(0|0\.\d{1,18})$/.test(p) || /^0\.[5-9]/.test(p))) {
-          return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)}; percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface`, ctx);
+        const problem = p === undefined ? null : premiumFractionViolation(p);
+        if (problem !== null) {
+          return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)} (${problem}); percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface`, ctx);
         }
       }
     }

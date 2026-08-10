@@ -1214,24 +1214,79 @@ const CATALOG: Mutant[] = [
     replace: "if (accountOk !== false) {",
     tests: [T.forself],
   },
-  // ── RFQ negotiation surface (venue a2b03bd): counter fraction cap, pre-flight gates, view ──
+  // ── RFQ negotiation surface (venue a2b03bd): fraction contract, citation gates, band, view ──
   {
-    // The < 0.5 fraction cap dropped from rfq-counter: a percent number pasted as a string
-    // ("4.1") still fails the shape regex, but "0.5"+ sails through to a venue rejection the
-    // string-decided check exists to catch client-side, with teaching.
-    id: "rfq-counter-fraction-cap-dropped",
+    // The fraction cap regressed to the pre-rework string-decided form: a 17-digit
+    // "0.49999999999999999" is < 0.5 as a decimal but parses to exactly 0.5 — the venue's own
+    // parseFloat refine 400s it, so accepting it here relays a doomed POST. This mutant IS the
+    // 22df15a behavior; the boundary tests exist to keep it dead.
+    id: "premium-fraction-string-decided-regression",
     file: "packages/core/src/handlers/submit.ts",
-    find: 'if (!/^(0|0\\.\\d{1,18})$/.test(p) || /^0\\.[5-9]/.test(p)) {',
-    replace: 'if (!/^(0|0\\.\\d{1,18})$/.test(p)) {',
+    find: 'if (Number.parseFloat(p) >= 0.5) return',
+    replace: 'if (/^0\\.[5-9]/.test(p)) return',
     tests: [T.venue],
   },
   {
-    // Truncation gate flipped: not-found refusals fire on INCOMPLETE records (false refusals of
-    // legitimately-cited superseded answers) and complete records relay unchecked.
-    id: "rfq-counter-truncated-gate-flipped",
+    // Fraction-cap comparator flipped exclusive: exactly "0.5" sails through to a venue 400.
+    id: "premium-fraction-cap-comparator-flipped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (!option && rfq.truncated !== true) {",
-    replace: "if (!option && rfq.truncated === true) {",
+    find: 'if (Number.parseFloat(p) >= 0.5) return',
+    replace: 'if (Number.parseFloat(p) > 0.5) return',
+    tests: [T.venue],
+  },
+  {
+    // Citation truncation gate flipped in the shared resolver: not-found refusals fire on
+    // INCOMPLETE records (false refusals of legitimately-cited superseded answers) and
+    // complete records relay unchecked — both quote_ref and optionRef paths break at once.
+    id: "citation-truncated-gate-flipped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "return { option, unresolved: option === undefined && rfq.truncated === true };",
+    replace: "return { option, unresolved: option === undefined && rfq.truncated !== true };",
+    tests: [T.venue],
+  },
+  {
+    // Band comparator made inclusive: an exactly-10x re-price the venue's STRICT float gate
+    // accepts (250 vs "0.25": 250/25 = 10.0 exactly) is refused — a relay out-rejecting its
+    // venue, the false-block class the bit-for-bit mirror exists to eliminate.
+    id: "premium-band-strict-flipped-high",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "(ratio > 10 || ratio < 0.1)",
+    replace: "(ratio >= 10 || ratio < 0.1)",
+    tests: [T.venue],
+  },
+  {
+    // Same at the low edge: exactly 0.1x (2.5 vs 25%) is venue-accepted, mutant refuses it.
+    id: "premium-band-strict-flipped-low",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "(ratio > 10 || ratio < 0.1)",
+    replace: "(ratio > 10 || ratio <= 0.1)",
+    tests: [T.venue],
+  },
+  {
+    // Zero-premium guard dropped: a zero declared premium (display metadata; the venue's own
+    // `premium > 0` guard skips the band) computes ratio 0 < 0.1 and gets falsely refused.
+    id: "premium-band-zero-guard-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (referencedPercent > 0 && action.premium > 0 && (ratio > 10 || ratio < 0.1)) {",
+    replace: "if (referencedPercent > 0 && (ratio > 10 || ratio < 0.1)) {",
+    tests: [T.venue],
+  },
+  {
+    // fraction→percent conversion broken (×100 → ×10): every consistent citation reads as a
+    // 10x divergence — the exact class of scale bug this gate polices, planted inside it.
+    id: "premium-band-fraction-scale-broken",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const referencedPercent = referenced * 100;",
+    replace: "const referencedPercent = referenced * 10;",
+    tests: [T.venue],
+  },
+  {
+    // Attribution check inverted: third-party quote stamping relays (the venue 400s it — but
+    // the pre-flight exists to refuse with teaching first) and every OWN citation is refused.
+    id: "quote-ref-maker-requester-inverted",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (typeof storedRequester === \"string\" && storedRequester.toLowerCase() !== action.order.maker.toLowerCase()) {",
+    replace: "if (typeof storedRequester === \"string\" && storedRequester.toLowerCase() === action.order.maker.toLowerCase()) {",
     tests: [T.venue],
   },
   {

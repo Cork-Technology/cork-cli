@@ -454,10 +454,18 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(env.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
   });
 
-  it("F5: the rfq-answer 0.5 cap is decided on the string — a 17-digit just-under value passes, 0.5 fails", async () => {
+  it("F5: the rfq-answer 0.5 cap replicates the venue's parseFloat refine — a 17-digit just-under value fails THERE, so it fails here", async () => {
     const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
-    const justUnder = await runTool("cork_submit", answer("0.49999999999999999"), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
-    expect(justUnder.state).toBe("ok"); // Number("0.49999999999999999") === 0.5 falsely rejected this before
+    // 16 digits: parseFloat = 0.4999999999999999 < 0.5 — the venue accepts, so we relay.
+    const justUnder = await runTool("cork_submit", answer("0.4999999999999999"), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
+    expect(justUnder.state).toBe("ok");
+    // 17 digits: a smaller decimal, but Number.parseFloat rounds it to exactly 0.5 — and the
+    // venue's PremiumFractionSchema refines with THAT parse, so it 400s. A pre-flight that
+    // predicts the venue must refuse it too (the earlier string-decided form let it through
+    // to a burnt round-trip).
+    const ulpUnder = await runTool("cork_submit", answer("0.49999999999999999"), ctxWith([]));
+    expect(ulpUnder.state).toBe("unavailable");
+    expect(ulpUnder.warnings[0]?.message).toContain("parseFloat");
     const atCap = await runTool("cork_submit", answer("0.5"), ctxWith([]));
     expect(atCap.state).toBe("unavailable");
     expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
@@ -573,23 +581,89 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     expect(seen.filter((s) => s.method === "POST").length).toBe(0);
   });
 
-  it("quote_ref band matches the BOOK's 10x acceptance: exactly-10x conflicts, ~9x (an honest re-price) relays", async () => {
+  it("quote_ref band replicates the venue's strict float gate: which side of 10x you land on is the VENUE's float answer", async () => {
     const lopBase = await lopBaseP;
-    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
-    const at10x = await runTool(
-      "cork_submit",
-      { ...lopBase, action: { ...lopBase.action, premium: 36, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
-    );
-    expect(at10x.state).toBe("conflict"); // 36% vs 3.6% = 10x — the venue's own rejection band, enforced early
-    expect(at10x.warnings[0]?.code).toBe("premium_scale_mismatch");
+    const cite = (fraction: string, premium: number, extraRoutes: Array<{ match: string; status?: number; body: unknown }> = []) =>
+      runTool(
+        "cork_submit",
+        { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+        ctxWith([...extraRoutes, { match: "/rfqs/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
+      );
+    const ok = [{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }];
 
-    const rePrice = await runTool(
-      "cork_submit",
-      { ...lopBase, action: { ...lopBase.action, premium: 32, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]),
-    );
+    // "0.036"*100 floats to 3.5999999999999996, so 36/it = 10.000000000000002 > 10: the venue
+    // rejects this nominal exactly-10x — and therefore so do we.
+    const rejected10x = await cite("0.036", 36);
+    expect(rejected10x.state).toBe("conflict");
+    expect(rejected10x.warnings[0]?.code).toBe("premium_scale_mismatch");
+    expect(rejected10x.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
+
+    // "0.25"*100 is EXACT in binary (25), so 250/25 = 10.0 exactly — and the venue's gate is
+    // STRICT (ratio > 10): it accepts this exactly-10x. The earlier inclusive-bigint form
+    // refused it — a relay must never out-reject its venue.
+    expect((await cite("0.25", 250, ok)).state).toBe("ok");
+    // Same at the low edge: 2.5/25 = 0.1 exactly, strict < 0.1 → accepted.
+    expect((await cite("0.25", 2.5, ok)).state).toBe("ok");
+    // Beyond the band on each side: rejected. (990/25 = 39.6x; 0.2/25 = 1/125x.)
+    expect((await cite("0.25", 990)).state).toBe("conflict");
+    expect((await cite("0.25", 0.2)).state).toBe("conflict");
+
+    // A zero declared premium skips the venue's band entirely (premium > 0 guard: the signed
+    // amounts are the truth, premium is display metadata) — the old form refused it as <=1/10x.
+    expect((await cite("0.25", 0, ok)).state).toBe("ok");
+
+    const rePrice = await cite("0.036", 32, ok);
     expect(rePrice.state).toBe("ok"); // inside the band: tolerated as a re-price, exactly like the book
+  });
+
+  it("quote_ref provenance mirrors the venue: maker must be the RFQ's requester, option must cohere (chain, collateral leg)", async () => {
+    const lopBase = await lopBaseP;
+    const withRfq = (rfq: Record<string, unknown>, premium = 3.6) =>
+      runTool(
+        "cork_submit",
+        { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+        ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }, { match: "/rfqs/rfq_1", body: rfq }]),
+      );
+    const goodOption = { option_id: "1", premium_annualized: "0.036" };
+    const answersWith = (option: Record<string, unknown>) => [{ answer_id: "ans_1", answer: { options: [option] } }];
+
+    // Third-party quote stamping: the RFQ was opened by someone else → refused before relay.
+    const stamped = await withRfq({ rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, answers: answersWith(goodOption) });
+    expect(stamped.state).toBe("unavailable");
+    expect(stamped.warnings[0]?.message).toContain("maker");
+
+    // Own RFQ (maker == requester, case-insensitive) → the citation stands and relays.
+    const own = await withRfq({ rfq_id: "rfq_1", request: { requester: SIGNER.address.toLowerCase() }, answers: answersWith(goodOption) });
+    expect(own.state).toBe("ok");
+
+    // The cited option must describe THIS order: wrong chain refused, foreign collateral refused.
+    const wrongChain = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, chain_id: 42161 }) }); // order is chainId 1
+    expect(wrongChain.state).toBe("unavailable");
+    expect(wrongChain.warnings[0]?.message).toContain("chain");
+    const foreignCollateral = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, collateral_asset: "0xcccccccccccccccccccccccccccccccccccccccc" }) });
+    expect(foreignCollateral.state).toBe("unavailable");
+    expect(foreignCollateral.warnings[0]?.message).toContain("collateral");
+    // …and a collateral that IS a leg passes (the maker asset, case-flipped to prove the compare).
+    const legCollateral = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, chain_id: 1, collateral_asset: "0x9D39A5DE30E57443BFF2A8307A4256C8797A3497".toLowerCase() }) });
+    expect(legCollateral.state).toBe("ok");
+  });
+
+  it("quote_ref on a TRUNCATED embed defers to the venue: relayed with citation_unresolved, the band check consciously skipped", async () => {
+    const lopBase = await lopBaseP;
+    const seen: Seen[] = [];
+    // The cited answer is NOT in the embed and the embed is truncated — absence unproven. The
+    // declared premium diverges wildly from anything, proving the band gate did NOT run.
+    const env = await runTool(
+      "cork_submit",
+      { ...lopBase, action: { ...lopBase.action, premium: 999, quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
+      ctxWith([
+        { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } },
+        { match: "/rfqs/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
+      ], seen),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "citation_unresolved")).toBe(true);
+    expect(seen.filter((s) => s.method === "POST").length).toBe(1); // relayed — the venue's full-store check rules
   });
 
   it("quote_ref with a consistent premium relays cleanly", async () => {
@@ -1307,15 +1381,18 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     expect(body.schema_version).toBe("1");
   });
 
-  it("rfq-counter premium is string-decided: percent-number string rejected, 0.5 rejected, 17-digit just-under passes", async () => {
+  it("rfq-counter premium replicates the venue's fraction contract: percent-string rejected, 0.5 rejected, the parseFloat boundary matches the venue's", async () => {
     const at = async (p: string) => runTool("cork_submit", counter({ premiumAnnualized: p }), ctxWith([{ match: "/counters", status: 201, body: { counter_id: "ctr_x" } }]));
     const percent = await at("4.1");
     expect(percent.state).toBe("unavailable");
     expect(percent.warnings[0]?.code).toBe("invalid_order_terms");
     expect(percent.warnings[0]?.message).toContain("FRACTION");
     expect((await at("0.5")).state).toBe("unavailable");
-    // 0.49999999999999999 rounds to exactly 0.5 in IEEE-754 — the string form must pass [C6].
-    expect((await at("0.49999999999999999")).state).toBe("ok");
+    // The venue's PremiumFractionSchema decides the cap via Number.parseFloat: 16 digits stay
+    // under it (accepted), the 17-digit form parses to exactly 0.5 there (rejected) — the
+    // pre-flight must land on the same side of the boundary in both cases.
+    expect((await at("0.4999999999999999")).state).toBe("ok");
+    expect((await at("0.49999999999999999")).state).toBe("unavailable");
   });
 
   it("optionRef pre-flight: unknown RFQ refuses rfq_not_found, wrong requester refuses BEFORE the POST", async () => {
@@ -1362,6 +1439,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
       ], seen),
     );
     expect(relayed.state).toBe("ok");
+    // Never a SILENT deferral: the unresolved citation is flagged on the ok envelope.
+    expect(relayed.warnings.some((w) => w.code === "citation_unresolved")).toBe(true);
     const post = seen.find((s) => s.method === "POST")!;
     expect((post.body as { option_ref: { answer_id: string; option_id: string } }).option_ref).toEqual({ answer_id: "ans_old", option_id: "1" });
 
@@ -1375,6 +1454,30 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
       ]),
     );
     expect(ok.state).toBe("ok");
+  });
+
+  it("rfq-counter pre-flight refuses an EXPIRED RFQ (the venue's 410) — but only when the fetch already happened (optionRef given)", async () => {
+    const seen: Seen[] = [];
+    const expired = { rfq_id: "rfq_1", state: "expired", request: { requester: REQUESTER }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }], truncated: false };
+    const env = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", body: expired }], seen),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(env.warnings[0]?.message).toContain("expired");
+    expect(seen.every((s) => s.method === "GET")).toBe(true); // refused before the POST burnt its request_id
+  });
+
+  it("rfq-counter idempotent replay: the venue's 200 (vs 201) surfaces as replay:true", async () => {
+    const env = await runTool(
+      "cork_submit",
+      counter(),
+      ctxWith([{ match: "/rfqs/rfq_1/counters", status: 200, body: { counter_id: "ctr_1" } }]),
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { replay: boolean }).replay).toBe(true);
   });
 
   it("rfq-answer relays supersedes verbatim when given, omits it otherwise", async () => {
