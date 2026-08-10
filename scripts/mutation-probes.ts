@@ -1470,6 +1470,35 @@ const CATALOG: Mutant[] = [
     replace: "POLICY: the current wire shape",
     tests: [T.venue],
   },
+  // ── x-units: the machine-readable unit axis (COR-35) — parity binds wire ↔ table ↔ prose ──
+  {
+    // TokenAmount stops emitting its unit: every amount field silently loses the machine-
+    // readable axis while descriptions still read fine — exactly the drift x-units exists to
+    // make diffable.
+    id: "units-xunits-def-dropped",
+    file: "packages/schemas/src/primitives.ts",
+    find: '.meta({ id: "TokenAmount", "x-units": X_UNITS.qTok });',
+    replace: '.meta({ id: "TokenAmount" });',
+    tests: [T.docTopics],
+  },
+  {
+    // One use site's fee unit drifts to the WAD family while the other stays — the cross-site
+    // consistency assertion (every emission must equal the expected value) is what sees it.
+    id: "units-xunits-value-drifted",
+    file: "packages/schemas/src/tools.ts",
+    find: '.meta({ "x-units": X_UNITS.pct18 })',
+    replace: '.meta({ "x-units": X_UNITS.wad })',
+    tests: [T.docTopics],
+  },
+  {
+    // The constraint bounds regress to bare UintStr — per-field scale AND x-units vanish from
+    // BOTH jitMarket paths at once (shared shape), the exact R2 defect this schema closes.
+    id: "units-constraint-field-scale-dropped",
+    file: "packages/schemas/src/tools.ts",
+    find: 'rateMin: UintStr.describe("ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)").meta({ "x-units": X_UNITS.wad }),',
+    replace: "rateMin: UintStr,",
+    tests: [T.docTopics],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

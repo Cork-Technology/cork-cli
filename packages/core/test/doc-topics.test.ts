@@ -2,7 +2,7 @@
 // every alias AND via search, and every prepare result carries the data.execution completion
 // pointer. All offline (config-only paths).
 import { describe, expect, it } from "vitest";
-import { DOC_TOPICS, inputJsonSchema, REGISTRY, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
+import { DOC_TOPICS, inputJsonSchema, REGISTRY, UNITS_TOPIC_REFERENCE, X_UNITS } from "@cork/schemas";
 import { runTool } from "@cork/core";
 
 const NOW = 1_800_000_000n;
@@ -70,27 +70,34 @@ describe("doc topic: units", () => {
   // unit-test volume and precision findings; the guard that matters is the one that fails when
   // two sources of truth disagree.
   it("table parity: every scaled field states the same marker in its schema description AND its topic row", () => {
-    const SCALED_FIELDS: Array<{ field: string; marker: string }> = [
-      { field: "swapFeePercentage", marker: "1e18 = 1%" },
-      { field: "unwindSwapFeePercentage", marker: "1e18 = 1%" },
-      { field: "rateOverride", marker: "1e18 = 1.0" },
-      { field: "rate", marker: "1e18 = 1.0" },
-      // The four constraint bounds — the headline fields of collisions #1 and #3. Their scale
-      // lives on the PARENT `constraint` object's description (the children are bare UintStr),
-      // reached via the walker's parent-description propagation below.
+    // Three bound axes per field: the prose marker in the schema description, the same marker on
+    // the topic row that names the field, and (where the field emits one) the machine-readable
+    // `x-units` value — which must equal the notation string on that same topic row. x-units is
+    // an OpenAPI-style extension (generators drop unknown keys), so the description marker stays
+    // mandatory; the extension is the diffable artifact.
+    const SCALED_FIELDS: Array<{ field: string; marker: string; xu?: string }> = [
+      { field: "swapFeePercentage", marker: "1e18 = 1%", xu: "D18{%}" },
+      { field: "unwindSwapFeePercentage", marker: "1e18 = 1%", xu: "D18{%}" },
+      { field: "rateOverride", marker: "1e18 = 1.0", xu: "D18{1}" },
+      { field: "rate", marker: "1e18 = 1.0", xu: "D18{1}" },
+      // The four constraint bounds — the headline fields of collisions #1 and #3. Since audit R2
+      // they carry their OWN describe + x-units (RateConstraintWire); the parent `constraint`
+      // description still states the scale and is checked via parent-propagation.
       { field: "constraint", marker: "1e18 = 1.0" },
-      { field: "rateMin", marker: "1e18 = 1.0" },
-      { field: "rateMax", marker: "1e18 = 1.0" },
-      { field: "rateChangePerDayMax", marker: "1e18 = 1.0" },
-      { field: "rateChangeCapacityMax", marker: "1e18 = 1.0" },
-      { field: "initialRateBump", marker: "1e7" },
-      { field: "rateBump", marker: "1e7" },
-      { field: "premium", marker: "PERCENT" },
+      { field: "rateMin", marker: "1e18 = 1.0", xu: "D18{1}" },
+      { field: "rateMax", marker: "1e18 = 1.0", xu: "D18{1}" },
+      { field: "rateChangePerDayMax", marker: "1e18 = 1.0", xu: "D18{1}" },
+      { field: "rateChangeCapacityMax", marker: "1e18 = 1.0", xu: "D18{1}" },
+      { field: "initialRateBump", marker: "1e7", xu: "D7{%}" },
+      { field: "rateBump", marker: "1e7", xu: "D7{%}" },
+      { field: "premium", marker: "PERCENT", xu: "{%}" },
       // rfq-counter's typed premium: fraction-string per the venue contract, pinned by R13 —
       // the marker is the shared "fraction" stem ("decimal-fraction STRING" in the schema,
       // "fraction STRINGS" on the topic row).
-      { field: "premiumAnnualized", marker: "fraction" },
-      { field: "minPremiumPerShare", marker: "per 1e18" },
+      { field: "premiumAnnualized", marker: "fraction", xu: "{%}" },
+      { field: "minPremiumPerShare", marker: "per 1e18", xu: "{qPremiumTok/cST}" },
+      // A representative TokenAmount rider: the unit comes from the shared $defs entry.
+      { field: "orderSize", marker: "base units", xu: "{qTok}" },
       // NOT listed: gasPriceEstimate / integratorFee / resolverFee / whitelistDiscountNumerator /
       // surplusFeePercent. Those are Fusion DECODE OUTPUTS (fusion.ts), never tool inputs, so they
       // have no input-schema description to check against — the topic labels them explicitly as
@@ -103,24 +110,27 @@ describe("doc topic: units", () => {
     // the use site). An object-valued property propagates its own description one level DOWN to
     // its children: a struct like `constraint` documents its four bounds on the parent.
     const byField = new Map<string, string[]>();
-    const record = (name: string, text: string | undefined) => {
-      if (typeof text === "string") byField.set(name, [...(byField.get(name) ?? []), text]);
+    const byFieldXu = new Map<string, string[]>();
+    const record = (map: Map<string, string[]>, name: string, text: string | undefined) => {
+      if (typeof text === "string") map.set(name, [...(map.get(name) ?? []), text]);
     };
     for (const tool of REGISTRY) {
       const schema = inputJsonSchema(tool.name) as Record<string, unknown>;
-      const defs = (schema.$defs ?? {}) as Record<string, { description?: string }>;
+      const defs = (schema.$defs ?? {}) as Record<string, { description?: string; "x-units"?: string }>;
       const walk = (node: unknown): void => {
         if (node === null || typeof node !== "object") return;
         const n = node as Record<string, unknown>;
         const props = n.properties as Record<string, Record<string, unknown>> | undefined;
         if (props) {
           for (const [name, prop] of Object.entries(props)) {
-            record(name, prop.description as string | undefined);
+            record(byField, name, prop.description as string | undefined);
+            record(byFieldXu, name, prop["x-units"] as string | undefined);
             const ref = typeof prop.$ref === "string" ? prop.$ref.split("/").pop() : undefined;
-            record(name, ref ? defs[ref]?.description : undefined);
+            record(byField, name, ref ? defs[ref]?.description : undefined);
+            record(byFieldXu, name, ref ? defs[ref]?.["x-units"] : undefined);
             const children = prop.properties as Record<string, unknown> | undefined;
             if (children && typeof prop.description === "string") {
-              for (const child of Object.keys(children)) record(child, prop.description);
+              for (const child of Object.keys(children)) record(byField, child, prop.description);
             }
           }
         }
@@ -134,7 +144,7 @@ describe("doc topic: units", () => {
 
     const lines = DOC_TOPICS.units!.body.split("\n");
     const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    for (const { field, marker } of SCALED_FIELDS) {
+    for (const { field, marker, xu } of SCALED_FIELDS) {
       const descs = byField.get(field);
       expect(descs, `${field} is not a property on any tool schema — rename or drop it from the units topic`).toBeDefined();
       expect(descs!.some((d) => d.includes(marker)), `${field}: no schema description states '${marker}'`).toBe(true);
@@ -143,6 +153,24 @@ describe("doc topic: units", () => {
         lines.some((l) => wordRe.test(l) && l.includes(marker)),
         `units topic: no line pairs ${field} with '${marker}' — the topic names the field but states a different scale`,
       ).toBe(true);
+      if (xu !== undefined) {
+        // The machine-readable axis: the field must EMIT the x-units value, and the topic row
+        // naming the field must carry the same notation string — schema wire, table, and prose
+        // can only move together.
+        const emitted = byFieldXu.get(field);
+        expect(emitted, `${field}: no x-units emitted anywhere (expected '${xu}')`).toBeDefined();
+        expect(emitted!.every((v) => v === xu), `${field}: x-units disagree across use sites — ${JSON.stringify(emitted)} vs '${xu}'`).toBe(true);
+        expect(
+          lines.some((l) => wordRe.test(l) && l.includes(xu)),
+          `units topic: no line pairs ${field} with notation '${xu}'`,
+        ).toBe(true);
+      }
+    }
+
+    // Vocabulary completeness: every X_UNITS value the schemas can emit appears in the topic
+    // table — a new vocabulary entry without a table row fails here, not in an integrator's lap.
+    for (const [k, v] of Object.entries(X_UNITS)) {
+      expect(DOC_TOPICS.units!.body.includes(v), `X_UNITS.${k} ('${v}') is not in the units topic body`).toBe(true);
     }
   });
 

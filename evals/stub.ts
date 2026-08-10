@@ -11,10 +11,16 @@ const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
 const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
 const NOW = 1_790_000_000n;
 
-// MarketRegistry 2.1.0 fixture (Arbitrum, matches cork-defaults.json so the binding guard passes).
-const REGISTRY_210 = "0xF5323F305360A792284814a7EDe78c2209A1DC94";
-export const LIQUIDITY_RECIPE = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
-export const FIXED_RECIPE = "0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D";
+// MarketRegistry 2.1.0 fixture — READ FROM cork-defaults.json rather than pinned: the binding
+// guard compares the stub's MARKET_REGISTRY() answer against the live config, so a hardcoded
+// address here rots on every registry redeploy (the pinned 0.3.2 literal survived the 0.3.3
+// redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found 2026-08-10
+// only because the eval log made the misses identifiable). Same for the recipe hints.
+import corkDefaults from "../cork-defaults.json";
+const MR_42161 = (corkDefaults as { marketRegistry: Record<string, { registry: string; recipes: Record<string, string> }> }).marketRegistry["42161"]!;
+const REGISTRY_210 = MR_42161.registry;
+export const LIQUIDITY_RECIPE = MR_42161.recipes.liquidity!;
+export const FIXED_RECIPE = MR_42161.recipes.fixed!;
 const WAD = 10n ** 18n;
 
 const MARKET = {

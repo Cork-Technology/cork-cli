@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { X_UNITS } from "./doc-topics.ts";
 import {
   Address,
   Bytes32,
@@ -88,7 +89,27 @@ export type QueryInput = z.infer<typeof QueryInput>;
 // than the TokenAmount examples suggest. One shared $defs entry teaches this at every use site.
 const PremiumPerShareRate = TokenAmount.describe(
   "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
-).meta({ id: "PremiumPerShareRate" });
+).meta({ id: "PremiumPerShareRate", "x-units": X_UNITS.premiumPerShare });
+
+// ── shared JIT sub-schemas (audit R2): the constraint bounds carry PER-FIELD scale — the parent
+// object's description is out of frame in a rendered per-flag help, and these four are the
+// headline fields of the 1e18=1.0 vs 1e18=1% collision. One const, two use sites (maker + taker
+// jitMarket), so the two paths cannot drift. Same for the ERC-2612 permit rows: `value` is a
+// TOKEN AMOUNT (the predicted cST), not a bare integer — R2's first finding.
+const RateConstraintWire = z.strictObject({
+  rateMin: UintStr.describe("ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)").meta({ "x-units": X_UNITS.wad }),
+  rateMax: UintStr.describe("ABSOLUTE rate ceiling, 1e18 = 1.0").meta({ "x-units": X_UNITS.wad }),
+  rateChangePerDayMax: UintStr.describe("ABSOLUTE max rate movement per day, 1e18 = 1.0").meta({ "x-units": X_UNITS.wad }),
+  rateChangeCapacityMax: UintStr.describe("ABSOLUTE total rate-movement budget, 1e18 = 1.0").meta({ "x-units": X_UNITS.wad }),
+});
+const Erc2612PermitWire = z.strictObject({
+  token: Address,
+  value: TokenAmount.describe("amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports"),
+  deadline: UnixSeconds,
+  v: z.number().int().min(0).max(255),
+  r: Bytes32,
+  s: Bytes32,
+});
 
 // ────────────────────────────────────────────────────────────────────────────
 // 2. cork_compute (R2) — closed per-kind params
@@ -122,7 +143,7 @@ export const ComputeParams = z.discriminatedUnion("kind", [
     ),
   z.strictObject({
       kind: z.literal("rollover-premium-floor"),
-      dstCstProduced: TokenAmount,
+      dstCstProduced: TokenAmount.describe("dst cST shares produced by the fill — cST is always 18 decimals"),
       minPremiumPerShare: PremiumPerShareRate,
     }).describe("minimum premium a rollover order is guaranteed to earn — pure math, no RPC needed"),
   z.strictObject({
@@ -143,7 +164,7 @@ export const ComputeParams = z.discriminatedUnion("kind", [
       collateralAsset: Address.optional().describe("the pair the constraint is for (order matters: collateral first)"),
       referenceAsset: Address.optional(),
       args: Hex.optional().describe("the recipe's additionalData, raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)"),
-      rate: UintStr.optional().describe("FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against"),
+      rate: UintStr.optional().describe("FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against").meta({ "x-units": X_UNITS.wad }),
       rateOracle: Address.optional().describe("explicit rate-oracle override — used as given (live if deployed, else passed to the recipe as address(0), which is what lets the liquidity recipe fall back to the anchorRate in args)"),
       legacy: z.boolean().optional().describe("route to the DEPRECATED pre-2.1.0 band math against the OLD registry (requires CORK_ENABLE_DEPRECATED=1 and `mode`)"),
     }).describe(
@@ -367,9 +388,9 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .strictObject({
         startTime: UnixSeconds.optional().describe("when the price starts decaying, absolute unix SECONDS — omitted = prepare time (the price then decays from the first moment the order can rest)"),
         durationSeconds: z.number().int().min(60).max(16_777_215).describe("how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"),
-        initialRateBump: UintStr.describe("the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor"),
+        initialRateBump: UintStr.describe("the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor").meta({ "x-units": X_UNITS.bump7 }),
         points: z
-          .array(z.strictObject({ rateBump: UintStr.describe("bump at this point, base 1e7; must be NON-INCREASING — each point <= the preceding point's bump (<= initialRateBump for the first). The getters interpolate linearly between points, so a point higher than its predecessor would make the price RISE across that segment; a dutch auction only decays."), timeDelta: z.number().int().min(1).max(65_535).describe("seconds since the previous point (2-byte wire field)") }))
+          .array(z.strictObject({ rateBump: UintStr.describe("bump at this point, base 1e7; must be NON-INCREASING — each point <= the preceding point's bump (<= initialRateBump for the first). The getters interpolate linearly between points, so a point higher than its predecessor would make the price RISE across that segment; a dutch auction only decays.").meta({ "x-units": X_UNITS.bump7 }), timeDelta: z.number().int().min(1).max(65_535).describe("seconds since the previous point (2-byte wire field)") }))
           .max(255)
           .optional()
           .describe("piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"),
@@ -383,17 +404,17 @@ export const OrdersAction = z.discriminatedUnion("type", [
         expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future at creation"),
         recipe: Address.optional().describe("the approved IMarketRecipe CONTRACT ADDRESS the order names — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used"),
         mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string (required there)"),
-        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored").meta({ "x-units": X_UNITS.wad }),
         additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x"),
         constraint: z
-          .strictObject({ rateMin: UintStr, rateMax: UintStr, rateChangePerDayMax: UintStr, rateChangeCapacityMax: UintStr })
+          .strictObject(RateConstraintWire.shape)
           .optional()
           .describe("the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"),
-        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool"),
-        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
+        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 }),
+        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only").meta({ "x-units": X_UNITS.pct18 }),
         enableJitMint: z.boolean().default(false).describe("maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"),
         permits: z
-          .array(z.strictObject({ token: Address, value: UintStr, deadline: UnixSeconds, v: z.number().int().min(0).max(255), r: Bytes32, s: Bytes32 }))
+          .array(Erc2612PermitWire)
           .max(8)
           .optional()
           .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
@@ -409,7 +430,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]"),
     listing: z.strictObject({
       side: z.enum(["BUY", "SELL"]),
-      premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000"),
+      premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000").meta({ "x-units": X_UNITS.percent }),
       expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
       nonce: UintStr,
       allowsPartialFills: z.boolean(),
@@ -429,17 +450,17 @@ export const OrdersAction = z.discriminatedUnion("type", [
         expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future at creation"),
         recipe: Address.optional().describe("the approved IMarketRecipe CONTRACT ADDRESS (discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used"),
         mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"),
-        rateOverride: UintStr.default("0").describe("FIXED recipes only (ABSOLUTE, 1e18 = 1.0; zero reverts); MUST stay 0 for price/nav recipes — rejected by the fill, not ignored"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only (ABSOLUTE, 1e18 = 1.0; zero reverts); MUST stay 0 for price/nav recipes — rejected by the fill, not ignored").meta({ "x-units": X_UNITS.wad }),
         additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against. Defaults to 0x"),
         constraint: z
-          .strictObject({ rateMin: UintStr, rateMax: UintStr, rateChangePerDayMax: UintStr, rateChangeCapacityMax: UintStr })
+          .strictObject(RateConstraintWire.shape)
           .optional()
           .describe("the four rate limits (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY: they must derive the pool whose cST one side of the RESTING ORDER names, or the fill reverts OrderNotForPool. Omit to auto-resolve via recipe.resolve (needs an RPC); when the resting order carries its own JIT extension, the derived pool id is cross-checked against it"),
         swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool"),
         unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
         enableJitMint: z.boolean().default(false).describe("encoded because the struct layout requires it, but IGNORED on the taker path — takerInteraction ALWAYS mints (attaching the hook to the taker side IS the opt-in)"),
         permits: z
-          .array(z.strictObject({ token: Address, value: UintStr, deadline: UnixSeconds, v: z.number().int().min(0).max(255), r: Bytes32, s: Bytes32 }))
+          .array(Erc2612PermitWire)
           .max(8)
           .optional()
           .describe("pre-signed ERC-2612 permits the adapter executes after the mint — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
@@ -469,12 +490,12 @@ export const OrdersAction = z.discriminatedUnion("type", [
     srcCstToken: Address,
     dstCstToken: Address,
     premiumToken: Address,
-    orderSize: TokenAmount,
+    orderSize: TokenAmount.describe("src cST shares to roll — cST is always 18 decimals"),
     minPremiumPerShare: PremiumPerShareRate,
     openDeadline: UnixSeconds,
     fillDeadline: UnixSeconds,
-    minCaReceived: TokenAmount.optional(),
-    minSharesOut: TokenAmount.optional(),
+    minCaReceived: TokenAmount.optional().describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)"),
+    minSharesOut: TokenAmount.optional().describe("slippage floor on the dst share pairs minted — shares are always 18 decimals"),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
     allowUnderfill: z.boolean().default(false),
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
@@ -507,7 +528,7 @@ export const PrepareMarketInput = z.object({
     })
       .describe("unsigned MarketRegistry.deploy(ca, ref, mode) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). Pair order matters: collateral first"),
     A("deploy-fixed-oracle", {
-      rate: UintStr.describe("the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts"),
+      rate: UintStr.describe("the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts").meta({ "x-units": X_UNITS.wad }),
     })
       .describe("unsigned MarketRegistry.deployFixedRateOracle(rate) tx: create the fixed-rate oracle for a RATE (no pair — a fixed rate is not a fact about two assets). Permissionless and IDEMPOTENT; this is the oracle a FIXED-recipe JIT order's rateOverride will produce"),
   ]),
@@ -566,8 +587,8 @@ const HookCallWire = z.strictObject({
 const RolloverParamsWire = z.strictObject({
   srcCstToken: Address,
   dstCstToken: Address,
-  minCaReceived: TokenAmount,
-  minSharesOut: TokenAmount,
+  minCaReceived: TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)"),
+  minSharesOut: TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals"),
   srcPoolId: Bytes32,
   dstPoolId: Bytes32,
   settler: Address,
@@ -586,7 +607,7 @@ const RolloverOrderWire = z.strictObject({
   openDeadline: UnixSeconds,
   fillDeadline: UnixSeconds,
   orderSalt: Uint64Str,
-  orderSize: TokenAmount,
+  orderSize: TokenAmount.describe("src cST shares to roll — cST is always 18 decimals"),
   minPremiumPerShare: PremiumPerShareRate,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
@@ -628,7 +649,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
     // Deliberately TIGHTER than the venue's own bound (it accepts up to 10000 to tolerate
     // basis-point-era clients): this surface is percent-only by contract, so 1001..10000 here
     // is a scale mistake worth refusing with teaching, not a value worth relaying.
-    premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected"),
+    premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected").meta({ "x-units": X_UNITS.percent }),
     expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
     nonce: UintStr,
     allowsPartialFills: z.boolean(),
@@ -650,7 +671,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
       notAfter: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"),
     }),
     marketTemplate: z.record(z.string(), z.unknown()).optional().describe("venue market template: either {market_template_id} or {inline:{oracle_recipe, …}}. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"),
-    notionalAssets: TokenAmount,
+    notionalAssets: TokenAmount.describe("requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals"), 
     validUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"),
     signature: Hex,
   }).describe("open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"),
@@ -658,7 +679,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
     rfqId: z.string().min(1),
     underwriter: Address,
     status: z.enum(["quoted", "pass"]).describe("quoted=submitting priced options; pass=declining (give reasonCode)"),
-    options: z.array(z.record(z.string(), z.unknown())).max(16).optional().describe("priced quote options; premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%)"),
+    options: z.array(z.record(z.string(), z.unknown())).max(16).optional().describe("priced quote options; premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip"),
     reasonCode: z.enum(["NO_CAPACITY", "PAIR_UNSUPPORTED", "TENOR_NOT_QUOTED", "PASS"]).optional(),
     supersedes: z.string().min(1).optional().describe("optional revision link: the answerId of YOUR prior answer on this SAME RFQ that this one replaces (venue-validated, 400 otherwise). Purely an audit trail — supersession is already implicit (an underwriter's newest answer is its current one), so omitting this loses nothing"),
     signature: Hex,
@@ -666,7 +687,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
   A("rfq-counter", {
     rfqId: z.string().min(1),
     requester: Address,
-    premiumAnnualized: z.string().min(1).describe("the counter-bid premium, decimal-fraction STRING per the venue numbers contract (\"0.041\" = 4.1% annualized, must be < 0.5) — same scale as answer-option premiums, NOT the percent number the book listing uses"),
+    premiumAnnualized: z.string().min(1).describe("the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)").meta({ "x-units": X_UNITS.percent }),
     optionRef: z.strictObject({ answerId: z.string().min(1), optionId: z.string().min(1) }).optional().describe("optional: point the bid at a specific quoted option on THIS RFQ when it is about those terms rather than the envelope at large (venue-validated, 400 otherwise; pre-flighted here when an RPC-free venue read succeeds)"),
     freshUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).optional().describe("advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"),
     signature: Hex,

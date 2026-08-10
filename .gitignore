@@ -46,3 +46,4 @@ cache/
 # single-binary release build outputs (scripts/compile-binaries.mjs) + bun temp files
 dist/
 *.bun-build
+evals/.last-run.jsonl

@@ -1,5 +1,6 @@
 import { getAddress, isAddress } from "viem";
 import { z } from "zod";
+import { X_UNITS } from "./doc-topics.ts";
 
 // Hex-typed outputs (`0x${string}`) so parsed values interoperate with viem/@cork/core directly.
 const hex = <T extends `0x${string}`>(re: RegExp, msg: string) =>
@@ -63,7 +64,7 @@ export const TokenAmount = z
   .describe(
     "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
   )
-  .meta({ id: "TokenAmount" });
+  .meta({ id: "TokenAmount", "x-units": X_UNITS.qTok });
 
 /** uint64-bounded decimal string — EIP-712 uint64 wire fields (deadlines, salts, nonces, chain
  *  ids in OrderData). */

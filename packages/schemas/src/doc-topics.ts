@@ -26,6 +26,30 @@ export const SIGNING_TOPIC_REFERENCE = 'cork_capabilities topic:"signing"' as co
  *  prompt-engineering surface — it should demonstrate the correct form, not just reject). */
 export const UNITS_TOPIC_REFERENCE = 'cork_capabilities topic:"units"' as const;
 
+/** The two-axis unit notation (precision prefix + dimension in braces, Reserve/ToB style with the
+ *  Cork extensions the units topic declares) as MACHINE-READABLE values: emitted as `x-units` on
+ *  every scaled schema field, valued with the SAME strings the topic table's Notation column uses,
+ *  so the parity test can bind field ↔ table with string equality. Emission is an OpenAPI-style
+ *  extension — generators drop unknown keys, so the unit stays MANDATORY in each description too
+ *  (the extension is the diffable artifact, the prose is the guaranteed-delivery one). The two
+ *  {%} wire forms (percent number vs fraction string) share a dimension and are told apart by the
+ *  field's own JSON type, exactly as on the table. */
+export const X_UNITS = {
+  /** 1e18 = 1.0 — absolute rates (rateMin/rateMax/rate/rateOverride/swapRate). */
+  wad: "D18{1}",
+  /** 1e18 = 1% — the Cork fee family (`*Percentage` fields); 100x apart from wad, same shape. */
+  pct18: "D18{%}",
+  /** Percent-or-fraction dimension at wire precision: book premium (number, 4.1 = 4.1%) and RFQ
+   *  premiums (fraction string, "0.041" = 4.1%). */
+  percent: "{%}",
+  /** 1e7 = +100% — the Fusion auction bump base. */
+  bump7: "D7{%}",
+  /** A token quantum: the token's own smallest unit; the token owns the precision. */
+  qTok: "{qTok}",
+  /** Premium-asset base units per one whole (1e18-quanta) cST share. */
+  premiumPerShare: "{qPremiumTok/cST}",
+} as const;
+
 export const DOC_TOPICS: Record<string, DocTopic> = {
   signing: {
     name: "signing",

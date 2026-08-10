@@ -3,6 +3,9 @@
 // than free-text — per Anthropic's tool-eval guidance. 30+ active + 5 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
+// Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
+// a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
+import { LIQUIDITY_RECIPE } from "./stub.ts";
 
 export interface Expectation {
   /** The tool the agent should reach for first. */
@@ -75,13 +78,13 @@ export const TASKS: EvalTask[] = [
   },
   {
     id: "resolve-constraint",
-    prompt: `Resolve the four rate limits that the approved liquidity recipe contract 0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291 would impose on collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on Arbitrum (chain 42161) — the values a JIT order carries.`,
-    expect: { tool: "cork_compute", params: { params: { kind: "recipe-rate-constraint", recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
+    prompt: `Resolve the four rate limits that the approved liquidity recipe contract ${LIQUIDITY_RECIPE} would impose on collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on Arbitrum (chain 42161) — the values a JIT order carries.`,
+    expect: { tool: "cork_compute", params: { params: { kind: "recipe-rate-constraint", recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
   },
   {
     id: "predict-market",
-    prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract 0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291. Report the derived pool id plus the cST and cPT contracts.`,
-    expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291" } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
+    prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract ${LIQUIDITY_RECIPE}. Report the derived pool id plus the cST and cPT contracts.`,
+    expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
   // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the

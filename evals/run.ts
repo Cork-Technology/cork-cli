@@ -13,6 +13,7 @@
 // CORK_EVAL_TRIALS (default 1; use 3 for stable numbers), EVAL_HELD_OUT=1 (include the held-out
 // set — do NOT tune descriptions against it), EVAL_GATE=1 (exit non-zero below thresholds),
 // CORK_EVAL_ONLY=<task-id> (single task).
+import { writeFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { REGISTRY, inputJsonSchema, descriptionExample } from "@cork/schemas";
 import { runTool, ToolInputError } from "@cork/core";
@@ -57,6 +58,28 @@ const TOOLS = REGISTRY.map((t) => ({
   description: t.description + descriptionExample(t.name),
   input_schema: inputJsonSchema(t.name) as Anthropic.Tool.InputSchema,
 }));
+
+/** One durable NDJSON row per run — everything the variance re-trial recipe and a post-hoc
+ *  regression hunt need, WITHOUT the transcript bulk (trace tools + verdict bits + token cost).
+ *  Exported for the unit test: the row must never silently lose a verdict field. */
+export function evalLogRow(r: TaskResult, model: string) {
+  return {
+    id: r.task.id,
+    heldOut: r.task.heldOut ?? false,
+    model,
+    ok: r.ok,
+    toolPick: r.toolPick,
+    paramsOk: r.paramsOk,
+    statePass: r.statePass,
+    answerPass: r.answerPass,
+    efficient: r.efficient,
+    ...(r.recovered !== undefined ? { recovered: r.recovered } : {}),
+    calls: r.calls,
+    tokens: r.tokens,
+    trace: r.trace.map((c) => `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.code ? `/${c.code}` : ""}`}`),
+    finalText: r.finalText.slice(0, 400),
+  };
+}
 
 async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
   const ctx = stubContext();
@@ -161,6 +184,14 @@ async function main() {
     }
   }
 
+  // Persist per-task rows BEFORE the summary prints: stdout is routinely piped/truncated (a
+  // `| tail` on the launch command silently destroyed the per-task evidence of a 31/33 run,
+  // 2026-08-10 — the summary survived, the identity of the two misses did not). The log file is
+  // the durable record the variance re-trial recipe needs (CORK_EVAL_ONLY=<id> needs the id).
+  const logPath = process.env.CORK_EVAL_LOG ?? "evals/.last-run.jsonl";
+  writeFileSync(logPath, results.map((r) => JSON.stringify(evalLogRow(r, MODEL))).join("\n") + "\n");
+  console.log(`per-task log: ${logPath}`);
+
   const n = results.length;
   const success = results.filter((r) => r.ok).length;
   const invalids = results.filter((r) => r.recovered !== undefined);
@@ -179,4 +210,6 @@ async function main() {
   }
 }
 
-await main();
+// Guarded so the module is importable (the log-row unit test imports evalLogRow; vitest workers
+// are Node, where import.meta.main is undefined — falsy — and the eval must not fire on import).
+if (import.meta.main) await main();
