@@ -124,6 +124,13 @@ jobs:
         env:
           MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
         run: |
+          # `required: true` on a workflow_call secret only checks the MAPPING exists — a caller
+          # forwarding an UNSET repo secret passes an empty string, and melange then dies on a
+          # 0-byte key file (observed: v0.1.0-rc.3, the first tag through this channel). Teach.
+          if [ -z "$MELANGE_SIGNING_KEY" ]; then
+            echo "::error::MELANGE_SIGNING_KEY repo secret is not set — one-time setup: 'melange keygen', store melange.rsa as the secret, commit melange.rsa.pub as packaging/melange.rsa.pub (header of this file)"
+            exit 1
+          fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
           sudo -E "$(command -v melange)" build packaging/melange.yaml \
             --arch "${{ matrix.arch }}" \
