@@ -154,3 +154,24 @@ jobs:
           \`\`\`
           Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt." \
             dist/ch-* dist/checksums.txt
+
+  # apk-repository + OCI + Phala channel, production tags only. Called DIRECTLY rather than
+  # relying on `release: published`: a release created with the run's own GITHUB_TOKEN never
+  # fires other workflows (Actions suppresses token-created event cascades), and the alternative
+  # — a PAT or app token whose only job is to re-fire an event — is a standing credential with a
+  # blast radius. A workflow_call needs no credential at all, makes the ordering an explicit
+  # `needs:` edge on the same commit, and passes secrets by name (least privilege).
+  apk-repo:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/apk-repo.yml
+    permissions:
+      contents: write # gh-pages push
+      packages: write # ghcr push
+      id-token: write
+      attestations: write
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+      PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}

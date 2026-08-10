@@ -13,21 +13,54 @@
 #   - `melange keygen` pair: private key in the MELANGE_SIGNING_KEY secret, public half committed
 #     as packaging/melange.rsa.pub (also served at the Pages root for consumers).
 #   - Pages enabled from the gh-pages branch.
+#
+# Three triggers, one gate:
+#   - workflow_call from release.yml (the NORMAL path): a release published by the pipeline's own
+#     GITHUB_TOKEN cannot fire `release: published` here (Actions suppresses token-created event
+#     cascades), so the release workflow CALLS this one directly — no PAT/app token exists to
+#     leak, the chain is an explicit `needs:` edge, and secrets arrive by name.
+#   - release: published — still fires for a release a human publishes by hand.
+#   - workflow_dispatch — operator backfill/retry (safe: the publish step refuses to overwrite
+#     any already-published apk).
+#   Candidate tags never enter this channel: one discriminator everywhere — a `-` in the tag
+#   (v0.1.0-rc.N) marks the candidate space, same rule release.yml uses for the prerelease flag.
 name: apk-repo
 
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: "release tag to package (vX.Y.Z — candidate tags are skipped by the gate)"
+        required: true
+        type: string
+    secrets:
+      MELANGE_SIGNING_KEY:
+        required: true
+      PHALA_CLOUD_API_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release tag to package (vX.Y.Z — candidate tags are skipped by the gate)"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 env:
   AQUA_CONFIG: packaging/aqua.yaml
+  # One resolution for all three triggers: `inputs` serves workflow_call AND workflow_dispatch;
+  # the release event carries its own tag.
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
 
 jobs:
   melange-build:
-    if: ${{ !github.event.release.prerelease }}
+    # Hyphen = candidate space (v0.1.0-rc.N): one rule for all three triggers, the same
+    # discriminator release.yml uses for the GitHub prerelease flag.
+    if: ${{ !contains(inputs.tag || github.event.release.tag_name, '-') }}
     strategy:
       matrix:
         include:
@@ -40,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
 
       - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
@@ -51,7 +84,7 @@ jobs:
 
       - name: Substitute release identity into the spec
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           VERSION="${TAG#v}" COMMIT="$(git rev-parse HEAD)" \
           yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
@@ -130,7 +163,7 @@ jobs:
 
       - name: Publish (push gh-pages; Pages serves the branch)
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           cd site
           git config user.name "github-actions[bot]"
@@ -159,7 +192,7 @@ jobs:
 
       - name: Wait for Pages to serve the new package
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           url="https://cork-technology.github.io/cork-cli/apk/x86_64/APKINDEX.tar.gz"
           for i in $(seq 1 60); do
@@ -172,7 +205,7 @@ jobs:
 
       - name: Pin the apk version in the apko spec
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           # An independent `apko build` of this spec must resolve the SAME package as this run —
           # pin cork-cli to the exact version-revision instead of floating on the index head.
@@ -184,7 +217,7 @@ jobs:
       - name: Build + push the image from the published repo
         id: publish
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
