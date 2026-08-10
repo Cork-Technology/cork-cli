@@ -508,7 +508,14 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
                 .catch(() => null),
             ]);
             const permit2Internal = Array.isArray(p2) && p2.length >= 2
-              ? { amount: p2[0] as bigint, expiration: Number(p2[1]), expired: Number(p2[1]) !== 0 && BigInt(Number(p2[1])) <= nowSecs }
+              // Permit2's own gate is `block.timestamp > allowed.expiration` (AllowanceTransfer
+              // ._transfer): spending is allowed AT the boundary second, and expiration 0 is
+              // ALWAYS expired — no special case. The earlier form carved 0 out as "not expired",
+              // so a hypothetical (amount>0, expiration 0) allowance read as fundable when the
+              // contract would revert AllowanceExpired; and its `<=` flipped the boundary second.
+              // The funding pre-flight predicts the authority, never improves on it (audit R9;
+              // same fidelity ruling as the premium band).
+              ? { amount: p2[0] as bigint, expiration: Number(p2[1]), expired: nowSecs > BigInt(Number(p2[1])) }
               : null;
             return [role, { corkAdapter: toAdapter, permit2: toPermit2, permit2Internal }] as const;
           }),

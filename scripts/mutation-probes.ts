@@ -1499,6 +1499,60 @@ const CATALOG: Mutant[] = [
     replace: "rateMin: UintStr,",
     tests: [T.docTopics],
   },
+  // ── Permit2 expiration gate (audit R9): the funding pre-flight predicts the AUTHORITY ──────
+  {
+    // The zero carve-out returns: an (amount>0, expiration 0) allowance reads as fundable when
+    // Permit2 reverts AllowanceExpired on it — the funded-looking bundle is built to revert.
+    id: "permit2-expiry-zero-carveout-reintroduced",
+    file: "packages/core/src/handlers/query.ts",
+    find: "expired: nowSecs > BigInt(Number(p2[1]))",
+    replace: "expired: Number(p2[1]) !== 0 && nowSecs > BigInt(Number(p2[1]))",
+    tests: [T.handlers],
+  },
+  {
+    // Boundary flipped to >=: expired reported one second EARLY — a still-fundable bundle
+    // refused at exactly expiration, the inverse of Permit2's own `block.timestamp > expiration`.
+    id: "permit2-expiry-boundary-comparator",
+    file: "packages/core/src/handlers/query.ts",
+    find: "expired: nowSecs > BigInt(Number(p2[1]))",
+    replace: "expired: nowSecs >= BigInt(Number(p2[1]))",
+    tests: [T.handlers],
+  },
+  // ── CLI numeric dialect + error contract (audit R5/R6/R7) ───────────────────────────────────
+  {
+    // Regression to the two-dialect world: integer flags accept 1e3 via Number() but not 1_000.
+    id: "cli-integer-sugar-gate-narrowed",
+    file: "packages/cli/src/app.ts",
+    find: 'if ((isAmountNode(node) || nodeT === "integer") && /[_eE]/.test(rawStr)) {',
+    replace: "if (isAmountNode(node) && /[_eE]/.test(rawStr)) {",
+    tests: [T.cli],
+  },
+  {
+    // Regression: the safe-range check on integer sugar never fires, so 1e18 lands in a JSON
+    // number with precision loss past 2^53 instead of the invalid_amount teaching.
+    id: "cli-integer-sugar-bounds-unreachable",
+    file: "packages/cli/src/app.ts",
+    find: 'if (nodeT === "integer" && BigInt(ex.ok) > BigInt(Number.MAX_SAFE_INTEGER)) {',
+    replace: 'if (nodeT === "integer" && BigInt(ex.ok) > BigInt(Number.MAX_SAFE_INTEGER) * BigInt(Number.MAX_SAFE_INTEGER)) {',
+    tests: [T.cli],
+  },
+  {
+    // Regression to plain-text stderr for commander parse errors under JSON intent.
+    id: "cli-commander-json-contract-regressed",
+    file: "packages/cli/src/app.ts",
+    find: "err += argvWantsJson ? `${JSON.stringify(payload)}\\n` : cmdErr || `${ce.message ?? \"argument parse error\"}\\n`;",
+    replace: "err += cmdErr || `${ce.message ?? \"argument parse error\"}\\n`;",
+    tests: [T.cli],
+  },
+  {
+    // Regression: the swallowed-positional detection always answers no, so `ch query --json
+    // pools` returns a bare parse error with no reorder teaching.
+    id: "cli-json-swallow-hint-regressed",
+    file: "packages/cli/src/app.ts",
+    find: "const swallowed = typeof jsonOpt === \"string\" && /^[A-Za-z][\\w-]*$/.test(rawJson);",
+    replace: "const swallowed = typeof jsonOpt === \"number\" && /^[A-Za-z][\\w-]*$/.test(rawJson);",
+    tests: [T.cli],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

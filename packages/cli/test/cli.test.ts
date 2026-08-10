@@ -716,3 +716,64 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
     expect(r.stdout).toContain("filters.mode");
   });
 });
+
+describe("audit R5/R6/R7 — one numeric dialect, one error contract, the swallowed positional", () => {
+  it("R5: integer-typed flags take the SAME sugar dialect as amount flags (1_0 and 1e1 both = 10)", async () => {
+    // Before: Number("1e1") accepted float notation by accident while "1_0" failed — two flags
+    // on one subcommand spoke different dialects. protocol-config validates pageSize offline.
+    for (const spelling of ["1_0", "1e1", "10"]) {
+      const r = await runCli(["query", "protocol-config", "--page-size", spelling, "--json"], { nowSeconds: NOW });
+      expect(r.code, spelling).toBe(EXIT.ok);
+    }
+  });
+
+  it("R5: sugar that expands beyond the safe integer range of a JSON-number field is refused with teaching", async () => {
+    const r = await runCli(["query", "protocol-config", "--page-size", "1e18", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    const payload = JSON.parse(r.stderr);
+    expect(payload.error.code).toBe("invalid_amount");
+    expect(payload.error.message).toContain("safe integer range");
+    expect(payload.error.message).toContain("not token amounts");
+  });
+
+  it("R5: an in-range expansion still lands in schema validation, not a silent clamp (1e3 vs max 200)", async () => {
+    const r = await runCli(["query", "protocol-config", "--page-size", "1e3", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid); // 1000 > the schema's max 200 — the schema teaches, sugar just expands
+  });
+
+  it("R6: a commander-level error is the structured JSON payload under CORK_JSON=1, not plain text", async () => {
+    const r = await runCli(["query", "protocol-config", "--frobnicate"], { nowSeconds: NOW }, { CORK_JSON: "1" });
+    expect(r.code).toBe(EXIT.invalid);
+    const payload = JSON.parse(r.stderr); // the whole point: stderr must PARSE
+    expect(payload.error.code).toBe("invalid_input");
+    expect(payload.error.message).toContain("frobnicate");
+  });
+
+  it("R6: bare --json reaches the same contract for commander errors (pre-option-binding intent)", async () => {
+    const r = await runCli(["query", "protocol-config", "--json", "--frobnicate"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(JSON.parse(r.stderr).error.code).toBe("invalid_input");
+  });
+
+  it("R6: without JSON intent the plain-text commander error is unchanged", async () => {
+    const r = await runCli(["query", "protocol-config", "--frobnicate"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(r.stderr).toContain("frobnicate");
+    expect(() => JSON.parse(r.stderr)).toThrow(); // plain text, deliberately
+  });
+
+  it("R7: a bare --json that swallowed a positional teaches the reorder instead of a bare parse error", async () => {
+    const r = await runCli(["query", "--json", "pools"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    const payload = JSON.parse(r.stderr);
+    expect(payload.error.code).toBe("invalid_json");
+    expect(payload.error.message).toContain("swallowed");
+    expect(payload.error.message).toContain("pools --json"); // the exact corrected spelling
+  });
+
+  it("R7: genuinely malformed JSON keeps the plain parse error (no false reorder hint)", async () => {
+    const r = await runCli(["query", "--json", "{not json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(JSON.parse(r.stderr).error.message).not.toContain("swallowed");
+  });
+});

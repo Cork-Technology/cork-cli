@@ -406,8 +406,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string (required there)"),
         rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored").meta({ "x-units": X_UNITS.wad }),
         additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x"),
-        constraint: z
-          .strictObject(RateConstraintWire.shape)
+        constraint: RateConstraintWire
           .optional()
           .describe("the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"),
         swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 }),
@@ -452,8 +451,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"),
         rateOverride: UintStr.default("0").describe("FIXED recipes only (ABSOLUTE, 1e18 = 1.0; zero reverts); MUST stay 0 for price/nav recipes — rejected by the fill, not ignored").meta({ "x-units": X_UNITS.wad }),
         additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against. Defaults to 0x"),
-        constraint: z
-          .strictObject(RateConstraintWire.shape)
+        constraint: RateConstraintWire
           .optional()
           .describe("the four rate limits (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY: they must derive the pool whose cST one side of the RESTING ORDER names, or the fill reverts OrderNotForPool. Omit to auto-resolve via recipe.resolve (needs an RPC); when the resting order carries its own JIT extension, the derived pool id is cross-checked against it"),
         swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool"),

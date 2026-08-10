@@ -3,8 +3,8 @@
   "tools": [
     {
       "name": "cork_query",
-      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; an trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): cork-pools, orderbook, fills, trading-pairs, flows (rollover orders/fills/contracts via filters.kind). Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
-      "descriptionTokensApprox": 182,
+      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
+      "descriptionTokensApprox": 184,
       "inputSchemaSha256": "2c6a397240b424b5bbf90f4f08dec9eebf5d14b61b66577fc0582c455c085b6f",
       "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
       "annotations": {

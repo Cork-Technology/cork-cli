@@ -1049,7 +1049,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     fundingMode: "erc20-approve",
     action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1000", receiver: "0xc0ffee0000000000000000000000000000000001", minCptAndCstSharesOut: "1" },
   });
-  const mkClient = (expiry: bigint) =>
+  const mkClient = (expiry: bigint, p2Expiration = 0n) =>
     ({
       readContract: async (args: { functionName: string; args?: unknown[] }) => {
         switch (args.functionName) {
@@ -1065,7 +1065,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
             return 6;
           case "allowance":
             // 2-arg = ERC-20 allowance (uint256); 3-arg = Permit2-internal (amount, expiration, nonce).
-            return (args.args?.length ?? 0) === 3 ? [777n, 0, 0] : 777n;
+            return (args.args?.length ?? 0) === 3 ? [777n, p2Expiration, 0] : 777n;
           default:
             throw new Error(`no stub for ${args.functionName}`);
         }
@@ -1109,14 +1109,33 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
     expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
     // permit2Internal is the Permit2-INTERNAL (user, token, spender=adapter) allowance the
-    // permit2 funding leg actually consumes (F18); expiration 0 = no permit granted yet.
-    expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777", permit2Internal: { amount: "777", expiration: 0, expired: false } });
+    // permit2 funding leg actually consumes (F18). expiration 0 is EXPIRED per Permit2's own
+    // gate (block.timestamp > expiration — no zero special-case): this fixture used to pin
+    // expired:false here, i.e. it certified an unspendable 777 allowance as fundable (audit R9).
+    expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777", permit2Internal: { amount: "777", expiration: 0, expired: true } });
     // Audit R1.2: balances/allowances are native base units and now say so, with per-role
     // decimals READ from the tokens (the stub answers 6 — an 18 here means a hardcode crept in);
     // cST/cPT stay the protocol-invariant 18.
     expect(d.decimals).toEqual({ collateral: 6, reference: 6, corkSwapToken: 18, corkPrincipalToken: 18 });
     expect(d.scales.balances).toContain("native base units");
     expect(d.scales.unitsTopic).toBe(UNITS_TOPIC_REFERENCE);
+  });
+
+  it("permit2Internal.expired replicates Permit2's gate exactly: allowed AT the boundary second, expired one past it", async () => {
+    const readAt = async (p2Expiration: bigint) => {
+      const env = await runTool(
+        "cork_query",
+        { resource: "account-state", chainId: 1, pageSize: 25, format: "concise", filters: { poolId: POOL, account: "0xc0ffee0000000000000000000000000000000001" } },
+        { nowSeconds: NOW, resolveRpc: async () => stubResolved(mkClient(NOW + 1n, p2Expiration)) },
+      );
+      return (env.data as { allowances: { byToken: { collateral: { permit2Internal: { expired: boolean } } } } }).allowances.byToken.collateral.permit2Internal;
+    };
+    // Permit2: `if (block.timestamp > allowed.expiration) revert AllowanceExpired` — spending is
+    // legal while timestamp <= expiration. The pre-flight must not report expired one second
+    // early (a fundable bundle refused) nor one late (a bundle built to revert).
+    expect((await readAt(NOW)).expired, "at the boundary second: still spendable").toBe(false);
+    expect((await readAt(NOW - 1n)).expired, "one second past: expired").toBe(true);
+    expect((await readAt(NOW + 3600n)).expired, "future expiration: live").toBe(false);
   });
 });
 

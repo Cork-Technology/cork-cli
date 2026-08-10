@@ -319,6 +319,14 @@ export async function runCli(
   let err = "";
   let code: number = EXIT.ok;
   const envWantsJson = env["CORK_JSON"] === "1" || env["CORK_JSON"] === "true";
+  // JSON intent for errors that fire BEFORE any command action runs (audit R6): commander-level
+  // failures (unknown option/command, excess args) and pre-parse errors happen before the
+  // per-command `--json` option is bound, so the intent is read straight off argv — a JSON-mode
+  // consumer must never receive plain text on stderr.
+  const argvWantsJson = envWantsJson || argv.some((a) => a === "--json" || a.startsWith("--json="));
+  // Commander's own stderr is buffered separately so a parse error can be re-shaped into the
+  // structured payload under JSON intent instead of leaking plain text.
+  let cmdErr = "";
 
   const program = new Command();
   program
@@ -328,7 +336,7 @@ export async function runCli(
     .exitOverride()
     .configureOutput({
       writeOut: (s) => (out += s),
-      writeErr: (s) => (err += s),
+      writeErr: (s) => (cmdErr += s),
     });
 
   // Group commands by their cliPath prefix so `prepare phoenix` nests under `prepare`.
@@ -574,7 +582,12 @@ export async function runCli(
             if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("expected a JSON object");
             input = parsed as Record<string, unknown>;
           } catch (e) {
-            const payload = { error: { code: "invalid_json", tool: tool.name, message: `invalid JSON input: ${(e as Error).message}` } };
+            // R7: a bare `--json` placed BEFORE a positional swallows it as the blob value —
+            // `ch query --json pools` arrives here with rawJson "pools". A single bare word that
+            // is not JSON-shaped is that mistake, not malformed JSON; teach the reorder.
+            const swallowed = typeof jsonOpt === "string" && /^[A-Za-z][\w-]*$/.test(rawJson);
+            const hint = swallowed ? ` — '${rawJson}' looks like a POSITIONAL that a bare --json (an output request) swallowed; put --json AFTER the positionals (ch ${tool.cliPath.join(" ")} ${rawJson} --json), or pass a full object (--json '{...}')` : "";
+            const payload = { error: { code: "invalid_json", tool: tool.name, message: `invalid JSON input: ${(e as Error).message}${hint}` } };
             err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
             code = EXIT.invalid;
             return;
@@ -600,10 +613,22 @@ export async function runCli(
               if (canonHit !== undefined) rawStr = String(canonHit); // `ch decode Calldata` → "calldata"
             }
           }
-          if (isAmountNode(node) && /[_eE]/.test(rawStr)) {
+          // Amount sugar covers integer-typed flags too (audit R5): Number("1e3") accepted
+          // float notation while "1_000" failed, so two adjacent flags on one subcommand spoke
+          // different dialects. One expander, one dialect. Integer fields add a safe-range gate
+          // because they land in JSON numbers, which lose precision past 2^53 — string-typed
+          // amounts have arbitrary precision and need no gate.
+          const nodeT = Array.isArray(node.type) ? node.type[0] : node.type;
+          if ((isAmountNode(node) || nodeT === "integer") && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
               const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: ${ex.err}` } };
+              err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+              code = EXIT.invalid;
+              return false;
+            }
+            if (nodeT === "integer" && BigInt(ex.ok) > BigInt(Number.MAX_SAFE_INTEGER)) {
+              const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: '${rawStr}' expands to ${ex.ok}, beyond the safe integer range of this JSON-number field (max 9007199254740991) — integer-typed fields are durations/counts, not token amounts` } };
               err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
               code = EXIT.invalid;
               return false;
@@ -843,9 +868,10 @@ export async function runCli(
 
   program
     .command("mcp")
-    .description("start the Cork MCP server (all 9 tools): stdio by default (`claude mcp add cork-defi -- ch mcp`), or Streamable HTTP with --http [--port 8080] (endpoint /mcp, health /healthz, docs /docs/signing; bearer auth via CORK_MCP_TOKEN)")
+    .description("start the Cork MCP server (all 9 tools): stdio by default (`claude mcp add cork-defi -- ch mcp`), or Streamable HTTP with --http [--port 8080] [--host <addr>] (endpoint /mcp, health /healthz, readiness /readyz, docs /docs/<topic>; bearer auth via CORK_MCP_TOKEN)")
     .option("--http", "serve Streamable HTTP instead of stdio")
     .option("--port <port>", "HTTP port (default 8080)")
+    .option("--host <addr>", "bind address (default 127.0.0.1, loopback only)")
     .action(() => {
       // The real server must own stdio from process start, so the binary entrypoint (bin.ts)
       // intercepts `mcp` before commander ever parses. Reaching this action means runCli was
@@ -869,18 +895,27 @@ export async function runCli(
   const pre = preParseVariants(normaliseArgv(argv, knownFlags));
   if ("error" in pre) {
     const payload = { error: { code: "invalid_input", tool: "ch", message: pre.error } };
-    err += envWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+    // argvWantsJson, not envWantsJson: pre-parse errors fire before `--json` is bound as an
+    // option, and the bare-flag spelling must reach the same JSON contract (audit R6).
+    err += argvWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
     return { code: EXIT.invalid, stdout: out, stderr: err };
   }
   try {
     await program.parseAsync(pre.argv, { from: "user" });
+    err += cmdErr; // rare non-error commander stderr (warnings) passes through verbatim
   } catch (e) {
     // exitOverride throws CommanderError for --help/--version/parse errors.
     const ce = e as { code?: string; exitCode?: number; message?: string };
     if (ce.code === "commander.helpDisplayed" || ce.code === "commander.help" || ce.code === "commander.version") {
+      err += cmdErr; // error-triggered help text stays user-readable in both modes
       code = EXIT.ok;
     } else {
-      if (err === "" && ce.message) err += `${ce.message}\n`;
+      // Commander-level parse errors (unknown option/command, excess args) previously leaked
+      // plain text onto stderr under JSON mode — the one path where a JSON consumer got
+      // non-JSON (audit R6). Same envelope shape as every other CLI error.
+      const message = (cmdErr || ce.message || "argument parse error").trim();
+      const payload = { error: { code: "invalid_input", tool: "ch", message } };
+      err += argvWantsJson ? `${JSON.stringify(payload)}\n` : cmdErr || `${ce.message ?? "argument parse error"}\n`;
       code = code === EXIT.ok ? EXIT.invalid : code;
     }
   }
