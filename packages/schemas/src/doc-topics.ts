@@ -134,7 +134,7 @@ they are the same claim, so a field description and this table can be checked ag
 
 | Notation | Schema description says | 5% is written | Fields | Unit owner |
 |---|---|---|---|---|
-| \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax, rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
+| \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax (the four constraint values a JIT order carries and signs), rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
 | \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (cap 5e18 = 5%), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
 | \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing — cork_submit lop-order and the finalize listing block | cork-api v0.1.3 |
 | \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\` and sibling premium fields | venue RFQ (stores verbatim, never parses your economics) |

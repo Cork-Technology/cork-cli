@@ -13,6 +13,7 @@ import {
   type LopOrder,
   type SafeSwapParams,
 } from "@cork/core";
+import { UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved } from "./helpers.ts";
 
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
@@ -20,6 +21,36 @@ const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
 const NOW = 1_800_000_000n; // deterministic clock
 const SUSDE = "0x9d39a5de30e57443bff2a8307a4256c8797a3497" as const;
 const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e" as const;
+
+// A full readPoolState stub (single pinned block) so every readPoolState consumer — the
+// chain-backed compute kinds AND the cork-pool query read — exercises its real handler path
+// offline. Hoisted to module scope (2026-08-10): the fixture plays the RPC wire once; compute
+// covers the branches no live pool can reach (rateMin-0 collapse, reserved at.timestamp), the
+// query side pins the output `scales` contract. Wei parity itself is covered by fork-parity.
+const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
+const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
+const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
+const W = 10n ** 18n;
+const poolStateClient = (over: { rateMin?: bigint } = {}) => ({
+  getBlockNumber: async () => 100n,
+  getBlock: async () => ({ timestamp: NOW }),
+  readContract: async (c: { functionName: string }) => {
+    switch (c.functionName) {
+      case "market":
+        return { collateralAsset: SUSDE, referenceAsset: VBUSDC, expiryTimestamp: NOW + 1_000_000n, rateMin: over.rateMin ?? W / 2n, rateMax: W, rateChangePerDayMax: 10n ** 15n, rateChangeCapacityMax: W, rateOracle: ORACLE };
+      case "constraints":
+        return [8n * 10n ** 17n, 1n, W]; // lastAdjustedRate, lastAdjustmentTimestamp, remainingCredits
+      case "swapRate": return W;
+      case "swapFee": return 0n;
+      case "unwindSwapFee": return 0n;
+      case "shares": return [CPT, CST];
+      case "rate": return W;
+      case "decimals": return 18;
+      case "issuedAt": return NOW - 10_000n;
+      default: throw new Error(`unexpected readContract ${c.functionName}`);
+    }
+  },
+});
 
 describe("runTool: cork_capabilities", () => {
   it("lists all 9 tools with phase + cli", async () => {
@@ -880,32 +911,20 @@ describe("runTool: cork_compute", () => {
     expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
 
-  // A full readPoolState stub (single pinned block) so the chain-backed compute path is exercised
-  // OFFLINE for the two branches no live pool can reach: a rateMin-0 impairment collapse, and the
-  // accepted-but-reserved at.timestamp disclosure. Wei parity itself is covered by fork-parity.
-  const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
-  const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
-  const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
-  const W = 10n ** 18n;
-  const poolStateClient = (over: { rateMin?: bigint } = {}) => ({
-    getBlockNumber: async () => 100n,
-    getBlock: async () => ({ timestamp: NOW }),
-    readContract: async (c: { functionName: string }) => {
-      switch (c.functionName) {
-        case "market":
-          return { collateralAsset: SUSDE, referenceAsset: VBUSDC, expiryTimestamp: NOW + 1_000_000n, rateMin: over.rateMin ?? W / 2n, rateMax: W, rateChangePerDayMax: 10n ** 15n, rateChangeCapacityMax: W, rateOracle: ORACLE };
-        case "constraints":
-          return [8n * 10n ** 17n, 1n, W]; // lastAdjustedRate, lastAdjustmentTimestamp, remainingCredits
-        case "swapRate": return W;
-        case "swapFee": return 0n;
-        case "unwindSwapFee": return 0n;
-        case "shares": return [CPT, CST];
-        case "rate": return W;
-        case "decimals": return 18;
-        case "issuedAt": return NOW - 10_000n;
-        default: throw new Error(`unexpected readContract ${c.functionName}`);
-      }
-    },
+  it("impairment-floor carries the pair's decimals — the documented cross-kind contract", async () => {
+    // The units topic and CLAUDE.md state all three chain-backed compute kinds return
+    // collateralDecimals/referenceDecimals; impairment-floor was the silent exception
+    // (maxReferencePerCst is WAD reference per cST — converting it to native units NEEDS them).
+    const env = await runTool(
+      "cork_compute",
+      { params: { kind: "impairment-floor", poolId: POOL, horizonSeconds: 2_592_000 }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(poolStateClient(), "default") },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { collateralDecimals: number; referenceDecimals: number; scales: Record<string, string> };
+    expect(d.collateralDecimals).toBe(18);
+    expect(d.referenceDecimals).toBe(18);
+    expect(d.scales.worstRate).toContain("1e18 = 1.0");
   });
 
   it("impairment-floor with rateMin 0 → ok, an invalid_state warning, and null maxReferencePerCst", async () => {
@@ -931,6 +950,40 @@ describe("runTool: cork_compute", () => {
     expect(d.scales).toBeDefined();
     expect(d.collateralDecimals).toBe(18);
     expect(d.referenceDecimals).toBe(18);
+  });
+});
+
+describe("cork-pool output scales — the units-topic contract on the most-read resource (audit R1)", () => {
+  it("labels the fee fields 1e18 = 1% and the rates 1e18 = 1.0, routing to the units topic", async () => {
+    // The collision this guards: swapFeePercentage (1e18 = 1%) and swapRate (1e18 = 1.0) are
+    // identically shaped and 100x apart — a swapped label here is a silent 100x lie on the
+    // most-read resource. Full handler path over the shared readPoolState fixture; only the
+    // RPC wire is played.
+    const env = await runTool(
+      "cork_query",
+      { resource: "cork-pool", pageSize: 25, format: "concise", filters: { poolId: POOL } },
+      { nowSeconds: NOW, resolveRpc: async () => stubResolved(poolStateClient(), "default") },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as {
+      swapRate: bigint;
+      corkSwapToken: string;
+      collateralDecimals: number;
+      scales: Record<string, string>;
+    };
+    // The read itself is real: fixture values surface through the handler.
+    expect(d.corkSwapToken.toLowerCase()).toBe(CST);
+    expect(d.collateralDecimals).toBe(18);
+    // The labels: percent family says 1e18 = 1% and NEVER reads as WAD; rate family says WAD.
+    for (const k of ["swapFeePercentage", "unwindSwapFeePercentage"] as const) {
+      expect(d.scales[k], k).toContain("1e18 = 1%");
+      expect(d.scales[k], k).not.toContain("1e18 = 1.0");
+    }
+    for (const k of ["swapRate", "oracleRate", "market", "constraintState"] as const) {
+      expect(d.scales[k], k).toContain("1e18 = 1.0");
+      expect(d.scales[k], k).not.toContain("1e18 = 1%");
+    }
+    expect(d.scales.reference).toBe(UNITS_TOPIC_REFERENCE);
   });
 });
 

@@ -90,7 +90,10 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
       if (floor.maxReferencePerCst === null) {
         w.push({ code: "invalid_state", message: "the worst-case rate collapses to ZERO over this horizon (rateMin is 0) — impairment can be total and the reference cost per cST is unbounded" });
       }
-      return envelope({ state: "ok", data: { kind: p.kind, ...floor, scales }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+      // ...decimals: converting the WAD-scaled maxReferencePerCst into native reference units
+      // needs the pair's decimals — and "all three chain-backed kinds carry them" is the
+      // documented contract (units topic + CLAUDE.md); this kind was the silent exception.
+      return envelope({ state: "ok", data: { kind: p.kind, ...floor, ...decimals, scales }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
     } catch (err) {
       return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx);
     }

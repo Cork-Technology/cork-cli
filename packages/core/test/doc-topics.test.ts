@@ -63,16 +63,26 @@ describe("doc topic: units", () => {
   });
 
   // The topic is a SECOND statement of a scale that already lives in each field's schema
-  // description — so it can rot against the schemas. This pins both directions: the field's own
-  // description must carry the scale marker, AND the topic body must name the field. Trail of Bits
-  // found no correlation between unit-test volume and precision findings, so the guard that matters
-  // is the one that fails when the two sources disagree, not another example.
-  it("table parity: every field the topic names carries the same scale in its own schema description", () => {
+  // description — so it can rot against the schemas. This pins BOTH directions for each field:
+  // (a) the field's own schema description states the marker, and (b) a topic-body LINE pairs the
+  // field name with the SAME marker — naming alone is not enough, or the topic could state a
+  // wrong scale beside a right name and stay green. Trail of Bits found no correlation between
+  // unit-test volume and precision findings; the guard that matters is the one that fails when
+  // two sources of truth disagree.
+  it("table parity: every scaled field states the same marker in its schema description AND its topic row", () => {
     const SCALED_FIELDS: Array<{ field: string; marker: string }> = [
       { field: "swapFeePercentage", marker: "1e18 = 1%" },
       { field: "unwindSwapFeePercentage", marker: "1e18 = 1%" },
       { field: "rateOverride", marker: "1e18 = 1.0" },
       { field: "rate", marker: "1e18 = 1.0" },
+      // The four constraint bounds — the headline fields of collisions #1 and #3. Their scale
+      // lives on the PARENT `constraint` object's description (the children are bare UintStr),
+      // reached via the walker's parent-description propagation below.
+      { field: "constraint", marker: "1e18 = 1.0" },
+      { field: "rateMin", marker: "1e18 = 1.0" },
+      { field: "rateMax", marker: "1e18 = 1.0" },
+      { field: "rateChangePerDayMax", marker: "1e18 = 1.0" },
+      { field: "rateChangeCapacityMax", marker: "1e18 = 1.0" },
       { field: "initialRateBump", marker: "1e7" },
       { field: "rateBump", marker: "1e7" },
       { field: "premium", marker: "PERCENT" },
@@ -80,13 +90,18 @@ describe("doc topic: units", () => {
       // NOT listed: gasPriceEstimate / integratorFee / resolverFee / whitelistDiscountNumerator /
       // surplusFeePercent. Those are Fusion DECODE OUTPUTS (fusion.ts), never tool inputs, so they
       // have no input-schema description to check against — the topic labels them explicitly as
-      // outputs instead. This list's contract is: input fields whose own description states a scale.
+      // outputs instead. Cork OUTPUT scales blocks (compute kinds, cork-pool) are pinned
+      // behaviorally in handlers.test.ts against the same markers.
     ];
 
     // Collect every description reachable for a property name, resolving $refs into $defs (the
     // shared primitives — TokenAmount, PremiumPerShareRate — carry their teaching there, not at
-    // the use site).
+    // the use site). An object-valued property propagates its own description one level DOWN to
+    // its children: a struct like `constraint` documents its four bounds on the parent.
     const byField = new Map<string, string[]>();
+    const record = (name: string, text: string | undefined) => {
+      if (typeof text === "string") byField.set(name, [...(byField.get(name) ?? []), text]);
+    };
     for (const tool of REGISTRY) {
       const schema = inputJsonSchema(tool.name) as Record<string, unknown>;
       const defs = (schema.$defs ?? {}) as Record<string, { description?: string }>;
@@ -96,12 +111,13 @@ describe("doc topic: units", () => {
         const props = n.properties as Record<string, Record<string, unknown>> | undefined;
         if (props) {
           for (const [name, prop] of Object.entries(props)) {
-            const texts: string[] = [];
-            if (typeof prop.description === "string") texts.push(prop.description);
+            record(name, prop.description as string | undefined);
             const ref = typeof prop.$ref === "string" ? prop.$ref.split("/").pop() : undefined;
-            const refDesc = ref ? defs[ref]?.description : undefined;
-            if (typeof refDesc === "string") texts.push(refDesc);
-            if (texts.length > 0) byField.set(name, [...(byField.get(name) ?? []), ...texts]);
+            record(name, ref ? defs[ref]?.description : undefined);
+            const children = prop.properties as Record<string, unknown> | undefined;
+            if (children && typeof prop.description === "string") {
+              for (const child of Object.keys(children)) record(child, prop.description);
+            }
           }
         }
         for (const v of Object.values(n)) {
@@ -112,12 +128,17 @@ describe("doc topic: units", () => {
       walk(schema);
     }
 
-    const body = DOC_TOPICS.units!.body;
+    const lines = DOC_TOPICS.units!.body.split("\n");
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     for (const { field, marker } of SCALED_FIELDS) {
       const descs = byField.get(field);
       expect(descs, `${field} is not a property on any tool schema — rename or drop it from the units topic`).toBeDefined();
       expect(descs!.some((d) => d.includes(marker)), `${field}: no schema description states '${marker}'`).toBe(true);
-      expect(body.includes(field), `the units topic body does not name ${field}`).toBe(true);
+      const wordRe = new RegExp(`\\b${escape(field)}\\b`);
+      expect(
+        lines.some((l) => wordRe.test(l) && l.includes(marker)),
+        `units topic: no line pairs ${field} with '${marker}' — the topic names the field but states a different scale`,
+      ).toBe(true);
     }
   });
 

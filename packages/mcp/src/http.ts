@@ -77,7 +77,15 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
     // DOC_TOPICS entry is served here the moment it exists — the previous hardcoded /docs/signing
     // would have needed an edit per topic (and silently 404'd until someone remembered).
     if (url.pathname.startsWith("/docs/")) {
-      const doc = findDocTopic(decodeURIComponent(url.pathname.slice("/docs/".length)));
+      // decodeURIComponent THROWS on malformed percent-encoding ("/docs/%") — on a public
+      // deployment an uncaught throw here is a 500 for a request that deserves the 404 + list.
+      let slug = "";
+      try {
+        slug = decodeURIComponent(url.pathname.slice("/docs/".length));
+      } catch {
+        /* malformed encoding: fall through with no slug → 404 with the topic list */
+      }
+      const doc = findDocTopic(slug);
       if (doc) {
         return new Response(doc.body, { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
       }

@@ -114,6 +114,17 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
     const listed = await bad.text();
     for (const topic of Object.values(DOC_TOPICS)) expect(listed).toContain(`/docs/${topic.name}`);
   });
+
+  it("/docs/<malformed-percent-encoding> is a 404, not a thrown URIError", async () => {
+    // decodeURIComponent throws on "%" and truncated escapes; on a public deployment an uncaught
+    // throw is a 500 for a request that deserves the 404 + topic list.
+    const handler = createHttpHandler({});
+    for (const path of ["/docs/%", "/docs/%zz", "/docs/%e0%"]) {
+      const res = await handler(new Request(`http://cork.test${path}`));
+      expect(res.status, path).toBe(404);
+      expect(await res.text()).toContain("/docs/units");
+    }
+  });
 });
 
 describe("/readyz diagnostics", () => {

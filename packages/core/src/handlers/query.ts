@@ -1,6 +1,6 @@
 // Split from handlers.ts (2026-08-05): query handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { type ChainId, Envelope, QueryInput } from "@cork/schemas";
+import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { type CorkAddresses, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
 import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
@@ -449,9 +449,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             oracleRate: "1e18 = 1.0 (WAD)",
             swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; 100x apart)",
             unwindSwapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD)",
-            "market.rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax": "1e18 = 1.0 (WAD, absolute)",
-            "constraintState.lastAdjustedRate": "1e18 = 1.0 (WAD)",
-            reference: 'cork_capabilities topic:"units"',
+            // One key per nested struct, matching the compute precedent (`constraint: …`) —
+            // slash-composite keys are not addressable by a consumer doing scales[field].
+            market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
+            constraintState: "lastAdjustedRate: 1e18 = 1.0 (WAD)",
+            reference: UNITS_TOPIC_REFERENCE,
           },
         },
         chainId,

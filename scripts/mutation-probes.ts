@@ -57,6 +57,8 @@ const T = {
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
+  docTopics: "packages/core/test/doc-topics.test.ts",
+  http: "packages/mcp/test/http.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -1307,6 +1309,52 @@ const CATALOG: Mutant[] = [
     find: "with_answers: p.withAnswers, view: p.view,",
     replace: "with_answers: p.withAnswers,",
     tests: [T.venue],
+  },
+  // ── units/scale labels: the C1 collision class — a swapped label is a silent 100x lie ──────
+  {
+    // The cork-pool fee label claims WAD: identical shape, 100x apart, on the most-read
+    // resource — the exact defect the scales block exists to prevent (footgun audit R1).
+    id: "units-scales-fee-label-swapped",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; 100x apart)"',
+    replace: 'swapFeePercentage: "1e18 = 1.0 (WAD)"',
+    tests: [T.handlers],
+  },
+  {
+    // The units TOPIC states the wrong marker on the fee row while still naming the fields —
+    // the "lying topic" hole: parity must check the marker ON THE ROW, not name-presence alone.
+    id: "units-topic-fee-marker-swapped",
+    file: "packages/schemas/src/doc-topics.ts",
+    find: "D18{%}\\` | 1e18 = 1% |",
+    replace: "D18{%}\\` | 1e18 = 1.0 |",
+    tests: [T.docTopics],
+  },
+  {
+    // The suspect tripwire silently stops routing to the units table — teaching regression the
+    // constant-level check could never see (asserted on the real emission path).
+    id: "units-tripwire-reference-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}",
+    replace: "quote_ref is present",
+    tests: [T.venue],
+  },
+  {
+    // /docs/<alias> resolution degrades to name-only: every alias 404s while the name still
+    // serves — the "served everywhere the moment it exists" contract silently narrows.
+    id: "units-docs-route-alias-dropped",
+    file: "packages/mcp/src/http.ts",
+    find: "const doc = findDocTopic(slug);",
+    replace: "const doc = Object.values(DOC_TOPICS).find((t) => t.name === slug);",
+    tests: [T.http],
+  },
+  {
+    // impairment-floor drops the pair's decimals again — the documented cross-kind contract
+    // ("all three chain-backed kinds carry them") regresses to the pre-fix silent exception.
+    id: "compute-impairment-decimals-dropped",
+    file: "packages/core/src/handlers/compute.ts",
+    find: "data: { kind: p.kind, ...floor, ...decimals, scales }",
+    replace: "data: { kind: p.kind, ...floor, scales }",
+    tests: [T.handlers],
   },
 ];
 
