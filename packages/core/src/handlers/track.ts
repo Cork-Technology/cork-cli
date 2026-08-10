@@ -115,7 +115,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const claimed = input.expect?.artifactDigest;
     if (claimed) {
       const match = digest.toLowerCase() === claimed.toLowerCase();
-      return envelope({ state: match ? "ok" : "conflict", data: { verified: match, computedDigest: digest, claimedDigest: claimed }, chainId, source: "config", ...(match ? {} : { warnings: [{ code: "digest_mismatch", message: "recomputed artifact digest does not match the claimed digest" }] }), ctx });
+      return envelope({ state: match ? "ok" : "conflict", data: { verified: match, computedDigest: digest, claimedDigest: claimed }, chainId, source: "config", ...(match ? {} : { warnings: [{ code: "artifact_digest_mismatch", message: "recomputed artifact digest does not match the claimed digest (formerly digest_mismatch)" }] }), ctx });
     }
     return envelope({ state: "ok", data: { computedDigest: digest }, chainId, source: "config", ctx });
   }

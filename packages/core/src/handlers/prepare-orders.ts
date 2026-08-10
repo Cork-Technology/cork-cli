@@ -571,7 +571,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           data: { requestedOrderHash: action.orderHash, localOrderHash, venueOrderHash: signed.venueOrderHash ?? null },
           chainId,
           source: "service",
-          warnings: [{ code: "digest_mismatch", message: "the venue row does not hash to the requested order — no fill bytes were built" }],
+          warnings: [{ code: "order_hash_mismatch", message: "the venue row does not hash to the requested order — no fill bytes were built (formerly digest_mismatch)" }],
           ctx,
         });
       }

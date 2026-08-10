@@ -227,8 +227,63 @@ describe("ch CLI", () => {
   });
 
   it("excess positional arguments error instead of being silently ignored", async () => {
-    const r = await runCli(["capabilities", "stray-arg"], { nowSeconds: NOW });
+    // capabilities now takes one operand (search — see the R4 suite below), so the excess-args
+    // guard is pinned on a command whose single positional genuinely overflows.
+    const r = await runCli(["query", "cork-pools", "stray-arg"], { nowSeconds: NOW });
     expect(r.code).toBe(EXIT.invalid);
+  });
+});
+
+describe("R4: one synonym resolver across every input path (2026-08-10)", () => {
+  it("capabilities takes a bare operand as a SEARCH — its primary use, previously 'too many arguments'", async () => {
+    const r = await runCli(["capabilities", "unwind", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    const env = JSON.parse(r.stdout);
+    expect(env.data.query).toBe("unwind");
+    expect(env.data.matches.length).toBeGreaterThan(0);
+  });
+
+  it("a canonicalised variant spelling DISPATCHES (rewritten pre-parse) — `unwindDeposit --explain` shows the VARIANT contract, not the parent's", async () => {
+    // Before the rewrite, preParse tolerated the spelling but commander fell through to the
+    // parent command — and --explain exited 0 showing the WRONG contract (the silent-wrong).
+    const r = await runCli(["prepare", "pool", "unwindDeposit", "--explain"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.ok);
+    expect(r.stdout).toContain("ch prepare pool unwind-deposit");
+    expect(r.stdout).not.toContain("cptAndCstSharesOut"); // a sibling variant's field — parent contract would list it
+  });
+
+  it("the positional field rides as a flag too: `--resource` works on query (was: unknown option, 'did you mean --source?')", async () => {
+    const r = await runCli(["query", "--resource", "pool", "--chain-id", "1", "--json"], { nowSeconds: NOW });
+    // cork-pool without filters.poolId is the offline-deterministic outcome — proving the flag
+    // fed the resource slot AND the alias table applied on the flag path.
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(JSON.parse(r.stdout).warnings[0].code).toBe("missing_filter");
+  });
+
+  it("resource aliases are case-insensitive, like chain names always were", async () => {
+    const r = await runCli(["query", "Pool", "--chain-id", "1", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(JSON.parse(r.stdout).warnings[0].code).toBe("missing_filter");
+  });
+
+  it("top-level verbs accept the chainId positional their long form accepts: `ch exercise 1`", async () => {
+    const r = await runCli(["exercise", "1", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid); // account/clientRequestId/pool fields are still missing…
+    const payload = JSON.parse(r.stderr);
+    const issuePaths = JSON.stringify(payload.error.issues);
+    expect(issuePaths).not.toContain("chainId"); // …but chainId was ACCEPTED from the operand
+  });
+
+  it("variant subcommands accept it too, with chain-name sugar: `ch prepare pool exercise arbitrum`", async () => {
+    const r = await runCli(["prepare", "pool", "exercise", "arbitrum", "--json"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid);
+    expect(JSON.stringify(JSON.parse(r.stderr).error.issues)).not.toContain("chainId");
+  });
+
+  it("enum-valued positionals tolerate canonicalised spellings, judged against the field's own enum", async () => {
+    const r = await runCli(["decode", "CALLDATA", "--json", "{}"], { nowSeconds: NOW });
+    expect(r.code).toBe(EXIT.invalid); // data is still missing…
+    expect(JSON.stringify(JSON.parse(r.stderr).error.issues)).not.toContain('"kind"'); // …but the kind slot resolved
   });
 });
 

@@ -600,6 +600,11 @@ the same transaction. What to check:
   invalidator: the first fill — of any size — consumes the whole order. If you take half of the
   underwriter's size, the other half is dead, not waiting. Going back for seconds means waiting
   for a fresh order.
+- **`clientRequestId` rules bite twice.** Retrying the same request? Reuse the SAME id — you get
+  the same artifact back (or an idempotent replay off-chain) instead of a duplicate. A genuinely
+  new request needs a FRESH id. Underwriters, one more: your maker order's invalidator *bit*
+  derives from this id, so two concurrently-live orders sharing an id share a bit — filling or
+  cancelling either kills the other. One live order, one id.
 - The result's `data.execution` block names the exact completion path (sign → decode-verify →
   broadcast → reconcile); `ch capabilities --topic signing` is the full reference.
 - **If the prepare warns `jit_side_mismatch` / `stale_share_prediction`, stop** — that resting order

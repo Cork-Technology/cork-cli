@@ -87,7 +87,7 @@ describe("MCP server in-memory roundtrip", () => {
     expect(res.isError).toBeFalsy();
     const env = res.structuredContent as { state: string; warnings: Array<{ code: string }> };
     expect(env.state).toBe("conflict");
-    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+    expect(env.warnings[0]?.code).toBe("artifact_digest_mismatch");
   });
 });
 

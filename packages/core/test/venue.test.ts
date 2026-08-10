@@ -232,7 +232,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     );
     // The venue's digest differs from the local recomputation in this stub → conflict surfaces.
     expect(env.state).toBe("conflict");
-    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+    expect(env.warnings[0]?.code).toBe("venue_digest_mismatch");
     // …but the POST itself happened with the right shape:
     const post = seen[0]!;
     expect(post.method).toBe("POST");
@@ -269,7 +269,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     tampered.action.intent.nonce = "999";
     const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
-    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+    expect(env.warnings[0]?.code).toBe("intent_hash_mismatch");
     expect(seen.length).toBe(0); // the broken payload never left the process
   });
 
@@ -1085,7 +1085,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const liar = { orderHash: hash, order: { ...orderWire, salt: "9999" }, signature: SIG, extension: "0x" };
     const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [liar], hasMore: false } }]);
     expect(env.state).toBe("conflict");
-    expect(env.warnings[0]?.code).toBe("digest_mismatch");
+    expect(env.warnings[0]?.code).toBe("order_hash_mismatch");
   });
 
   it("order absent from a COMPLETE book → order_not_found (a normal outcome)", async () => {

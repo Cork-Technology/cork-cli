@@ -158,7 +158,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           data: { claimed: o.rolloverIntentHash, recomputed: recomputedIntentHash },
           chainId,
           source: "config",
-          warnings: [{ code: "digest_mismatch", message: "intent does not hash to order.rolloverIntentHash (zero-digest EIP-712 struct hash) — the payload was NOT relayed; the intent or the signed order is inconsistent" }],
+          warnings: [{ code: "intent_hash_mismatch", message: "intent does not hash to order.rolloverIntentHash (zero-digest EIP-712 struct hash) — the payload was NOT relayed; the intent or the signed order is inconsistent (formerly digest_mismatch)" }],
           ctx,
         });
       }
@@ -236,7 +236,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
             data: { venueDigest, localDigest },
             chainId,
             source: "service",
-            warnings: [{ code: "digest_mismatch", message: "the venue computed a DIFFERENT orderDigest than the local EIP-712 recomputation — do not sign or rely on either until resolved" }],
+            warnings: [{ code: "venue_digest_mismatch", message: "the venue computed a DIFFERENT orderDigest than the local EIP-712 recomputation — do not sign or rely on either until resolved (formerly digest_mismatch)" }],
             ctx,
           });
         }

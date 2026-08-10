@@ -954,7 +954,7 @@ const CATALOG: Mutant[] = [
     // shuffle grew into preParseVariants.)
     id: "cli-variant-shuffle-disabled",
     file: "packages/cli/src/app.ts",
-    find: "return { argv: [...spec.path, next, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };",
+    find: "return { argv: [...spec.path, exact, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };",
     replace: "return { argv: argvIn };",
     tests: [T.cli],
   },
@@ -1215,6 +1215,62 @@ const CATALOG: Mutant[] = [
     find: "if (accountOk === false) {",
     replace: "if (accountOk !== false) {",
     tests: [T.forself],
+  },
+  // ── R4: one synonym resolver across every CLI input path (2026-08-10) ─────────────────────
+  {
+    // preParse validates a canonicalised variant spelling but stops REWRITING it: commander
+    // falls through to the parent command, and `--explain` exits 0 showing the WRONG contract —
+    // the silent-wrong this rewrite exists to kill.
+    id: "cli-preparse-canonical-rewrite-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "return first === exact ? { argv: argvIn } : { argv: [...argvIn.slice(0, i), exact, ...argvIn.slice(i + 1)] };",
+    replace: "return { argv: argvIn };",
+    tests: [T.cli],
+  },
+  {
+    // Positional↔flag parity dropped: `--resource` is an unknown option again, with a
+    // did-you-mean pointing at an unrelated flag.
+    id: "cli-positional-flag-parity-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "if (positional && props[positional]) fieldOption(cmd, cmdRegistered, positional, props[positional]!);",
+    replace: "void 0;",
+    tests: [T.cli],
+  },
+  {
+    // Resource aliases regress to case-sensitive while chain names stay case-insensitive — the
+    // exact same-table-different-rule split R4 closed.
+    id: "cli-resource-alias-case-sensitive-regression",
+    file: "packages/cli/src/app.ts",
+    find: 'if (name === "resource") rawStr = RESOURCE_ALIASES[rawStr.toLowerCase()] ?? rawStr.toLowerCase();',
+    replace: 'if (name === "resource") rawStr = RESOURCE_ALIASES[rawStr] ?? rawStr;',
+    tests: [T.cli],
+  },
+  {
+    // Variant subcommands and top-level verbs stop taking the parent's positional: `ch exercise
+    // 1` rejects the operand its long form accepts (the R4 class in miniature).
+    id: "cli-variant-positional-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "const positionalValue = positional ? (args[0] as string | undefined) : undefined;",
+    replace: "const positionalValue = !variant && positional ? (args[0] as string | undefined) : undefined;",
+    tests: [T.cli],
+  },
+  {
+    // capabilities loses its search operand: `ch capabilities unwind` dies on excess args while
+    // every sibling tool takes a bare operand.
+    id: "cli-capabilities-search-positional-dropped",
+    file: "packages/cli/src/app.ts",
+    find: ' ?? (tool.name === "cork_capabilities" ? "search" : undefined);',
+    replace: " ?? undefined;",
+    tests: [T.cli],
+  },
+  {
+    // Enum canonical tolerance dropped: `ch decode CALLDATA` stops resolving against the
+    // field's own enum (only exact spellings pass).
+    id: "cli-enum-canonical-tolerance-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "const canonHit = node.enum.find((e) => canonicalise(String(e)) === canonicalise(rawStr));",
+    replace: "const canonHit = undefined as string | undefined;",
+    tests: [T.cli],
   },
   // ── RFQ negotiation surface (venue a2b03bd): fraction contract, citation gates, band, view ──
   {

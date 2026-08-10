@@ -359,6 +359,11 @@ export async function runCli(
     path: string[];
     variants: Set<string>;
     variantNames: string[];
+    /** canonicalise(spelling) → the EXACT spelling commander dispatches on (kebab name or a
+     *  registered alias). preParse REWRITES tolerated spellings to this — a spelling merely
+     *  accepted here but left in argv falls through commander to the parent command, which
+     *  mis-reads it as a positional (and `--explain` then exits 0 showing the WRONG contract). */
+    dispatch: Map<string, string>;
     positional?: { flag: string; values: Set<string> };
   }
   const unionSpecs: UnionCliSpec[] = [];
@@ -373,11 +378,17 @@ export async function runCli(
       const i = spec.path.length;
       const first = argvIn[i];
       if (first === undefined || first.startsWith("-")) return { argv: argvIn };
-      if (spec.variants.has(canonicalise(first))) return { argv: argvIn };
+      if (spec.variants.has(canonicalise(first))) {
+        // Rewrite a tolerated spelling (`unwindDeposit`, `Unwind-Deposit`) to the exact one
+        // commander dispatches on — validation without rewriting was the silent-wrong.
+        const exact = spec.dispatch.get(canonicalise(first))!;
+        return first === exact ? { argv: argvIn } : { argv: [...argvIn.slice(0, i), exact, ...argvIn.slice(i + 1)] };
+      }
       if (spec.positional?.values.has(first.toLowerCase())) {
         const next = argvIn[i + 1];
         if (next !== undefined && !next.startsWith("-") && spec.variants.has(canonicalise(next))) {
-          return { argv: [...spec.path, next, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };
+          const exact = spec.dispatch.get(canonicalise(next)) ?? next;
+          return { argv: [...spec.path, exact, `--${spec.positional.flag}`, first, ...argvIn.slice(i + 2)] };
         }
         return { argv: argvIn };
       }
@@ -435,7 +446,9 @@ export async function runCli(
     const props = Object.fromEntries(Object.entries(objectProps(schema.properties)).map(([k, n]) => [k, resolveNode(n, defs)]));
     const required = schema?.required ?? [];
     // One positional, for the first required scalar — `ch query cork-pool`, `ch decode calldata`.
-    const positional = required.find((r) => props[r] && isScalarNode(props[r]!));
+    // capabilities has no required scalar but search is its primary use: `ch capabilities unwind`
+    // must not die on "too many arguments" when every other tool takes a bare operand.
+    const positional = required.find((r) => props[r] && isScalarNode(props[r]!)) ?? (tool.name === "cork_capabilities" ? "search" : undefined);
     // The discriminated-union field (action/params/subject), if the tool has one: each of its
     // variants becomes a SUBCOMMAND (`ch prepare phoenix exercise …`) with the variant's own
     // fields flattened into flags. The legacy forms (positional chainId + --action/--params
@@ -479,6 +492,12 @@ export async function runCli(
       if (name === positional) continue;
       fieldOption(cmd, cmdRegistered, name, node);
     }
+    // Positional↔flag parity: the positional field ALSO rides as a flag (`ch query --resource
+    // rfqs`, `ch prepare pool --chain-id 1`). Before this, the flag spelling of a positional was
+    // an unknown option — with a did-you-mean pointing at an unrelated flag (--resource →
+    // "--source"). When both forms are given, the flag overrides the positional, matching the
+    // flags-override-everything convention of every other field.
+    if (positional && props[positional]) fieldOption(cmd, cmdRegistered, positional, props[positional]!);
 
     // cork_query: every known filters key rides as a first-class flag (`--pool-id`, `--rfq-id`,
     // `--status` …) merging INTO filters — the escaped-JSON `--filters` blob stays available and
@@ -517,9 +536,10 @@ export async function runCli(
         const self = args[args.length - 1] as Command;
         const parentOpts = variant ? ((self.parent?.opts() ?? {}) as Record<string, unknown>) : {};
         const opts = { ...parentOpts, ...(args[args.length - 2] as Record<string, unknown>) };
-        // Variant subcommands take no positionals — every top-level field (chainId included)
-        // rides as a flag there, so the variant name owns the readable slot.
-        const positionalValue = !variant && positional ? (args[0] as string | undefined) : undefined;
+        // Variant subcommands and top-level verbs accept the parent's positional too — the long
+        // and short spellings must take the same operands (`ch exercise 1` = `ch prepare pool
+        // exercise 1` = `ch prepare pool 1 exercise`); every field still also rides as a flag.
+        const positionalValue = positional ? (args[0] as string | undefined) : undefined;
 
         const jsonOpt = opts["json"];
         const wantsJson = jsonOpt !== undefined || envWantsJson;
@@ -561,10 +581,25 @@ export async function runCli(
           }
         }
 
-        /** Assign one flag value with amount sugar + scalar/JSON handling; false = error emitted. */
+        /** Assign one value with synonym resolution, amount sugar, and scalar/JSON handling;
+         *  false = error emitted. ONE resolver for positional and flag forms alike, so a synonym
+         *  accepted in one spelling slot is accepted in every spelling slot (blobs stay
+         *  wire-exact by design): chain names lowercase-insensitively; resource aliases likewise
+         *  (they were case-sensitive while chain names were not — same table, different rule);
+         *  enum-valued fields tolerate the taxonomy-agreeing variant aliases and canonicalised
+         *  spellings, judged against the field's OWN enum so an alias never leaks across domains. */
         const assign = (target: Record<string, unknown>, name: string, node: SchemaNode, supplied: unknown): boolean => {
           let rawStr = String(supplied);
           if (name === "chainId" && CHAIN_NAMES[rawStr.toLowerCase()] !== undefined) rawStr = CHAIN_NAMES[rawStr.toLowerCase()]!;
+          if (name === "resource") rawStr = RESOURCE_ALIASES[rawStr.toLowerCase()] ?? rawStr.toLowerCase();
+          if (node.enum && node.enum.length > 0 && !node.enum.includes(rawStr)) {
+            const aliasTarget = Object.entries(VARIANT_ALIAS_TARGET).find(([a]) => canonicalise(a) === canonicalise(rawStr))?.[1];
+            if (aliasTarget !== undefined && node.enum.includes(aliasTarget)) rawStr = aliasTarget; // `ch decode limit-order` → kind "order"
+            else {
+              const canonHit = node.enum.find((e) => canonicalise(String(e)) === canonicalise(rawStr));
+              if (canonHit !== undefined) rawStr = String(canonHit); // `ch decode Calldata` → "calldata"
+            }
+          }
           if (isAmountNode(node) && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
@@ -597,21 +632,12 @@ export async function runCli(
           return true;
         };
 
-        // Then the ergonomic forms, which win over the JSON blob so a flag can override it.
-        if (positional && positionalValue !== undefined) {
-          const aliasTarget = VARIANT_ALIAS_TARGET[positionalValue];
-          const posRaw =
-            positional === "chainId"
-              ? (CHAIN_NAMES[positionalValue.toLowerCase()] ?? positionalValue)
-              : positional === "resource"
-                ? (RESOURCE_ALIASES[positionalValue] ?? positionalValue)
-                : aliasTarget !== undefined && props[positional]?.enum?.includes(aliasTarget)
-                  ? aliasTarget // `ch decode limit-order` → kind "order" (alias promised, previously dead)
-                  : positionalValue;
-          input[positional] = coerce(props[positional]!, posRaw);
+        // Then the ergonomic forms, which win over the JSON blob so a flag can override it. The
+        // positional rides through the SAME resolver as its flag twin — one set of synonyms.
+        if (positional && positionalValue !== undefined && props[positional]) {
+          if (!assign(input, positional, props[positional]!, positionalValue)) return;
         }
         for (const [name, node] of Object.entries(props)) {
-          if (!variant && name === positional) continue;
           if (variant && union && name === union.field) continue;
           const supplied = opts[name];
           if (supplied === undefined) continue;
@@ -719,12 +745,18 @@ export async function runCli(
       {
         const variantNames = union.variants.map((v) => kebab(v.value));
         const variantCanon = new Set([...variantNames, ...variantNames.flatMap((v) => VARIANT_ALIASES[v] ?? [])].map(canonicalise));
+        // Exact dispatchable spelling per tolerated form: canonical kebab names first, then the
+        // registered aliases (commander dispatches both; anything else must be rewritten).
+        const dispatch = new Map<string, string>();
+        for (const v of variantNames) dispatch.set(canonicalise(v), v);
+        for (const v of variantNames) for (const a of VARIANT_ALIASES[v] ?? []) dispatch.set(canonicalise(a), a);
         const specPaths = [[...tool.cliPath], ...(tool.cliAliases ?? []).map((alias) => [...tool.cliPath.slice(0, -1), alias])];
         for (const specPath of specPaths)
         unionSpecs.push({
           path: specPath,
           variants: variantCanon,
           variantNames,
+          dispatch,
           ...(positional && props[positional]?.enum?.length
             ? {
                 positional: {
@@ -744,6 +776,9 @@ export async function runCli(
             .command(kebab(v.value))
             .description(firstSentence(v.description ?? `${v.value} (see --explain)`)),
         );
+        // The parent's positional works here too (`ch prepare pool exercise 1`): rejecting an
+        // operand the long form accepts was the R4 class in miniature.
+        if (positional) sub.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
         for (const alias of VARIANT_ALIASES[kebab(v.value)] ?? []) sub.alias(alias);
         const subRegistered = new Set<string>();
         // Top-level fields ride as flags here (chainId included — the variant owns the slot).
@@ -770,6 +805,7 @@ export async function runCli(
               .command(verb)
               .description(`${firstSentence(v.description ?? verb)} (= ch ${tool.cliPath.join(" ")} ${kebab(v.value)})`),
           );
+          if (positional) top.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
           const topRegistered = new Set<string>();
           for (const [name, node] of Object.entries(props)) {
             if (union.field === name) continue;
