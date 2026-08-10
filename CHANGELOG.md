@@ -6,6 +6,50 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
+## [0.1.0-rc.3] — 2026-08-10
+
+### Added
+
+- **RFQ negotiation surface** (venue a2b03bd): `cork_submit rfq-counter` — the requester's
+  non-committal counter-bid, with the venue's own gates replicated client-side (fraction
+  contract, requester/expiry/citation pre-flights); optional `supersedes` on `rfq-answer`;
+  `filters.view` (`full`|`current`) on the `rfqs` read serving the negotiation frontier, with
+  `version`-based change polling taught in the schema.
+- **`units` doc topic** — the scale table agents can ask for (`cork_capabilities
+  topic:"units"`), wired into every numbers-contract tripwire message; money/rate outputs across
+  compute, query, and decode now carry explicit `scales` blocks (audit R1 closed).
+- **market-registry 0.3.3** (Arbitrum One + Base, identical addresses): the CREATE2-collision
+  fix integrated and live-verified; CREATE2 attestations extended with public rebuild pointers
+  (`source`: repo@tag + forge path) and config-binding declarations (`binds`), coverage pinned —
+  15 entries, all re-derived locally.
+- **Live venue contract test** (`venue-live.test.ts`): the negotiation read contract asserted
+  against the deployed venue (frontier partition arithmetic, version monotonicity), wired into
+  CI's live-smoke.
+
+### Changed
+
+- **`digest_mismatch` split into four branchable codes** (covered-surface change, rc-line only:
+  `artifact_digest_mismatch`, `intent_hash_mismatch`, `venue_digest_mismatch`,
+  `order_hash_mismatch`); messages carry "(formerly digest_mismatch)" for one release.
+- **RFQ pre-flights now predict the deployed venue, not an idealized decimal contract**: the
+  fraction cap mirrors the venue's `parseFloat` refine; the `quote_ref` premium band replicates
+  the venue's strict float gate operation-for-operation (eliminating two false-block classes);
+  citations unresolvable on a truncated answers embed relay flagged `citation_unresolved`
+  instead of false-refusing; the venue's provenance checks (maker==requester, option chain and
+  collateral coherence) run client-side with teaching.
+- **One CLI synonym resolver across every input path** (audit R4): resource aliases are
+  case-insensitive like chain names; positional fields also ride as flags (`--resource`,
+  `--chain-id`); variant subcommands and top-level verbs accept the parent's positional
+  (`ch exercise 1`); canonicalised variant spellings are rewritten pre-parse so `--explain`
+  can no longer show the wrong contract; `ch capabilities <query>` searches.
+
+### Fixed
+
+- Footgun-audit hardening: `rollover-premium-floor` rounds CEIL (settler parity);
+  unsafe-integer JSON numbers refuse instead of silently rounding (order records,
+  `filters.rate`); `chainid_defaulted` warns when an omitted chainId picked mainnet for
+  chain-specific hashes.
+
 ## [0.1.0-rc.2] — 2026-08-10
 
 Identical content to 0.1.0-rc.1 plus one release-pipeline fix: the cross-OS smoke step used
