@@ -267,14 +267,15 @@ liveness/ERC-1271 checks DO use the default-resolved RPC — security reads run 
 endpoint resolves.)
 
 Per-chain coverage: chainId 1 is **full** on its own stack. 42161 and 8453 both default to
-**phoenix v1.3.0-rc.1 + market-registry 0.3.2** (2026-08-07, identical CREATE2 addresses; the
-0.3.2 adapter's controller binds the v1.3 pool manager `0x02803B…7263`; per-chain bundler3 read
+**phoenix v1.3.0-rc.1 + market-registry 0.3.3** (2026-08-10, identical CREATE2 addresses; the
+adapter's controller binds the v1.3 pool manager `0x02803B…7263`; per-chain bundler3 read
 from the adapter's own `BUNDLER3()`). All five phoenix contracts + the full registry stack on both
 chains — but **no pools exist on the v1.3 pool manager yet**
-(cork-pool reads `chain_read_failed` there), the adapter's POOL_CREATOR +
-FEE_MANAGER grant is pending one Safe signature (prepares warn `roles_not_granted`), and pair
-oracles are seeded on Base but mostly undeployed on 42161 (resolve needs the `additionalData`
-anchor until a pair's wrapper deploys). The venue's EXISTING markets live on the previous Arbitrum
+(cork-pool reads `chain_read_failed` there). The adapter's POOL_CREATOR + FEE_MANAGER roles are
+GRANTED on BOTH chains (verified 2026-08-10 — the `roles_not_granted` era is over); the residual
+42161 gap is RECIPE APPROVAL: isRecipe is false ×3 there (true ×3 on Base), so 42161 JIT
+resolution answers `recipe_not_found` until Zian's approvals land; pair-oracle resolve still
+takes the `additionalData` anchor until a pair's wrapper deploys. The venue's EXISTING markets live on the previous Arbitrum
 stack, `deploymentProfiles["42161"]["arbitrum-v1.1"]` (old PM `0x4d0ab6…`; rollover binds THIS
 generation; share prediction stays correct — `predictShares` follows the CONTROLLER's own
 `CORK_POOL_MANAGER()` binding, mutation-probed). The pre-launch pair (old PM
@@ -283,11 +284,16 @@ examples/tests: `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02c
 list: `api-phoenix.cork.tech/v1/pools/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the
 vnet — chainId 1 without a vnet RPC yields `chain_read_failed`, by design.
 
-**MarketRegistry 2.1.0-model, contracts release 0.3.2 (Arbitrum One + Base, identical
-addresses).** The whole registry stack was redeployed 2026-08-07 against the v1.3.0-rc.1 pool
-manager — every address changed (registry `0xF532…DC94`, adapter `0x1b75…c7CE`, factories, THREE
-approved recipes — LiquidityPrice, LiquidityNav (NEW), FixedRate — verified on-chain on BOTH
-chains; attestations in packages/core/src/config.ts). The 0.3.2 controller splits fee authority
+**MarketRegistry 2.1.0-model, contracts release 0.3.3 (Arbitrum One + Base, identical
+addresses).** Redeployed 2026-08-10 with the CREATE2-collision fix: the wrapper key doubles as
+the CREATE2 salt and is now keccak256(abi.encode(**registryAddress**, ca, ref, caSource,
+refSource)) — every registry derives its own salt space, so the sUSDe/sUSDS@42161 brick cannot
+recur (verified live: the pair simulates DEPLOYABLE on the new registry, still reverts on the
+old). Every address changed again (registry `0xa78d…11F1`, adapter `0x8902…374f`, factories,
+THREE recipes — LiquidityPrice, LiquidityNav, FixedRate; attestations re-derived from the 0.3.3
+broadcast records in packages/core/src/config.ts; the 0.3.2 set `0xF532…DC94` is superseded, git
+history keeps its record). Predicted wrapper addresses come from simulateContract(registry.deploy)
+— on-chain, never a local salt port — so the salt change needed no math changes. The controller splits fee authority
 into FEE_MANAGER_ROLE — `readAdapterRoles` (market-registry.ts) detects the generation from the
 controller's own `FEE_MANAGER_ROLE()` view (CONFIGURATOR on older controllers), one shared
 comparator, mutation-probed. The PREVIOUS generation is dangerous precisely

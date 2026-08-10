@@ -63,81 +63,86 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x2e1204abee27192079350f3f17779da88e1940a2ac222eb9f3e5a66060f682cb",
     expected: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
   },
-  // MarketRegistry 0.3.2 set (42161 block 491971103 / 8453 block 49648442 — identical
-  // addresses, ONE AtomicDeployer batch per chain with identical inputs) — extracted from the
-  // deploy broadcast (market-registry-private tag 0.3.2). The AtomicDeployer itself is Safe-
-  // Singleton-Factory CREATE2 (salt ++ initCode calldata); the eight protocol contracts are
-  // CREATE2 FROM the AtomicDeployer under ONE guarded salt: keccak256(abi.encodePacked(
-  // deploySender, rawSalt)) — the anti-squatting guard in script/AtomicDeployer.sol. Every
-  // entry locally re-derived and matched against BOTH chains' live addresses 2026-08-07.
+  // MarketRegistry 0.3.3 set (42161 block 492983171 / 8453 block 49775886 — identical
+  // addresses, ONE AtomicDeployer batch per chain with byte-identical init codes, verified from
+  // both chains' broadcast records) — extracted from the deploy broadcast (market-registry-private
+  // tag 0.3.3; the redeploy that fixes the cross-generation wrapper-salt collision by keying the
+  // wrapper CREATE2 salt on the registry address). The AtomicDeployer itself is Safe-Singleton-
+  // Factory CREATE2 (salt ++ initCode calldata; its rawSalt IS the global deployment salt); the
+  // eight protocol contracts are CREATE2 FROM the AtomicDeployer under ONE guarded salt:
+  // keccak256(abi.encodePacked(deploySender, rawSalt)) — the anti-squatting guard in
+  // script/AtomicDeployer.sol. Every entry locally re-derived and matched against BOTH chains'
+  // live addresses 2026-08-10. The factories' initCodeHashes are UNCHANGED from 0.3.2 — their
+  // addresses moved only because the salt space moved, which is the point of the fix. The 0.3.2
+  // set (registry 0xF5323F30…) is superseded; git history has its attestations.
   {
     name: "atomicDeployer",
-    salt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9",
+    salt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5",
     initCodeHash: "0xf71b94e19de5f98f8ced603caa2a4953479ae71e87f018dc3bc24429027ff448",
-    expected: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
+    expected: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
   },
   {
     name: "marketRegistry",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
-    initCodeHash: "0x30c197c6fec24ca9bb19afbed9d36753cab192be627853d26489e3c3df8241ac",
-    expected: "0xF5323F305360A792284814a7EDe78c2209A1DC94",
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x121b40b3455d01ad785c7b53bc460fca873133a3b7498d62b09cf602d67ae732",
+    expected: "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
   },
   {
     name: "corkLimitOrderAdapter",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
-    initCodeHash: "0x92a5ea42b19652513c11203e4a6e32881cc33b77ff41c6f59db7800a7e933d89",
-    expected: "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE",
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x9de5105f09a61a78b2441a2300094bd6b34c2759cbc10fda836396a579dd479d",
+    expected: "0x8902a88912a334263fe3d731d03c267715b9374f",
   },
   {
     name: "wrapperRateConsumerFactory",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
     initCodeHash: "0x9f7d017bc7ba9128c4ab4246dce99fd10de9611f0e0955a7247ab1e08afdb225",
-    expected: "0xF64c9d502531Cd87f9CB2994092FB56d02a21812",
+    expected: "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
   },
   {
     name: "fixedRateOracleFactory",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
     initCodeHash: "0x2bc263ef45c96cfc64807511369b436baa56cdf256f32390564e6f33801dc02a",
-    expected: "0x7766d44d40329B3e15302531eb4C0D2578031Acb",
+    expected: "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
   },
   {
     name: "aggregatorAdapterFactory",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
     initCodeHash: "0x41055e120e8153a192624fc07ab38327cb481b814855b7b960a523de61f03224",
-    expected: "0xf2aa4c2FEA4e6e0FF8de30C07C4f54fC86A93BbB",
+    expected: "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
   },
   {
     name: "liquidityPriceRecipe",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
-    initCodeHash: "0xdefdfe13fd8c98cf3bcc959b37b8a57b1594177e47424b020b9a1210ea1a4612",
-    expected: "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291",
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0xfa87863e27b920b646e09222488f730d0fbbe0c9e3351f903a2c2f3908a26101",
+    expected: "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
   },
   {
     name: "liquidityNavRecipe",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
-    initCodeHash: "0xa9c19c296b017a6d7d7fe156a12b0519814556e5f1cabd5f9a6bd2a41f94fb26",
-    expected: "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506",
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0x14743f20eee6d12d3e7bab21ab15561f1c94e5e952348ce3b1b4ca69183a2390",
+    expected: "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
   },
   {
     name: "fixedRateRecipe",
-    deployer: "0x24a6C14D772E5931621A1DBe4BfeA0f6d7e681B2",
-    salt: "0x7b721a223f31d0949286963ca6cec2713d81dd1a43a9510206b4d7ff4adb943c",
-    guard: { rawSalt: "0x5d09d5a707ed9b8aeb40ee5f544b4846deabaf6c6559bc3356d3a4387960d3a9", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
-    initCodeHash: "0x9edfd2059bfb00e96739ef0b4297b1d73588a0d761f82f15c93aab3bb217f31e",
-    expected: "0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D",
+    deployer: "0x56366DEed49735CdD8A6CbE72Db187b9A7958884",
+    salt: "0x7e95f016beff322ab68560273670f09ee407ece46809047bc0b70970a64eead6",
+    guard: { rawSalt: "0xce89d6c66025e5b8639fbd88d3d4d841cfda15dd99e3f1ea98e3dec3f7a5c9b5", guardSender: "0xE6E7437088bc0A9c29b5147AA13c1aB24541782a" },
+    initCodeHash: "0xcc9718159b9bb14ef88d186874626dbc6dc762a8220b151e3a80ff39ea104c07",
+    expected: "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
   },
 ];

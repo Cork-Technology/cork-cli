@@ -197,17 +197,17 @@ export interface RecipeCatalogEntry {
   args: { type: string; display: string } | null;
 }
 export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
-  // 0.3.2 recipes (identical addresses on 42161 + 8453; constant getters probed live on the
-  // deployed contracts 2026-08-07 — both liquidity flavors carry the same band constants).
-  "0xd27c7bb8564db019b41d9c48d1abced9a7d90291": {
+  // 0.3.3 recipes (identical addresses on 42161 + 8453; constant getters re-probed live on the
+  // deployed contracts 2026-08-10 — same constant set as 0.3.2, both liquidity flavors alike).
+  "0xb881db48ad6da84a8f0d1ce4150caf7ae016dc55": {
     constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
     args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
   },
-  "0x1cf1ef3f0d2f59bf26a373ce7dcf0f88612c1506": {
+  "0xaed3d0e3c86a994d88741c285657c3e78550f66d": {
     constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
     args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
   },
-  "0x6d838136bbbe7d34ce8dddc431ce1bb4a1f9d98d": {
+  "0x133ac0fa9e3d44a34b8ce4e4b8d468758fd165c1": {
     constants: ["WINDOW_WIDTH"],
     args: { type: "()", display: "no payload — the fixed-rate recipe rejects any additionalData" },
   },

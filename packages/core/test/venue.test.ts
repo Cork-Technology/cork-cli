@@ -1006,10 +1006,10 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
   // ── taker-side JIT: the walkthrough's canonical settle path (underwriter lifts a BUY order,
   // takerInteraction mints the cST into the fill gap) ──────────────────────────────────────
   describe("jitMarket on taker-fill", () => {
-    const REG = "0xF5323F305360A792284814a7EDe78c2209A1DC94";
-    const ADAPTER = "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE";
+    const REG = "0xa78d8137B01058dD23e545b6557209eBBc9611F1";
+    const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f";
     const CONTROLLER = "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1";
-    const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
+    const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55";
     const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
     const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
     const ORACLE = "0x00000000000000000000000000000000000000fe";

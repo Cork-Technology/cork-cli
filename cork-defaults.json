@@ -1,7 +1,7 @@
 {
   "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
   "schemaVersion": 1,
-  "updated": "2026-08-07",
+  "updated": "2026-08-10",
   "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix v1.3.0-rc.1, prerelease 2026-08-07): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). Adopted together with market-registry 0.3.2 (Zian's redeploy against this pool manager) — the generations are ALIGNED. The previous Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']; rollover still binds the v1.1 stack (its redeploy is pending).",
   "deployments": {
     "1": {
@@ -61,39 +61,39 @@
       }
     }
   },
-  "$marketRegistryComment": "MarketRegistry stack, contracts release 0.3.2 (Zian's full redeploy 2026-08-07 against the v1.3.0-rc.1 pool manager; identical addresses on 42161 + 8453 via ONE AtomicDeployer batch — guarded CREATE2, salts attested in packages/core/src/config.ts; adapter bindings + isRecipe for all three recipes verified on-chain on BOTH chains 2026-08-07). `recipes` are NAMED HINTS for the deprecated mode sugar only — membership is decided solely by isRecipe on chain. The 0.3.2 controller splits fee authority into FEE_MANAGER_ROLE (the adapter needs POOL_CREATOR + FEE_MANAGER; grant pending a Safe signature as of 2026-08-07 — prepares warn roles_not_granted until it lands). The 0.3.0 predecessor (registry 0x47C3AF38435Db64D9400c30575E4c10482c0752D, v1.1-pool-manager-bound) is superseded and dropped from config — git history has its full record. The PRE-2.1.0 generation (different interface, misdecoding answers) stays under marketRegistryLegacy, reachable only with CORK_ENABLE_DEPRECATED=1.",
+  "$marketRegistryComment": "MarketRegistry stack, contracts release 0.3.3 (Zian's full redeploy 2026-08-10 — the CREATE2-collision fix: the wrapper key doubles as the CREATE2 salt and is now keccak256(abi.encode(registryAddress, ca, ref, caSource, refSource)), so every registry instance derives its own salt space and the sUSDe/sUSDS@42161 brick cannot recur. Verified empirically 2026-08-10: the pair simulates DEPLOYABLE on the new registry and still reverts on the old one. Identical addresses on 42161 + 8453 via ONE AtomicDeployer batch — guarded CREATE2, salts + initCodeHashes attested in packages/core/src/config.ts, re-derived locally from the 0.3.3 broadcast records and matched against BOTH chains' live addresses 2026-08-10). `recipes` are NAMED HINTS for the deprecated mode sugar only — membership is decided solely by isRecipe on chain: as of 2026-08-10 all three recipes are APPROVED on Base but NOT YET on Arbitrum (isRecipe false ×3, API /v1/42161/recipes empty) — JIT resolution on 42161 answers recipe_not_found until the approvals land. POOL_CREATOR + FEE_MANAGER are GRANTED to the new adapter on BOTH chains (verified on-chain 2026-08-10 — the roles_not_granted era is over; adapter LOP/POOL_MANAGER/CONTROLLER/MARKET_REGISTRY bindings all verified). The 0.3.2 predecessor (registry 0xF5323F305360A792284814a7EDe78c2209A1DC94, adapter 0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE; no markets were ever created through it — its roles landed only with this redeploy) and the 0.3.0 one before it are superseded and dropped from config — git history has their full record; the adapter.MARKET_REGISTRY() binding guard refuses cross-generation reads. The PRE-2.1.0 generation (different interface, misdecoding answers) stays under marketRegistryLegacy, reachable only with CORK_ENABLE_DEPRECATED=1.",
   "marketRegistry": {
     "42161": {
-      "registry": "0xF5323F305360A792284814a7EDe78c2209A1DC94",
-      "adapter": "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE",
+      "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
+      "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
       "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
-      "wrapperFactory": "0xF64c9d502531Cd87f9CB2994092FB56d02a21812",
-      "fixedRateOracleFactory": "0x7766d44d40329B3e15302531eb4C0D2578031Acb",
-      "aggregatorAdapterFactory": "0xf2aa4c2FEA4e6e0FF8de30C07C4f54fC86A93BbB",
+      "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
+      "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
+      "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
       "recipes": {
-        "liquidity": "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291",
-        "nav": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506",
-        "fixed": "0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D"
+        "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
+        "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"
       },
       "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
-      "contractsVersion": "0.3.2",
-      "deployedAtBlock": 491971103
+      "contractsVersion": "0.3.3",
+      "deployedAtBlock": 492983171
     },
     "8453": {
-      "registry": "0xF5323F305360A792284814a7EDe78c2209A1DC94",
-      "adapter": "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE",
+      "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
+      "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
       "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
-      "wrapperFactory": "0xF64c9d502531Cd87f9CB2994092FB56d02a21812",
-      "fixedRateOracleFactory": "0x7766d44d40329B3e15302531eb4C0D2578031Acb",
-      "aggregatorAdapterFactory": "0xf2aa4c2FEA4e6e0FF8de30C07C4f54fC86A93BbB",
+      "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
+      "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
+      "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
       "recipes": {
-        "liquidity": "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291",
-        "nav": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506",
-        "fixed": "0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D"
+        "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
+        "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"
       },
       "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
-      "contractsVersion": "0.3.2",
-      "deployedAtBlock": 49648442
+      "contractsVersion": "0.3.3",
+      "deployedAtBlock": 49775886
     }
   },
   "marketRegistryLegacy": {

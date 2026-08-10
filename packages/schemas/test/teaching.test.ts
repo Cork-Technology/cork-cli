@@ -130,7 +130,7 @@ describe("buildTeaching — enum-typo issue enrichment", () => {
   });
 
   it("the pre-rename compute kind resolve-recipe teaches recipe-rate-constraint (mutation-probed)", () => {
-    const input = { chainId: 8453, params: { kind: "resolve-recipe", recipe: "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca" } };
+    const input = { chainId: 8453, params: { kind: "resolve-recipe", recipe: "0xAeD3D0e3C86A994d88741C285657c3e78550f66d", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca" } };
     const parsed = ComputeInput.safeParse(input);
     expect(parsed.success).toBe(false);
     const t = buildTeaching("cork_compute", parsed.success ? [] : parsed.error.issues, input);

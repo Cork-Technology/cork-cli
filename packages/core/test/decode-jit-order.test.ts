@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { buildJitExtension, encodeJitExtraData, runTool } from "@cork/core";
 import venueFixture from "./fixtures/venue-legacy-jit-order.json";
 
-const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
-const ADAPTER_210 = "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE";
+const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55";
+const ADAPTER_210 = "0x8902a88912a334263fe3d731d03c267715b9374f";
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2";
 const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610";
 

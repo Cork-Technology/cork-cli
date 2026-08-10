@@ -31,10 +31,10 @@ const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on
 const REF = "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc"; // waArbUSDCn (the captured ground-truth pair)
 const ACCT = "0xc0ffee0000000000000000000000000000000001";
 // The 2.1.0 deployment set (cork-defaults.json, verified on-chain 2026-08-03).
-const REG = "0xF5323F305360A792284814a7EDe78c2209A1DC94";
-const ADAPTER = "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE";
+const REG = "0xa78d8137B01058dD23e545b6557209eBBc9611F1";
+const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f";
 const CONTROLLER = "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1";
-const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291";
+const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ORACLE = "0x00000000000000000000000000000000000000fe";
 
@@ -195,9 +195,11 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
     }));
     expect(env.state).toBe("ok");
     const d = env.data as { contractsVersion: string; scale: string; items: Array<{ address: string; source: string; registryMatches: boolean; argsKnown: boolean; constants: Record<string, string>; args: { type: string } }> };
-    // The config's release tag, echoed verbatim ("0.3.2" = the contracts-release label the
-    // registry read API serves; "2.1.0" remains the GENERATION name in prose/docs).
-    expect(d.contractsVersion).toBe("0.3.2");
+    // The config's release tag, echoed verbatim (the contracts-release label the registry read
+    // API serves; "2.1.0" remains the GENERATION name in prose/docs). Shape-checked, not pinned
+    // to a literal: the live parity test asserts config == API, and a third copy here is exactly
+    // the stale-pin pattern that broke CI on the 0.3.0→0.3.2 relabel.
+    expect(d.contractsVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(d.items[0]?.source).toBe("price");
     expect(d.items[0]?.registryMatches).toBe(true);
     expect(d.items[0]?.argsKnown).toBe(true);

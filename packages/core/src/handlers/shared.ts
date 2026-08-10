@@ -272,7 +272,13 @@ export function revertReason(err: unknown): string {
  *  and the factory has no reuse path — so the raw create collision bubbles EMPTY revert
  *  data. The two are told apart by re-reading the pair's registration: a fully-registered
  *  pair whose deploy reverts without a named error is the collision, not a registration
- *  problem. Degrades to the generic text when the follow-up reads fail. */
+ *  problem. Degrades to the generic text when the follow-up reads fail.
+ *
+ *  FIXED UPSTREAM in market-registry 0.3.3 (2026-08-10): the wrapper key/salt is now
+ *  keccak256(abi.encode(registryAddress, ca, ref, caSource, refSource)) — every registry
+ *  derives its own salt space, so the collision class cannot recur on 0.3.3+ registries
+ *  (verified live: the original sUSDe/sUSDS pair simulates deployable on the new registry).
+ *  The branch stays: legacy:true reads and foreign pre-0.3.3 registries still hit it. */
 export async function diagnoseOracleDeployFailure(
   client: ResolvedRpc["client"],
   registry: `0x${string}`,
@@ -298,7 +304,7 @@ export async function diagnoseOracleDeployFailure(
     return (
       `${reason} — but BOTH assets are registered and the revert names no registry error: this is the CREATE2-collision class, not a registration problem. ` +
       `A previous registry generation already created this pair's identical underlying Morpho oracle (same canonical factory, same pair-derived salt), and the wrapper factory has no reuse path, ` +
-      `so this registry cannot deploy the pair's ${mode} wrapper until that is fixed upstream. Until then the pair can host FIXED-recipe markets only (deploy-fixed-oracle + rateOverride)`
+      `so this registry cannot deploy the pair's ${mode} wrapper. Market-registry 0.3.3+ fixes the class (the wrapper salt is keyed on the registry address); this registry appears to be an older generation — on it the pair can host FIXED-recipe markets only (deploy-fixed-oracle + rateOverride)`
     );
   }
   const missing = [collateralAsset, referenceAsset].filter((_, i) => registered[i] === false);

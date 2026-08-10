@@ -54,7 +54,7 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
 describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry read API", () => {
   const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
   const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610"; // sUSDS (registered on Arbitrum)
-  const LIQ = "0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291"; // LiquidityRecipe (approved)
+  const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55"; // LiquidityRecipe (approved)
   const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}`; // abi.encode(1e18)
   const API = process.env.CORK_MARKET_API ?? "https://zian-b.feat.cork.tech";
 
@@ -79,9 +79,9 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr } = await resolveMarketRegistry(42161);
     // The contracts-release label is a FREE-FORM tag the API serves (relabeled "2.1.0"→"0.3.0"
-    // ~2026-08-06, →"0.3.2" ~2026-08-10; the registry ADDRESS is the identity check, no on-chain
-    // getter arbitrates). PARITY is the contract — config == API — so no third hardcoded copy
-    // lives here to rot on the next relabel.
+    // ~2026-08-06, →"0.3.2" ~2026-08-10, →"0.3.3" later the same day with the collision-fix
+    // redeploy; the registry ADDRESS is the identity check, no on-chain getter arbitrates).
+    // PARITY is the contract — config == API — so no third hardcoded copy lives here to rot.
     expect(mr?.contractsVersion).toBeDefined();
     const api = await apiGet<{ registries: Array<{ chain_id: number; registry: string; contracts_version: string }> }>("/v1/registries");
     if (!api) return;
@@ -172,12 +172,31 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(od.deployed).toBe(api.status === "live");
   }, 60_000);
 
+  /** 0.3.3 (2026-08-10): the recipes are deployed on 42161 but NOT YET approved there
+   *  (isRecipe false ×3; they ARE approved on Base). Recipe-dependent legs adapt to that
+   *  live state instead of pinning it: unapproved → assert the honest recipe_not_found gate;
+   *  approved (the moment Zian's approval txs land) → full wei-for-wei parity, no edit needed. */
+  const liqApprovedOn42161 = async (): Promise<boolean> => {
+    const r = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(r.state).toBe("ok");
+    return (r.data as { items: Array<{ address: string }> }).items.some((i) => i.address.toLowerCase() === LIQ.toLowerCase());
+  };
+
   it("recipe-rate-constraint matches POST /v1/42161/resolve wei-for-wei (liquidity + anchor)", async () => {
+    const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_compute",
       { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
+    if (!approved) {
+      // The tool must refuse to resolve against an unapproved recipe — a constraint a fill
+      // would reject (RecipeRejectedConstraint at best, OrderNotForPool at worst) must not
+      // be signable-looking. Flips to the full-parity branch when the approvals land.
+      expect(ours.state).toBe("unavailable");
+      expect(ours.warnings.some((w) => w.code === "recipe_not_found")).toBe(true);
+      return;
+    }
     expect(ours.state).toBe("ok");
     const oc = (ours.data as { constraint: Record<string, string> }).constraint;
     const api = await apiPost<{ constraint: Record<string, { raw: string }> }>("/v1/42161/resolve", { recipe: LIQ, collateral_asset: CA, reference_asset: REF, args: ANCHOR_ARGS });
@@ -188,19 +207,26 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     expect(oc["rateChangeCapacityMax"]).toBe(api.constraint["rate_change_capacity_max"]!.raw);
   }, 60_000);
 
-  // weETH/wstETH: a pair whose price oracle IS deployable on 42161. The default CA/REF pair
-  // (sUSDe/sUSDS) is the cross-generation CREATE2-collision pair: OUR derive answers
-  // oracle.address null (deploy reverts — fork-proven), the API predict still hands out the
-  // colliding address; that known divergence gets its own leg below.
+  // weETH/wstETH: a second registered pair, kept so the derive leg is not single-pair. (Under
+  // 0.3.2 this was the "clean" pair vs the sUSDe/sUSDS CREATE2-collision pair; 0.3.3 keys the
+  // wrapper salt on the registry address, so the collision class is gone — its leg below now
+  // pins deployability instead of the divergence.)
   const CLEAN_CA = "0x35751007a407ca6FEFfE80b3cB397736D2cf4dbe"; // weETH
   const CLEAN_REF = "0x5979D7b546E38E414F7E9822514be443A4800529"; // wstETH
 
   it("derive-market matches POST /v1/42161/market/predict (oracle address; identity when both derive one)", async () => {
+    const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_query",
       { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CLEAN_CA, referenceAsset: CLEAN_REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
+    if (!approved) {
+      // Same adaptive gate as the constraint leg: derivation refuses an unapproved recipe.
+      expect(ours.state).toBe("unavailable");
+      expect(ours.warnings.some((w) => w.code === "recipe_not_found")).toBe(true);
+      return;
+    }
     expect(ours.state).toBe("ok");
     const od = ours.data as { oracle: { address: string; deployed: boolean; rate?: string }; pool: { poolId: string; exists: boolean } | null; shares: { corkSwapToken: string; corkPrincipalToken: string } | null };
     const api = await apiPost<{ oracle: { address: string; deployed: boolean; rate: { raw: string } | null }; market: { pool_id: string; exists: boolean } | null; shares: { shares_token: string; principal_token: string } | null }>(
@@ -221,24 +247,29 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     }
   }, 90_000);
 
-  it("collision pair (sUSDe/sUSDS): OUR derive reports the pair as un-deployable — a KNOWN divergence from the API's predict", async () => {
-    // The 0.3.2 wrapper salt has no generation domain, so this pair's PRICE oracle address is
-    // occupied by the previous generation's oracle and deploy REVERTS (fork-proven 2026-08-08).
-    // The API's predict does not simulate deployability and still hands out the colliding
-    // address; ours answers oracle.address null + oracle_not_deployable, which a JIT signer
-    // must see BEFORE signing. This leg pins OUR behavior live; it goes green-with-update the
-    // day upstream ships the factory reuse fix (then the pair becomes deployable and this
-    // assertion should be flipped, not deleted).
+  it("collision pair (sUSDe/sUSDS): DEPLOYABLE on the 0.3.3 registry — the wrapper-salt fix, pinned live", async () => {
+    // FLIPPED 2026-08-10, exactly as the pre-flip comment instructed. Under 0.3.2 the wrapper
+    // salt had no generation domain: this pair's PRICE-oracle address was occupied by the
+    // previous generation's oracle and deploy reverted with no data (fork-proven 2026-08-08;
+    // OUR derive answered oracle.address null + oracle_not_deployable while the API's predict
+    // handed out the colliding address). 0.3.3 keys the wrapper salt on the registry address —
+    // every registry gets its own salt space — so the same pair now simulates DEPLOYABLE.
+    // registry-oracle (not derive) is the right probe: deployability needs no recipe, so this
+    // leg stays green whether or not the 42161 recipe approvals have landed.
     const ours = await runTool(
       "cork_query",
-      { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");
-    const od = ours.data as { oracle: { address: string | null; deployed: boolean } };
-    expect(od.oracle.deployed).toBe(false);
-    expect(od.oracle.address).toBeNull();
-    const codes = (ours.warnings as Array<{ code: string }>).map((w) => w.code);
-    expect(codes).toContain("oracle_not_deployable");
+    const od = (ours.data as { oracle: { address: string | null; deployed: boolean; deployable: boolean } }).oracle;
+    expect(od.deployable).toBe(true);
+    expect(od.address).not.toBeNull();
+    // Parity with the API's predict — under 0.3.3 both sides agree again (the old divergence
+    // existed only because predict did not simulate deployability against the spent salt).
+    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/price/${CA}/${REF}`);
+    if (!api) return;
+    expect(od.address!.toLowerCase()).toBe(api.oracle.toLowerCase());
+    expect(od.deployed).toBe(api.status === "live");
   }, 90_000);
 });
