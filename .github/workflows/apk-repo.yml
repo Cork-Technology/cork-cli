@@ -1,5 +1,5 @@
 # apk-repository + OCI-image channel.
-# Runs after a (non-prerelease) GitHub release is published:
+# Packages each production (non-candidate) release — see "Three triggers, one gate" below:
 #
 #   1. melange builds the cork-cli apk from source at the tag, per NATIVE arch runner, with
 #      --generate-provenance (SLSA provenance as .attest.tar.gz beside each apk) and a signed index.

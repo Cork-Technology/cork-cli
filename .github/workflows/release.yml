@@ -152,7 +152,7 @@ jobs:
           \`\`\`
           gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml
           \`\`\`
-          Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt." \
+          Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt. One caveat: match your host's libc to the asset you verify (glibc assets on a glibc host, musl on musl) — for same-OS targets Bun embeds the HOST's libc flavor, so a musl host rebuilding \`ch-linux-x64\` gets a correct-but-different binary, a false mismatch (verified empirically: musl assets reproduce byte-identically from an independent musl machine)." \
             dist/ch-* dist/checksums.txt
 
   # apk-repository + OCI + Phala channel, production tags only. Called DIRECTLY rather than
