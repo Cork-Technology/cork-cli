@@ -305,7 +305,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       } else if (input.resource === "rfqs") {
         // Single get by id, or the discovery feed (server default: state=open, newest first).
         if (filters.rfqId) {
-          const row = await getRfq(deps, filters.rfqId);
+          const row = await getRfq(deps, filters.rfqId, filters.view);
           if (!row) return unavailable(chainId, "rfq_not_found", `RFQ '${filters.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
           traversal = { complete: true, items: [row], pagesFetched: 1 };
         } else {
@@ -315,6 +315,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ...(filters.referenceAsset ? { referenceAsset: filters.referenceAsset.toLowerCase() } : {}),
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
             ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
+            ...(filters.view ? { view: filters.view } : {}),
             ...(cursor ? { cursor } : {}),
             limit: input.pageSize,
           }));

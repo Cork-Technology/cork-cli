@@ -95,6 +95,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
     // recomputed digest [K3], so a made-up signature would (correctly) return a conflict.
     { title: "Relay a signed rollover order to the venue (intent hash + digest recomputed before relay)", input: { chainId: 42161, clientRequestId: "demo-submit-0001", action: { type: "rollover-order", order: { user: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", fillerHint: "0x0000000000000000000000000000000000000000", exclusiveFiller: "0x0000000000000000000000000000000000000000", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: SUSDE, rolloverContract: DEMO_ACCOUNT, originChainId: "42161", destinationChainId: "42161", openDeadline: "1795000000", fillDeadline: "1795604800", orderSalt: "8811723641", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", allowPartialFills: false, allowUnderfill: false, premiumPaymentMode: 0, rolloverIntentHash: "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84", rolloverParams: { srcCstToken: SUSDE, dstCstToken: VBUSDC, minCaReceived: "0", minSharesOut: "0", srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D" } }, intent: { rolloverContract: DEMO_ACCOUNT, deadline: "1795604800", nonce: "1", preRolloverHooks: [], midRolloverHooks: [], postRolloverHooks: [], premiumHooks: [] }, signature: "0x97ccd3eb8faa84248754800ef050b1ee4ae6f2f073df6f5cf2b28c9bf6478e052af96f77cd1291a576bcdb77ba3bd1df363f4fc4e55624b353b1d99c34e795ea1b" } } },
     { title: "Open an RFQ (buyer): cover 50k, acceptable parameter envelope", input: { chainId: 42161, clientRequestId: "demo-rfq-0001", action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: SUSDE, collateralAsset: { one_of: [VBUSDC] }, modes: ["liquidity_impairment"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: 1795000000, notAfter: 1795604800 }, notionalAssets: "50000000000", validUntil: 1794900000, signature: "0x00" } } },
+    { title: "Counter-bid your own RFQ (buyer): 3.5% annualized, non-committal, broadcast to every underwriter", input: { chainId: 42161, clientRequestId: "demo-counter-0001", action: { type: "rfq-counter", rfqId: "rfq_0abc123", requester: DEMO_ACCOUNT, premiumAnnualized: "0.035", signature: "0x00" } } },
   ],
 };
 
@@ -194,12 +195,13 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   },
   cork_submit: {
     status: "implemented",
-    reason: "all four off-chain venue writes wired; activation pending the first live accepted POST",
+    reason: "all five off-chain venue writes wired; activation pending the first live accepted POST",
     variants: {
       "rollover-order": { status: "implemented", reason: "K3 intent-hash + orderDigest recomputed before relay" },
       "lop-order": { status: "implemented", reason: "orderHash recomputed locally; extension/salt commitment pre-flight" },
       "rfq-open": { status: "implemented" },
       "rfq-answer": { status: "implemented" },
+      "rfq-counter": { status: "implemented", reason: "requester's non-committal counter-bid; fraction contract enforced string-decided, optionRef pre-flighted against the RFQ record when cited" },
     },
   },
 };

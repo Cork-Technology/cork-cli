@@ -288,27 +288,31 @@ export interface RfqListParams extends PageParams {
   referenceAsset?: string;
   requester?: string;
   withAnswers?: boolean;
+  view?: "full" | "current";
 }
 
 /**
  * GET /v1/rfqs — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
  * Server defaults: state=open, newest first, keyset-paged on rfq_id ({items, next_cursor}).
- * with_answers=true embeds each RFQ's answers (newest first, venue-capped per row).
+ * with_answers=true embeds each RFQ's answers (newest first, venue-capped per row);
+ * view=current narrows the embed to the negotiation frontier (one current answer per
+ * underwriter + the current counter). Rows carry `version`, the venue's monotonic change
+ * counter — poll the list, re-read only what moved.
  */
 export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueList> {
   return asList(
     await getJson(
       deps,
-      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, cursor: p.cursor, limit: p.limit })}`,
+      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );
 }
 
 /** GET /v1/rfqs/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
-export async function getRfq(deps: VenueDeps, rfqId: string): Promise<Record<string, unknown> | null> {
+export async function getRfq(deps: VenueDeps, rfqId: string, view?: "full" | "current"): Promise<Record<string, unknown> | null> {
   try {
-    const raw = await getJson(deps, `/rfqs/${encodeURIComponent(rfqId)}`);
+    const raw = await getJson(deps, `/rfqs/${encodeURIComponent(rfqId)}${qs({ view })}`);
     return Row.parse(raw);
   } catch (err) {
     if (err instanceof VenueHttpError && err.status === 404) return null;
@@ -443,4 +447,9 @@ export async function postRfq(deps: VenueDeps, body: unknown): Promise<VenuePost
 /** POST /v1/rfqs/{rfqId}/answers — answer an RFQ with priced options or a typed pass. */
 export async function postRfqAnswer(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
   return postJson(deps, `/rfqs/${encodeURIComponent(rfqId)}/answers`, body);
+}
+
+/** POST /v1/rfqs/{rfqId}/counters — the requester's non-committal counter-bid (requester-only). */
+export async function postRfqCounter(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
+  return postJson(deps, `/rfqs/${encodeURIComponent(rfqId)}/counters`, body);
 }

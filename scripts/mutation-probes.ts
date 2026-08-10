@@ -1214,6 +1214,45 @@ const CATALOG: Mutant[] = [
     replace: "if (accountOk !== false) {",
     tests: [T.forself],
   },
+  // ── RFQ negotiation surface (venue a2b03bd): counter fraction cap, pre-flight gates, view ──
+  {
+    // The < 0.5 fraction cap dropped from rfq-counter: a percent number pasted as a string
+    // ("4.1") still fails the shape regex, but "0.5"+ sails through to a venue rejection the
+    // string-decided check exists to catch client-side, with teaching.
+    id: "rfq-counter-fraction-cap-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: 'if (!/^(0|0\\.\\d{1,18})$/.test(p) || /^0\\.[5-9]/.test(p)) {',
+    replace: 'if (!/^(0|0\\.\\d{1,18})$/.test(p)) {',
+    tests: [T.venue],
+  },
+  {
+    // Truncation gate flipped: not-found refusals fire on INCOMPLETE records (false refusals of
+    // legitimately-cited superseded answers) and complete records relay unchecked.
+    id: "rfq-counter-truncated-gate-flipped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (!option && rfq.truncated !== true) {",
+    replace: "if (!option && rfq.truncated === true) {",
+    tests: [T.venue],
+  },
+  {
+    // option_ref wire keys swapped: the venue would 400 every counter that cites an option
+    // (answer ids in the option slot and vice versa) — classic snake_case mapping transposition.
+    id: "rfq-counter-optionref-keys-swapped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "option_ref: { answer_id: action.optionRef.answerId, option_id: action.optionRef.optionId }",
+    replace: "option_ref: { answer_id: action.optionRef.optionId, option_id: action.optionRef.answerId }",
+    tests: [T.venue],
+  },
+  {
+    // filters.view silently dropped from the list URL: 'current' reads serve the full history
+    // and the frontier view is unreachable — the venue defaults to view=full server-side, so
+    // nothing errors, the answer is just wrong.
+    id: "rfqs-view-param-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "with_answers: p.withAnswers, view: p.view,",
+    replace: "with_answers: p.withAnswers,",
+    tests: [T.venue],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

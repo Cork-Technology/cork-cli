@@ -45,6 +45,7 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_submit :: action<oneOf2>.expiryWindow.notBefore": "venue RFQ field: absolute unix int, bounded <= year 2100 + handler window checks",
   "cork_submit :: action<oneOf2>.expiryWindow.notAfter": "venue RFQ field: absolute unix int, bounded <= year 2100 + handler window checks",
   "cork_submit :: action<oneOf2>.validUntil": "venue RFQ field: absolute unix int, bounded <= year 2100 + future check",
+  "cork_submit :: action<oneOf4>.freshUntil": "venue RFQ counter field: absolute unix int, bounded <= year 2100 (advisory freshness clock, same semantics as answer options)",
   // Tiny fixed-width protocol values.
   "cork_prepare_orders :: action<oneOf0>.jitMarket.permits[].v": "ECDSA recovery byte 0..255",
   "cork_prepare_orders :: action<oneOf2>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (taker-fill jitMarket)",

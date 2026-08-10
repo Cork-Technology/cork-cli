@@ -24,6 +24,7 @@ export interface QueryFilters {
   rfqId?: string;
   state?: "open" | "expired";
   withAnswers?: boolean;
+  view?: "full" | "current";
   recipe?: `0x${string}`;
   args?: `0x${string}`;
   rate?: bigint;
@@ -55,6 +56,7 @@ export const KNOWN_FILTER_KEYS = [
   "rfqId",
   "state",
   "withAnswers",
+  "view",
   "recipe",
   "args",
   "rate",
@@ -144,6 +146,11 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     const v = String(raw.state);
     if (v !== "open" && v !== "expired") fail("state", "expected 'open' | 'expired'");
     else out.state = v;
+  }
+  if (raw?.view !== undefined) {
+    const v = String(raw.view);
+    if (v !== "full" && v !== "current") fail("view", "expected 'full' (every stored answer row, the default) | 'current' (the negotiation frontier: one current answer per underwriter + the current counter)");
+    else out.view = v;
   }
   if (raw?.withAnswers !== undefined) {
     if (typeof raw.withAnswers === "boolean") out.withAnswers = raw.withAnswers;

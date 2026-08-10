@@ -80,7 +80,10 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "reconcile/txHash", text: "transaction receipt status landed mined did it succeed confirm" },
     { variant: "simulate", text: "simulate dry run bundle bytes advisory" },
   ],
-  cork_submit: [{ variant: "submit", text: "submit relay broadcast signed order orderbook send" }],
+  cork_submit: [
+    { variant: "submit", text: "submit relay broadcast signed order orderbook send" },
+    { variant: "rfq-counter", text: "counter bid negotiate negotiation rfq buyer requester haggle counter-offer premium" },
+  ],
 };
 
 const STOPWORDS = new Set([

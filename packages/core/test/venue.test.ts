@@ -1269,3 +1269,143 @@ describe("taker-fill of an auction-priced resting order", () => {
     expect(env.warnings.some((w) => w.code === "decaying_price_notice")).toBe(false);
   });
 });
+
+describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b03bd contract", () => {
+  const REQUESTER = "0xc0ffee0000000000000000000000000000000001";
+  const counter = (over: Record<string, unknown> = {}) => ({
+    chainId: 42161,
+    clientRequestId: "test-ctr-0001",
+    action: { type: "rfq-counter", rfqId: "rfq_1", requester: REQUESTER, premiumAnnualized: "0.035", signature: "0x00", ...over },
+  });
+
+  it("rfq-counter relays the snake_case body with clientRequestId as request_id — and NO pre-flight GET without optionRef", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_submit",
+      counter({ freshUntil: 1795000000 }),
+      ctxWith([{ match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_1" } }], seen),
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { kind: string; counterId: string | null }).kind).toBe("rfq-counter");
+    expect((env.data as { counterId: string | null }).counterId).toBe("ctr_1");
+    // Exactly ONE venue request: the POST. No optionRef → no pre-flight round-trip.
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.method).toBe("POST");
+    const body = seen[0]!.body as Record<string, unknown>;
+    expect(body.request_id).toBe("test-ctr-0001");
+    // The Address primitive normalizes to EIP-55 checksum form — compare case-insensitively.
+    expect(String(body.requester).toLowerCase()).toBe(REQUESTER.toLowerCase());
+    expect(body.premium_annualized).toBe("0.035");
+    expect(body.fresh_until).toBe(1795000000);
+    expect(body.option_ref).toBeUndefined();
+    expect(body.schema_version).toBe("1");
+  });
+
+  it("rfq-counter premium is string-decided: percent-number string rejected, 0.5 rejected, 17-digit just-under passes", async () => {
+    const at = async (p: string) => runTool("cork_submit", counter({ premiumAnnualized: p }), ctxWith([{ match: "/counters", status: 201, body: { counter_id: "ctr_x" } }]));
+    const percent = await at("4.1");
+    expect(percent.state).toBe("unavailable");
+    expect(percent.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(percent.warnings[0]?.message).toContain("FRACTION");
+    expect((await at("0.5")).state).toBe("unavailable");
+    // 0.49999999999999999 rounds to exactly 0.5 in IEEE-754 — the string form must pass [C6].
+    expect((await at("0.49999999999999999")).state).toBe("ok");
+  });
+
+  it("optionRef pre-flight: unknown RFQ refuses rfq_not_found, wrong requester refuses BEFORE the POST", async () => {
+    const seen: Seen[] = [];
+    const miss = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", status: 404, body: { message: "Unknown rfq_id" } }], seen),
+    );
+    expect(miss.state).toBe("unavailable");
+    expect(miss.warnings[0]?.code).toBe("rfq_not_found");
+    expect(seen.every((s) => s.method === "GET")).toBe(true); // never relayed
+
+    const seen2: Seen[] = [];
+    const rfqOtherRequester = { rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }], truncated: false };
+    const forbidden = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", body: rfqOtherRequester }], seen2),
+    );
+    expect(forbidden.state).toBe("unavailable");
+    expect(forbidden.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(forbidden.warnings[0]?.message).toContain("requester");
+    expect(seen2.every((s) => s.method === "GET")).toBe(true);
+  });
+
+  it("optionRef pre-flight: missing option refuses on a COMPLETE record, relays on a truncated one (venue stays authoritative)", async () => {
+    const base = { rfq_id: "rfq_1", request: { requester: REQUESTER }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
+    const refuse = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_1", optionId: "99" } }),
+      ctxWith([{ match: "/rfqs/rfq_1", body: { ...base, truncated: false } }]),
+    );
+    expect(refuse.state).toBe("unavailable");
+    expect(refuse.warnings[0]?.message).toContain("optionRef");
+
+    const seen: Seen[] = [];
+    const relayed = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_old", optionId: "1" } }),
+      ctxWith([
+        { match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_2" } },
+        { match: "/rfqs/rfq_1", body: { ...base, truncated: true } },
+      ], seen),
+    );
+    expect(relayed.state).toBe("ok");
+    const post = seen.find((s) => s.method === "POST")!;
+    expect((post.body as { option_ref: { answer_id: string; option_id: string } }).option_ref).toEqual({ answer_id: "ans_old", option_id: "1" });
+
+    // Happy path: cited option exists on a complete record → relayed.
+    const ok = await runTool(
+      "cork_submit",
+      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([
+        { match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_3" } },
+        { match: "/rfqs/rfq_1", body: { ...base, truncated: false } },
+      ]),
+    );
+    expect(ok.state).toBe("ok");
+  });
+
+  it("rfq-answer relays supersedes verbatim when given, omits it otherwise", async () => {
+    const answer = (over: Record<string, unknown> = {}) => ({
+      chainId: 42161,
+      clientRequestId: "test-sup-0001",
+      action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: REQUESTER, status: "quoted", options: [{ option_id: "1", premium_annualized: "0.04" }], signature: "0x00", ...over },
+    });
+    const seen: Seen[] = [];
+    expect((await runTool("cork_submit", answer({ supersedes: "ans_prev" }), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_2" } }], seen))).state).toBe("ok");
+    expect((seen[0]!.body as Record<string, unknown>).supersedes).toBe("ans_prev");
+    const seen2: Seen[] = [];
+    expect((await runTool("cork_submit", answer(), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_3" } }], seen2))).state).toBe("ok");
+    expect("supersedes" in (seen2[0]!.body as Record<string, unknown>)).toBe(false);
+  });
+
+  it("filters.view forwards to BOTH rfqs GETs; a bad value is a teachable filter error", async () => {
+    const seen: Seen[] = [];
+    const list = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { withAnswers: true, view: "current" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs?", body: { items: [], next_cursor: null } }], seen),
+    );
+    expect(list.state).toBe("ok");
+    expect(seen[0]!.url).toContain("view=current");
+
+    const seen2: Seen[] = [];
+    const single = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123", view: "current" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs/rfq_abc123", body: { rfq_id: "rfq_abc123", version: 3, answers: [], counter: null } }], seen2),
+    );
+    expect(single.state).toBe("ok");
+    expect(seen2[0]!.url).toContain("view=current");
+
+    await expect(
+      runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { view: "frontier" }, pageSize: 25, format: "concise" }, ctxWith([])),
+    ).rejects.toBeInstanceOf(ToolInputError);
+  });
+});

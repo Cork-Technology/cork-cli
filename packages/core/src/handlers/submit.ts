@@ -5,7 +5,7 @@ import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { ERC1271_MAGIC, erc1271Abi, LOP_ADDRESSES, lopDomain } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
-import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
+import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
 
@@ -434,6 +434,46 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }));
     }
 
+    // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
+    // negotiation loop; the venue broadcasts it to every underwriter, newest counter wins).
+    if (action.type === "rfq-counter") {
+      // Same fraction contract as answer options (§2.1), same string-decided check: a decimal
+      // STRING < 0.5, judged on the digits so IEEE-754 rounding can't flip the boundary [C6].
+      const p = action.premiumAnnualized;
+      if (!/^(0|0\.\d{1,18})$/.test(p) || /^0\.[5-9]/.test(p)) {
+        return unavailable(chainId, "invalid_order_terms", `premiumAnnualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1% annualized) — got ${JSON.stringify(p)}; percent numbers (4.1) belong only on the book listing field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
+      }
+      // optionRef pre-flight [K3-style], mirroring lop-order's quoteRef check: one venue GET,
+      // only when the counter cites an option. The same fetch also catches the wrong-requester
+      // 403 before the POST burns its request_id. A TRUNCATED answers embed cannot prove
+      // absence (superseded answers stay citable by design), so not-found refusals only fire
+      // on a complete record — the venue's own validation stays authoritative either way.
+      if (action.optionRef) {
+        const rfq = await getRfq(deps, action.rfqId);
+        if (!rfq) return unavailable(chainId, "rfq_not_found", `RFQ '${action.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
+        const storedRequester = (rfq.request as Record<string, unknown> | undefined)?.requester;
+        if (typeof storedRequester === "string" && storedRequester.toLowerCase() !== action.requester.toLowerCase()) {
+          return unavailable(chainId, "invalid_order_terms", `only the RFQ's requester may counter: RFQ '${action.rfqId}' was opened by ${storedRequester}, not ${action.requester} — the venue would 403 this on relay`, ctx);
+        }
+        const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
+        const answer = answers.find((a) => String(a.answer_id) === action.optionRef!.answerId);
+        const option = answer?.answer?.options?.find((o) => String(o.option_id) === action.optionRef!.optionId);
+        if (!option && rfq.truncated !== true) {
+          return unavailable(chainId, "invalid_order_terms", `optionRef option '${action.optionRef.optionId}' not found in answer '${action.optionRef.answerId}' of RFQ '${action.rfqId}' — a counter's optionRef must cite an option of an answer on this RFQ (the venue would 400 this on relay); drop optionRef to counter the envelope at large`, ctx);
+        }
+      }
+      const res = await postRfqCounter(deps, action.rfqId, {
+        schema_version: "1",
+        request_id: input.clientRequestId,
+        requester: action.requester,
+        premium_annualized: action.premiumAnnualized,
+        ...(action.optionRef ? { option_ref: { answer_id: action.optionRef.answerId, option_id: action.optionRef.optionId } } : {}),
+        ...(action.freshUntil !== undefined ? { fresh_until: action.freshUntil } : {}),
+        signature: action.signature,
+      });
+      return mapPost(res, (body, replay) => ({ kind: "rfq-counter", accepted: true, replay, counterId: body.counter_id ?? null, rfqId: action.rfqId }));
+    }
+
     // rfq-answer — enforce the fraction contract on quoted options before relaying (§2.1: a
     // decimal STRING < 0.5; a wad or percent pasted here fails at this boundary, with teaching).
     if (action.status === "quoted") {
@@ -453,6 +493,9 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       underwriter: action.underwriter,
       status: action.status,
       ...(action.status === "quoted" ? { options: action.options ?? [] } : { reason_code: action.reasonCode ?? "PASS" }),
+      // Optional revision link, relayed verbatim (venue-validated: must cite an OWN prior
+      // answer on this same RFQ). Supersession is implicit either way — audit trail only.
+      ...(action.supersedes !== undefined ? { supersedes: action.supersedes } : {}),
       signature: action.signature,
     });
     return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId }));

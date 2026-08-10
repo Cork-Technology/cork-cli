@@ -135,7 +135,7 @@ export const REGISTRY = [
     cliPath: ["submit"],
     phase: 3,
     description:
-      "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer. Never signs [K1]; idempotent by clientRequestId [K2].",
+      "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2].",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
