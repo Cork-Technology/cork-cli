@@ -6,7 +6,15 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
-## [0.1.0-rc.1] — 2026-08-09
+## [0.1.0-rc.2] — 2026-08-10
+
+Identical content to 0.1.0-rc.1 plus one release-pipeline fix: the cross-OS smoke step used
+`tee /dev/stderr`, a device Windows git-bash lacks, so `pipefail` failed a PASSING Windows
+binary check and the publish gate (correctly) withheld the release. The rc.1 rehearsal proved
+everything else: version-gate, two independent byte-identical builds, provenance attestation,
+and the binaries themselves on all four OS families. rc.1's tag remains unpublished history.
+
+## [0.1.0-rc.1] — 2026-08-09 (tag exists; release not published — smoke-script bug, see rc.2)
 
 First tagged release candidate: the Cork Phoenix **MCP server + CLI over one typed core**
 (9 tools; MCP and CLI are thin projections of the same `runTool` dispatch).

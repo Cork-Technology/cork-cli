@@ -113,7 +113,11 @@ jobs:
           CORK_NO_UPDATE_NOTIFIER: "1"
         run: |
           chmod +x "dist/${{ matrix.asset }}" || true
-          "./dist/${{ matrix.asset }}" version | tee /dev/stderr | grep -F "${{ github.ref_name }}"
+          # No `tee /dev/stderr`: the device is absent in Windows git-bash and pipefail then
+          # fails a passing check (observed on the v0.1.0-rc.1 rehearsal). Capture + grep instead.
+          v="$("./dist/${{ matrix.asset }}" version)"
+          printf '%s\n' "$v"
+          printf '%s\n' "$v" | grep -F "${{ github.ref_name }}"
           "./dist/${{ matrix.asset }}" capabilities >/dev/null
           "./dist/${{ matrix.asset }}" query protocol-config --chainid 42161 >/dev/null
       - name: MCP stdio handshake
