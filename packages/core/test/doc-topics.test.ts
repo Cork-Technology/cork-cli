@@ -2,7 +2,7 @@
 // every alias AND via search, and every prepare result carries the data.execution completion
 // pointer. All offline (config-only paths).
 import { describe, expect, it } from "vitest";
-import { DOC_TOPICS } from "@cork/schemas";
+import { DOC_TOPICS, inputJsonSchema, REGISTRY, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { runTool } from "@cork/core";
 
 const NOW = 1_800_000_000n;
@@ -36,6 +36,96 @@ describe("doc topic: signing", () => {
       expect(env.warnings[0]!.message).toContain(t.name);
       for (const a of t.aliases) expect(env.warnings[0]!.message).toContain(a);
     }
+  });
+});
+
+describe("doc topic: units", () => {
+  it("resolves by name and by every alias, case-insensitively", async () => {
+    for (const key of ["units", "UNITS", "scales", "decimals", "wad", "fixed-point"]) {
+      const env = await runTool("cork_capabilities", { topic: key }, { nowSeconds: NOW });
+      expect(env.state).toBe("ok");
+      const d = env.data as { topic: string; summary: string; body: string };
+      expect(d.topic).toBe("units");
+      expect(d.summary).toBe(DOC_TOPICS.units!.summary);
+      expect(d.body).toContain("1e18 = 1%");
+    }
+  });
+
+  it("surfaces in search results as a topic card", async () => {
+    for (const q of ["what scale is this field", "is this wad or percent", "how many decimals"]) {
+      const env = await runTool("cork_capabilities", { search: q }, { nowSeconds: NOW });
+      expect(env.state).toBe("ok");
+      const matches = (env.data as { matches: Array<Record<string, unknown>> }).matches;
+      const topic = matches.find((m) => m.topic === "units");
+      expect(topic, `search: ${q}`).toBeDefined();
+      expect(topic!.reference).toBe(UNITS_TOPIC_REFERENCE);
+    }
+  });
+
+  // The topic is a SECOND statement of a scale that already lives in each field's schema
+  // description — so it can rot against the schemas. This pins both directions: the field's own
+  // description must carry the scale marker, AND the topic body must name the field. Trail of Bits
+  // found no correlation between unit-test volume and precision findings, so the guard that matters
+  // is the one that fails when the two sources disagree, not another example.
+  it("table parity: every field the topic names carries the same scale in its own schema description", () => {
+    const SCALED_FIELDS: Array<{ field: string; marker: string }> = [
+      { field: "swapFeePercentage", marker: "1e18 = 1%" },
+      { field: "unwindSwapFeePercentage", marker: "1e18 = 1%" },
+      { field: "rateOverride", marker: "1e18 = 1.0" },
+      { field: "rate", marker: "1e18 = 1.0" },
+      { field: "initialRateBump", marker: "1e7" },
+      { field: "rateBump", marker: "1e7" },
+      { field: "premium", marker: "PERCENT" },
+      { field: "minPremiumPerShare", marker: "per 1e18" },
+      // NOT listed: gasPriceEstimate / integratorFee / resolverFee / whitelistDiscountNumerator /
+      // surplusFeePercent. Those are Fusion DECODE OUTPUTS (fusion.ts), never tool inputs, so they
+      // have no input-schema description to check against — the topic labels them explicitly as
+      // outputs instead. This list's contract is: input fields whose own description states a scale.
+    ];
+
+    // Collect every description reachable for a property name, resolving $refs into $defs (the
+    // shared primitives — TokenAmount, PremiumPerShareRate — carry their teaching there, not at
+    // the use site).
+    const byField = new Map<string, string[]>();
+    for (const tool of REGISTRY) {
+      const schema = inputJsonSchema(tool.name) as Record<string, unknown>;
+      const defs = (schema.$defs ?? {}) as Record<string, { description?: string }>;
+      const walk = (node: unknown): void => {
+        if (node === null || typeof node !== "object") return;
+        const n = node as Record<string, unknown>;
+        const props = n.properties as Record<string, Record<string, unknown>> | undefined;
+        if (props) {
+          for (const [name, prop] of Object.entries(props)) {
+            const texts: string[] = [];
+            if (typeof prop.description === "string") texts.push(prop.description);
+            const ref = typeof prop.$ref === "string" ? prop.$ref.split("/").pop() : undefined;
+            const refDesc = ref ? defs[ref]?.description : undefined;
+            if (typeof refDesc === "string") texts.push(refDesc);
+            if (texts.length > 0) byField.set(name, [...(byField.get(name) ?? []), ...texts]);
+          }
+        }
+        for (const v of Object.values(n)) {
+          if (Array.isArray(v)) v.forEach(walk);
+          else walk(v);
+        }
+      };
+      walk(schema);
+    }
+
+    const body = DOC_TOPICS.units!.body;
+    for (const { field, marker } of SCALED_FIELDS) {
+      const descs = byField.get(field);
+      expect(descs, `${field} is not a property on any tool schema — rename or drop it from the units topic`).toBeDefined();
+      expect(descs!.some((d) => d.includes(marker)), `${field}: no schema description states '${marker}'`).toBe(true);
+      expect(body.includes(field), `the units topic body does not name ${field}`).toBe(true);
+    }
+  });
+
+  it("the scale tripwires route to the topic (an error should teach the correct form, not only reject)", () => {
+    // Asserted at the source-constant level: the three premium tripwire messages interpolate
+    // UNITS_TOPIC_REFERENCE, so the routing cannot silently drop out of one of them.
+    expect(UNITS_TOPIC_REFERENCE).toBe('cork_capabilities topic:"units"');
+    expect(DOC_TOPICS.units!.name).toBe("units");
   });
 });
 

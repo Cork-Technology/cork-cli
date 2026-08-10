@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): submit handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { hashTypedData, isAddressEqual, keccak256, recoverAddress } from "viem";
-import { Envelope, SubmitInput } from "@cork/schemas";
+import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { ERC1271_MAGIC, erc1271Abi, LOP_ADDRESSES, lopDomain } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
@@ -318,7 +318,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
       // orders can be legitimately tiny).
       if (action.premium > 0 && action.premium < 0.1) {
-        lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present` });
+        lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
       }
       // quote_ref pre-flight [K3-style]: verify the cited option exists and the premium does not
       // contradict it (~100x divergence = a scale mistake the venue would reject at POST).
@@ -340,7 +340,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
             data: { quoteRef: action.quoteRef, citedOptionPremiumAnnualized: option.premium_annualized ?? null },
             chainId,
             source: "service",
-            warnings: [{ code: "quote_ref_unverifiable", message: `the cited RFQ option has no parsable positive premium_annualized (got ${JSON.stringify(option.premium_annualized)}) — the premium scale cross-check cannot run; NOT relayed. Cite a valid option or drop quoteRef` }],
+            warnings: [{ code: "quote_ref_unverifiable", message: `the cited RFQ option has no parsable positive premium_annualized (got ${JSON.stringify(option.premium_annualized)}) — the premium scale cross-check cannot run; NOT relayed. Cite a valid option or drop quoteRef. RFQ premiums are FRACTION strings ("0.041" = 4.1%); full scale table: ${UNITS_TOPIC_REFERENCE}` }],
             ctx,
           });
         }
@@ -358,7 +358,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
             data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent },
             chainId,
             source: "service",
-            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=10" : "<=1/10"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — outside the venue's own 10x acceptance band, so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036")` }],
+            warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${high ? ">=10" : "<=1/10"}x from the cited quote (${option.premium_annualized} fraction = ${expectedPercent}%) — outside the venue's own 10x acceptance band, so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036"). Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
             ctx,
           });
         }

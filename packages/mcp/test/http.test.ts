@@ -97,6 +97,23 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
     const missing = await handler(new Request("http://cork.test/nope"));
     expect(missing.status).toBe(404);
   });
+
+  it("/docs/<topic> serves EVERY doc topic by name and by alias; an unknown topic 404s with the list", async () => {
+    // The route resolves through findDocTopic, so this passes for a topic added later without
+    // touching http.ts — the property the previous hardcoded /docs/signing could not have.
+    const handler = createHttpHandler({});
+    for (const topic of Object.values(DOC_TOPICS)) {
+      for (const key of [topic.name, ...topic.aliases]) {
+        const res = await handler(new Request(`http://cork.test/docs/${key}`));
+        expect(res.status, `/docs/${key}`).toBe(200);
+        expect(await res.text()).toBe(topic.body);
+      }
+    }
+    const bad = await handler(new Request("http://cork.test/docs/not-a-topic"));
+    expect(bad.status).toBe(404);
+    const listed = await bad.text();
+    for (const topic of Object.values(DOC_TOPICS)) expect(listed).toContain(`/docs/${topic.name}`);
+  });
 });
 
 describe("/readyz diagnostics", () => {

@@ -21,6 +21,11 @@ export interface DocTopic {
 
 export const SIGNING_TOPIC_REFERENCE = 'cork_capabilities topic:"signing"' as const;
 
+/** Referenced from the scale tripwires in handlers/submit.ts so a unit warning routes to the full
+ *  table instead of only teaching inline (Anthropic tool-design guidance: an error message is a
+ *  prompt-engineering surface — it should demonstrate the correct form, not just reject). */
+export const UNITS_TOPIC_REFERENCE = 'cork_capabilities topic:"units"' as const;
+
 export const DOC_TOPICS: Record<string, DocTopic> = {
   signing: {
     name: "signing",
@@ -90,6 +95,84 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
   RPC override on the tool surface, and broadcasting is always client-side.`,
     searchText:
       "sign signing execute broadcast send raw transaction eth_sendRawTransaction eth_signTransaction eth_signTypedData_v4 wallet client-side signature unsigned artifact next steps complete finish submit on-chain typed data how do i execute this prepared bundle",
+  },
+  units: {
+    name: "units",
+    aliases: ["scales", "decimals", "wad", "fixed-point"],
+    summary:
+      "Nine scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats, which have already cost this surface one guard. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
+    body: `# Numeric units and scales
+
+Nine scale conventions live on this surface. Eight are inherited from whoever owns the value;
+exactly one is a Cork choice. The operating rule has two halves:
+
+**WAD (1e18 = 1.0) is mandatory for fields Cork mints, and forbidden for fields Cork mirrors.**
+A token owns its decimals, a deployed contract owns its fixed-point base, the venue owns its wire
+format. Rescaling a mirrored value inserts a conversion where the unit was already derivable — and
+once two hops both convert, nothing downstream can tell which hop was wrong.
+
+## Notation
+
+Scales are written on two axes, following the Reserve Protocol / Trail of Bits dimensional
+convention: a precision prefix (\`D18\`, \`D7\`) plus a dimension in braces (\`{1}\` dimensionless,
+\`{%}\` percent, \`{qTok}\` a token quantum — the smallest indivisible unit). The two axes matter
+because the surface's worst collision is two fields at the SAME precision with DIFFERENT
+dimensions: \`rateMax\` is \`D18{1}\` and \`swapFeePercentage\` is \`D18{%}\`, a hundredfold apart.
+
+## What 5% looks like in every scale that could hold it
+
+Each row gives the two-axis notation AND the plain form used in the field's own schema description —
+they are the same claim, so a field description and this table can be checked against each other
+(and are, by a parity test).
+
+| Notation | Schema description says | 5% is written | Fields | Unit owner |
+|---|---|---|---|---|
+| \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax, rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
+| \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (cap 5e18 = 5%), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
+| \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing — cork_submit lop-order and the finalize listing block | cork-api v0.1.3 |
+| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\` and sibling premium fields | venue RFQ (stores verbatim, never parses your economics) |
+| \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
+| \`D5{%}\` | 1e5 base | \`5000\` | integratorFee, resolverFee (uint16, decoded from Fusion extraData) | 1inch Fusion FeeTaker |
+| \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
+| \`{gwei}\` | 1000 = 1 gwei | \`5000\` = 5 gwei | gasPriceEstimate (uint32, auction gas-bump term — a DECODE OUTPUT, not an input) | 1inch Fusion auction extraData |
+| \`{qTok}\` token quantum | the token's own smallest unit (base units) | \`2500000000000000000\` = 2.5 @18dp; \`1000000000\` = 1000 USDC @6dp | every amount: makingAmount, collateralAssetsIn, orderSize, every min*/max* bound | the token itself, via \`decimals()\` |
+| \`D18{qPremiumTok/cST}\` | base units of the premium asset per 1e18 share | \`12000000000000000\` = 0.012/share @18dp; \`12000\` @6dp | minPremiumPerShare — premium-asset base units per 1e18 (one whole) cST share | Cork rollover contract (\`floor = shares * value / 1e18\`) |
+
+## The three collisions
+
+**1 — eighteen zeros, two meanings.** \`rateMax = 1.0\` and \`swapFeePercentage = 1%\` are both
+\`1000000000000000000\`. Nothing in the digits resolves this; only the field name does. The rule:
+any field whose name ends \`Percentage\`, and any recipe constant ending \`_PERCENTAGE\`, is the
+\`D18{%}\` family — everything else documented "1e18 = 1.0" is \`D18{1}\`.
+
+**2 — \`premium\` means four different things.** Book listing \`4.1\` (percent number) · RFQ option
+\`"0.041"\` (fraction string) · rollover \`minPremiumPerShare\` \`12000000000000000\` (base units per
+1e18 share) · auction \`initialRateBump\` \`500000\` (1e7 above the signed floor). Confirm which
+surface you are on before writing the number.
+
+**3 — rateMin/rateMax across generations.** Under the 2.1.0 model these four constraint values are
+ABSOLUTE rates at \`D18{1}\`. On the pre-2.1.0 path the same names carried PERCENTAGE bands. The
+legacy path is gated (\`legacy: true\` plus CORK_ENABLE_DEPRECATED=1) and every result is labelled,
+but the hazard is that the old generation still ANSWERS: 2.1.0-shaped calls against it decode into
+plausible nonsense rather than failing.
+
+## Converting safely
+
+- **Strings on the wire, integers in the math.** Every scaled value crosses the boundary as a
+  decimal string and is compared in exact integer arithmetic. Floats have already cost this surface
+  one guard: an exactly-100x scale divergence slipped through because \`410 / (0.041 * 100)\`
+  evaluates to \`99.99999999999999\`, just under the threshold.
+- **Mind the silent laundering window.** Between 2^53 and 1e21 a JSON *number* parses to a rounded
+  float that still stringifies without an exponent, so a corrupted value looks pristine downstream.
+  That window covers roughly 0.01 to 1000 tokens at 18 decimals — most real trades.
+- **Never rescale an amount.** A raw base-unit integer passes through verbatim; convert human input
+  by the token's own decimals and keep the whole-number part.
+- **Read the output labels.** cst-swap-rate, unwind-rate and impairment-floor return a \`scales\`
+  block plus collateralDecimals/referenceDecimals. Do not assume 18.
+- **Timestamps are absolute unix SECONDS**, bounded to year 2100 — a millisecond value
+  (\`Date.now()\`) is rejected with teaching rather than accepted as an immortal deadline.`,
+    searchText:
+      "units unit scale scales scaling decimals decimal precision wad 1e18 fixed point ray percent percentage fraction basis points bps what scale is this field is this wad how many decimals do i multiply by 1e18 premium percent or fraction rate bump base 1e7 token amount base units smallest unit convert amount 18 decimals usdc 6 decimals off by 100 scale mismatch",
   },
 };
 

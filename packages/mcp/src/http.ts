@@ -15,8 +15,10 @@
 //                            (subsystems.*.degraded), not the status code. Hosts only, never
 //                            full URLs: the committed default RPC URLs embed access tokens in
 //                            their PATH, and CORK_RPC_URL may too.
-//   GET /docs/signing      — the DOC_TOPICS signing body as text/markdown (same constant as the
-//                            capabilities topic and the initialize instructions — zero drift)
+//   GET /docs/<topic>      — any DOC_TOPICS body as text/markdown, resolved by name OR alias
+//                            through the same findDocTopic the capabilities tool uses (same
+//                            constant as the topic lookup and the initialize instructions — zero
+//                            drift); unknown topic 404s with the available list
 // The handler is a pure function so tests drive it without a socket; `startHttpServer` wraps it
 // in Bun.serve for the real deployment (container entrypoint: `ch mcp --http`).
 //
@@ -26,7 +28,7 @@
 // config only, and broadcasting is always client-side (cork_capabilities topic:"signing").
 import { timingSafeEqual } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { DOC_TOPICS } from "@cork/schemas";
+import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
 import { BUILD_VERSION, configDiagnostics, rpcDiagnostics, venueDiagnostics, type HandlerContext } from "@cork/core";
 import { createCorkServer } from "./server.ts";
 
@@ -71,8 +73,16 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
       };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }
-    if (url.pathname === "/docs/signing") {
-      return new Response(DOC_TOPICS.signing!.body, { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
+    // /docs/<topic-or-alias> resolves through the SAME lookup the capabilities tool uses, so a new
+    // DOC_TOPICS entry is served here the moment it exists — the previous hardcoded /docs/signing
+    // would have needed an edit per topic (and silently 404'd until someone remembered).
+    if (url.pathname.startsWith("/docs/")) {
+      const doc = findDocTopic(decodeURIComponent(url.pathname.slice("/docs/".length)));
+      if (doc) {
+        return new Response(doc.body, { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      const known = Object.values(DOC_TOPICS).map((d) => `/docs/${d.name}`).join(" ");
+      return new Response(`no such doc topic; available: ${known}\n`, { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
     }
     if (url.pathname === "/mcp") {
       if (opts.token !== undefined && !bearerOk(req.headers.get("authorization"), opts.token)) {
