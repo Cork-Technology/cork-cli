@@ -126,8 +126,8 @@ const CATALOG: Mutant[] = [
   {
     id: "taker-interaction-concat-order",
     file: "packages/core/src/handlers/jit.ts",
-    find: "const interaction = `0x${mr.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;",
-    replace: "const interaction = `0x${extraData.slice(2)}${mr.adapter.slice(2)}` as `0x${string}`;",
+    find: "const interaction = `0x${ladder.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;",
+    replace: "const interaction = `0x${extraData.slice(2)}${ladder.adapter.slice(2)}` as `0x${string}`;",
     tests: [T.venue],
   },
   {
@@ -206,14 +206,14 @@ const CATALOG: Mutant[] = [
     // that equalizes the indentation will surface here as pattern rot — re-aim, don't delete.
     id: "makerjit-precalls-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: '\n              preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    find: '\n              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
     replace: "\n              void 0;",
     tests: [T.mr],
   },
   {
     id: "takerjit-precalls-dropped",
     file: "packages/core/src/handlers/jit.ts",
-    find: '\n        preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    find: '\n        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
     replace: "\n        void 0;",
     tests: [T.venue],
   },
@@ -262,10 +262,14 @@ const CATALOG: Mutant[] = [
     tests: [T.venue],
   },
   {
+    // Re-aimed after the 2026-08-11 ladder extraction: the maker's own roles conditional moved
+    // into the SHARED runJitPreflightLadder (covered by takerjit-roles-warn-dropped above), so
+    // the maker-side defect class is now "the maker drops the ladder's warnings on the floor" —
+    // roles_not_granted, deprecation_notice, funding_needs_rpc all vanish from maker results.
     id: "makerjit-roles-warn-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "\n            if (!adapterRoles.granted) {",
-    replace: "\n            if (false) {",
+    find: "\n        warnings.push(...ladder.warnings);",
+    replace: "\n        void ladder.warnings;",
     tests: [T.mr],
   },
   // ── stale_share_prediction: the consumed-nonce diagnosis (single shared emitter by design) ──
@@ -1498,8 +1502,8 @@ const CATALOG: Mutant[] = [
     // consistency assertion (every emission must equal the expected value) is what sees it.
     id: "units-xunits-value-drifted",
     file: "packages/schemas/src/tools.ts",
-    find: '.meta({ "x-units": X_UNITS.pct18 })',
-    replace: '.meta({ "x-units": X_UNITS.wad })',
+    find: 'const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 });',
+    replace: 'const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.wad });',
     tests: [T.docTopics],
   },
   {
@@ -1625,7 +1629,18 @@ for (const m of catalog) {
     rotted++;
     continue;
   }
-  writeFileSync(m.file, original.replace(m.find, m.replace));
+  // An AMBIGUOUS find is rot too: `replace` would mutate only the FIRST occurrence — possibly
+  // the wrong site — while the probe still reports "caught" for a defect it never planted where
+  // intended (several finds are byte-identical across maker/taker paths and disambiguate only
+  // by indentation; an indentation-equalizing refactor must fail HERE, not silently mis-aim).
+  if (original.indexOf(m.find) !== original.lastIndexOf(m.find)) {
+    console.log(`ROT      ${m.id} — pattern matches ${m.file} MORE THAN ONCE (ambiguous anchor); make the find unique`);
+    rotted++;
+    continue;
+  }
+  // split/join, not String.replace with a string arg — replace interprets `$$`/`$&`/$` in the
+  // replacement, which would silently corrupt a future mutant quoting such source.
+  writeFileSync(m.file, original.split(m.find).join(m.replace));
   try {
     const passed = await vitest(m.tests);
     if (passed) {

@@ -17,9 +17,9 @@ import { whitelistManagerAbi } from "../chain/abis.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
+import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR } from "./shared.ts";
 
-const ZERO = "0x0000000000000000000000000000000000000000";
+const ZERO = ZERO_ADDR;
 
 type Warning = { code: string; message: string };
 
@@ -185,11 +185,9 @@ export async function prepareForSelfTakerFill(args: {
 }): Promise<Envelope> {
   const { ctx, chainId, account, lop, forSelf, signed, auctionData, priorWarnings } = args;
   const nowSecs = nowSecondsOf(ctx);
-  const deadline = forSelf.deadlineAt !== undefined ? BigInt(forSelf.deadlineAt) : nowSecs + BigInt(forSelf.deadlineSeconds);
+  const { deadline, warning: deadlineWarning } = resolveDeadline(forSelf, nowSecs, "the wrapper reverts DeadlineExceeded");
   const warnings: Warning[] = [...priorWarnings];
-  if (forSelf.deadlineAt !== undefined && deadline <= nowSecs) {
-    warnings.push({ code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — the wrapper reverts DeadlineExceeded; pin a future absolute deadline for byte-stable retries` });
-  }
+  if (deadlineWarning) warnings.push(deadlineWarning);
 
   // Amount validation + derivation via the SAME rules as the raw fill path (zero-making,
   // over-ask clamp, all-or-nothing partial refusal) — one semantics, two encoders.
@@ -341,10 +339,8 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const warnings: Warning[] = [...depWarn];
   const nowSecs = nowSecondsOf(ctx);
-  const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
-  if (input.deadlineAt !== undefined && deadline <= nowSecs) {
-    warnings.push({ code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — the adapter reverts DeadlineExceeded; pin a future absolute deadline for byte-stable retries` });
-  }
+  const { deadline, warning: deadlineWarning } = resolveDeadline(input, nowSecs, "the adapter reverts DeadlineExceeded");
+  if (deadlineWarning) warnings.push(deadlineWarning);
 
   const call = buildPoolForSelfCall(action, deadline);
 
@@ -368,9 +364,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   if (resolved) {
     try {
       const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, (action as { poolId: `0x${string}` }).poolId, ctx.atBlock);
-      if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
-        return unavailable(input.chainId, "pool_not_found", `pool ${(action as { poolId: string }).poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
-      }
+      if (poolMissing(tokens)) return poolNotFound(input.chainId, (action as { poolId: string }).poolId, ctx);
       tokenAddresses = { collateral: tokens.collateral, reference: tokens.reference, cST: tokens.cst, cPT: tokens.cpt };
       warnings.push(
         ...(await poolPreflightWarnings({

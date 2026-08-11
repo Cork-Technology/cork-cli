@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cork/core": "workspace:*",
+    "@cork/mcp": "workspace:*",
     "@cork/schemas": "workspace:*",
     "commander": "12.1.0",
     "zod": "4.4.3"

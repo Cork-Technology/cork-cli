@@ -10,10 +10,9 @@ import { resolveConfig, resolveRollover } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, type HyperSyncLog, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
-import { PERMIT2_ADDRESS } from "./submit.ts";
 
 /** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
@@ -87,7 +86,7 @@ async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScan
     const rows = spec.postFilter(spec.decode(mined.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: Number(l.blockNumber), transactionHash: l.transactionHash }))));
     return { status: "merged", rows, headBlock: head };
   } catch (err) {
-    return { status: "error", message: `live-tail eth_getLogs via ${hostOf(rpc.url)} failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
+    return { status: "error", message: `live-tail eth_getLogs via ${hostOf(rpc.url)} failed: ${firstLine(err)}` };
   }
 }
 
@@ -228,7 +227,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       ctx,
     });
   } catch (err) {
-    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`, ctx);
+    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${firstLine(err)}`, ctx);
   }
 }
 
@@ -622,7 +621,7 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
         }
       } catch (err) {
         verification = "attempted but the live views failed — rows are event-derived only";
-        warnings.push({ code: "chain_read_failed", message: `live-view verification failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — rows are event-derived only` });
+        warnings.push({ code: "chain_read_failed", message: `live-view verification failed (${firstLine(err)}) — rows are event-derived only` });
       }
     } else if (resolved && items.length > VERIFY_CAP) {
       verification = `skipped (${items.length} rows exceeds the ${VERIFY_CAP}-row live-verification cap) — rows are event-derived only`;
@@ -650,6 +649,6 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
       ctx,
     });
   } catch (err) {
-    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`, ctx);
+    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${firstLine(err)}`, ctx);
   }
 }

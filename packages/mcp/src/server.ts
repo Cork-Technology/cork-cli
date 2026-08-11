@@ -69,12 +69,13 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
         isError: envelope.state === "unavailable",
       };
     } catch (err) {
-      const invalid = err instanceof ToolInputError;
-      const teaching = invalid ? (err as ToolInputError).teaching : undefined;
+      // One instanceof narrowing instead of repeated casts — `tie` is the typed view of the error.
+      const tie = err instanceof ToolInputError ? err : undefined;
+      const teaching = tie?.teaching;
       const message = teaching
         ? `${teaching.summary}. ${teaching.remediation}${teaching.example ? ` Example — ${teaching.example.title}: ${JSON.stringify(teaching.example.input)}` : ""}`
-        : invalid
-          ? `invalid input for ${(err as ToolInputError).tool}: ${JSON.stringify((err as ToolInputError).issues)}`
+        : tie
+          ? `invalid input for ${tie.tool}: ${JSON.stringify(tie.issues)}`
           : err instanceof Error
             ? err.message.split("\n")[0]!
             : String(err);
@@ -88,7 +89,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       const errorEnvelope = {
         state: "unavailable" as const,
         data: teaching ?? null,
-        warnings: [{ code: invalid ? "invalid_input" : "internal_error", message }],
+        warnings: [{ code: tie ? "invalid_input" : "internal_error", message }],
         provenance: { source: "config" as const, chainId, fetchedAt: new Date().toISOString() },
         schemaVersion: SCHEMA_VERSION,
       };

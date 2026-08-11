@@ -10,6 +10,7 @@
 // the ERC-7683 `Open` event's tuple layout is not reproduced here, so an Open log surfaces as
 // an unlabeled event rather than being guessed [K3-honest].
 import { keccak256, stringToHex, toEventSelector } from "viem";
+import { z } from "zod";
 import { envioToken, hyperRpcHost, redactEnvioUrl, redactUrlIn } from "./datasources/envio.ts";
 
 type Hex = `0x${string}`;
@@ -99,6 +100,19 @@ export interface RawLog {
   logIndex: string;
 }
 
+/** Shape gate for eth_getLogs rows (external, untrusted): blockNumber must be BigInt-parsable
+ *  hex — labelLogs feeds it straight to BigInt(). Extra fields pass through (loose object). */
+const RawLogRows = z.array(
+  z.looseObject({
+    address: z.string(),
+    topics: z.array(z.string()),
+    data: z.string(),
+    blockNumber: z.string().regex(/^0x[0-9a-fA-F]+$/, "blockNumber is not 0x-hex"),
+    transactionHash: z.string(),
+    logIndex: z.string(),
+  }),
+);
+
 export class LogsRangeLimited extends Error {
   constructor(message: string) {
     super(message);
@@ -156,14 +170,19 @@ export async function fetchDigestLogs(args: {
   } finally {
     clearTimeout(t);
   }
-  const body = (await res.json().catch(() => null)) as { result?: RawLog[]; error?: { message?: string } } | null;
+  const body = (await res.json().catch(() => null)) as { result?: unknown; error?: { message?: string } } | null;
   if (!body || body.error || !Array.isArray(body.result)) {
     const msg = scrub(body?.error?.message ?? `HTTP ${res.status}`);
     // Range-cap rejections (non-archive nodes, free tiers) are a distinct, honest outcome.
     if (/range|archive|10000|block/i.test(msg)) throw new LogsRangeLimited(msg);
     throw new Error(`logs endpoint error: ${msg}`);
   }
-  return body.result;
+  // Same trust boundary venue.ts zod-guards: the rows are UNTRUSTED external input, and an
+  // unshaped row used to escape as a raw TypeError from labelLogs' BigInt(blockNumber) instead
+  // of the honest typed error every other malformed response gets.
+  const rows = RawLogRows.safeParse(body.result);
+  if (!rows.success) throw new Error(`logs endpoint returned malformed log rows (${scrub(rows.error.issues[0]?.message ?? "shape mismatch")})`);
+  return rows.data;
 }
 
 export interface LabeledLog {

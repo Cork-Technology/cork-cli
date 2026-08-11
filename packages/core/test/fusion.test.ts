@@ -328,8 +328,11 @@ describe("runTool: cork_prepare_orders maker-order + auction (offline, pure loca
     expect(dec.postInteraction).toBeNull();
     expect(dec.classification).toBe("current");
     expect(dec.auction.initialRateBump).toBe(1_000_000n);
-    // fusion echo: phase decaying at start; ceiling = floor * 1.1 (bump 1e6/1e7 = +10%), floor = takingAmount.
-    expect(d.fusion["phase"]).toBe("decaying");
+    // fusion echo: at exactly t == startTime the settlement port still charges the FULL bump
+    // (calcAuctionBump `<=`), so the phase label is "pre-start" — the label and the price beside
+    // it must agree (they briefly didn't: this surface said "decaying" while takerPaysNow below
+    // is the ceiling). Ceiling = floor * 1.1 (bump 1e6/1e7 = +10%), floor = takingAmount.
+    expect(d.fusion["phase"]).toBe("pre-start");
     expect(d.fusion["floorTakingAmount"]).toBe("1000000");
     expect(d.fusion["takerPaysCeiling"]).toBe("1100000");
     expect(d.fusion["takerPaysNow"]).toBe("1100000"); // t == startTime → full bump

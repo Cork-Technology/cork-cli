@@ -5,8 +5,9 @@
 // is called out as unreadable rather than glossed over, because the value of this summary comes
 // entirely from being trustworthy when it matters.
 import type { DecodedLeg } from "./decode.ts";
+import { U256_MAX } from "../math/fixed.ts";
 
-const MAX_UINT = (1n << 256n) - 1n;
+const MAX_UINT = U256_MAX;
 
 export interface SummaryOptions {
   /**

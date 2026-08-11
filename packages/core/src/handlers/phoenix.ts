@@ -11,8 +11,7 @@ import { summarizeBundle } from "../bundle/summary.ts";
 import { canAutoFund, type FundingMode, fundingPlan } from "../bundle/funding.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, unavailable } from "./shared.ts";
-import { PERMIT2_ADDRESS } from "./submit.ts";
+import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, unavailable } from "./shared.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
 
 
@@ -114,19 +113,13 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
   }
   const nowSecs = nowSecondsOf(ctx);
-  // deadlineAt (absolute) pins the bundle bytes across retries [K2]; deadlineSeconds
-  // (relative, default) re-anchors to the clock on each call.
-  const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
+  const { deadline, warning: deadlineWarning } = resolveDeadline(input, nowSecs, "the bundle would revert its deadline check on-chain");
   if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
     return handlePhoenixAuthority(input, depWarn, dep, ctx);
   }
   const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
   const warnings: Array<{ code: string; message: string }> = [...depWarn];
-  // deadlineAt is validated for FORMAT only by the schema; a past moment builds fine and can
-  // only revert on-chain — disclose it (the sibling deadlineSeconds is bounded-future) [F19].
-  if (input.deadlineAt !== undefined && deadline <= nowSecs) {
-    warnings.push({ code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — the bundle would revert its deadline check on-chain; pin a future absolute deadline for byte-stable retries` });
-  }
+  if (deadlineWarning) warnings.push(deadlineWarning);
   let funding: Call[] = [];
   let sweepBack: Call[] = [];
   // Filled in whenever we read the pool, so the bundle summary can name tokens by their role.
@@ -149,10 +142,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
       if (resolved) {
         try {
           const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
-          const ZERO = "0x0000000000000000000000000000000000000000";
-          if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
-            return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
-          }
+          if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
           tokenRoles = roleMapOf(tokens);
           // 'pre-funded' gets the same guards as the funded path — it must not silently skip
           // checks its sibling enforces [F19].
@@ -195,13 +185,9 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     } catch (err) {
       return chainReadFailed(input.chainId, err, [], ctx, resolved);
     }
-    // A nonexistent pool does NOT revert here — market() returns a zeroed struct. Refuse to
-    // build funding legs against the zero address instead of emitting a plausible-looking
-    // bundle that can only revert on-chain.
-    const ZERO = "0x0000000000000000000000000000000000000000";
-    if (tokens.collateral === ZERO || tokens.cst === ZERO || tokens.cpt === ZERO) {
-      return unavailable(input.chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${input.chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
-    }
+    // Refuse to build funding legs against the zero address instead of emitting a
+    // plausible-looking bundle that can only revert on-chain.
+    if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
     tokenRoles = roleMapOf(tokens);
     // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
     // build-and-warn — a bundle that can only revert is still returned, clearly labelled.

@@ -10,7 +10,7 @@ import { JIT_EVENTS } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
 
 /** [K7] chain-verification payload on rollover-order reconcile results: the settler's live
@@ -231,7 +231,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                 });
               }
             } catch (err) {
-              warnings.push({ code: "chain_read_failed", message: `orderStatus verification read failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — result is venue-reported only` });
+              warnings.push({ code: "chain_read_failed", message: `orderStatus verification read failed (${firstLine(err)}) — result is venue-reported only` });
             }
           } else {
             warnings.push(venueNote);
@@ -255,7 +255,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               warnings.push(
                 err instanceof LogsRangeLimited
                   ? { code: "logs_range_limited", message: `the logs endpoint refused the historical range (${err.message}) — event history omitted; use HyperRPC (ENVIO_API_TOKEN) for full-range scans` }
-                  : { code: "logs_unavailable", message: `event-history leg failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` },
+                  : { code: "logs_unavailable", message: `event-history leg failed: ${firstLine(err)}` },
               );
             }
           } else if (!logsEndpoint) {
@@ -346,7 +346,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                 });
               }
             } catch (err) {
-              warnings.push({ code: "chain_read_failed", message: `LOP invalidator read failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — result is venue-reported only` });
+              warnings.push({ code: "chain_read_failed", message: `LOP invalidator read failed (${firstLine(err)}) — result is venue-reported only` });
             }
           } else if (maker && lop && traitsStr !== undefined) {
             warnings.push(venueNote);

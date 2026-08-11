@@ -184,6 +184,14 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
     const logs = await fetchDigestLogs({ ...common, fetchImpl: jsonResp({ jsonrpc: "2.0", id: 1, result: [] }) });
     expect(logs).toEqual([]);
   });
+  it("malformed log rows (external, untrusted) fail as a TYPED logs error, not a downstream BigInt TypeError", async () => {
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: jsonResp({ jsonrpc: "2.0", id: 1, result: [{ address: "0xabc", topics: [], data: "0x", blockNumber: "not-hex", transactionHash: "0x1", logIndex: "0x0" }] }) }),
+    ).rejects.toThrow(/malformed log rows/);
+    await expect(
+      fetchDigestLogs({ ...common, fetchImpl: jsonResp({ jsonrpc: "2.0", id: 1, result: [42] }) }),
+    ).rejects.toThrow(/malformed log rows/);
+  });
   it("range/archive refusals become LogsRangeLimited (a distinct, honest outcome)", async () => {
     await expect(
       fetchDigestLogs({ ...common, fetchImpl: jsonResp({ error: { message: "block range too large" } }) }),

@@ -121,7 +121,7 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
       await server.connect(transport);
       return transport.handleRequest(req);
     }
-    return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/signing\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/<topic>\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   };
 }
 

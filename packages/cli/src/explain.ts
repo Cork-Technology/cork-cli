@@ -9,6 +9,7 @@
 // resolving $ref into $defs, unfolding discriminated unions (oneOf/anyOf) into one block per
 // variant, and word-wrapping every description — so the two surfaces never drift.
 
+import { envFlag } from "./env.ts";
 import { wrap } from "./render.ts";
 
 /** The contract object the CLI assembles for a tool (also the shape emitted as JSON). */
@@ -168,9 +169,9 @@ export function formatExplainText(doc: ExplainDoc): string {
   return out.join("\n");
 }
 
-/** Whether `--explain` should emit JSON: an explicit --json value, or a truthy CORK_EXPLAIN_JSON. */
-export function explainWantsJson(jsonOpt: string | undefined, env: Record<string, string | undefined>): boolean {
-  if (jsonOpt !== undefined) return true;
-  const flag = env.CORK_EXPLAIN_JSON;
-  return flag !== undefined && flag !== "" && flag !== "0" && flag.toLowerCase() !== "false";
+/** Whether `--explain` should emit JSON without an explicit --json: CORK_EXPLAIN_JSON=1|true —
+ *  the same strict rule as every other CORK_* toggle (envFlag), where this flag alone used to
+ *  accept any non-"0"/"false" value. */
+export function explainWantsJson(env: Record<string, string | undefined>): boolean {
+  return envFlag(env, "CORK_EXPLAIN_JSON");
 }

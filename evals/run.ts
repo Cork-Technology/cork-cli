@@ -33,7 +33,14 @@ import { evalAuthMode } from "./auth-mode.ts";
 process.env.CORK_CONFIG_NO_FETCH ??= "1";
 
 const MODEL = process.env.CORK_EVAL_MODEL ?? "claude-sonnet-5";
+// A malformed TRIALS ("abc" → NaN, "" → 0) would run ZERO trials and — with the gate's n>0
+// short-circuit — exit green having graded nothing: the same green-no-op class (C13) the
+// CORK_EVAL_ONLY guard below exists for. Fail loud instead.
 const TRIALS = Number(process.env.CORK_EVAL_TRIALS ?? 1);
+if (!Number.isInteger(TRIALS) || TRIALS < 1) {
+  console.error("CORK_EVAL_TRIALS must be a positive integer");
+  process.exit(2);
+}
 const MAX_LOOP = 6;
 
 interface TraceCall {
@@ -70,6 +77,13 @@ const TOOLS = REGISTRY.map((t) => ({
   input_schema: inputJsonSchema(t.name) as Anthropic.Tool.InputSchema,
 }));
 
+/** Compact per-call cell: `tool→state/code`, `tool!` for schema-invalid. ONE renderer for the
+ *  log row and the console FAIL line — the log-row test asserts they share a vocabulary, which
+ *  was previously maintained by hand in two copies of this expression. */
+function traceCell(c: TraceCall): string {
+  return `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.code ? `/${c.code}` : ""}`}`;
+}
+
 /** One durable NDJSON row per run — everything the variance re-trial recipe and a post-hoc
  *  regression hunt need, WITHOUT the transcript bulk (trace tools + verdict bits + token cost).
  *  Exported for the unit test: the row must never silently lose a verdict field. */
@@ -87,7 +101,7 @@ export function evalLogRow(r: TaskResult, model: string) {
     ...(r.recovered !== undefined ? { recovered: r.recovered } : {}),
     calls: r.calls,
     tokens: r.tokens,
-    trace: r.trace.map((c) => `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.code ? `/${c.code}` : ""}`}`),
+    trace: r.trace.map(traceCell),
     finalText: r.finalText.slice(0, 400),
   };
 }
@@ -191,7 +205,7 @@ async function main() {
       console.log(
         `${flag}  ${task.id}${task.heldOut ? " [held-out]" : ""}${TRIALS > 1 ? ` t${trial}` : ""}  tool:${r.toolPick ? "✓" : "✗"} params:${r.paramsOk ? "✓" : "✗"} state:${r.statePass ? "✓" : "✗"} answer:${r.answerPass ? "✓" : "✗"} calls:${r.calls}${r.efficient ? "" : "(over)"} tokens:${r.tokens}${r.recovered !== undefined ? ` recovered:${r.recovered ? "✓" : "✗"}` : ""}`,
       );
-      if (!r.ok) console.log(`      trace: ${r.trace.map((c) => `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.code ? `/${c.code}` : ""}`}`).join(" , ")}\n      answer: ${r.finalText.slice(0, 160)}`);
+      if (!r.ok) console.log(`      trace: ${r.trace.map(traceCell).join(" , ")}\n      answer: ${r.finalText.slice(0, 160)}`);
     }
   }
 
@@ -215,9 +229,18 @@ async function main() {
   console.log(`error recovery:    ${invalids.length ? pct(invalids.filter((r) => r.recovered).length, invalids.length) : "n/a (no invalid calls)"}`);
   console.log(`total tokens:      ${results.reduce((s, r) => s + r.tokens, 0)}`);
 
-  if (process.env.EVAL_GATE && n > 0 && success / n < Number(process.env.EVAL_GATE_THRESHOLD ?? 0.8)) {
-    console.error(`\nEVAL GATE FAILED: success ${pct(success, n)} < threshold`);
-    process.exit(1);
+  if (process.env.EVAL_GATE) {
+    // A zero-run gate is a FAILURE, not a pass (C13); a NaN threshold would silently disable
+    // the comparison, so it is rejected the same way.
+    const threshold = Number(process.env.EVAL_GATE_THRESHOLD ?? 0.8);
+    if (n === 0 || !Number.isFinite(threshold)) {
+      console.error(`\nEVAL GATE FAILED: ${n === 0 ? "zero runs graded" : `threshold '${process.env.EVAL_GATE_THRESHOLD}' is not a number`}`);
+      process.exit(1);
+    }
+    if (success / n < threshold) {
+      console.error(`\nEVAL GATE FAILED: success ${pct(success, n)} < threshold`);
+      process.exit(1);
+    }
   }
 }
 

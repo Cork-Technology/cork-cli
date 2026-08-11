@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
-import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../orders.ts";
+import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type LopOrder } from "../orders.ts";
 import { decodeJitExtension, type ResolvedConstraint } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
@@ -10,7 +10,7 @@ import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
 import { decodeBundle, type DecodedLeg, decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
-import { envelope, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
+import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
 
@@ -100,7 +100,6 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
   };
 }
 
-const DECODE_U160 = (1n << 160n) - 1n;
 
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
  *  breakdown + locally recomputed orderHash; any caller-claimed hash is cross-checked, never
@@ -225,8 +224,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
   // Extension binding: OrderLib enforces salt.low160 == keccak256(extension).low160 at fill.
   let saltBinding: { saltBoundToExtension: true } | undefined;
   if (extension !== undefined && extension !== "0x") {
-    const bound = (order.salt & DECODE_U160) === (BigInt(keccak256(extension)) & DECODE_U160);
-    if (!bound) {
+    if (!saltExtensionBinding(order.salt, extension).bound) {
       return envelope({
         state: "conflict",
         data: { ...base, saltBoundToExtension: false },
@@ -332,7 +330,7 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   try {
     parsed = parseTransaction(raw as TransactionSerialized);
   } catch (err) {
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `not a decodable Ethereum transaction (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — kind 'tx' takes the SIGNED serialized transaction; for inner calldata alone use kind 'calldata'` }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `not a decodable Ethereum transaction (${firstLine(err)}) — kind 'tx' takes the SIGNED serialized transaction; for inner calldata alone use kind 'calldata'` }]);
   }
   if (parsed.r === undefined || parsed.s === undefined) {
     throw new ToolInputError("cork_decode", [{ path: ["data"], message: "this transaction is UNSIGNED (no signature fields) — kind 'tx' validates signed bytes before broadcast; for unsigned bytes decode the inner calldata with kind 'calldata'" }]);

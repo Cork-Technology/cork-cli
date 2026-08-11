@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { compareVersions } from "@cork/core";
+import { envFlag } from "./env.ts";
 
 export const RELEASE_REPO = "Cork-Technology/cork-cli";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -21,7 +22,7 @@ export interface UpdateCache {
   notifiedAt?: string; // last time a notice was printed
 }
 
-export function updateCachePath(env: Record<string, string | undefined> = process.env): string {
+function updateCachePath(env: Record<string, string | undefined> = process.env): string {
   return env["CORK_UPDATE_CACHE_FILE"] ?? join(homedir(), ".cache", "cork-helper-cli", "update-check.json");
 }
 
@@ -38,11 +39,9 @@ export function updateDecision(opts: {
   const silent =
     !stderrIsTTY ||
     currentVersion === "dev" ||
-    env["CORK_NO_UPDATE_NOTIFIER"] === "1" ||
-    env["CORK_NO_UPDATE_NOTIFIER"] === "true" ||
+    envFlag(env, "CORK_NO_UPDATE_NOTIFIER") ||
     env["CI"] !== undefined ||
-    env["CORK_JSON"] === "1" ||
-    env["CORK_JSON"] === "true" ||
+    envFlag(env, "CORK_JSON") ||
     argv.includes("--json") ||
     argv[0] === "mcp" ||
     argv[0] === "self-update" ||
@@ -64,7 +63,7 @@ export function updateDecision(opts: {
   return { notice, refresh, cacheUpdate };
 }
 
-export function readUpdateCache(path: string): UpdateCache | null {
+function readUpdateCache(path: string): UpdateCache | null {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as UpdateCache;
   } catch {
@@ -72,7 +71,7 @@ export function readUpdateCache(path: string): UpdateCache | null {
   }
 }
 
-export function writeUpdateCache(path: string, cache: UpdateCache): void {
+function writeUpdateCache(path: string, cache: UpdateCache): void {
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(cache)}\n`);

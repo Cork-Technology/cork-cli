@@ -96,6 +96,17 @@ const PremiumPerShareRate = TokenAmount.describe(
 // headline fields of the 1e18=1.0 vs 1e18=1% collision. One const, two use sites (maker + taker
 // jitMarket), so the two paths cannot drift. Same for the ERC-2612 permit rows: `value` is a
 // TOKEN AMOUNT (the predicted cST), not a bare integer — R2's first finding.
+// The two 1e18=1% FEE fields are shared the same way: they are exactly the other half of that
+// collision, and the taker copy once silently lost its x-units marker (the parity test cannot
+// see an omission — it checks that emitted values agree, and a site emitting nothing is
+// invisible). One const per field closes the omission class structurally.
+const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 });
+const JitUnwindSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only").meta({ "x-units": X_UNITS.pct18 });
+// Rollover teaching strings shared between the prepare (rollover-intent) and submit
+// (rollover-order) shapes — three of them were maintained as identical copies at both sites.
+const RolloverOrderSizeWire = TokenAmount.describe("src cST shares to roll — cST is always 18 decimals");
+const RolloverMinCaWire = TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)");
+const RolloverMinSharesWire = TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals");
 const RateConstraintWire = z.strictObject({
   rateMin: UintStr.describe("ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)").meta({ "x-units": X_UNITS.wad }),
   rateMax: UintStr.describe("ABSOLUTE rate ceiling, 1e18 = 1.0").meta({ "x-units": X_UNITS.wad }),
@@ -409,8 +420,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
         constraint: RateConstraintWire
           .optional()
           .describe("the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"),
-        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 }),
-        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only").meta({ "x-units": X_UNITS.pct18 }),
+        swapFeePercentage: JitSwapFeeWire,
+        unwindSwapFeePercentage: JitUnwindSwapFeeWire,
         enableJitMint: z.boolean().default(false).describe("maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"),
         permits: z
           .array(Erc2612PermitWire)
@@ -454,8 +465,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
         constraint: RateConstraintWire
           .optional()
           .describe("the four rate limits (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY: they must derive the pool whose cST one side of the RESTING ORDER names, or the fill reverts OrderNotForPool. Omit to auto-resolve via recipe.resolve (needs an RPC); when the resting order carries its own JIT extension, the derived pool id is cross-checked against it"),
-        swapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool"),
-        unwindSwapFeePercentage: UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only"),
+        swapFeePercentage: JitSwapFeeWire,
+        unwindSwapFeePercentage: JitUnwindSwapFeeWire,
         enableJitMint: z.boolean().default(false).describe("encoded because the struct layout requires it, but IGNORED on the taker path — takerInteraction ALWAYS mints (attaching the hook to the taker side IS the opt-in)"),
         permits: z
           .array(Erc2612PermitWire)
@@ -488,12 +499,12 @@ export const OrdersAction = z.discriminatedUnion("type", [
     srcCstToken: Address,
     dstCstToken: Address,
     premiumToken: Address,
-    orderSize: TokenAmount.describe("src cST shares to roll — cST is always 18 decimals"),
+    orderSize: RolloverOrderSizeWire,
     minPremiumPerShare: PremiumPerShareRate,
     openDeadline: UnixSeconds,
     fillDeadline: UnixSeconds,
-    minCaReceived: TokenAmount.optional().describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)"),
-    minSharesOut: TokenAmount.optional().describe("slippage floor on the dst share pairs minted — shares are always 18 decimals"),
+    minCaReceived: RolloverMinCaWire.optional(),
+    minSharesOut: RolloverMinSharesWire.optional(),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
     allowUnderfill: z.boolean().default(false),
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
@@ -585,10 +596,12 @@ const HookCallWire = z.strictObject({
 const RolloverParamsWire = z.strictObject({
   srcCstToken: Address,
   dstCstToken: Address,
-  minCaReceived: TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)"),
-  minSharesOut: TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals"),
-  srcPoolId: Bytes32,
-  dstPoolId: Bytes32,
+  minCaReceived: RolloverMinCaWire,
+  minSharesOut: RolloverMinSharesWire,
+  // MarketId, not bare Bytes32: the submit path's pool ids are the same field the prepare path
+  // teaches with MarketId's where-to-get-one description.
+  srcPoolId: MarketId,
+  dstPoolId: MarketId,
   settler: Address,
 });
 const RolloverOrderWire = z.strictObject({
@@ -605,7 +618,7 @@ const RolloverOrderWire = z.strictObject({
   openDeadline: UnixSeconds,
   fillDeadline: UnixSeconds,
   orderSalt: Uint64Str,
-  orderSize: TokenAmount.describe("src cST shares to roll — cST is always 18 decimals"),
+  orderSize: RolloverOrderSizeWire,
   minPremiumPerShare: PremiumPerShareRate,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),

@@ -14,7 +14,7 @@
 import type { ToolDef } from "@cork/schemas";
 
 /** Terminal-ish width. Fixed rather than read from tput so output is reproducible in tests. */
-export const WIDTH = 88;
+const WIDTH = 88;
 const LABEL = 22;
 
 /**
@@ -75,7 +75,7 @@ function scalar(v: unknown): string {
  * Nothing is truncated — hiding fields from a person debugging an integration is worse
  * than a long scroll, and `--json` remains available for machine consumption.
  */
-export function renderValue(value: unknown, indent = 0): string {
+function renderValue(value: unknown, indent = 0): string {
   const pad = " ".repeat(indent);
   if (!isPlainObject(value) && !Array.isArray(value)) return `${pad}${scalar(value)}`;
 

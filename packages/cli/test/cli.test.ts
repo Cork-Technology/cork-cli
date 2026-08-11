@@ -777,3 +777,26 @@ describe("audit R5/R6/R7 — one numeric dialect, one error contract, the swallo
     expect(JSON.parse(r.stderr).error.message).not.toContain("swallowed");
   });
 });
+
+describe("code-smell audit fixes (2026-08-11)", () => {
+  it("--enable-deprecated does not leak CORK_ENABLE_DEPRECATED into later runCli calls", async () => {
+    const prev = process.env["CORK_ENABLE_DEPRECATED"];
+    delete process.env["CORK_ENABLE_DEPRECATED"];
+    try {
+      const r = await runCli(["capabilities", "--enable-deprecated"], { nowSeconds: NOW });
+      expect(r.code).toBe(EXIT.ok);
+      // runCli is capture-everything/never-exit: one flagged call must not unlock the
+      // deprecation gate for every later call in the same process (tests, embedding).
+      expect(process.env["CORK_ENABLE_DEPRECATED"]).toBeUndefined();
+    } finally {
+      if (prev !== undefined) process.env["CORK_ENABLE_DEPRECATED"] = prev;
+    }
+  });
+
+  it("CORK_EXPLAIN_JSON speaks the same strict dialect as CORK_JSON ('true' works, 'yes' does not)", async () => {
+    const asTrue = await runCli(["query", "--explain"], { nowSeconds: NOW }, { CORK_EXPLAIN_JSON: "true" });
+    expect(() => JSON.parse(asTrue.stdout)).not.toThrow();
+    const asYes = await runCli(["query", "--explain"], { nowSeconds: NOW }, { CORK_EXPLAIN_JSON: "yes" });
+    expect(() => JSON.parse(asYes.stdout)).toThrow(); // prose — 'yes' is not a CORK_* truthy value
+  });
+});

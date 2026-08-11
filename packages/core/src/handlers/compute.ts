@@ -6,7 +6,7 @@ import { impairmentFloor, previewAdjustedRate } from "../math/constraint.ts";
 import { previewSwap, previewUnwindSwap } from "../math/preview.ts";
 import { type CorkAddresses, readPoolState } from "../chain/reads.ts";
 import { decodeMakerTraits, hashLopOrder, LOP_ADDRESSES } from "../orders.ts";
-import { type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
+import { auctionPhase, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, rpcProvenance, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
 import { parseOrderRecord } from "./decode.ts";
 import { getRegistry, handleComputeResolveRecipeLegacy, resolveRecipeOracleConstraint } from "./registry.ts";
@@ -156,7 +156,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     return handleComputeDutchAuction(input, p, ctx);
   }
   // The one deliberately-gated kind left, naming its REAL blocker and unblock condition.
-  return unavailable(chainId, "phase_gated", "rfq-quote would RECOMMEND a price — a pricing-model/product decision that is deliberately deferred, not missing infrastructure. The registry band math it would build on is already live as cork_compute recipe-rate-constraint; discover open RFQs with cork_query rfqs and answer them with cork_submit rfq-answer. A Fusion-style decaying-premium order (compute dutch-auction-price is live) is one modeled-quote-free alternative — see notes/fusion-integration-plan.md", ctx);
+  return unavailable(chainId, "phase_gated", "rfq-quote would RECOMMEND a price — a pricing-model/product decision that is deliberately deferred, not missing infrastructure. The registry band math it would build on is already live as cork_compute recipe-rate-constraint; discover open RFQs with cork_query rfqs and answer them with cork_submit rfq-answer. The modeled-quote-free alternative is SHIPPED: a decaying-premium auction order (cork_prepare_orders maker-order with `auction`; price it any time with compute dutch-auction-price)", ctx);
 }
 
 /**
@@ -216,7 +216,7 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
   const baseFee = p.baseFeeWei !== undefined ? BigInt(p.baseFeeWei) : null;
   const bump = fusionRateBump(decoded.auction, ts, baseFee);
   const finish = decoded.auction.startTime + decoded.auction.duration;
-  const phase = ts <= decoded.auction.startTime ? "pre-start" : ts >= finish ? "floor" : "decaying";
+  const phase = auctionPhase(decoded.auction, ts);
 
   const m = p.makingAmount !== undefined ? BigInt(p.makingAmount) : order.makingAmount;
   const M = order.makingAmount;

@@ -14,8 +14,7 @@ const hex = <T extends `0x${string}`>(re: RegExp, msg: string) =>
 // ONCE per tool document as a named `$defs` entry with `$ref`s at every use site. Measured effect
 // is modest (prepare_phoenix −5% wire) — the real payoff is that a $defs description (TokenAmount,
 // UnixSeconds) teaches unit/format once and rides every use site at ~zero marginal cost. `$ref` is
-// Claude/OpenAI-safe and spec-legal (JSON Schema 2020-12 default since MCP 2025-11-25, SEP-2106);
-// see notes/research/mcp-frontier-2026.md.
+// Claude/OpenAI-safe and spec-legal (JSON Schema 2020-12 default since MCP 2025-11-25, SEP-2106).
 export const Address = z
   .string()
   .regex(/^0x[0-9a-fA-F]{40}$/, "expected 0x-prefixed 20-byte address")
@@ -83,8 +82,9 @@ export const UNIX_SECONDS_MAX = 4102444800n;
 
 /** The same year-2100 bound as a plain number, for absolute-time fields typed as JSON numbers
  *  (RFQ windows, LOP listing expiry) rather than the decimal-string `UnixSeconds` primitive —
- *  one source for the bound so string and number time fields can never drift apart. */
-export const UNIX_SECONDS_MAX_NUMBER = 4_102_444_800;
+ *  DERIVED from the bigint (not a second literal) so string and number time fields truly cannot
+ *  drift apart. */
+export const UNIX_SECONDS_MAX_NUMBER = Number(UNIX_SECONDS_MAX);
 
 /** Absolute unix timestamp in seconds — uint64 wire shape with the time semantics taught inline
  *  (deadlines/expiries here are wall-clock absolute, never relative durations), plus a

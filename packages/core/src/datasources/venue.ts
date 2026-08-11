@@ -204,8 +204,13 @@ export class VenueHttpError extends Error {
 function asList(raw: unknown, what: string): VenueList {
   const parsed = ListResponse.safeParse(raw);
   if (!parsed.success) {
-    // A bare array carries no pagination metadata — completeness is unprovable.
-    if (Array.isArray(raw)) return { items: z.array(Row).parse(raw), paginationKnown: false };
+    // A bare array carries no pagination metadata — completeness is unprovable. safeParse, not
+    // parse: a malformed element must surface as the same venue-typed shape error every other
+    // malformed response gets, never as a raw ZodError (which read as internal_error).
+    if (Array.isArray(raw)) {
+      const rows = z.array(Row).safeParse(raw);
+      if (rows.success) return { items: rows.data, paginationKnown: false };
+    }
     throw new VenueUnreachable(`venue ${what} response did not match the expected list shape`);
   }
   const p = parsed.data;

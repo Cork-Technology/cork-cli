@@ -45,15 +45,56 @@ export async function diagnoseStaleSidePrediction(
   }
 }
 
-/** Build the TAKER interaction (`adapter ++ abi.encode(JITMarketParams, PermitParams[])`) for
- *  lifting a resting order — the walkthrough's canonical settle path: the underwriter-taker
- *  delivers a not-yet-minted cST via takerInteraction, which always mints (enableJitMint gates
- *  only the maker-side twin). Reuses the SAME primitives as the maker-side prepare (recipe
- *  resolution, constraint staticcall, verify pre-flight, state-override share prediction), so
- *  every protocol rule stays single-sourced; only the orchestration differs — including one
- *  taker-specific guard: when the RESTING order carries its own JIT extension, the taker's
- *  params must derive the SAME pool id, or the two hooks would fight (conflict, no bytes). */
-export async function buildTakerJitInteraction(args: {
+/** The chain-verified half of a ladder run — present only when an RPC resolved AND the
+ *  pre-flights ran to completion; the callers' prediction tails key off it. */
+export interface JitLadderVerified {
+  client: Parameters<typeof predictShares>[0];
+  boundController: `0x${string}`;
+  source: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
+  /** address is non-null by construction: the ladder gates on an unresolvable oracle. */
+  oracle: Omit<Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["oracle"], "address"> & { address: `0x${string}` };
+  derived: ReturnType<typeof deriveJitMarket>;
+}
+
+export type JitLadderResult =
+  | { gate: Envelope }
+  | {
+      gate?: undefined;
+      adapter: `0x${string}`;
+      registry: `0x${string}`;
+      recipe: `0x${string}`;
+      rateOverride: bigint;
+      additionalData: `0x${string}`;
+      /** Always defined on success: explicit, statically resolved, or the run was gated. */
+      constraint: ResolvedConstraint;
+      warnings: Array<{ code: string; message: string }>;
+      verified?: JitLadderVerified;
+    };
+
+/** Side-specific WORDS for the shared ladder — the logic is single-sourced; only these
+ *  fragments differ between the maker (signs an extension) and the taker (builds a fill
+ *  interaction). Everything else about the two hook sides lives in the callers' tails. */
+const LADDER_SIDE = {
+  maker: { artifact: "extension", act: "signing", live: "JIT market orders", rolesTail: "; the order is signable but not yet fillable" },
+  taker: { artifact: "interaction", act: "broadcasting", live: "JIT fills", rolesTail: "" },
+} as const;
+
+/** The wire fields of a `jitMarket` block, shared by both hook sides — derived from the ladder's
+ *  own signature so the shape has exactly one declaration site. */
+export type JitMarketWireParams = Parameters<typeof runJitPreflightLadder>[0]["jm"];
+
+/**
+ * The 2.1.0 JIT pre-flight ladder, SHARED by the maker prepare and the taker fill: registry +
+ * adapter resolution, recipe (or deprecated mode sugar), the adapter binding triple, controller
+ * roles, recipe↔oracle↔constraint resolution, the rateOverride↔source coherence gates, the
+ * oracle gate, the recipe.verify pre-flight, and the market derivation. The two paths used to
+ * carry ~100-line copies of this orchestration — protocol rules double-anchored by probes and
+ * free to drift (and they had: the taker copy silently lacked the verify-read-failure and
+ * oracle-not-deployed disclosures the maker copy carried). The share-prediction tails stay
+ * with their callers (buildTakerJitInteraction below, the maker block in prepare-orders.ts) —
+ * they genuinely differ per side.
+ */
+export async function runJitPreflightLadder(args: {
   ctx: HandlerContext;
   chainId: ChainId;
   lop: `0x${string}`;
@@ -71,33 +112,29 @@ export async function buildTakerJitInteraction(args: {
     enableJitMint: boolean;
     permits?: Array<{ token: `0x${string}`; value: string; deadline: string; v: number; r: `0x${string}`; s: `0x${string}` }> | undefined;
   };
-  taker: `0x${string}`;
-  order: LopOrder;
-  orderExtension: `0x${string}` | undefined;
-}): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: TakerJitReport; warnings: Array<{ code: string; message: string }> }> {
-  const { ctx, chainId, lop, jm } = args;
+  side: keyof typeof LADDER_SIDE;
+}): Promise<JitLadderResult> {
+  const { ctx, chainId, lop, jm, side } = args;
+  const words = LADDER_SIDE[side];
   const warnings: Array<{ code: string; message: string }> = [];
-  const nowSecs = nowSecondsOf(ctx);
-  const swapFee = BigInt(jm.swapFeePercentage);
-  const unwindFee = BigInt(jm.unwindSwapFeePercentage);
   const expiryTimestamp = BigInt(jm.expiryTimestamp);
-  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
-  if (valueGate) return { gate: valueGate };
   const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
   if (!mr?.adapter) {
-    return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT fills are live on Arbitrum One and Base (42161, 8453)`, ctx) };
+    return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — ${words.live} are live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
   if (mrWarn) warnings.push(mrWarn);
+  // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,
+  // so the sugar also works offline).
   let recipe = jm.recipe;
   if (!recipe) {
     if (jm.mode === undefined) {
-      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS); `mode` survives only as deprecated sugar" }]);
+      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"); `mode` survives only as deprecated sugar" }]);
     }
     const hinted = mr.recipes?.[jm.mode];
     if (!hinted) {
       return { gate: unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (jitMarket.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx) };
     }
-    warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} — pass jitMarket.recipe directly` });
+    warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} via this tool's config hints — pass jitMarket.recipe directly; mode will be removed in a later release` });
     recipe = hinted;
   }
   const rateOverride = BigInt(jm.rateOverride ?? "0");
@@ -105,15 +142,18 @@ export async function buildTakerJitInteraction(args: {
   let constraint: ResolvedConstraint | undefined = jm.constraint
     ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
     : undefined;
-  let jit: TakerJitReport = { adapter: mr.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
+  const base = { adapter: mr.adapter, registry: mr.registry, recipe, rateOverride, additionalData, warnings } as const;
 
+  // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
     if (!constraint) {
       return { gate: unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute recipe-rate-constraint)", ctx) };
     }
-    warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — taker-side JIT pre-flights (adapter bindings, roles, recipe, oracle, verify, cST side-match) were SKIPPED; the interaction is built from the caller-supplied constraint but unverified" });
-  } else {
+    warnings.push({ code: "funding_needs_rpc", message: `no RPC resolved — JIT pre-flights (adapter bindings, roles, recipe membership, source/rateOverride coherence, oracle, verify, cST side-match) were SKIPPED; the ${words.artifact} is built from the caller-supplied constraint but unverified` });
+    return { ...base, constraint };
+  }
+  {
     const client = resolved.client;
     try {
       const [boundLop, boundRegistry, boundController] = await Promise.all([
@@ -122,21 +162,25 @@ export async function buildTakerJitInteraction(args: {
         client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
       ]);
       if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — refresh cork-defaults.json before broadcasting anything" }], ctx }) };
+        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
       }
       const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
       if (!adapterRoles.granted) {
-        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — this fill will revert until both are granted (a governance action)` });
+        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change)${words.rolesTail}` });
       }
       const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
       warnings.push(...res.warnings);
       if (res.gate) return { gate: res.gate };
       const { source, oracle } = res;
+      // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the caller
+      // gets the real rule, not a downstream recipe revert: the fill REJECTS a non-zero
+      // override on a price/nav recipe (UnexpectedRateOverride), and a fixed fill deploys
+      // FixedRateOracle(rateOverride), whose constructor reverts on 0.
       if (source === "fixed" && rateOverride === 0n) {
-        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: rateOverride must carry the rate its FixedRateOracle is deployed at — zero reverts the fill`, ctx) };
+        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx) };
       }
       if (source !== "fixed" && rateOverride !== 0n) {
-        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride)`, ctx) };
+        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx) };
       }
       if (!constraint) {
         const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
@@ -144,14 +188,65 @@ export async function buildTakerJitInteraction(args: {
         constraint = c.constraint;
       }
       if (oracle.address === null) {
-        return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — the fill would revert`, ctx) };
+        return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx) };
       }
+      // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
+      // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside the
+      // window, so a predicted oracle can't answer yet (the fill deploys it first).
       if (oracle.deployed) {
         const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
-        if (ok === false) warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint; re-resolve and rebuild" });
+        if (ok === false) {
+          warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
+        } else if (ok === null) {
+          warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
+        }
+      } else {
+        warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
       }
       const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
-      jit = { ...jit, source, oracle: { address: oracle.address, deployed: oracle.deployed }, derivedPoolId: derived.poolId, constraint };
+      return { ...base, constraint, verified: { client, boundController, source, oracle: { ...oracle, address: oracle.address }, derived } };
+    } catch (err) {
+      if (!constraint) {
+        return { gate: unavailable(chainId, "chain_read_failed", `the JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER, so the ${words.artifact} cannot be built. Retry, or pass jitMarket.constraint from cork_compute recipe-rate-constraint`, ctx) };
+      }
+      warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${revertReason(err)}) — the ${words.artifact} is built from the caller-supplied constraint but unverified` });
+      return { ...base, constraint };
+    }
+  }
+}
+
+/** Build the TAKER interaction (`adapter ++ abi.encode(JITMarketParams, PermitParams[])`) for
+ *  lifting a resting order — the walkthrough's canonical settle path: the underwriter-taker
+ *  delivers a not-yet-minted cST via takerInteraction, which always mints (enableJitMint gates
+ *  only the maker-side twin). The pre-flight ladder is the SHARED runJitPreflightLadder above;
+ *  this builder adds the taker tail: one taker-specific guard (a resting order carrying its own
+ *  JIT extension pins the market the maker signed for — the taker's params must re-derive the
+ *  SAME pool id, or the two hooks would fight: conflict, no bytes) plus the cST prediction. */
+export async function buildTakerJitInteraction(args: {
+  ctx: HandlerContext;
+  chainId: ChainId;
+  lop: `0x${string}`;
+  jm: JitMarketWireParams;
+  taker: `0x${string}`;
+  order: LopOrder;
+  orderExtension: `0x${string}` | undefined;
+}): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: TakerJitReport; warnings: Array<{ code: string; message: string }> }> {
+  const { ctx, chainId, lop, jm } = args;
+  const nowSecs = nowSecondsOf(ctx);
+  const swapFee = BigInt(jm.swapFeePercentage);
+  const unwindFee = BigInt(jm.unwindSwapFeePercentage);
+  const expiryTimestamp = BigInt(jm.expiryTimestamp);
+  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
+  if (valueGate) return { gate: valueGate };
+  const ladder = await runJitPreflightLadder({ ctx, chainId, lop, jm, side: "taker" });
+  if (ladder.gate) return { gate: ladder.gate };
+  const { recipe, rateOverride, additionalData, constraint, warnings } = ladder;
+  let jit: TakerJitReport = { adapter: ladder.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
+
+  if (ladder.verified) {
+    const { client, boundController, source, oracle, derived } = ladder.verified;
+    jit = { ...jit, source, oracle: { address: oracle.address, deployed: oracle.deployed }, derivedPoolId: derived.poolId, constraint };
+    try {
       // Consistency with the MAKER's signed intent: a resting order carrying its own JIT
       // extension pins the market the maker signed for — the taker's params must re-derive it.
       if (args.orderExtension && args.orderExtension !== "0x") {
@@ -168,33 +263,37 @@ export async function buildTakerJitInteraction(args: {
       const { dep: jitDep } = await getDep(ctx, chainId);
       const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
       if (!oracle.deployed) {
-        preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
       }
-      const pred = await predictShares(client, { adapter: mr.adapter, controller: boundController, poolManager: jitDep!.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls });
-      if (pred.status === "unavailable") {
-        warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
-      }
-      if (pred.cst) {
-        jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — the LOP pulls the just-minted cST from the taker" };
-        const cstLc = pred.cst.toLowerCase();
-        if (args.order.makerAsset.toLowerCase() !== cstLc && args.order.takerAsset.toLowerCase() !== cstLc) {
-          warnings.push({ code: "jit_side_mismatch", message: `NEITHER side of the resting order is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
-          await diagnoseStaleSidePrediction(client, [["the resting order's makerAsset", args.order.makerAsset], ["the resting order's takerAsset", args.order.takerAsset]], derived.poolId, warnings, "This resting order can never fill; it must be re-signed against a fresh share prediction.");
+      // A missing/partial deployment config is NOT a chain read failure [C11] — guard, don't `!`
+      // (the legacy path below and registry.ts already degrade this way).
+      if (jitDep?.poolManager === undefined) {
+        warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
+      } else {
+        const pred = await predictShares(client, { adapter: ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls });
+        if (pred.status === "unavailable") {
+          warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
+        }
+        if (pred.cst) {
+          jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — the LOP pulls the just-minted cST from the taker" };
+          const cstLc = pred.cst.toLowerCase();
+          if (args.order.makerAsset.toLowerCase() !== cstLc && args.order.takerAsset.toLowerCase() !== cstLc) {
+            warnings.push({ code: "jit_side_mismatch", message: `NEITHER side of the resting order is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
+            await diagnoseStaleSidePrediction(client, [["the resting order's makerAsset", args.order.makerAsset], ["the resting order's takerAsset", args.order.takerAsset]], derived.poolId, warnings, "This resting order can never fill; it must be re-signed against a fresh share prediction.");
+          }
         }
       }
     } catch (err) {
-      if (!constraint) {
-        return { gate: unavailable(chainId, "chain_read_failed", `taker-side JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the interaction cannot be built. Retry, or pass jitMarket.constraint`, ctx) };
-      }
-      warnings.push({ code: "chain_read_failed", message: `taker-side JIT pre-flight reads failed (${revertReason(err)}) — the interaction is built from the caller-supplied constraint but unverified` });
+      // The ladder already succeeded — a tail failure degrades to unverified, never a gate.
+      warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the interaction is built but the cST side-match is unverified` });
     }
   }
   const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
   const extraData = encodeJitExtraData(
-    { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint: constraint!, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
+    { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
     permits,
   );
-  const interaction = `0x${mr.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;
+  const interaction = `0x${ladder.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;
   return { interaction, jit, warnings };
 }
 

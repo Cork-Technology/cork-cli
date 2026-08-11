@@ -15,12 +15,12 @@
 //    addresses), and fixed-rate oracles are keyed on the RATE, not a pair.
 //  - ENUM TRAP: RecipeSource is NAV=0,PRICE=1,FIXED=2 while OracleMode/SourceType are
 //    PRICE=0,NAV=1 — inverted. Never pass one where the other is expected.
-import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
+import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex, zeroAddress } from "viem";
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import type { Market } from "./types.ts";
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
+const ZERO_ADDRESS = zeroAddress;
 
 // ── Enums (numeric values from IMarketRegistry.sol / IMarketRecipe.sol, tag 2.1.0) ──────────
 export const ASSET_KIND = ["ERC20", "ERC4626"] as const;

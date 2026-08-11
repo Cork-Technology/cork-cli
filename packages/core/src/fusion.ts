@@ -10,14 +10,16 @@
 // 2026-07-28) — both rounding directions, interpolation, fee/whitelist-discount, boundaries.
 // Known deployed-getter gotchas carried from the spike: the on-chain selectors use the
 // all-uint256 Order tuple, and public-node eth_call runs with block.basefee = 0.
-import { concatHex, keccak256, size, sliceHex, toHex } from "viem";
+import { concatHex, size, sliceHex, toHex } from "viem";
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
-import { decodeExtensionFields, type LopExtensionFields, type LopOrder } from "./orders.ts";
+import { decodeExtensionFields, saltExtensionBinding, type LopExtensionFields, type LopOrder } from "./orders.ts";
 
 type Hex = `0x${string}`;
 
 /** Classification reference set (cork-defaults.json). The ACTIVE settlement is always decoded
- *  from the order's extension — this set only says which layout/deployment it is. */
+ *  from the order's extension — this set only says which layout/deployment it is. BUNDLED-PINNED
+ *  by design (module-load constant, same rule as LOP_ADDRESSES in orders.ts): a remote-config
+ *  edit does NOT take effect — pricing-layout classification must not move under a ship. */
 export const FUSION_SETTLEMENTS: Record<number, { current: Hex; legacy: Hex[] }> = Object.fromEntries(
   Object.entries((bundledDefaults as { fusionSettlements?: Record<string, { current: Hex; legacy?: Hex[] }> }).fusionSettlements ?? {}).map(
     ([k, v]) => [Number(k), { current: v.current, legacy: v.legacy ?? [] }],
@@ -314,8 +316,6 @@ export function isGetterWhitelisted(fees: FusionGetterFees, taker: string): bool
 
 // ── whole-order decode [K3] ──────────────────────────────────────────────────────────────────
 
-const U160 = (1n << 160n) - 1n;
-
 export interface DecodedFusionOrder {
   settlement: Hex;
   classification: SettlementClass;
@@ -365,8 +365,16 @@ export function decodeFusionOrder(order: LopOrder, extension: Hex, chainId: numb
     fees,
     postInteraction,
     extensionFields: fields,
-    saltBoundToExtension: (order.salt & U160) === (BigInt(keccak256(extension)) & U160),
+    saltBoundToExtension: saltExtensionBinding(order.salt, extension).bound,
   };
+}
+
+/** Phase label matching the settlement port's own boundaries (calcAuctionBump above): AT
+ *  startTime the bump is still initialRateBump (`<=`), AT finish it is 0 (`>=`). ONE comparator
+ *  for the three surfaces that report this label — two of them used `<` and disagreed with the
+ *  price at exactly ts == startTime. */
+export function auctionPhase(a: { startTime: bigint; duration: bigint }, ts: bigint): "pre-start" | "decaying" | "floor" {
+  return ts <= a.startTime ? "pre-start" : ts >= a.startTime + a.duration ? "floor" : "decaying";
 }
 
 /** The taker-facing price report a fill of an auction-priced resting order carries

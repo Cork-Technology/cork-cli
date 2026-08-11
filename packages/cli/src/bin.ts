@@ -61,10 +61,13 @@ if (argv[0] === "mcp") {
       process.stderr.write(`ch mcp --http: --host requires an address (e.g. --host 0.0.0.0)\n`);
       process.exit(2);
     }
+    // Source-path import, NOT `@cork/mcp`: that package's exports map serves its compiled dist/
+    // (the publishable artifact), which is stale or absent in a source run — the dependency is
+    // declared in package.json so the package graph stays honest.
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
     const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
-    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/signing; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/<topic>; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

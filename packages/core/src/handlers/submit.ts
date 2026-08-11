@@ -1,43 +1,12 @@
 // Split from handlers.ts (2026-08-05): submit handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { hashTypedData, isAddressEqual, keccak256, recoverAddress } from "viem";
+import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { ERC1271_MAGIC, erc1271Abi, LOP_ADDRESSES, lopDomain } from "../orders.ts";
+import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
-import { envelope, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
-
-
-const U160 = (1n << 160n) - 1n;
-const U40 = (1n << 40n) - 1n;
-const LOP_NO_PARTIAL_FILLS_FLAG = 1n << 255n;
-
-/**
- * Parse a decimal string (plain or scientific notation) into an EXACT 1e18-scaled bigint, or
- * null when it is not a finite decimal / not representable at 18 fractional digits. Retained
- * as the exact-decimal parse utility (test-pinned); note the RFQ premium checks below
- * deliberately do NOT use it — they replicate the venue's own float-decided gates instead,
- * because a pre-flight that predicts a specific server must fail exactly where IT fails.
- */
-export function decimalToScaled(s: string): bigint | null {
-  const m = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(s.trim());
-  if (!m) return null;
-  const sign = m[1] === "-" ? -1n : 1n;
-  const frac = m[3] ?? "";
-  const digits = BigInt(m[2]! + frac);
-  const pow = BigInt(m[4] ?? "0") - BigInt(frac.length) + 18n;
-  if (pow >= 0n) {
-    if (pow > 96n) return null; // absurd magnitude — treat as unparsable rather than compute 10^huge
-    return sign * digits * 10n ** pow;
-  }
-  const div = 10n ** -pow;
-  if (digits % div !== 0n) return null; // finer than 1e-18 — not exactly representable
-  return (sign * digits) / div;
-}
-
-/** Canonical Uniswap Permit2 (same address on every chain). */
-export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
 /**
  * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-indexing-api
@@ -113,6 +82,9 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       }
       // [F14] Re-run the settler/deadline checks the prepare path enforces — a submit-only caller
       // must not be able to relay an order the prepare path would have refused to build.
+      // Non-fatal findings (unrecognized settler, missing config) ride the OK envelope as
+      // warnings — prepare's relay-with-warning posture, previously silently skipped here.
+      const settlerWarnings: Array<{ code: string; message: string }> = [];
       {
         const { rollover } = await resolveRollover(chainId);
         if (rollover) {
@@ -124,6 +96,11 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           if (kind === "PARTIAL" && !o.allowPartialFills) {
             return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — this signed order is unfillable; re-sign against the ExactSettler ${rollover.exactSettler} or with allowPartialFills:true`, ctx);
           }
+          if (kind === undefined) {
+            settlerWarnings.push({ code: "settler_not_recognized", message: `settler ${o.settler} is not a configured Cork settler for chainId ${chainId} (exact ${rollover.exactSettler}, partial ${rollover.partialSettler}) — relayed, but verify the address before counting on settlement` });
+          }
+        } else {
+          settlerWarnings.push({ code: "settler_not_recognized", message: `no rollover deployment configured for chainId ${chainId} — the settler/mode coherence checks could not run; relayed unverified` });
         }
         const openDeadline = BigInt(o.openDeadline);
         const fillDeadline = BigInt(o.fillDeadline);
@@ -214,7 +191,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           data: { orderDigest: localDigest },
           chainId,
           source: "config",
-          warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order digest (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — NOT relayed` }],
+          warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order digest (${firstLine(err)}) — NOT relayed` }],
           ctx,
         });
       }
@@ -225,7 +202,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         signature: action.signature,
         envelope: { orderDataType: ORDER_DATA_TYPEHASH },
       });
-      const out = mapPost(res, (body, replay) => ({ kind: "rollover-order", accepted: true, replay, orderDigest: body.orderDigest ?? localDigest, localDigest }));
+      const out = mapPost(res, (body, replay) => ({ kind: "rollover-order", accepted: true, replay, orderDigest: body.orderDigest ?? localDigest, localDigest }), settlerWarnings);
       // Venue digest disagreement is a conflict, not a success — surface it [K7]. Read the
       // venue's own response body (the same boundary mapPost read), not the envelope back.
       if (out.state === "ok") {
@@ -257,30 +234,19 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         takingAmount: BigInt(action.order.takingAmount),
         makerTraits: BigInt(action.order.makerTraits),
       };
-      // [K3] The orderHash sent to the venue is recomputed locally, never caller-supplied.
-      const orderHash = hashTypedData({
-        domain: lopDomain(chainId, lop),
-        types: { Order: [
-          { name: "salt", type: "uint256" },
-          { name: "maker", type: "address" },
-          { name: "receiver", type: "address" },
-          { name: "makerAsset", type: "address" },
-          { name: "takerAsset", type: "address" },
-          { name: "makingAmount", type: "uint256" },
-          { name: "takingAmount", type: "uint256" },
-          { name: "makerTraits", type: "uint256" },
-        ] },
-        primaryType: "Order",
-        message: orderMsg,
-      });
+      // [K3] The orderHash sent to the venue is recomputed locally, never caller-supplied —
+      // via the same hashLopOrder the maker path signs against (this block used to carry a
+      // hand-rolled copy of the typed-data shape).
+      const orderHash = hashLopOrder(chainId, lop, orderMsg);
       // [F3/K3] Derive the listing fields from the SIGNED makerTraits instead of trusting the
       // caller's duplicates: the venue book must never advertise an expiry / partial-fill policy /
-      // nonce that contradicts what the signature enforces at fill.
+      // nonce that contradicts what the signature enforces at fill. decodeMakerTraits owns the
+      // MakerTraitsLib bit layout — no private copy of the shift/mask constants here.
       {
-        const traits = orderMsg.makerTraits;
-        const traitsExpiry = (traits >> 80n) & U40; // 0 = no expiry
-        const traitsNonce = (traits >> 120n) & U40;
-        const traitsAllowsPartial = (traits & LOP_NO_PARTIAL_FILLS_FLAG) === 0n;
+        const traits = decodeMakerTraits(orderMsg.makerTraits);
+        const traitsExpiry = traits.expiry; // 0 = no expiry
+        const traitsNonce = traits.nonce;
+        const traitsAllowsPartial = traits.allowPartialFills;
         const mismatches: string[] = [];
         if (BigInt(action.expiry) !== traitsExpiry) mismatches.push(`expiry: listing says ${action.expiry}, the signed makerTraits encode ${traitsExpiry}`);
         if (BigInt(action.nonce) !== traitsNonce) mismatches.push(`nonce: listing says ${action.nonce}, the signed makerTraits encode ${traitsNonce}`);
@@ -346,7 +312,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
             data: { orderHash },
             chainId,
             source: "config",
-            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order hash (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — NOT relayed` }],
+            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature could not be recovered over the recomputed order hash (${firstLine(err)}) — NOT relayed` }],
             ctx,
           });
         }
@@ -427,9 +393,8 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       }
       // Extension commitment pre-flight: what would revert InvalidExtension at fill is caught here.
       if (action.extension !== "0x") {
-        const saltLow = BigInt(action.order.salt) & U160;
-        const extLow = BigInt(keccak256(action.extension)) & U160;
-        if (saltLow !== extLow) {
+        const { saltLow, extLow, bound } = saltExtensionBinding(BigInt(action.order.salt), action.extension);
+        if (!bound) {
           return envelope({
             state: "conflict",
             data: { saltLow160: `0x${saltLow.toString(16)}`, extensionKeccakLow160: `0x${extLow.toString(16)}` },

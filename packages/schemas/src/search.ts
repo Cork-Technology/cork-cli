@@ -8,7 +8,8 @@ import { TOOL_EXAMPLES } from "./examples.ts";
 import { DOC_TOPICS } from "./doc-topics.ts";
 
 export interface SearchHint {
-  /** Variant this phrase points at (a resource / kind / action.type, or a mode/subject path). */
+  /** Variant this phrase points at (a resource / kind / action.type, a mode/subject path — or,
+   *  for tools whose "variants" are input FIELDS, that field's name: capabilities `search`). */
   variant: string;
   /** Space-separated phrases users and agents actually say for this variant. */
   text: string;
@@ -81,7 +82,9 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "simulate", text: "simulate dry run bundle bytes advisory" },
   ],
   cork_submit: [
-    { variant: "submit", text: "submit relay broadcast signed order orderbook send" },
+    // Real action.type values (schema-accepted), not a made-up "submit" pseudo-variant.
+    { variant: "lop-order", text: "submit relay broadcast signed order orderbook send list resting" },
+    { variant: "rollover-order", text: "submit relay signed rollover migration extend expiry order" },
     { variant: "rfq-counter", text: "counter bid negotiate negotiation rfq buyer requester haggle counter-offer premium" },
   ],
 };

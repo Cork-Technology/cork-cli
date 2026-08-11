@@ -19,9 +19,8 @@ import { handleTrack } from "./handlers/track.ts";
 import { handleSubmit } from "./handlers/submit.ts";
 
 export { ToolInputError, jsonSafe, type HandlerContext } from "./handlers/shared.ts";
-export { KNOWN_FILTER_KEYS } from "./handlers/filters.ts";
+export { DIGIT_FILTER_KEYS, KNOWN_FILTER_KEYS } from "./handlers/filters.ts";
 export { resetRegistryBindingGuardCache } from "./handlers/registry.ts";
-export { decimalToScaled, premiumFractionViolation } from "./handlers/submit.ts";
 
 
 /** Validate + dispatch a tool call. Throws ToolInputError on schema failure. */

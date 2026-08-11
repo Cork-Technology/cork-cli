@@ -138,6 +138,9 @@ function realLoadState(): RpcState {
   if (memState?.path === path) return memState.state;
   let state: RpcState;
   try {
+    // Version-gated cast, deliberately NOT schema-validated (unlike the remote-config cache,
+    // which zod-parses): this file is our own write-through breaker state, self-healing on any
+    // corruption (a bad field just makes one endpoint probe again), never third-party input.
     const raw = JSON.parse(readFileSync(path, "utf8")) as RpcState;
     state = raw && raw.version === 1 ? { ...emptyState(), ...raw } : emptyState();
   } catch {

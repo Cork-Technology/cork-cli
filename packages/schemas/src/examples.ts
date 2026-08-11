@@ -4,7 +4,7 @@
 // measurably raises parameter accuracy (Anthropic "Advanced tool use": 72%→90%) [C13].
 //
 // The demo pool is the canonical vnet fixture (deployed on the Tenderly virtual mainnet via
-// impersonation — recipe: scripts/DeployDemoPool.s.sol / notes/experiments/03-vnet-fixture.md).
+// impersonation — recipe: experiments/fork-harness/script/DeployDemoPool.s.sol, private tree).
 // It exists ONLY on the vnet: run these against `CORK_RPC_URL=<vnet>`; on real mainnet substitute
 // a live poolId from api-phoenix.cork.tech/v1/pools/.
 import type { ToolName } from "./registry.ts";
@@ -127,13 +127,13 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "trading-pairs": { status: "activated", reason: "venue-backed (centralized mode)" },
       orderbook: { status: "activated", reason: "venue-backed (centralized mode)" },
       fills: { status: "activated", reason: "centralized (venue) or full-decentralized (HyperSync OrderFilled scan)" },
-      "registry-assets": { status: "activated", reason: "MarketRegistry 2.1.0 chain views — Arbitrum One (42161): two named source slots (priceSource/navSource) + token self-description; filters.address for a single asset" },
+      "registry-assets": { status: "activated", reason: "MarketRegistry 2.1.0 chain views — Arbitrum One + Base (42161, 8453; contracts 0.3.3, identical addresses): two named source slots (priceSource/navSource) + token self-description; filters.address for a single asset" },
       rfqs: { status: "activated", reason: "venue-backed (centralized mode): GET /v1/rfqs discovery feed + single get via filters.rfqId; venue-only in every mode (RFQ requests/answers never bind and emit no events)" },
-      "registry-oracle": { status: "activated", reason: "2.1.0 mode-keyed pair wrappers (price|nav via 3-arg lookupWrapper + simulated deploy: deployed/deployable/why-not) AND fixed-rate oracles keyed on the rate (filters.rate) — 42161" },
-      "registry-recipes": { status: "activated", reason: "2.1.0 recipes-as-contracts: address + source + description + live constants + args annotation (isRecipe is the only membership gate) — 42161" },
-      "registry-denominations": { status: "activated", reason: "2.1.0 label→unit map with display-label resolution (pseudo-unit table + unit symbol); labelHash is the identity — 42161" },
-      "registry-feeds": { status: "activated", reason: "2.1.0 directed conversion-feed edges with live aggregator answers (decimals drift visible) — 42161" },
-      "derive-cork-pool": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
+      "registry-oracle": { status: "activated", reason: "2.1.0 mode-keyed pair wrappers (price|nav via 3-arg lookupWrapper + simulated deploy: deployed/deployable/why-not) AND fixed-rate oracles keyed on the rate (filters.rate) — 42161 + 8453" },
+      "registry-recipes": { status: "activated", reason: "2.1.0 recipes-as-contracts: address + source + description + live constants + args annotation (isRecipe is the only membership gate) — 42161 + 8453 (approved on Base; 42161 approvals pending)" },
+      "registry-denominations": { status: "activated", reason: "2.1.0 label→unit map with display-label resolution (pseudo-unit table + unit symbol); labelHash is the identity — 42161 + 8453" },
+      "registry-feeds": { status: "activated", reason: "2.1.0 directed conversion-feed edges with live aggregator answers (decimals drift visible) — 42161 + 8453" },
+      "derive-cork-pool": { status: "activated", reason: "MarketRegistry 2.1.0 + adapter derivation (42161 + 8453): recipe contract + off-chain-resolved constraint (recipe.resolve), LOCAL pool id (computeMarketId), cST/cPT via state-override simulation, and pool existence — the same derivation a JIT LOP fill runs; identity PINNED once an order carrying the constraint is signed" },
     },
   },
   cork_compute: {
@@ -179,7 +179,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   },
   cork_prepare_market: {
     status: "activated",
-    reason: "MarketRegistry 2.1.0 verified on-chain 2026-08-03 (Arbitrum One, full redeploy — every address changed): deploy-oracle builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
+    reason: "MarketRegistry 2.1.0 contracts 0.3.3 verified on-chain 2026-08-10 (Arbitrum One + Base, identical addresses — the CREATE2-collision-fix redeploy): deploy-oracle builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
     variants: { "deploy-oracle": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" } },
   },
   cork_track: {

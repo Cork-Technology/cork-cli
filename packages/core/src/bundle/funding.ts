@@ -4,7 +4,8 @@
 //   erc20-approve -> erc20TransferFrom(token, adapter, amount)   (initiator pre-approves adapter)
 //   permit2       -> permit2TransferFrom(token, adapter, amount) (initiator has a Permit2 allowance)
 //   pre-funded    -> no leg (tokens already in the adapter)
-import { encodeFunctionData, parseAbi } from "viem";
+import { encodeFunctionData, parseAbi, zeroAddress } from "viem";
+import { U256_MAX } from "../math/fixed.ts";
 import { call, type Call } from "./bundler3.ts";
 import type { PhoenixAction } from "@cork/schemas";
 
@@ -58,7 +59,7 @@ const FUNDING_TABLE: Partial<Record<PhoenixAction["type"], FundReq[]>> = {
 // Share-burning actions burn from `owner` (which must be the adapter or the initiator). When
 // owner == adapter we can fund by transferring the shares in; when owner == initiator the pool
 // burns directly from the user and the caller manages the approval (no leg we should guess).
-const MAX_UINT = (1n << 256n) - 1n;
+const MAX_UINT = U256_MAX;
 const BURN_TABLE: Partial<Record<PhoenixAction["type"], FundReq[]>> = {
   withdraw: [{ role: "cpt", field: "maxCptSharesIn" }],
   "withdraw-other": [{ role: "cpt", field: "maxCptSharesIn" }],
@@ -122,7 +123,7 @@ function actionField(action: PhoenixAction, field: PhoenixActionField): string |
   return (action as Partial<Record<PhoenixActionField, string>>)[field];
 }
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const ZERO_ADDRESS = zeroAddress;
 const NONE = { sweepLegs: [] as Call[], sweptTokens: [] as `0x${string}`[] };
 
 /**

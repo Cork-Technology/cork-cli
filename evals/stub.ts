@@ -1,5 +1,5 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
-// demo-pool fixture state (notes/experiments/03-vnet-fixture.md) so eval runs need NO network
+// demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
 import type { HandlerContext } from "@cork/core";
 import { DEMO_POOL_ID } from "@cork/schemas";
@@ -8,7 +8,9 @@ const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
 const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
 const ORACLE = "0x14115b5fdab3afcd72cf03785041c720100edb0e";
 const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
-const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
+/** Exported so eval-task answer regexes derive from THIS constant instead of re-pinning the
+ *  literal (the same import-don't-duplicate rule as LIQUIDITY_RECIPE below). */
+export const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
 const NOW = 1_790_000_000n;
 
 // MarketRegistry 2.1.0 fixture — READ FROM cork-defaults.json rather than pinned: the binding

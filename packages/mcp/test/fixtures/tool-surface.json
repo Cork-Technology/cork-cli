@@ -2312,12 +2312,14 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
                         "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "enableJitMint": {
@@ -2748,8 +2750,8 @@
     },
     {
       "name": "cork_prepare_market",
-      "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
-      "descriptionTokensApprox": 177,
+      "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One and Base (42161, 8453). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
+      "descriptionTokensApprox": 183,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3406,10 +3408,10 @@
                             "$ref": "#/$defs/TokenAmount"
                           },
                           "srcPoolId": {
-                            "$ref": "#/$defs/Bytes32"
+                            "$ref": "#/$defs/MarketId"
                           },
                           "dstPoolId": {
-                            "$ref": "#/$defs/Bytes32"
+                            "$ref": "#/$defs/MarketId"
                           },
                           "settler": {
                             "$ref": "#/$defs/Address"
@@ -4043,6 +4045,10 @@
           "Bytes32": {
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "MarketId": {
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "$ref": "#/$defs/Bytes32"
           },
           "UintStr": {
             "type": "string",

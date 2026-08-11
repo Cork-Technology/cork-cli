@@ -3,9 +3,10 @@
 // a Bundler3 leg, because an approve routed through the bundler would key the allowance to the
 // bundler contract instead of the owner. Unsigned bytes only [K1].
 import { encodeFunctionData, parseAbi } from "viem";
+import { U256_MAX } from "../math/fixed.ts";
 
 const erc20ApproveAbi = parseAbi(["function approve(address spender, uint256 amount)"]);
-const MAX_UINT256 = (1n << 256n) - 1n;
+const MAX_UINT256 = U256_MAX;
 
 export interface AuthorityAction {
   type: "authority-onboard" | "authority-revoke";

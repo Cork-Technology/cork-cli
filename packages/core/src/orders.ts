@@ -21,9 +21,13 @@ import {
 } from "viem";
 
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
+import { U256_MAX } from "./math/fixed.ts";
 
 /** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin).
- *  Sourced from the bundled cork-defaults.json — no address literals in source. */
+ *  Sourced from the bundled cork-defaults.json — no address literals in source. BUNDLED-PINNED
+ *  by design (module-load constant): unlike deployments/marketRegistry/rollover, a remote-config
+ *  edit to lopAddresses does NOT take effect — the 1inch router is immutable canonical
+ *  infrastructure, and hash/domain math must not change under a ship without a code release. */
 export const LOP_ADDRESSES: Record<number, `0x${string}`> = Object.fromEntries(
   Object.entries(bundledDefaults.lopAddresses).map(([k, v]) => [Number(k), v as `0x${string}`]),
 );
@@ -391,13 +395,20 @@ export function reconstructMakerOrder(a: Omit<FinalizeMakerOrderArgs, "signature
   if (orderHash.toLowerCase() !== a.claimedOrderHash.toLowerCase()) {
     throw new Error(`reconstructed order hash ${orderHash} does not match the prepared orderHash ${a.claimedOrderHash}`);
   }
-  if (a.extension !== "0x") {
-    // OrderLib requires the salt's low 160 bits == keccak256(extension)'s low 160 bits at fill.
-    const saltLow = a.order.salt & U160;
-    const extLow = BigInt(keccak256(a.extension)) & U160;
-    if (saltLow !== extLow) throw new Error("salt's low 160 bits are not bound to keccak256(extension) — this order would revert InvalidExtension at fill");
+  if (a.extension !== "0x" && !saltExtensionBinding(a.order.salt, a.extension).bound) {
+    throw new Error("salt's low 160 bits are not bound to keccak256(extension) — this order would revert InvalidExtension at fill");
   }
   return { orderHash };
+}
+
+/** OrderLib's extension commitment — the ONE comparator for every surface that checks it
+ *  (finalize reconstruction, decode order, the submit pre-flight, fusion's whole-order decode):
+ *  the salt's low 160 bits must equal keccak256(extension)'s low 160 bits, or the fill reverts
+ *  InvalidExtension. Four private copies of this rule (and of the 160-bit mask) used to exist. */
+export function saltExtensionBinding(salt: bigint, extension: `0x${string}`): { saltLow: bigint; extLow: bigint; bound: boolean } {
+  const saltLow = salt & U160;
+  const extLow = BigInt(keccak256(extension)) & U160;
+  return { saltLow, extLow, bound: saltLow === extLow };
 }
 
 export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<FinalizedMakerOrder> {
@@ -567,7 +578,6 @@ export const lopInvalidatorAbi = parseAbi([
 ]);
 
 const NONCE_OR_EPOCH_OFFSET = 120n;
-const U256_MAX_ = (1n << 256n) - 1n;
 
 export type LopInvalidatorPlan =
   | { mode: "bit"; slot: bigint; mask: bigint; nonceOrEpoch: bigint }
@@ -593,7 +603,7 @@ export interface LopOnChainStatus {
 /** Classify a rawRemainingInvalidatorForOrder read (remaining-invalidator orders). */
 export function classifyRemainingRaw(raw: bigint): LopOnChainStatus {
   if (raw === 0n) return { status: "live-untouched" };
-  const remaining = U256_MAX_ ^ raw; // solidity `~value` on uint256
+  const remaining = U256_MAX ^ raw; // solidity `~value` on uint256
   return remaining === 0n ? { status: "filled-or-cancelled" } : { status: "live-partially-filled", remaining };
 }
 

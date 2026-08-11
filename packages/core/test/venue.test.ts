@@ -774,6 +774,22 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     expect(posted.intent.preRolloverHooks.length).toBe(1);
   });
 
+  it("rollover-order with an UNRECOGNIZED settler relays WITH settler_not_recognized (F14 parity with prepare)", async () => {
+    const example = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as {
+      action: { order: Record<string, unknown> & { settler: string; rolloverParams: Record<string, unknown> }; signature?: string };
+    };
+    // A settler that is neither configured Cork settler: prepare warns and builds; submit must
+    // warn and relay — a submit-only caller previously got SILENTLY weaker checks.
+    const stranger = "0x00000000000000000000000000000000DeaDBeef";
+    example.action.order.settler = stranger;
+    example.action.order.rolloverParams.settler = stranger;
+    example.action.signature = await signRollover(42161, example.action.order);
+    const seen: Seen[] = [];
+    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "settler_not_recognized" && w.message.includes(stranger))).toBe(true);
+  });
+
   it("bare-array venue responses parse as lists (shape tolerance)", async () => {
     const env = await runTool(
       "cork_query",
@@ -782,6 +798,17 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     );
     expect(env.state).toBe("ok");
     expect((env.data as { count: number }).count).toBe(2);
+  });
+
+  it("a bare array with a NON-OBJECT element is the venue-typed shape error, never a raw ZodError (→ internal_error)", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "trading-pairs", chainId: 42161, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/limit-orders/markets", body: [{ poolId: "0x1" }, 42] }]),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("venue_unreachable");
+    expect(env.warnings[0]?.message).toContain("did not match the expected list shape");
   });
 
   it("quote_ref citing an unknown RFQ → invalid_order_terms, NOT relayed", async () => {

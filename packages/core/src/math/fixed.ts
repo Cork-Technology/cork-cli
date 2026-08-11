@@ -9,7 +9,11 @@ export const WAD = 10n ** 18n; // 1e18
 export const PCT_DENOM = 100n * WAD; // 100e18 — fee denominator (1e18 = 1%)
 export const TARGET_DECIMALS = 18;
 
-const U256_MAX = (1n << 256n) - 1n;
+/** Exported as the ONE definition — five modules used to carry private copies of this literal,
+ *  exactly the constant a one-character typo corrupts silently. Callers may alias it locally
+ *  (e.g. `const MAX_UINT = U256_MAX`) to keep their domain vocabulary. */
+export const U256_MAX = (1n << 256n) - 1n;
+export const U160_MAX = (1n << 160n) - 1n;
 
 export type Rounding = "floor" | "ceil";
 

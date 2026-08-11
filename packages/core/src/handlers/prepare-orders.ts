@@ -3,17 +3,16 @@
 import { isAddressEqual } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, type PermitParams, predictShares, readAdapterRoles, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
-import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, encodeJitExtraData, type PermitParams, predictShares } from "../market-registry.ts";
+import { resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
-import { type AuctionPriceReport, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
+import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, jitValueGate, type LegacyJitReport, prepareJitLegacy, type TakerJitReport } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
-import { resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 /** Maker-side 2.1.0 JIT report echoed in `data.jit` — the base always rides; the verified half is
  *  filled only when an RPC resolved and the pre-flights ran. Legacy maker orders carry
@@ -23,10 +22,10 @@ type MakerJitReport = {
   hook: string;
   recipe: `0x${string}`;
   enableJitMint: boolean;
-  source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
+  source?: NonNullable<Extract<JitLadderResult, { gate?: undefined }>["verified"]>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
   derivedPoolId?: `0x${string}`;
-  constraint?: ResolvedConstraint;
+  constraint?: Extract<JitLadderResult, { gate?: undefined }>["constraint"];
   identity?: string;
   predictedCorkSwapToken?: `0x${string}`;
   permitNote?: string;
@@ -207,94 +206,21 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         jitData = leg.jitData;
         warnings.push(...leg.warnings);
       } else {
-        const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
-        if (!mr?.adapter) {
-          return unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — JIT market orders are live on Arbitrum One and Base (42161, 8453)`, ctx);
-        }
-        if (mrWarn) warnings.push(mrWarn);
-        // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,
-        // so the sugar also works offline).
-        let recipe = jm.recipe;
-        if (!recipe) {
-          if (jm.mode === undefined) {
-            throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"); `mode` survives only as deprecated sugar" }]);
-          }
-          const hinted = mr.recipes?.[jm.mode];
-          if (!hinted) {
-            return unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (jitMarket.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx);
-          }
-          warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} via this tool's config hints — pass jitMarket.recipe directly; mode will be removed in a later release` });
-          recipe = hinted;
-        }
-        const rateOverride = BigInt(jm.rateOverride ?? "0");
-        const additionalData = (jm.additionalData ?? "0x") as `0x${string}`;
-        let constraint: ResolvedConstraint | undefined = jm.constraint
-          ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
-          : undefined;
-        jitData = { adapter: mr.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint };
+        // The pre-flight ladder (registry/adapter/recipe/bindings/roles/coherence/oracle/verify/
+        // derivation) is SHARED with the taker fill — runJitPreflightLadder in jit.ts. Only the
+        // maker tail below (cST prediction with maker-facing wording, extension encode) is local.
+        const ladder = await runJitPreflightLadder({ ctx, chainId, lop, jm, side: "maker" });
+        if (ladder.gate) return ladder.gate;
+        const { recipe, rateOverride, additionalData, constraint } = ladder;
+        warnings.push(...ladder.warnings);
+        jitData = { adapter: ladder.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint };
 
-        // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
-        const resolved = await getRpc(ctx, chainId);
-        if (!resolved) {
-          if (!constraint) {
-            return unavailable(chainId, "requires_rpc", "jitMarket has no explicit constraint and no RPC resolved to derive one — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER. Either set CORK_RPC_URL, or pass jitMarket.constraint (from cork_compute recipe-rate-constraint) for offline byte-building", ctx);
-          }
-          warnings.push({ code: "funding_needs_rpc", message: "no RPC resolved — JIT pre-flights (adapter bindings, roles, recipe membership, source/rateOverride coherence, oracle, verify, cST side-match) were SKIPPED; the extension is built from the caller-supplied constraint but unverified" });
-        } else {
-          const client = resolved.client;
+        if (ladder.verified) {
+          const { client, boundController, source, oracle, derived } = ladder.verified;
+          jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.rate !== null ? { rate: oracle.rate } : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
+          warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
+
           try {
-            // Adapter is volatile config: re-verify its bindings + role grants on every prepare.
-            const [boundLop, boundRegistry, boundController] = await Promise.all([
-              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
-              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
-              client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
-            ]);
-            if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-              return envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before signing anything" }], ctx });
-            }
-            const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
-            if (!adapterRoles.granted) {
-              warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change); the order is signable but not yet fillable` });
-            }
-            const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
-            warnings.push(...res.warnings);
-            if (res.gate) return res.gate;
-            const { source, oracle } = res;
-            // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the
-            // caller gets the real rule, not a downstream recipe revert: the fill REJECTS a
-            // non-zero override on a price/nav recipe (UnexpectedRateOverride), and a fixed
-            // fill deploys FixedRateOracle(rateOverride), whose constructor reverts on 0.
-            if (source === "fixed" && rateOverride === 0n) {
-              return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx);
-            }
-            if (source !== "fixed" && rateOverride !== 0n) {
-              return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx);
-            }
-            if (!constraint) {
-              const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
-              if ("gate" in c) return c.gate;
-              constraint = c.constraint;
-            }
-            if (oracle.address === null) {
-              return unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx);
-            }
-            // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
-            // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside
-            // the window, so a predicted oracle can't answer yet (the fill deploys it first).
-            if (oracle.deployed) {
-              const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
-              if (ok === false) {
-                warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
-              } else if (ok === null) {
-                warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
-              }
-            } else {
-              warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
-            }
-            const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
-            jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.rate !== null ? { rate: oracle.rate } : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
-            warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
-
             // Predicted cST: direct read when the pool exists; otherwise the state-override
             // simulation (role granted in-memory — works before AND after the governance grant).
             // When the oracle is not deployed, the simulation prepends the SAME permissionless
@@ -302,42 +228,47 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             const { dep: jitDep } = await getDep(ctx, chainId);
             const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
             if (!oracle.deployed) {
-              preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
             }
-            const pred = await predictShares(client, {
-              adapter: mr.adapter,
-              controller: boundController,
-              poolManager: jitDep!.poolManager,
-              market: derived.market,
-              poolId: derived.poolId,
-              unwindSwapFeePercentage: unwindFee,
-              swapFeePercentage: swapFee,
-              preCalls,
-            });
-            const cst = pred.cst;
-            if (pred.status === "unavailable") {
-              warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1/state overrides unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
-            }
-            if (cst) {
-              jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
-              const cstLc = cst.toLowerCase();
-              if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
-                warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
-                await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run derive-cork-pool and set the order side to the FRESH predicted cST before signing.");
+            // A missing/partial deployment config is NOT a chain read failure [C11]: guarding
+            // (like the legacy-jit and registry siblings) instead of `jitDep!` keeps a config
+            // gap from surfacing as a misattributed `chain_read_failed` TypeError.
+            if (jitDep?.poolManager === undefined) {
+              warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
+            } else {
+              const pred = await predictShares(client, {
+                adapter: ladder.adapter,
+                controller: boundController,
+                poolManager: jitDep.poolManager,
+                market: derived.market,
+                poolId: derived.poolId,
+                unwindSwapFeePercentage: unwindFee,
+                swapFeePercentage: swapFee,
+                preCalls,
+              });
+              const cst = pred.cst;
+              if (pred.status === "unavailable") {
+                warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1/state overrides unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
+              }
+              if (cst) {
+                jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
+                const cstLc = cst.toLowerCase();
+                if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
+                  warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
+                  await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run derive-cork-pool and set the order side to the FRESH predicted cST before signing.");
+                }
               }
             }
           } catch (err) {
-            if (!constraint) {
-              return unavailable(chainId, "chain_read_failed", `the JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER, so the extension cannot be built. Retry, or pass jitMarket.constraint from cork_compute recipe-rate-constraint`, ctx);
-            }
-            warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${revertReason(err)}) — the extension is built from the caller-supplied constraint but unverified` });
+            // The ladder already succeeded — a tail failure degrades to unverified, never a gate.
+            warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the extension is built but the cST side-match is unverified` });
           }
         }
         const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
         extension = buildJitExtension(
-          mr.adapter,
+          ladder.adapter,
           encodeJitExtraData(
-            { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint: constraint!, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
+            { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
             permits,
           ),
         );
@@ -412,12 +343,11 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         return unavailable(chainId, "invalid_order_terms", `self-check failed: the built auction extension did not decode back as a Fusion order (${err instanceof Error ? err.message : String(err)}) — this is a tool bug, do not sign; please report it`, ctx);
       }
       const bumpNow = fusionRateBump(dec.auction, nowSecs, null);
-      const finish = dec.auction.startTime + dec.auction.duration;
       fusionData = {
         settlement: dec.settlement,
         role: "amount getter ONLY — no postInteraction, so any taker fills at the decayed price through the plain LOP fill path (no resolver, no whitelist)",
         auction: { startTime: String(dec.auction.startTime), durationSeconds: String(dec.auction.duration), initialRateBump: String(dec.auction.initialRateBump), points: dec.auction.points.map((p) => ({ rateBump: String(p.rateBump), timeDelta: String(p.timeDelta) })), scale: "rate bump base 1e7 = +100% above the signed floor" },
-        phase: nowSecs < dec.auction.startTime ? "pre-start" : nowSecs >= finish ? "floor" : "decaying",
+        phase: auctionPhase(dec.auction, nowSecs),
         takerPaysCeiling: String(fusionTakerPays(built.order.makingAmount, built.order.takingAmount, built.order.makingAmount, 0n, dec.auction.initialRateBump)),
         takerPaysNow: String(fusionTakerPays(built.order.makingAmount, built.order.takingAmount, built.order.makingAmount, 0n, bumpNow.effective)),
         floorTakingAmount: String(built.order.takingAmount),
@@ -665,7 +595,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           if (action.maximumTakingAmount === undefined) auctionCap = ceilingTakerPays;
           auctionData = {
             settlement: auctionDec.settlement,
-            phase: nowSecs < auctionDec.auction.startTime ? "pre-start" : nowSecs >= finish ? "floor" : "decaying",
+            phase: auctionPhase(auctionDec.auction, nowSecs),
             currentTakerPays: String(currentTakerPays),
             ceilingTakerPays: String(ceilingTakerPays),
             floorTakerPays: String(fusionTakerPays(M, T, fillMaking, fee, 0n)),

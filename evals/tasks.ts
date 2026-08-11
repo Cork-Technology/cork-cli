@@ -5,7 +5,12 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { LIQUIDITY_RECIPE } from "./stub.ts";
+import { CST, LIQUIDITY_RECIPE } from "./stub.ts";
+import corkDefaults from "../cork-defaults.json";
+
+// The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
+// stub's own header documents). Held-out tasks keep their inline copies untouched by rule.
+const MAINNET_ADAPTER = (corkDefaults as { deployments: Record<string, { corkAdapter?: string }> }).deployments["1"]!.corkAdapter!;
 
 export interface Expectation {
   /** The tool the agent should reach for first. */
@@ -45,7 +50,7 @@ export const TASKS: EvalTask[] = [
   // ── reads ──────────────────────────────────────────────────────────────
   { id: "read-market", prompt: `Read the current on-chain state of Cork pool ${P} and tell me the swap rate.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /0\.8|800000000000000000/, maxCalls: 2 } },
   { id: "read-balances", prompt: `What token balances does account ${A} hold in Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "account-state" }, state: "ok", maxCalls: 2 } },
-  { id: "read-config", prompt: "Which contract address is the Cork adapter deployed at on mainnet?", expect: { tool: "cork_query", params: { resource: "protocol-config" }, state: "ok", answer: /0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407/i, maxCalls: 2 } },
+  { id: "read-config", prompt: "Which contract address is the Cork adapter deployed at on mainnet?", expect: { tool: "cork_query", params: { resource: "protocol-config" }, state: "ok", answer: new RegExp(MAINNET_ADAPTER, "i"), maxCalls: 2 } },
   { id: "read-whitelist", prompt: `Is ${A} whitelisted on Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "pool-whitelist" }, state: "ok", answer: /not whitelisted|false|no\b/i, maxCalls: 2 } },
   { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b0\b|zero|no (resting )?orders|empty/i, maxCalls: 2 } },
   { id: "whitelist-enumerate", prompt: "List ALL whitelisted addresses across Cork pools (the full enumeration, not a single-account check).", expect: { tool: "cork_query", params: { resource: "whitelisted-addresses" }, state: "ok", answer: /a11ce/i, maxCalls: 2 } },
@@ -84,7 +89,7 @@ export const TASKS: EvalTask[] = [
   {
     id: "predict-market",
     prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract ${LIQUIDITY_RECIPE}. Report the derived pool id plus the cST and cPT contracts.`,
-    expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: /16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69/i, maxCalls: 2 },
+    expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: new RegExp(CST.slice(2), "i"), maxCalls: 2 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
   // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the

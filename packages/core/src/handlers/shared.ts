@@ -151,7 +151,7 @@ export function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ c
  * failed — the pool probably doesn't exist" sends the caller chasing the wrong cause.
  */
 export function localComputeFailed(chainId: ChainId, err: unknown, extra: Array<{ code: string; message: string }>, ctx: HandlerContext): Envelope {
-  const cause = err instanceof Error ? err.message.split("\n")[0]! : String(err);
+  const cause = firstLine(err);
   return envelope({
     state: "unavailable",
     data: null,
@@ -237,6 +237,43 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
 }
 
 export const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as const;
+
+/** Canonical Uniswap Permit2 (same address on every chain) — a pure chain constant, housed here
+ *  so read handlers don't import an address from the side-effecting submit module. */
+export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+
+/** First line of an unknown error's message — the one spelling of the repeated
+ *  `err instanceof Error ? err.message.split("\n")[0] : String(err)` idiom. */
+export function firstLine(err: unknown): string {
+  return err instanceof Error ? (err.message.split("\n")[0] ?? String(err)) : String(err);
+}
+
+/** A nonexistent pool does NOT revert — market() returns a zeroed struct. ONE predicate + ONE
+ *  refusal envelope for every surface that must not build against the zero address (phoenix
+ *  funded + pre-funded, forSelf); three private copies of both used to exist. */
+export function poolMissing(tokens: { collateral: string; cst: string; cpt: string }): boolean {
+  return tokens.collateral === ZERO_ADDR || tokens.cst === ZERO_ADDR || tokens.cpt === ZERO_ADDR;
+}
+export function poolNotFound(chainId: ChainId, poolId: string, ctx: HandlerContext): Envelope {
+  return unavailable(chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
+}
+
+/** deadlineAt (absolute) pins the bytes across retries [K2]; deadlineSeconds (relative, the
+ *  default) re-anchors to the clock on each call. deadlineAt is validated for FORMAT only by
+ *  the schema — a past moment builds fine and can only revert on-chain, so it is disclosed as
+ *  would_revert, naming the component that reverts [F19]. One resolver for the three surfaces
+ *  that take the pair (phoenix bundles, forSelf pool calls, forSelf fills). */
+export function resolveDeadline(
+  input: { deadlineAt?: string | undefined; deadlineSeconds: number },
+  nowSecs: bigint,
+  revertsAs: string,
+): { deadline: bigint; warning?: { code: string; message: string } } {
+  const deadline = input.deadlineAt !== undefined ? BigInt(input.deadlineAt) : nowSecs + BigInt(input.deadlineSeconds);
+  if (input.deadlineAt !== undefined && deadline <= nowSecs) {
+    return { deadline, warning: { code: "would_revert", message: `deadlineAt ${deadline} is not in the future (now ${nowSecs}) — ${revertsAs}; pin a future absolute deadline for byte-stable retries` } };
+  }
+  return { deadline };
+}
 
 /** One line naming a revert, PREFERRING the decoded custom error over viem's generic
  *  shortMessage. viem formats a decoded revert as

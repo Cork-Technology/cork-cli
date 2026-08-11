@@ -142,7 +142,13 @@ export async function runSelfUpdate(
   chmodSync(tmp, 0o755);
   const old = `${binPath}.old`;
   rmSync(old, { force: true });
-  renameSync(binPath, old);
+  try {
+    renameSync(binPath, old);
+  } catch (e) {
+    // First rename failed — the binary is untouched, but the verified download must not linger.
+    rmSync(tmp, { force: true });
+    return { code: 1, out: "", err: `swap failed (${(e as Error).message}) — binary untouched\n` };
+  }
   try {
     renameSync(tmp, binPath);
   } catch (e) {

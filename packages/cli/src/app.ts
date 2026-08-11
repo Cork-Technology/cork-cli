@@ -18,7 +18,8 @@
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
 import { REGISTRY, RENAMED_VALUES, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
-import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, DIGIT_FILTER_KEYS, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { envFlag } from "./env.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
 import { runSelfUpdate } from "./self-update.ts";
@@ -32,7 +33,7 @@ export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 }
  * an integer literal that no longer round-trips; falls back to a plain parse on engines
  * without source access. Amount-class fields are strings and unaffected.
  */
-export function parseJsonPrecise(text: string): unknown {
+function parseJsonPrecise(text: string): unknown {
   return JSON.parse(text, function reviver(_key: string, value: unknown, context?: { source?: string }) {
     if (typeof value === "number" && context && typeof context.source === "string" && /^-?\d+$/.test(context.source) && !Number.isSafeInteger(value)) {
       throw new Error(
@@ -139,7 +140,7 @@ function coerce(node: SchemaNode, raw: string): unknown {
  * reasonably type it. Only names that resolve to a known property are touched; anything
  * else (including `--rpc-url`) passes through untouched for commander to handle.
  */
-export function normaliseArgv(argv: readonly string[], known: ReadonlyMap<string, string>): string[] {
+function normaliseArgv(argv: readonly string[], known: ReadonlyMap<string, string>): string[] {
   return argv.map((arg) => {
     if (!arg.startsWith("--")) return arg;
     const eq = arg.indexOf("=");
@@ -150,10 +151,9 @@ export function normaliseArgv(argv: readonly string[], known: ReadonlyMap<string
   });
 }
 
-/** camelCase discriminator value → the kebab-case subcommand spelling (`txHash` → `tx-hash`). */
-function kebab(v: string): string {
-  return v.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-}
+/** camelCase discriminator value → the kebab-case subcommand spelling (`txHash` → `tx-hash`) —
+ *  the identical transform as flagFor; the second name marks the subcommand-vs-flag call sites. */
+const kebab = flagFor;
 
 /** Plain Levenshtein for did-you-mean suggestions on mistyped variant names. */
 function levenshtein(a: string, b: string): number {
@@ -208,7 +208,7 @@ const RESOURCE_ALIASES: Record<string, string> = {
   "registered-denominations": "registry-denominations",
   "registered-feeds": "registry-feeds",
   "market-recipes": "registry-recipes", // recipes are MARKET-level terms
-  "asset-pair-oracle": "registry-oracle", // the protocol-worded synonym (flows serves rollover orders/fills/contracts) // the item-named synonym (every sibling resource is a plural of its item; the LOP is the Limit Order Protocol)
+  "asset-pair-oracle": "registry-oracle", // the pair-keyed synonym (the wrapper is keyed on the (CA, REF) pair)
   "trading-pair": "trading-pairs",
 };
 
@@ -221,6 +221,14 @@ const TOP_LEVEL_VERBS: Record<string, (variant: string) => string | undefined> =
 
 /** Network-name shorthand for chainId values: arbitrum → 42161. */
 const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbitrum: "42161", base: "8453", sepolia: "11155111" };
+
+/** Option names owned by the CLI itself (canonicalised spellings) — a schema field must never
+ *  register over them. The collision lint in cli.test.ts duplicates this set as a tripwire. */
+const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help"]);
+
+/** The digits-only filter keys that get the CLI's amount sugar (`--rate 1e18`); imported from
+ *  filters.ts so the sugar list and parseQueryFilters' bigint fields cannot drift apart. */
+const SUGARED_FILTER_KEYS = new Set<string>(DIGIT_FILTER_KEYS);
 
 /** One variant of a discriminated-union field: the const that names it + its own field schemas. */
 interface UnionVariant {
@@ -318,7 +326,7 @@ export async function runCli(
   let out = "";
   let err = "";
   let code: number = EXIT.ok;
-  const envWantsJson = env["CORK_JSON"] === "1" || env["CORK_JSON"] === "true";
+  const envWantsJson = envFlag(env, "CORK_JSON");
   // JSON intent for errors that fire BEFORE any command action runs (audit R6): commander-level
   // failures (unknown option/command, excess args) and pre-parse errors happen before the
   // per-command `--json` option is bound, so the intent is read straight off argv — a JSON-mode
@@ -463,7 +471,6 @@ export async function runCli(
     // blobs) keep working on the parent command — the subcommands are additive sugar.
     const union = discriminatedUnion(props, defs);
 
-    const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help"]);
     const baseOptions = (c: Command): Command =>
       c
         // commander v12 silently ignores extra positional args by default — a typo like
@@ -479,7 +486,9 @@ export async function runCli(
       const canon = flagFor(name);
       // Duplicate/reserved canonical names would make one flag write two places — register the
       // first occurrence only; the variant-collision lint test asserts none exist in the registry.
-      if (registered.has(canon) || RESERVED.has(canon)) return;
+      // RESERVED holds canonicalised (dash-free) spellings, so the kebab flag name must be
+      // canonicalised before the lookup — `rpcUrl` kebabs to "rpc-url", reserved as "rpcurl".
+      if (registered.has(canon) || RESERVED.has(canonicalise(canon))) return;
       registered.add(canon);
       const hint = isScalarNode(node) ? describeShort(node) : "json";
       // Fall back to the accepted values rather than echoing the flag's own name, which
@@ -552,6 +561,13 @@ export async function runCli(
         const jsonOpt = opts["json"];
         const wantsJson = jsonOpt !== undefined || envWantsJson;
 
+        /** Emit one structured error payload (JSON or prose per --json intent) and set the exit
+         *  code — the single shape every CLI-level failure takes, so no site can drift. */
+        const fail = (payload: { error: Record<string, unknown> }, exitCode: number): void => {
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          code = exitCode;
+        };
+
         if (opts["explain"]) {
           // Variant-scoped explain: same renderer, with the union field narrowed to this branch
           // (raw node, refs intact) — `ch prepare phoenix exercise --explain` documents exercise.
@@ -568,7 +584,7 @@ export async function runCli(
           }
           const doc = { tool: tool.name, cli, phase: tool.phase, description: tool.description, inputSchema: schemaDoc };
           // explainWantsJson carries the explain-scoped env var; the global one applies too.
-          out += wantsJson || explainWantsJson(undefined, env) ? `${JSON.stringify(doc, null, 2)}\n` : `${formatExplainText(doc)}\n`;
+          out += wantsJson || explainWantsJson(env) ? `${JSON.stringify(doc, null, 2)}\n` : `${formatExplainText(doc)}\n`;
           return;
         }
 
@@ -587,9 +603,7 @@ export async function runCli(
             // is not JSON-shaped is that mistake, not malformed JSON; teach the reorder.
             const swallowed = typeof jsonOpt === "string" && /^[A-Za-z][\w-]*$/.test(rawJson);
             const hint = swallowed ? ` — '${rawJson}' looks like a POSITIONAL that a bare --json (an output request) swallowed; put --json AFTER the positionals (ch ${tool.cliPath.join(" ")} ${rawJson} --json), or pass a full object (--json '{...}')` : "";
-            const payload = { error: { code: "invalid_json", tool: tool.name, message: `invalid JSON input: ${(e as Error).message}${hint}` } };
-            err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-            code = EXIT.invalid;
+            fail({ error: { code: "invalid_json", tool: tool.name, message: `invalid JSON input: ${(e as Error).message}${hint}` } }, EXIT.invalid);
             return;
           }
         }
@@ -622,15 +636,11 @@ export async function runCli(
           if ((isAmountNode(node) || nodeT === "integer") && /[_eE]/.test(rawStr)) {
             const ex = expandAmount(rawStr);
             if ("err" in ex) {
-              const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: ${ex.err}` } };
-              err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-              code = EXIT.invalid;
+              fail({ error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: ${ex.err}` } }, EXIT.invalid);
               return false;
             }
             if (nodeT === "integer" && BigInt(ex.ok) > BigInt(Number.MAX_SAFE_INTEGER)) {
-              const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: '${rawStr}' expands to ${ex.ok}, beyond the safe integer range of this JSON-number field (max 9007199254740991) — integer-typed fields are durations/counts, not token amounts` } };
-              err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-              code = EXIT.invalid;
+              fail({ error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(name)}: '${rawStr}' expands to ${ex.ok}, beyond the safe integer range of this JSON-number field (max 9007199254740991) — integer-typed fields are durations/counts, not token amounts` } }, EXIT.invalid);
               return false;
             }
             rawStr = ex.ok;
@@ -649,9 +659,7 @@ export async function runCli(
               target[name] = rawStr;
               return true;
             }
-            const payload = { error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(name)} expects JSON: ${(e as Error).message}` } };
-            err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-            code = EXIT.invalid;
+            fail({ error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(name)} expects JSON: ${(e as Error).message}` } }, EXIT.invalid);
             return false;
           }
           return true;
@@ -671,10 +679,9 @@ export async function runCli(
 
         // Filter flags (cork_query): merge on top of any blob-supplied filters. Values stay raw
         // strings — parseQueryFilters owns coercion (booleans accept "true"/"false") — EXCEPT the
-        // digits-only keys, which get the same amount sugar every schema-derived amount flag has:
-        // before this, `--rate 1e18` was refused by an error message written in the very notation
-        // the flag would not accept. Keys must stay in step with parseQueryFilters' digit fields.
-        const SUGARED_FILTER_KEYS = new Set(["rate", "expiry"]);
+        // digits-only keys (SUGARED_FILTER_KEYS, imported from filters.ts), which get the same
+        // amount sugar every schema-derived amount flag has: before this, `--rate 1e18` was
+        // refused by an error message written in the very notation the flag would not accept.
         if (filterFlagKeys.length > 0 || filterFlagAliases.length > 0) {
           const blobF = input["filters"];
           const filters: Record<string, unknown> =
@@ -687,9 +694,7 @@ export async function runCli(
             if (SUGARED_FILTER_KEYS.has(k) && /[_eE]/.test(v)) {
               const ex = expandAmount(v);
               if ("err" in ex) {
-                const payload = { error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(k)}: ${ex.err}` } };
-                err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-                code = EXIT.invalid;
+                fail({ error: { code: "invalid_amount", tool: tool.name, message: `--${flagFor(k)}: ${ex.err}` } }, EXIT.invalid);
                 return;
               }
               v = ex.ok;
@@ -720,9 +725,7 @@ export async function runCli(
               const parsed = parseJsonPrecise(String(flagBase));
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = { ...base, ...(parsed as Record<string, unknown>) };
             } catch (e) {
-              const payload = { error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(union.field)} expects JSON: ${(e as Error).message}` } };
-              err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-              code = EXIT.invalid;
+              fail({ error: { code: "invalid_json", tool: tool.name, message: `--${flagFor(union.field)} expects JSON: ${(e as Error).message}` } }, EXIT.invalid);
               return;
             }
           }
@@ -738,7 +741,10 @@ export async function runCli(
         }
 
         // --enable-deprecated maps onto the same env var the gate reads (deprecation.ts), so the
-        // CLI flag and MCP env configuration stay one mechanism.
+        // CLI flag and MCP env configuration stay one mechanism — and is RESTORED afterwards:
+        // runCli is documented capture-everything/never-exit, so a flagged call must not leave
+        // the gate unlocked for later runCli calls in the same process (tests, embedding).
+        const prevDeprecated = process.env["CORK_ENABLE_DEPRECATED"];
         if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
         const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
         try {
@@ -753,13 +759,14 @@ export async function runCli(
             // Teaching issues (path/expected/received/suggestion — the documented shape, same
             // payload MCP puts in its error envelope) ARE the issues; raw zod issues only when
             // teaching could not be built.
-            const payload = { error: { code: "invalid_input", tool: e.tool, issues: e.teaching ? e.teaching.issues : e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example } : {}) } };
-            err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-            code = EXIT.invalid;
+            fail({ error: { code: "invalid_input", tool: e.tool, issues: e.teaching ? e.teaching.issues : e.issues, ...(e.teaching ? { remediation: e.teaching.remediation, example: e.teaching.example } : {}) } }, EXIT.invalid);
           } else {
-            const payload = { error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] ?? String(e) } };
-            err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
-            code = EXIT.error;
+            fail({ error: { code: "internal_error", tool: tool.name, message: (e as Error).message.split("\n")[0] ?? String(e) } }, EXIT.error);
+          }
+        } finally {
+          if (opts["enableDeprecated"]) {
+            if (prevDeprecated === undefined) delete process.env["CORK_ENABLE_DEPRECATED"];
+            else process.env["CORK_ENABLE_DEPRECATED"] = prevDeprecated;
           }
         }
       };
@@ -776,49 +783,58 @@ export async function runCli(
         for (const v of variantNames) dispatch.set(canonicalise(v), v);
         for (const v of variantNames) for (const a of VARIANT_ALIASES[v] ?? []) dispatch.set(canonicalise(a), a);
         const specPaths = [[...tool.cliPath], ...(tool.cliAliases ?? []).map((alias) => [...tool.cliPath.slice(0, -1), alias])];
-        for (const specPath of specPaths)
-        unionSpecs.push({
-          path: specPath,
-          variants: variantCanon,
-          variantNames,
-          dispatch,
-          ...(positional && props[positional]?.enum?.length
-            ? {
-                positional: {
-                  flag: flagFor(positional),
-                  values: new Set([
-                    ...props[positional]!.enum!.map((e) => String(e).toLowerCase()),
-                    ...(positional === "chainId" ? Object.keys(CHAIN_NAMES) : []),
-                  ]),
-                },
-              }
-            : {}),
-        });
+        for (const specPath of specPaths) {
+          unionSpecs.push({
+            path: specPath,
+            variants: variantCanon,
+            variantNames,
+            dispatch,
+            ...(positional && props[positional]?.enum?.length
+              ? {
+                  positional: {
+                    flag: flagFor(positional),
+                    values: new Set([
+                      ...props[positional]!.enum!.map((e) => String(e).toLowerCase()),
+                      ...(positional === "chainId" ? Object.keys(CHAIN_NAMES) : []),
+                    ]),
+                  },
+                }
+              : {}),
+          });
+        }
       }
+      /** Attach one variant's full CLI surface — the parent's positional, the top-level fields
+       *  as flags, the variant's own fields flattened, and the action — to a subcommand OR a
+       *  top-level verb. ONE builder for both so they cannot drift (they had: the verb copy
+       *  silently lost the knownFlags registration the subcommand copy carried). */
+      const attachVariantSurface = (target: Command, v: UnionVariant): void => {
+        // The parent's positional works here too (`ch prepare pool exercise 1`): rejecting an
+        // operand the long form accepts was the R4 class in miniature.
+        if (positional) target.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
+        const registered = new Set<string>();
+        // Top-level fields ride as flags here (chainId included — the variant owns the slot).
+        for (const [name, node] of Object.entries(props)) {
+          if (union.field === name) continue;
+          fieldOption(target, registered, name, node);
+        }
+        // The variant's own fields, flattened.
+        for (const [name, node0] of Object.entries(v.props)) {
+          if (name === union.disc) continue;
+          const node = resolveNode(node0, defs);
+          fieldOption(target, registered, name, node);
+          knownFlags.set(canonicalise(flagFor(name)), flagFor(name));
+        }
+        target.action(makeAction(v));
+      };
+
       for (const v of union.variants) {
         const sub = baseOptions(
           cmd
             .command(kebab(v.value))
             .description(firstSentence(v.description ?? `${v.value} (see --explain)`)),
         );
-        // The parent's positional works here too (`ch prepare pool exercise 1`): rejecting an
-        // operand the long form accepts was the R4 class in miniature.
-        if (positional) sub.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
         for (const alias of VARIANT_ALIASES[kebab(v.value)] ?? []) sub.alias(alias);
-        const subRegistered = new Set<string>();
-        // Top-level fields ride as flags here (chainId included — the variant owns the slot).
-        for (const [name, node] of Object.entries(props)) {
-          if (union.field === name) continue;
-          fieldOption(sub, subRegistered, name, node);
-        }
-        // The variant's own fields, flattened.
-        for (const [name, node0] of Object.entries(v.props)) {
-          if (name === union.disc) continue;
-          const node = resolveNode(node0, defs);
-          fieldOption(sub, subRegistered, name, node);
-          knownFlags.set(canonicalise(flagFor(name)), flagFor(name));
-        }
-        sub.action(makeAction(v));
+        attachVariantSurface(sub, v);
 
         // Top-level verb: pool actions + fill are also PROGRAM-level commands — `ch exercise …`
         // = `ch prepare pool exercise …`, `ch fill …` = `ch prepare order taker-fill …`. Same
@@ -830,17 +846,7 @@ export async function runCli(
               .command(verb)
               .description(`${firstSentence(v.description ?? verb)} (= ch ${tool.cliPath.join(" ")} ${kebab(v.value)})`),
           );
-          if (positional) top.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
-          const topRegistered = new Set<string>();
-          for (const [name, node] of Object.entries(props)) {
-            if (union.field === name) continue;
-            fieldOption(top, topRegistered, name, node);
-          }
-          for (const [name, node0] of Object.entries(v.props)) {
-            if (name === union.disc) continue;
-            fieldOption(top, topRegistered, name, resolveNode(node0, defs));
-          }
-          top.action(makeAction(v));
+          attachVariantSurface(top, v);
         }
       }
     }

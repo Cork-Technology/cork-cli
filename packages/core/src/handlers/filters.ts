@@ -67,6 +67,11 @@ export const KNOWN_FILTER_KEYS = [
   "legacy",
 ] as const;
 
+/** The digits-only (bigint-valued) filter keys — `rate` and `expiry` below parse via BigInt.
+ *  Exported for the CLI, whose amount sugar (`--rate 1e18`) must cover exactly these keys;
+ *  importing the list keeps the sugar and the parser from drifting apart. */
+export const DIGIT_FILTER_KEYS = ["rate", "expiry"] as const;
+
 export function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilters {
   const out: QueryFilters = {};
   const fail = (key: string, message: string): never => {

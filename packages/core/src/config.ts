@@ -22,16 +22,11 @@ import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 
 const bundledDeployments = bundledDefaults.deployments as Record<string, CorkDeployment>;
 
+/** Test-fixture sugar ONLY: the bundled mainnet entry, which is complete (all optional fields
+ *  present — config-remote.test pins it). Production paths resolve deployments REMOTE-FIRST via
+ *  `resolveDeployment` (config-remote.ts); nothing at runtime may read this bundled-only view —
+ *  a `deploymentFor(chainId)` convenience that did exactly that was removed 2026-08-11. */
 export const MAINNET_DEPLOYMENT: Required<CorkDeployment> = bundledDeployments["1"] as Required<CorkDeployment>;
-export const ARBITRUM_DEPLOYMENT: CorkDeployment = bundledDeployments["42161"]!;
-
-export const DEPLOYMENTS: Record<number, CorkDeployment> = Object.fromEntries(
-  Object.entries(bundledDeployments).map(([k, v]) => [Number(k), v]),
-);
-
-export function deploymentFor(chainId: number): CorkDeployment | undefined {
-  return DEPLOYMENTS[chainId];
-}
 
 /** Safe Singleton Factory — the CREATE2 deployer for Cork's cross-chain-identical addresses. */
 export const CREATE2_DEPLOYER = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as const;

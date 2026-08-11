@@ -112,6 +112,10 @@ function pickExample(tool: ToolName, rawInput: unknown): ToolExample | undefined
 /** Build the teaching payload from raw zod issues (defensive: tolerates any issue shape). */
 export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unknown): Teaching {
   const list = Array.isArray(rawIssues) ? (rawIssues as ZodIssueLike[]) : [];
+  // Whether any issue actually carried a closed legal-value set — the enum reminder below is
+  // emitted only then. It used to ride EVERY remediation, misleading callers whose failure was
+  // a checksum, a ms-timestamp, or a missing field into hunting for a nonexistent enum.
+  let sawClosedEnum = false;
   const issues: TeachingIssue[] = list.map((i) => {
     const path = (i.path ?? []).join(".");
     const out: TeachingIssue = {
@@ -124,6 +128,7 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
     // Closed-enum typo help: zod v4 carries the legal set on `values` (enum/literal-union).
     const legal = (i.values ?? i.options)?.filter((v): v is string => typeof v === "string");
     if (legal?.length) {
+      sawClosedEnum = true;
       const got = valueAt(rawInput, i.path ?? []);
       if (typeof got === "string") {
         const renamed = RENAMED_VALUES[got];
@@ -145,7 +150,7 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
     summary: `invalid input for ${tool}${paths.length ? ` (fields: ${paths.join(", ")})` : ""}`,
     issues,
     remediation:
-      `Fix the listed field(s) and retry — all enums are closed (no free-form values). ` +
+      `Fix the listed field(s) and retry${sawClosedEnum ? " — all enums are closed (no free-form values)" : ""}. ` +
       `Adapt the example below to your case; reuse your clientRequestId when retrying the same request [K2].`,
     ...(example ? { example } : {}),
   };

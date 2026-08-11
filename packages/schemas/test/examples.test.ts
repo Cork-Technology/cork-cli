@@ -67,7 +67,17 @@ describe("teaching builder: defensive branches", () => {
     const t = buildTeaching("cork_query", { weird: true }, {});
     expect(t.issues).toEqual([]);
     expect(t.summary).toBe("invalid input for cork_query");
-    expect(t.remediation).toContain("closed");
+    // No enum issue in sight → no enum advice: the closed-enum reminder is emitted only when
+    // some issue actually carried a legal-value set (it used to ride every remediation).
+    expect(t.remediation).not.toContain("closed");
+    expect(t.remediation).toContain("Fix the listed field(s)");
+  });
+
+  it("the closed-enum reminder appears exactly when an issue carries a legal-value set", () => {
+    const withEnum = buildTeaching("cork_query", [{ code: "invalid_value", path: ["resource"], message: "bad", values: ["cork-pool", "fills"] }], { resource: "pool" });
+    expect(withEnum.remediation).toContain("closed");
+    const withoutEnum = buildTeaching("cork_query", [{ code: "invalid_type", path: ["chainId"], message: "expected number" }], { chainId: "x" });
+    expect(withoutEnum.remediation).not.toContain("closed");
   });
 
   it("walks array indices in issue paths to fetch the received value for suggestions", () => {
@@ -96,5 +106,30 @@ describe("teaching builder: defensive branches", () => {
       { resource: { nested: true } },
     );
     expect(t.issues[0]?.suggestion).toBeUndefined();
+  });
+});
+
+describe("example address literals ↔ cork-defaults.json (offline drift gate)", () => {
+  // The worked examples pin recipe CONTRACT addresses inline (schema-layer files cannot import
+  // core's config resolution without inverting the package layering). Nothing else bound them:
+  // a recipe redeploy that updates cork-defaults.json would leave the SHIPPED wire examples
+  // advertising a dead address — the stub.ts pinned-literal rot class, on the tool surface.
+  it("every 0x address in an example that looks like a recipe matches a configured recipe", async () => {
+    const { default: corkDefaults } = await import("../../../cork-defaults.json");
+    const configured = new Set<string>();
+    for (const mr of Object.values((corkDefaults as { marketRegistry: Record<string, { recipes?: Record<string, string> }> }).marketRegistry)) {
+      for (const addr of Object.values(mr.recipes ?? {})) configured.add(addr.toLowerCase());
+    }
+    const recipeRefs: string[] = [];
+    const walk = (v: unknown, keyed: string): void => {
+      if (typeof v === "string" && keyed === "recipe" && /^0x[0-9a-fA-F]{40}$/.test(v)) recipeRefs.push(v);
+      else if (Array.isArray(v)) for (const item of v) walk(item, keyed);
+      else if (v && typeof v === "object") for (const [k, item] of Object.entries(v)) walk(item, k);
+    };
+    for (const examples of Object.values(TOOL_EXAMPLES)) for (const e of examples ?? []) walk(e.input, "");
+    expect(recipeRefs.length).toBeGreaterThan(0);
+    for (const addr of recipeRefs) {
+      expect(configured.has(addr.toLowerCase()), `example recipe ${addr} is not a configured recipe address in cork-defaults.json — the redeploy updated the config but not the shipped examples`).toBe(true);
+    }
   });
 });
