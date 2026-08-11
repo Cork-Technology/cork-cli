@@ -21,6 +21,17 @@ import { stubContext } from "./stub.ts";
 import { TASKS, type EvalTask } from "./tasks.ts";
 import { evalAuthMode } from "./auth-mode.ts";
 
+// Pin config resolution to the tree under test. The stub answers MARKET_REGISTRY() from the
+// LOCAL cork-defaults.json (evals/stub.ts), but an unpinned run resolves config REMOTE-FIRST
+// (GitHub raw main + a 1h disk cache) — so any window where the working tree's defaults differ
+// from pushed main (a registry redeploy mid-integration: exactly the 0.3.3 incident) re-creates
+// the adapter_binding_mismatch eval rot the stub's config import was built to kill, via
+// remote/bundled skew instead of a stale literal. Chain, venue, and HyperSync are already
+// stubbed in ctx; config is process-env-scoped, so it is pinned here (as live-ab/run.sh does).
+// `??=` keeps a deliberate override possible. Import-time on purpose: the pin must precede any
+// runTool call however this module is driven, and the test observes it on import.
+process.env.CORK_CONFIG_NO_FETCH ??= "1";
+
 const MODEL = process.env.CORK_EVAL_MODEL ?? "claude-sonnet-5";
 const TRIALS = Number(process.env.CORK_EVAL_TRIALS ?? 1);
 const MAX_LOOP = 6;

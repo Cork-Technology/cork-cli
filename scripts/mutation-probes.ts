@@ -56,6 +56,7 @@ const T = {
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
+  evalConfigPin: "evals/config-pin.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
   docTopics: "packages/core/test/doc-topics.test.ts",
   http: "packages/mcp/test/http.test.ts",
@@ -421,6 +422,16 @@ const CATALOG: Mutant[] = [
     find: '  if (env.ANTHROPIC_BASE_URL) return "ambient";\n  return "skip";',
     replace: '  return "ambient";',
     tests: [T.evalAuth],
+  },
+  {
+    // The Layer-B config pin: an unpinned eval resolves config remote-first while the stub
+    // answers MARKET_REGISTRY() from the local cork-defaults.json — remote/bundled skew during
+    // a registry-redeploy integration re-creates the 0.3.3 adapter_binding_mismatch eval rot.
+    id: "eval-config-pin-dropped",
+    file: "evals/run.ts",
+    find: 'process.env.CORK_CONFIG_NO_FETCH ??= "1";',
+    replace: "",
+    tests: [T.evalConfigPin],
   },
   // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
   // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──

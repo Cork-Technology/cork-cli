@@ -373,7 +373,7 @@ edit `cork-defaults.json`.
 the **surface-drift gate** (`packages/mcp/test/surface-drift.test.ts`) — any change to advertised
 names/descriptions/schemas fails CI until the fixture is deliberately regenerated
 (`UPDATE_SURFACE=1`). Layer B (`bun run eval`, needs an Anthropic key; self-skips): a fresh agent
-gets only the 9 tool definitions and ~20 tasks against a stubbed chain; graded on tool selection,
+gets only the 9 tool definitions and 30+ tasks against a stubbed chain; graded on tool selection,
 parameters, outcome, efficiency, recovery. **Never tune descriptions/examples
 against the 5 held-out tasks.** Surface-change workflow is TIERED mechanically (surface-tier.ts;
 the drift failure message names the tier): sentence-preserving rewording of existing descriptions

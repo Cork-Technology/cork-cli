@@ -40,7 +40,11 @@ A fresh agent is given ONLY the 9 tool definitions (as an MCP client would see t
 complete realistic tasks. The loop is a plain Anthropic-SDK agentic loop (`evals/run.ts`)
 dispatching to the in-process `runTool` with a stubbed chain (`evals/stub.ts`, serving the
 canonical demo-pool fixture) — **the LLM API is the only network dependency**; runs are
-deterministic on the tool side and identical between machines.
+deterministic on the tool side and identical between machines. That claim is load-bearing and
+pinned: `run.ts` sets `CORK_CONFIG_NO_FETCH` at import so the tools read the SAME local
+`cork-defaults.json` the stub answers `MARKET_REGISTRY()` from — unpinned, a working tree whose
+defaults differ from pushed main (a registry redeploy mid-integration) turns eval tasks red with
+`adapter_binding_mismatch` (the 0.3.3 incident, in remote/bundled-skew form).
 
 Grading is programmatic over the tool-call **trace**, not the free text:
 
@@ -54,7 +58,7 @@ Grading is programmatic over the tool-call **trace**, not the free text:
 
 ### Task set (`evals/tasks.ts`)
 
-~20 active tasks spanning reads, compute, prepare, decode/track, discovery, and *gated* outcomes
+30+ active tasks spanning reads, compute, prepare, decode/track, discovery, and *gated* outcomes
 (the agent must report `needs_indexer` / `phase_gated` / `mode_unavailable` / `chain_read_failed`
 honestly instead of inventing data), plus **5 held-out tasks**.
 
