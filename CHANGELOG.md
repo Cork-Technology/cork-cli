@@ -6,6 +6,70 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
+## [0.2.0-rc.1] — unreleased
+
+**New line (0.1 → 0.2), declared by the integrability owner under policy R5/R14** (2026-08-11):
+this cut carries three behavior changes in R14's class — visible to no schema diff, judged (by a
+non-author, as R14 requires) to change what adapted integrations observe. Per R10, `y` plays the
+major's role below 1.0.0, and at `^0.1.x` a resolver will NOT cross into 0.2.x: an rc.3 runner's
+build stops instead of silently absorbing changed behavior. Details under Changed.
+
+### Added
+
+- **`x-units` on every scaled input field** (covered-surface addition): machine-readable unit
+  notation (`D18{1}`, `D18{%}`, `{qTok}`, …) valued from the same vocabulary as the `units`
+  topic table; a three-axis parity test binds the wire extension, the table row, and the
+  description prose per field. The surface-drift fixture now stores FULL schemas (was hashes),
+  so unit changes are reviewable in the fixture diff, not just detectable.
+- **Audit R2 closed** (input schema descriptions): `permits[].value` typed as a TokenAmount with
+  the predicted-cST teaching; the four JIT constraint bounds carry PER-FIELD scale + x-units
+  (shared `RateConstraintWire`); rollover `orderSize`/`minCaReceived`/`minSharesOut` and
+  `dstCstProduced` state their token and decimals; `notionalAssets` names its `one_of`-decimals
+  ambiguity with the remediation; the rfq-answer options gate is advertised in the schema
+  (structure vs relaxable-policy split per the COR-35 ruling).
+- **Tiered surface-drift gate** (dev-infra): drift failures classify mechanically
+  (`surface-tier.ts`) into prose (regenerate only) vs semantic (Layer B first, held-out
+  included); ambiguity fails expensive by construction; classifier mutation-probed.
+- **Eval harness persistence** (dev-infra): every Layer B run writes per-task rows to
+  `evals/.last-run.jsonl`; eval fixtures read deployment addresses from `cork-defaults.json`
+  (a pinned 0.3.2 registry address had silently turned two tasks red after the 0.3.3 redeploy).
+- apk release channel fails fast with teaching when `MELANGE_SIGNING_KEY` is unset.
+
+### Changed
+
+- **[R14 prose] `permit2Internal.expired` now replicates Permit2's own gate exactly**
+  (`block.timestamp > expiration`; audit R9). Two observable flips: an allowance with
+  `expiration: 0` now reports `expired: true` (Permit2 has no zero special-case — the old
+  `false` certified an allowance the chain would reject with `AllowanceExpired`), and the exact
+  boundary second now reports `expired: false` (spending is legal AT expiration). **What to do:**
+  if your tests or logic pinned `expired: false` for zero-expiration states, update them — the
+  old verdict walked funding flows into on-chain reverts; the new one matches what a fill will
+  actually do.
+- **[R14 prose] CLI argument-parse errors now honor the JSON error contract.** Under
+  `CORK_JSON=1` or any `--json` spelling, unknown-option/unknown-command/excess-argument errors
+  emit the standard `{"error":{"code":"invalid_input",…}}` envelope on stderr instead of
+  commander's plain text (the one stderr path a JSON consumer could not parse). Exit codes are
+  unchanged. **What to do:** a script that regex-parsed the old plain text (an uncovered
+  surface) should `JSON.parse` stderr like every other error path; plain-text mode without JSON
+  intent is byte-compatible.
+- **[R14 prose] Oversized values in integer-typed flags reclassify** `invalid_input` →
+  `invalid_amount`: integer flags now share the amount-sugar dialect (`1_000` and `1e3` both
+  work — previously two adjacent flags accepted different spellings by accident), and a value
+  expanding past 2^53 is refused as `invalid_amount` with teaching instead of falling through
+  to a schema type error. **What to do:** if you branch on `error.code` for absurd-magnitude
+  inputs to integer fields, add `invalid_amount` to that branch.
+- `ch query --json pools` (a bare `--json` swallowing a positional) now teaches the exact
+  corrected spelling instead of a bare parse error.
+- The "(formerly digest_mismatch)" message suffixes from rc.3 remain through this release; the
+  one-release notice window closes with the next cut.
+
+### Fixed
+
+- Advertised `cork_query` description named the retired `flows` resource (now
+  `rollover-orders`, and `rfqs` is listed) and carried an "an trading-pair" typo; `ch mcp`
+  entrypoint help and the commander stub documented different option sets and both still said
+  `/docs/signing` though the route serves every topic.
+
 ## [0.1.0-rc.3] — 2026-08-10
 
 ### Added
