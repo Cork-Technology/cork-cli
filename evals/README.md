@@ -11,11 +11,24 @@ schemas, examples) changes.
 | Every worked example validates against its tool's input schema | `packages/schemas/test/examples.test.ts` |
 | Teaching errors: typo → "did you mean …?", remediation example itself validates | `packages/schemas/test/examples.test.ts` |
 | Maturity map covers all 9 tools; `specified` variants carry a reason code | `packages/schemas/test/examples.test.ts` |
-| **Surface-drift gate**: advertised MCP surface (names, descriptions incl. inline examples, input/output schema hashes, annotations) must match the committed fixture | `packages/mcp/test/surface-drift.test.ts` + `fixtures/tool-surface.json` |
+| **Surface-drift gate**: advertised MCP surface (names, descriptions incl. inline examples, FULL input/output schemas, annotations) must match the committed fixture | `packages/mcp/test/surface-drift.test.ts` + `fixtures/tool-surface.json` |
 | Description token budget < 3000 (approx) across all 9 tools | same file |
 
-A drift-gate failure means the surface changed. That is exactly what Layer B exists to measure, so
-the workflow is: change surface → run Layer B → if numbers hold, regenerate the fixture:
+A drift-gate failure means the surface changed, and the gate is TIERED — the failure message names
+the tier, decided MECHANICALLY by `packages/mcp/src/surface-tier.ts` (owner-approved 2026-08-11;
+never a judgment call, because "it's just wording" is precisely how semantic drift ships):
+
+- **prose** — every difference is a rewording of an EXISTING description-carrying string
+  (schema/tool `description`, server `instructions`) that preserves its sentence count.
+  Regenerate the fixture; **no eval run required**.
+- **semantic** — anything else: keys added/removed, names, types, enums, patterns, `x-units`,
+  sentence counts, array sizes. Full workflow: run Layer B (include the held-out set,
+  `EVAL_HELD_OUT=1`), and if the numbers hold, regenerate.
+
+Ambiguity fails EXPENSIVE by construction (the sentence counter's approximations only ever
+misclassify prose→semantic). Rationale for keeping the cheap tier narrow: a "redundant" full run
+once exposed rotted eval fixtures nobody was looking for. The classifier itself is
+mutation-probed (`surface-tier-*`). To regenerate after either tier:
 
 ```sh
 UPDATE_SURFACE=1 bunx vitest run packages/mcp/test/surface-drift.test.ts

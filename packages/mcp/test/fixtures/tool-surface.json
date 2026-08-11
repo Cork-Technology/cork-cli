@@ -5,8 +5,220 @@
       "name": "cork_query",
       "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
       "descriptionTokensApprox": 184,
-      "inputSchemaSha256": "2c6a397240b424b5bbf90f4f08dec9eebf5d14b61b66577fc0582c455c085b6f",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "cork-pools",
+              "cork-pool",
+              "pool-whitelist",
+              "whitelisted-addresses",
+              "rollover-orders",
+              "trading-pairs",
+              "orderbook",
+              "fills",
+              "account-state",
+              "protocol-config",
+              "registry-assets",
+              "registry-oracle",
+              "registry-recipes",
+              "registry-denominations",
+              "registry-feeds",
+              "derive-cork-pool",
+              "rfqs"
+            ],
+            "description": "Taxonomy: a CORK-POOL is one expiry of a MARKET (the family of pools over one (collateralAsset, referenceAsset) pair); a TRADING-PAIR is a tradable pair listing on the LOP venue book. cork-pools=list all pools; cork-pool=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); rollover-orders=rollover orders/fills/contracts — pool migrations to a successor expiry (filters.kind); trading-pairs=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); derive-cork-pool=derive ONE pool (expiry included) BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed; rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers; filters.view 'current' for the negotiation frontier). RFQ rows carry `version`, a monotonic change counter bumped by every stored answer/counter — poll the list and re-read only RFQs whose version moved; embedded-answers reads also carry `counter`, the requester's current counter-bid (null when none). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a pool's on-chain Market struct (the struct keeps its on-chain name) is the same contract that registry-oracle/derive-cork-pool report under oracle{address}"
+          },
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "centralized",
+              "lite-decentralized",
+              "full-decentralized"
+            ],
+            "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+          },
+          "filters": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter). Unknown keys are a teachable error"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 25,
+            "description": "items requested per venue page during traversal"
+          },
+          "maxPages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "hard bound on pages walked in one venue traversal; hitting it returns state=ok with a pagination_incomplete warning and a nextCursor to resume"
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: read state",
         "readOnlyHint": true,
@@ -18,8 +230,428 @@
       "name": "cork_compute",
       "description": "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building. Example — How much cST + reference does 1 sUSDe out cost right now?: {\"params\":{\"kind\":\"cst-swap-rate\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsOut\":\"1000000000000000000\"}}",
       "descriptionTokensApprox": 105,
-      "inputSchemaSha256": "aa59d227f07f6a562ea3eabe764f82a5887f36acfe9ec2f22778b07d7433c9b8",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "params": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "cst-swap-rate"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "poolId",
+                  "collateralAssetsOut"
+                ],
+                "additionalProperties": false,
+                "description": "cost (cST shares + reference assets in) of taking an exact collateral amount out via safeSwap, at the current on-chain rate"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "unwind-rate"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "poolId",
+                  "collateralAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "reverse of cst-swap-rate: what putting an exact collateral amount back in returns"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "dutch-auction-price"
+                  },
+                  "order": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes [K3]"
+                  },
+                  "baseFeeWei": {
+                    "description": "block base fee in WEI for the gas-bump term; omitted = gas bump skipped = the UPPER-BOUND price (public-node eth_call cannot verify this term — it runs with basefee 0)",
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "taker": {
+                    "description": "price for THIS taker (getter-whitelist discount applies); omitted = both whitelisted and non-whitelisted prices are returned",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "makingAmount": {
+                    "description": "price this making amount (the fillable range is 0..the order's own makingAmount; a larger value is extrapolated past what any fill can consume and warns makingamount_exceeds_order); omitted = the full order",
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "order"
+                ],
+                "additionalProperties": false,
+                "description": "current decayed price of a 1inch Fusion dutch-auction order (v3.1 layout) — pure local math, wei-exact vs the deployed settlement getters; pin the moment with at.timestamp (defaults to now)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "rollover-premium-floor"
+                  },
+                  "dstCstProduced": {
+                    "description": "dst cST shares produced by the fill — cST is always 18 decimals",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minPremiumPerShare": {
+                    "$ref": "#/$defs/PremiumPerShareRate"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "dstCstProduced",
+                  "minPremiumPerShare"
+                ],
+                "additionalProperties": false,
+                "description": "minimum premium a rollover order is guaranteed to earn — pure math, no RPC needed"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "impairment-floor"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "horizonSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "look-ahead horizon, relative seconds"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "poolId",
+                  "horizonSeconds"
+                ],
+                "additionalProperties": false,
+                "description": "worst-case rate-constrained impairment over the horizon — a floor, not a forecast"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "rfq-quote"
+                  },
+                  "marketTypeBucket": {
+                    "type": "string"
+                  },
+                  "durationSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tokenRiskStats": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "kind",
+                  "marketTypeBucket",
+                  "durationSeconds"
+                ],
+                "additionalProperties": false,
+                "description": "indicative RFQ quote for a market-type bucket (phase-gated)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "recipe-rate-constraint"
+                  },
+                  "recipe": {
+                    "description": "the approved recipe CONTRACT ADDRESS (2.1.0: recipes are contracts, not mode strings) — discover with cork_query resource:'registry-recipes'",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice. Pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string"
+                  },
+                  "collateralAsset": {
+                    "description": "the pair the constraint is for (order matters: collateral first)",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "referenceAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "args": {
+                    "description": "the recipe's additionalData, raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "rate": {
+                    "description": "FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against",
+                    "x-units": "D18{1}",
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "rateOracle": {
+                    "description": "explicit rate-oracle override — used as given (live if deployed, else passed to the recipe as address(0), which is what lets the liquidity recipe fall back to the anchorRate in args)",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "legacy": {
+                    "type": "boolean",
+                    "description": "route to the DEPRECATED pre-2.1.0 band math against the OLD registry (requires CORK_ENABLE_DEPRECATED=1 and `mode`)"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false,
+                "description": "ask a recipe CONTRACT what four rate limits it would impose on a pair — a staticcall to recipe.resolve, THE step that produces the constraint a JIT order carries and signs (fill the order's recipe/constraint/additionalData from ONE call so they agree). Constraint values are ABSOLUTE rates, 1e18 = 1.0"
+              }
+            ]
+          },
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "at": {
+            "type": "object",
+            "properties": {
+              "block": {
+                "description": "pin the read to this block number for bit-identical replay",
+                "$ref": "#/$defs/UintStr"
+              },
+              "timestamp": {
+                "description": "unix SECONDS to evaluate at. HONORED by dutch-auction-price (a time-decaying price is pinned by the clock, not a block); accepted-but-reserved for the block-anchored kinds",
+                "$ref": "#/$defs/UnixSeconds"
+              }
+            },
+            "additionalProperties": false
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "MarketId": {
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "$ref": "#/$defs/Bytes32"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "TokenAmount": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
+            "x-units": "{qTok}"
+          },
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
+          },
+          "PremiumPerShareRate": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
+            "x-units": "{qPremiumTok/cST}",
+            "$ref": "#/$defs/TokenAmount"
+          },
+          "Hex": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]*$",
+            "description": "0x-prefixed hex"
+          },
+          "UnixSeconds": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: deterministic math",
         "readOnlyHint": true,
@@ -30,8 +662,197 @@
       "name": "cork_decode",
       "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
       "descriptionTokensApprox": 355,
-      "inputSchemaSha256": "2a1791a705a27b6ee22ec63060ef665aa614ffa021c0d5cc31b2948ce50f776c",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "calldata",
+              "tx",
+              "order",
+              "event",
+              "receipt"
+            ],
+            "description": "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "description": "raw bytes to decode — tx calldata for kind 'calldata', the SIGNED raw transaction bytes for kind 'tx', or the 8-word order tuple for kind 'order'",
+                "$ref": "#/$defs/Hex"
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {},
+                "description": "an already-structured payload to label: the order's JSON struct fields (kind 'order'), ONE log object {address?, topics[], data} (kind 'event'), or a receipt {logs:[...]} (kind 'receipt')"
+              }
+            ]
+          },
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "data"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Hex": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]*$",
+            "description": "0x-prefixed hex"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: decode bytes",
         "readOnlyHint": true,
@@ -42,8 +863,146 @@
       "name": "cork_capabilities",
       "description": "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure [C13]. Example — Find the right tool/variant for 'unwind': {\"search\":\"unwind\"}",
       "descriptionTokensApprox": 89,
-      "inputSchemaSha256": "c02e17d1a374481ca28f5e67bece767701f6793d7449cf3af9c041d75380f31c",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: manual & maturity map",
         "readOnlyHint": true,
@@ -54,8 +1013,724 @@
       "name": "cork_prepare_phoenix",
       "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
       "descriptionTokensApprox": 222,
-      "inputSchemaSha256": "df55672facb41f0f77de031bd3f6358b58bad277b6781998483b777cdaf57a58",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "account": {
+            "description": "the initiating account. Funding legs pull from Bundler3's initiator at execution time, but this is ALSO the recipient of the sweep-back legs: for actions funded from a slippage CAP (any max* input), the bundle ends by returning the unspent remainder here, so it is not left on the adapter where anyone can take it. Set it to the address that actually funds the bundle",
+            "$ref": "#/$defs/Address"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+          },
+          "fundingMode": {
+            "type": "string",
+            "enum": [
+              "permit2",
+              "erc20-approve",
+              "pre-funded"
+            ],
+            "default": "permit2",
+            "description": "how the bundle sources tokens: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 approve legs to the cork adapter; pre-funded=no funding legs (tokens already in place)"
+          },
+          "deadlineSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400,
+            "default": 1800,
+            "description": "RELATIVE deadline, seconds from now — re-anchors to the clock on every call, so a retry produces different bytes; pass deadlineAt instead for byte-stable retries"
+          },
+          "deadlineAt": {
+            "$ref": "#/$defs/UnixSeconds"
+          },
+          "forSelf": {
+            "type": "object",
+            "properties": {
+              "adapter": {
+                "description": "the INTEGRATOR-DEPLOYED Cork ForSelf pool adapter (Cork-Technology/cork-periphery shape) — not a Cork deployment; its CORK() binding is verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address token allowances",
+                "$ref": "#/$defs/Address"
+              }
+            },
+            "required": [
+              "adapter"
+            ],
+            "additionalProperties": false,
+            "description": "emit the action as a DIRECT call to a Cork ForSelf ADAPTER (the *ForSelf twin of the action — e.g. exercise → exerciseForSelf) instead of a Bundler3 bundle — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The adapter's entrypoints carry NO receiver/owner parameters: outputs are structurally delivered to the calling account, inputs are pulled from it against allowances granted TO THE ADAPTER, and any unspent cap returns in the same transaction (custody-free). The action's receiver (and owner) must therefore equal `account`. fundingMode is ignored on this path — there are no funding or sweep legs to build. Not applicable to the authority ops"
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mint"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "cptAndCstSharesOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "maxCollateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "cptAndCstSharesOut",
+                  "receiver",
+                  "maxCollateralAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "enter exact-OUT: buy an exact number of CPT+CST share pairs; maxCollateralAssetsIn is the slippage cap on collateral paid"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "deposit"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minCptAndCstSharesOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "collateralAssetsIn",
+                  "receiver",
+                  "minCptAndCstSharesOut"
+                ],
+                "additionalProperties": false,
+                "description": "enter exact-IN: deposit an exact collateral amount; minCptAndCstSharesOut is the slippage floor on share pairs received"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "unwind-deposit"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "owner": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "maxCptAndCstSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "collateralAssetsOut",
+                  "owner",
+                  "receiver",
+                  "maxCptAndCstSharesIn"
+                ],
+                "additionalProperties": false,
+                "description": "exit exact-OUT (pre-expiry): burn share pairs to get an exact collateral amount back; maxCptAndCstSharesIn caps the pairs burned"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "unwind-mint"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "cptAndCstSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "owner": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minCollateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "cptAndCstSharesIn",
+                  "owner",
+                  "receiver",
+                  "minCollateralAssetsOut"
+                ],
+                "additionalProperties": false,
+                "description": "exit exact-IN (pre-expiry): burn an exact number of share pairs; minCollateralAssetsOut floors the collateral returned"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "withdraw"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "owner": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "maxCptSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "collateralAssetsOut",
+                  "owner",
+                  "receiver",
+                  "maxCptSharesIn"
+                ],
+                "additionalProperties": false,
+                "description": "POST-expiry settle, exact collateral out: burn at most maxCptSharesIn CPT (CPT only — vs unwind-* which burn CPT+CST pairs pre-expiry)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "withdraw-other"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "referenceAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "owner": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "maxCptSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "referenceAssetsOut",
+                  "owner",
+                  "receiver",
+                  "maxCptSharesIn"
+                ],
+                "additionalProperties": false,
+                "description": "POST-expiry settle, exact REFERENCE assets out (not collateral): burn at most maxCptSharesIn CPT"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "redeem"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "cptSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "owner": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minReferenceAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minCollateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "cptSharesIn",
+                  "owner",
+                  "receiver",
+                  "minReferenceAssetsOut",
+                  "minCollateralAssetsOut"
+                ],
+                "additionalProperties": false,
+                "description": "POST-expiry settle, exact-IN: burn an exact CPT amount for pro-rata reference + collateral; both min* fields are slippage floors"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "swap"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "maxCstSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maxReferenceAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "collateralAssetsOut",
+                  "receiver",
+                  "maxCstSharesIn",
+                  "maxReferenceAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "coverage payout (safeSwap): take an exact collateral amount out, paying CST + reference in; both max* fields are slippage caps"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "exercise"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "cstSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minCollateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maxReferenceAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "cstSharesIn",
+                  "receiver",
+                  "minCollateralAssetsOut",
+                  "maxReferenceAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "coverage payout exact-IN: burn an exact CST amount (+reference capped by maxReferenceAssetsIn) for collateral floored by minCollateralAssetsOut"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "exercise-other"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "referenceAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minCollateralAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maxCstSharesIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "referenceAssetsIn",
+                  "receiver",
+                  "minCollateralAssetsOut",
+                  "maxCstSharesIn"
+                ],
+                "additionalProperties": false,
+                "description": "coverage payout pinned on the REFERENCE leg: pay an exact reference amount in, CST capped, collateral floored"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "unwind-swap"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "collateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minReferenceAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minCstSharesOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "collateralAssetsIn",
+                  "receiver",
+                  "minReferenceAssetsOut",
+                  "minCstSharesOut"
+                ],
+                "additionalProperties": false,
+                "description": "reverse of swap: put an exact collateral amount back in, receiving CST + reference (both floored)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "unwind-exercise"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "cstSharesOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minReferenceAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maxCollateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "cstSharesOut",
+                  "receiver",
+                  "minReferenceAssetsOut",
+                  "maxCollateralAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "reverse of exercise: recover an exact CST amount, paying collateral (capped) and receiving reference (floored)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "unwind-exercise-other"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "referenceAssetsOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "minCstSharesOut": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maxCollateralAssetsIn": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "referenceAssetsOut",
+                  "receiver",
+                  "minCstSharesOut",
+                  "maxCollateralAssetsIn"
+                ],
+                "additionalProperties": false,
+                "description": "reverse of exercise-other, pinned on the REFERENCE leg: recover an exact reference amount; CST floored, collateral capped"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "authority-onboard"
+                  },
+                  "token": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "spender": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "amount": {
+                    "$ref": "#/$defs/TokenAmount"
+                  }
+                },
+                "required": [
+                  "type",
+                  "token",
+                  "spender"
+                ],
+                "additionalProperties": false,
+                "description": "token-authority op: unsigned DIRECT ERC-20 approve tx granting a standing allowance (amount omitted = unlimited) — an owner-signed tx, not a bundle leg (allowances are keyed to msg.sender); spender is normally the corkAdapter (erc20-approve mode) or canonical Permit2 (permit2 mode)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "authority-revoke"
+                  },
+                  "token": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "spender": {
+                    "$ref": "#/$defs/Address"
+                  }
+                },
+                "required": [
+                  "type",
+                  "token",
+                  "spender"
+                ],
+                "additionalProperties": false,
+                "description": "token-authority op: unsigned DIRECT ERC-20 approve(spender, 0) tx zeroing an allowance"
+              }
+            ]
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "chainId",
+          "account",
+          "clientRequestId",
+          "action"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
+          },
+          "UnixSeconds": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
+          },
+          "MarketId": {
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "$ref": "#/$defs/Bytes32"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "TokenAmount": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
+            "x-units": "{qTok}"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: build unsigned Phoenix bundle",
         "readOnlyHint": true,
@@ -66,8 +1741,1005 @@
       "name": "cork_prepare_orders",
       "description": "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit. Example — Signable maker order: sell 1 sUSDe for 1 vbUSDC: {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-order-0001\",\"action\":{\"type\":\"maker-order\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"side\":\"SELL\",\"makerAsset\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"takerAsset\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"makingAmount\":\"1000000000000000000\",\"takingAmount\":\"1000000\",\"expirySeconds\":3600}}",
       "descriptionTokensApprox": 172,
-      "inputSchemaSha256": "084c991061c2af81988878891689fe45b19ad1007ee420d621e52bfbbb0458b4",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "account": {
+            "$ref": "#/$defs/Address"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "maker-order"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "BUY",
+                      "SELL"
+                    ],
+                    "description": "side from the MAKER's perspective for the venue listing"
+                  },
+                  "makerAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "takerAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "makingAmount": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "takingAmount": {
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "expirySeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 315576000,
+                    "description": "RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"
+                  },
+                  "allowsPartialFills": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId — the invalidator bit is derived from it, and orders sharing an id would share a bit, so filling one would invalidate the others"
+                  },
+                  "usePermit2": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "extension": {
+                    "description": "raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket and auction, which BUILD the extension",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "auction": {
+                    "type": "object",
+                    "properties": {
+                      "startTime": {
+                        "description": "when the price starts decaying, absolute unix SECONDS — omitted = prepare time (the price then decays from the first moment the order can rest)",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "durationSeconds": {
+                        "type": "integer",
+                        "minimum": 60,
+                        "maximum": 16777215,
+                        "description": "how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"
+                      },
+                      "initialRateBump": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$",
+                        "description": "the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor",
+                        "x-units": "D7{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "points": {
+                        "maxItems": 255,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "rateBump": {
+                              "type": "string",
+                              "pattern": "^[0-9]+$",
+                              "description": "bump at this point, base 1e7; must be NON-INCREASING — each point <= the preceding point's bump (<= initialRateBump for the first). The getters interpolate linearly between points, so a point higher than its predecessor would make the price RISE across that segment; a dutch auction only decays.",
+                              "x-units": "D7{%}",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "timeDelta": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535,
+                              "description": "seconds since the previous point (2-byte wire field)"
+                            }
+                          },
+                          "required": [
+                            "rateBump",
+                            "timeDelta"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"
+                      }
+                    },
+                    "required": [
+                      "durationSeconds",
+                      "initialRateBump"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Cork-native DECAYING-PREMIUM order (the modeled-quote-free answer to rfq-quote): the deployed 1inch Fusion settlement is used purely as an AMOUNT GETTER — no postInteraction, so ANY taker fills at the current decayed price through the plain LOP fill path; the auction discovers the premium instead of a pricing model. Composes with jitMarket (one extension, one salt binding). Mutually exclusive with raw `extension`. Price the resting order any time with cork_compute dutch-auction-price"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "collateralAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "referenceAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "expiryTimestamp": {
+                        "description": "pool expiry — must be in the future at creation",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS the order names — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "mode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string (required there)"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "additionalData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "enableJitMint": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"
+                      },
+                      "permits": {
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports",
+                              "$ref": "#/$defs/TokenAmount"
+                            },
+                            "deadline": {
+                              "$ref": "#/$defs/UnixSeconds"
+                            },
+                            "v": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "r": {
+                              "$ref": "#/$defs/Bytes32"
+                            },
+                            "s": {
+                              "$ref": "#/$defs/Bytes32"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "value",
+                            "deadline",
+                            "v",
+                            "r",
+                            "s"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"
+                      },
+                      "legacy": {
+                        "type": "boolean",
+                        "description": "build against the DEPRECATED pre-2.1.0 adapter/registry generation (mode-string extraData, constraint derived at FILL time) — requires CORK_ENABLE_DEPRECATED=1 and `mode`. Kept because that adapter still holds the controller roles until governance grants the 2.1.0 ones"
+                      }
+                    },
+                    "required": [
+                      "collateralAsset",
+                      "referenceAsset",
+                      "expiryTimestamp"
+                    ],
+                    "additionalProperties": false,
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "side",
+                  "makerAsset",
+                  "takerAsset",
+                  "makingAmount",
+                  "takingAmount"
+                ],
+                "additionalProperties": false,
+                "description": "signable 1inch LOP v4 maker order (typed-data to sign, then finalize-maker-order, then pass its submitInput verbatim to cork_submit); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "finalize-maker-order"
+                  },
+                  "prepared": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "maker-order"
+                      },
+                      "lop": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "typedData": {
+                        "type": "object",
+                        "properties": {
+                          "domain": {
+                            "type": "object",
+                            "properties": {
+                              "chainId": {
+                                "type": "number",
+                                "enum": [
+                                  1,
+                                  42161,
+                                  8453,
+                                  11155111,
+                                  49222
+                                ],
+                                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+                              },
+                              "verifyingContract": {
+                                "$ref": "#/$defs/Address"
+                              }
+                            },
+                            "required": [
+                              "chainId",
+                              "verifyingContract"
+                            ]
+                          },
+                          "message": {
+                            "type": "object",
+                            "properties": {
+                              "salt": {
+                                "$ref": "#/$defs/UintStr"
+                              },
+                              "maker": {
+                                "$ref": "#/$defs/Address"
+                              },
+                              "receiver": {
+                                "$ref": "#/$defs/Address"
+                              },
+                              "makerAsset": {
+                                "$ref": "#/$defs/Address"
+                              },
+                              "takerAsset": {
+                                "$ref": "#/$defs/Address"
+                              },
+                              "makingAmount": {
+                                "$ref": "#/$defs/TokenAmount"
+                              },
+                              "takingAmount": {
+                                "$ref": "#/$defs/TokenAmount"
+                              },
+                              "makerTraits": {
+                                "$ref": "#/$defs/UintStr"
+                              }
+                            },
+                            "required": [
+                              "salt",
+                              "maker",
+                              "receiver",
+                              "makerAsset",
+                              "takerAsset",
+                              "makingAmount",
+                              "takingAmount",
+                              "makerTraits"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "message"
+                        ]
+                      },
+                      "orderHash": {
+                        "$ref": "#/$defs/Bytes32"
+                      },
+                      "extension": {
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "clientRequestId": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 128,
+                        "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "lop",
+                      "typedData",
+                      "orderHash",
+                      "clientRequestId"
+                    ],
+                    "description": "the exact data object returned by cork_prepare_orders maker-order"
+                  },
+                  "signature": {
+                    "description": "the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "listing": {
+                    "type": "object",
+                    "properties": {
+                      "side": {
+                        "type": "string",
+                        "enum": [
+                          "BUY",
+                          "SELL"
+                        ]
+                      },
+                      "premium": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1000,
+                        "description": "PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000",
+                        "x-units": "{%}"
+                      },
+                      "expiry": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4102444800,
+                        "description": "absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"
+                      },
+                      "nonce": {
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "allowsPartialFills": {
+                        "type": "boolean"
+                      },
+                      "quoteRef": {
+                        "type": "object",
+                        "properties": {
+                          "rfqId": {
+                            "type": "string"
+                          },
+                          "answerId": {
+                            "type": "string"
+                          },
+                          "optionId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "rfqId",
+                          "answerId",
+                          "optionId"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the RFQ answer option this order executes, if any"
+                      }
+                    },
+                    "required": [
+                      "side",
+                      "premium",
+                      "expiry",
+                      "nonce",
+                      "allowsPartialFills"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "prepared",
+                  "signature",
+                  "listing"
+                ],
+                "additionalProperties": false,
+                "description": "verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs [K1]"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "taker-fill"
+                  },
+                  "orderHash": {
+                    "$ref": "#/$defs/Bytes32"
+                  },
+                  "fillMakingAmount": {
+                    "description": "making amount to receive; omit for the full remaining order",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "maximumTakingAmount": {
+                    "description": "hard cap on taking amount paid (slippage guard); omit to use the exact rounded-up signed ratio",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "receiver": {
+                    "description": "recipient of the maker asset; defaults to account",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "interaction": {
+                    "description": "RAW taker interaction calldata (`adapter address ++ extraData`), invoked via takerInteraction DURING the fill — after the maker asset moves, before the taker asset is pulled. Prefer `jitMarket`, which BUILDS these bytes with pre-flights; pass raw hex only when you assembled the payload yourself. Rides in args after the extension; length packed at takerTraits bits 200-223",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "collateralAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "referenceAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "expiryTimestamp": {
+                        "description": "pool expiry — must be in the future at creation",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS (discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "mode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "DEPRECATED sugar: a legacy mode name mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only (ABSOLUTE, 1e18 = 1.0; zero reverts); MUST stay 0 for price/nav recipes — rejected by the fill, not ignored",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "additionalData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against. Defaults to 0x",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY: they must derive the pool whose cST one side of the RESTING ORDER names, or the fill reverts OrderNotForPool. Omit to auto-resolve via recipe.resolve (needs an RPC); when the resting order carries its own JIT extension, the derived pool id is cross-checked against it"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — consumed only if this fill creates the pool",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "enableJitMint": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "encoded because the struct layout requires it, but IGNORED on the taker path — takerInteraction ALWAYS mints (attaching the hook to the taker side IS the opt-in)"
+                      },
+                      "permits": {
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports",
+                              "$ref": "#/$defs/TokenAmount"
+                            },
+                            "deadline": {
+                              "$ref": "#/$defs/UnixSeconds"
+                            },
+                            "v": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "r": {
+                              "$ref": "#/$defs/Bytes32"
+                            },
+                            "s": {
+                              "$ref": "#/$defs/Bytes32"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "value",
+                            "deadline",
+                            "v",
+                            "r",
+                            "s"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "pre-signed ERC-2612 permits the adapter executes after the mint — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"
+                      }
+                    },
+                    "required": [
+                      "collateralAsset",
+                      "referenceAsset",
+                      "expiryTimestamp"
+                    ],
+                    "additionalProperties": false,
+                    "description": "build the taker interaction FOR this fill (2.1.0): lifting a BUY-cover resting order, the underwriter-taker delivers a not-yet-minted cST — takerInteraction deploys the oracle if needed, verifies the carried constraint, creates the pool, mints the cST to the taker (funded by the taker's collateral; approve the adapter for the collateral pull), and executes the permits, all between the maker asset moving and the taker asset being pulled. Mutually exclusive with raw `interaction`"
+                  },
+                  "forSelf": {
+                    "type": "object",
+                    "properties": {
+                      "adapter": {
+                        "description": "the INTEGRATOR-DEPLOYED Cork ForSelf fill adapter (Cork-Technology/cork-periphery shape) — not a Cork deployment; its CORK()/LOP() bindings are verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address an allowance",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "poolId": {
+                        "description": "the Cork market this fill must belong to — the wrapper binds the order's asset pair to this pool ON-CHAIN (checked after the fill, so a just-in-time order whose market is created during the fill still passes) and reverts OrderAssetsNotInMarket otherwise",
+                        "$ref": "#/$defs/MarketId"
+                      },
+                      "deadlineSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 86400,
+                        "default": 1800,
+                        "description": "RELATIVE deadline for the wrapper's own deadline check, seconds from now — re-anchors to the clock on every call; pass deadlineAt for byte-stable retries"
+                      },
+                      "deadlineAt": {
+                        "description": "absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes [K2]",
+                        "$ref": "#/$defs/UnixSeconds"
+                      }
+                    },
+                    "required": [
+                      "adapter",
+                      "poolId"
+                    ],
+                    "additionalProperties": false,
+                    "description": "emit the unsigned fill as a call to a Cork ForSelf ADAPTER (fillOrderForSelf) instead of raw LOP calldata — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The wrapper structurally forces the bought asset to the CALLER, disables taker interactions and Permit2 sourcing, pulls the taker asset from the caller up to the slippage cap and sweeps back the unspent remainder, and binds the fill to `poolId`. Approve the ORDER's taker asset to the ADAPTER (not the LOP). Mutually exclusive with receiver, interaction, and jitMarket — lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path"
+                  },
+                  "maxPages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 10,
+                    "description": "hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"
+                  }
+                },
+                "required": [
+                  "type",
+                  "orderHash"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "cancel"
+                  },
+                  "orderHash": {
+                    "$ref": "#/$defs/Bytes32"
+                  },
+                  "makerTraits": {
+                    "description": "the order's makerTraits value, verbatim from the resting order",
+                    "$ref": "#/$defs/UintStr"
+                  }
+                },
+                "required": [
+                  "type",
+                  "orderHash",
+                  "makerTraits"
+                ],
+                "additionalProperties": false,
+                "description": "on-chain cancel calldata for a resting LOP order you made"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rollover-intent"
+                  },
+                  "settler": {
+                    "description": "CorkSettler to bind to: ExactSettler (all-or-nothing) or PartialSettler (partial fills) — mode gate must match allowPartialFills",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "rolloverContract": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "srcPoolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "dstPoolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "srcCstToken": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "dstCstToken": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "premiumToken": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "orderSize": {
+                    "description": "src cST shares to roll — cST is always 18 decimals",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minPremiumPerShare": {
+                    "$ref": "#/$defs/PremiumPerShareRate"
+                  },
+                  "openDeadline": {
+                    "$ref": "#/$defs/UnixSeconds"
+                  },
+                  "fillDeadline": {
+                    "$ref": "#/$defs/UnixSeconds"
+                  },
+                  "minCaReceived": {
+                    "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minSharesOut": {
+                    "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "allowPartialFills": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "must match the settler kind: true requires PartialSettler, false requires ExactSettler"
+                  },
+                  "allowUnderfill": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "premiumPaymentMode": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "const": 0
+                      },
+                      {
+                        "type": "number",
+                        "const": 1
+                      }
+                    ],
+                    "description": "0=upfront, 1=on-settle"
+                  },
+                  "fillerHint": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "exclusiveFiller": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "orderSalt": {
+                    "description": "pin for byte-stable retries; omitted = derived from clientRequestId",
+                    "$ref": "#/$defs/Uint64Str"
+                  },
+                  "nonce": {
+                    "$ref": "#/$defs/Uint64Str"
+                  }
+                },
+                "required": [
+                  "type",
+                  "settler",
+                  "rolloverContract",
+                  "srcPoolId",
+                  "dstPoolId",
+                  "srcCstToken",
+                  "dstCstToken",
+                  "premiumToken",
+                  "orderSize",
+                  "minPremiumPerShare",
+                  "openDeadline",
+                  "fillDeadline"
+                ],
+                "additionalProperties": false,
+                "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"
+              }
+            ]
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "chainId",
+          "account",
+          "clientRequestId",
+          "action"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
+          },
+          "MarketId": {
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "$ref": "#/$defs/Bytes32"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "TokenAmount": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
+            "x-units": "{qTok}"
+          },
+          "Hex": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]*$",
+            "description": "0x-prefixed hex"
+          },
+          "UnixSeconds": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
+          },
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "PremiumPerShareRate": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
+            "x-units": "{qPremiumTok/cST}",
+            "$ref": "#/$defs/TokenAmount"
+          },
+          "Uint64Str": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned 64-bit integer, decimal string"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: build signable order",
         "readOnlyHint": true,
@@ -78,8 +2750,238 @@
       "name": "cork_prepare_market",
       "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One (42161). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
       "descriptionTokensApprox": 177,
-      "inputSchemaSha256": "e9959ca0c72a7242fd645426b5e6dff12ba2513e598d0e275af26378c7b380d4",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "deploy-oracle"
+                  },
+                  "collateralAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "referenceAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "price",
+                      "nav"
+                    ],
+                    "description": "which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"
+                  }
+                },
+                "required": [
+                  "type",
+                  "collateralAsset",
+                  "referenceAsset"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned MarketRegistry.deploy(ca, ref, mode) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). Pair order matters: collateral first"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "deploy-fixed-oracle"
+                  },
+                  "rate": {
+                    "type": "string",
+                    "pattern": "^[0-9]+$",
+                    "description": "the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts",
+                    "x-units": "D18{1}",
+                    "$ref": "#/$defs/UintStr"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rate"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned MarketRegistry.deployFixedRateOracle(rate) tx: create the fixed-rate oracle for a RATE (no pair — a fixed rate is not a fact about two assets). Permissionless and IDEMPOTENT; this is the oracle a FIXED-recipe JIT order's rateOverride will produce"
+              }
+            ]
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "chainId",
+          "clientRequestId",
+          "action"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
+          },
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: build market-infrastructure tx",
         "readOnlyHint": true,
@@ -90,8 +2992,291 @@
       "name": "cork_track",
       "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7]. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
       "descriptionTokensApprox": 78,
-      "inputSchemaSha256": "0c8ace81530baf449a7486f6a4930b1692cba4c1329df467d82efb7fa9d88551",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "verify",
+              "simulate",
+              "reconcile"
+            ],
+            "description": "verify=check a resource against deployed chain state; reconcile=resolve a receipt/order to a closed lifecycle state; simulate=eth_call dry-run of a FROZEN prepared artifact (subject kind 'artifact' with to/bundler3 + data/multicall + from/account) — answers wouldRevert BEFORE anyone signs"
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "artifact"
+                  },
+                  "artifact": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "kind",
+                  "artifact"
+                ],
+                "additionalProperties": false,
+                "description": "a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is [K3]"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "txHash"
+                  },
+                  "txHash": {
+                    "$ref": "#/$defs/Bytes32"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "txHash"
+                ],
+                "additionalProperties": false,
+                "description": "an on-chain transaction — reconcile its receipt to an outcome"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "orderHash"
+                  },
+                  "orderHash": {
+                    "$ref": "#/$defs/Bytes32"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "orderHash"
+                ],
+                "additionalProperties": false,
+                "description": "a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state [K7]"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "marketRef"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "poolId"
+                ],
+                "additionalProperties": false,
+                "description": "a pool — re-hash its MarketId against live chain state"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "submissionRef"
+                  },
+                  "submissionRef": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "submissionRef"
+                ],
+                "additionalProperties": false,
+                "description": "a prior cork_submit reference — resolve it to a lifecycle state"
+              }
+            ]
+          },
+          "expect": {
+            "type": "object",
+            "properties": {
+              "artifactDigest": {
+                "$ref": "#/$defs/Bytes32"
+              }
+            },
+            "required": [
+              "artifactDigest"
+            ]
+          },
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "subject"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "MarketId": {
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "$ref": "#/$defs/Bytes32"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: verify & reconcile",
         "readOnlyHint": true,
@@ -102,8 +3287,903 @@
       "name": "cork_submit",
       "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x97ccd3eb8faa84248754800ef050b1ee4ae6f2f073df6f5cf2b28c9bf6478e052af96f77cd1291a576bcdb77ba3bd1df363f4fc4e55624b353b1d99c34e795ea1b\"}}",
       "descriptionTokensApprox": 545,
-      "inputSchemaSha256": "fb15afd60a90dad5c09b05744f83d552d064fca48e9b90ff010ebd3e8c0f36f6",
-      "outputSchemaSha256": "6cf723f8854adf48b93b466cefd159cca3ec8b12ce6bde6e8cc352f6ba7115cd",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "enum": [
+              1,
+              42161,
+              8453,
+              11155111,
+              49222
+            ],
+            "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rollover-order"
+                  },
+                  "order": {
+                    "type": "object",
+                    "properties": {
+                      "user": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "settler": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "fillerHint": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "exclusiveFiller": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "srcCstToken": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "dstCstToken": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "premiumToken": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "rolloverContract": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "originChainId": {
+                        "$ref": "#/$defs/Uint64Str"
+                      },
+                      "destinationChainId": {
+                        "$ref": "#/$defs/Uint64Str"
+                      },
+                      "openDeadline": {
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "fillDeadline": {
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "orderSalt": {
+                        "$ref": "#/$defs/Uint64Str"
+                      },
+                      "orderSize": {
+                        "description": "src cST shares to roll — cST is always 18 decimals",
+                        "$ref": "#/$defs/TokenAmount"
+                      },
+                      "minPremiumPerShare": {
+                        "$ref": "#/$defs/PremiumPerShareRate"
+                      },
+                      "allowPartialFills": {
+                        "type": "boolean"
+                      },
+                      "allowUnderfill": {
+                        "type": "boolean"
+                      },
+                      "premiumPaymentMode": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "const": 0
+                          },
+                          {
+                            "type": "number",
+                            "const": 1
+                          }
+                        ],
+                        "description": "0=upfront, 1=on-settle — must match what the signature covers"
+                      },
+                      "rolloverIntentHash": {
+                        "description": "EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed [K3]",
+                        "$ref": "#/$defs/Bytes32"
+                      },
+                      "rolloverParams": {
+                        "type": "object",
+                        "properties": {
+                          "srcCstToken": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "dstCstToken": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "minCaReceived": {
+                            "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)",
+                            "$ref": "#/$defs/TokenAmount"
+                          },
+                          "minSharesOut": {
+                            "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals",
+                            "$ref": "#/$defs/TokenAmount"
+                          },
+                          "srcPoolId": {
+                            "$ref": "#/$defs/Bytes32"
+                          },
+                          "dstPoolId": {
+                            "$ref": "#/$defs/Bytes32"
+                          },
+                          "settler": {
+                            "$ref": "#/$defs/Address"
+                          }
+                        },
+                        "required": [
+                          "srcCstToken",
+                          "dstCstToken",
+                          "minCaReceived",
+                          "minSharesOut",
+                          "srcPoolId",
+                          "dstPoolId",
+                          "settler"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "user",
+                      "settler",
+                      "fillerHint",
+                      "exclusiveFiller",
+                      "srcCstToken",
+                      "dstCstToken",
+                      "premiumToken",
+                      "rolloverContract",
+                      "originChainId",
+                      "destinationChainId",
+                      "openDeadline",
+                      "fillDeadline",
+                      "orderSalt",
+                      "orderSize",
+                      "minPremiumPerShare",
+                      "allowPartialFills",
+                      "allowUnderfill",
+                      "premiumPaymentMode",
+                      "rolloverIntentHash",
+                      "rolloverParams"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "intent": {
+                    "type": "object",
+                    "properties": {
+                      "rolloverContract": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "deadline": {
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "nonce": {
+                        "$ref": "#/$defs/Uint64Str"
+                      },
+                      "preRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "midRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "postRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "premiumHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "rolloverContract",
+                      "deadline",
+                      "nonce",
+                      "preRolloverHooks",
+                      "midRolloverHooks",
+                      "postRolloverHooks",
+                      "premiumHooks"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "signature": {
+                    "description": "the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs [K1]",
+                    "$ref": "#/$defs/Hex"
+                  }
+                },
+                "required": [
+                  "type",
+                  "order",
+                  "intent",
+                  "signature"
+                ],
+                "additionalProperties": false,
+                "description": "relay a caller-signed rollover ERC-7683 order to the venue (build it with cork_prepare_orders rollover-intent)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "lop-order"
+                  },
+                  "order": {
+                    "type": "object",
+                    "properties": {
+                      "salt": {
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "maker": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "receiver": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "makerAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "takerAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "makingAmount": {
+                        "$ref": "#/$defs/TokenAmount"
+                      },
+                      "takingAmount": {
+                        "$ref": "#/$defs/TokenAmount"
+                      },
+                      "makerTraits": {
+                        "$ref": "#/$defs/UintStr"
+                      }
+                    },
+                    "required": [
+                      "salt",
+                      "maker",
+                      "receiver",
+                      "makerAsset",
+                      "takerAsset",
+                      "makingAmount",
+                      "takingAmount",
+                      "makerTraits"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "signature": {
+                    "description": "the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "extension": {
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "BUY",
+                      "SELL"
+                    ]
+                  },
+                  "premium": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000,
+                    "description": "PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected",
+                    "x-units": "{%}"
+                  },
+                  "expiry": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4102444800,
+                    "description": "absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"
+                  },
+                  "nonce": {
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "allowsPartialFills": {
+                    "type": "boolean"
+                  },
+                  "makerAccountType": {
+                    "default": "EOA",
+                    "type": "string",
+                    "enum": [
+                      "EOA",
+                      "ERC1271"
+                    ]
+                  },
+                  "makerPermit2": {
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "quoteRef": {
+                    "type": "object",
+                    "properties": {
+                      "rfqId": {
+                        "type": "string"
+                      },
+                      "answerId": {
+                        "type": "string"
+                      },
+                      "optionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "rfqId",
+                      "answerId",
+                      "optionId"
+                    ],
+                    "additionalProperties": false,
+                    "description": "the RFQ answer option this order executes, if any — premium is cross-checked against it before relay"
+                  }
+                },
+                "required": [
+                  "type",
+                  "order",
+                  "signature",
+                  "side",
+                  "premium",
+                  "expiry",
+                  "nonce",
+                  "allowsPartialFills"
+                ],
+                "additionalProperties": false,
+                "description": "relay a caller-signed 1inch LOP v4 maker order to the venue orderbook (build it with cork_prepare_orders maker-order)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rfq-open"
+                  },
+                  "requester": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "referenceAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "collateralAsset": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "$ref": "#/$defs/Address"
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false,
+                        "description": "exactly this collateral token"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "one_of": {
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/Address"
+                            }
+                          }
+                        },
+                        "required": [
+                          "one_of"
+                        ],
+                        "additionalProperties": false,
+                        "description": "any of these collateral tokens is acceptable"
+                      }
+                    ]
+                  },
+                  "modes": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "liquidity_only",
+                        "liquidity_impairment"
+                      ]
+                    }
+                  },
+                  "packageIds": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "expiryWindow": {
+                    "type": "object",
+                    "properties": {
+                      "notBefore": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4102444800,
+                        "description": "earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"
+                      },
+                      "notAfter": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4102444800,
+                        "description": "latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"
+                      }
+                    },
+                    "required": [
+                      "notBefore",
+                      "notAfter"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "marketTemplate": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "venue market template: either {market_template_id} or {inline:{oracle_recipe, …}}. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"
+                  },
+                  "notionalAssets": {
+                    "description": "requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "validUntil": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4102444800,
+                    "description": "RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"
+                  },
+                  "signature": {
+                    "$ref": "#/$defs/Hex"
+                  }
+                },
+                "required": [
+                  "type",
+                  "requester",
+                  "referenceAsset",
+                  "collateralAsset",
+                  "modes",
+                  "packageIds",
+                  "expiryWindow",
+                  "notionalAssets",
+                  "validUntil",
+                  "signature"
+                ],
+                "additionalProperties": false,
+                "description": "open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rfq-answer"
+                  },
+                  "rfqId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "underwriter": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "quoted",
+                      "pass"
+                    ],
+                    "description": "quoted=submitting priced options; pass=declining (give reasonCode)"
+                  },
+                  "options": {
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "description": "priced quote options; premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip"
+                  },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "NO_CAPACITY",
+                      "PAIR_UNSUPPORTED",
+                      "TENOR_NOT_QUOTED",
+                      "PASS"
+                    ]
+                  },
+                  "supersedes": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "optional revision link: the answerId of YOUR prior answer on this SAME RFQ that this one replaces (venue-validated, 400 otherwise). Purely an audit trail — supersession is already implicit (an underwriter's newest answer is its current one), so omitting this loses nothing"
+                  },
+                  "signature": {
+                    "$ref": "#/$defs/Hex"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rfqId",
+                  "underwriter",
+                  "status",
+                  "signature"
+                ],
+                "additionalProperties": false,
+                "description": "answer an open RFQ as an underwriter: priced options or a pass. Answers are REVISIONS — your newest answer on an RFQ is your current one; post again to update your quote (up to 500 revisions per underwriter thread)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rfq-counter"
+                  },
+                  "rfqId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "requester": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "premiumAnnualized": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
+                    "x-units": "{%}"
+                  },
+                  "optionRef": {
+                    "type": "object",
+                    "properties": {
+                      "answerId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "optionId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "answerId",
+                      "optionId"
+                    ],
+                    "additionalProperties": false,
+                    "description": "optional: point the bid at a specific quoted option on THIS RFQ when it is about those terms rather than the envelope at large (venue-validated, 400 otherwise; pre-flighted here when an RPC-free venue read succeeds)"
+                  },
+                  "freshUntil": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4102444800,
+                    "description": "advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"
+                  },
+                  "signature": {
+                    "$ref": "#/$defs/Hex"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rfqId",
+                  "requester",
+                  "premiumAnnualized",
+                  "signature"
+                ],
+                "additionalProperties": false,
+                "description": "counter-bid an open RFQ as its REQUESTER (the buyer's side of the negotiation): non-committal like answers — it binds nobody; commitment stays the signed limit order. Broadcast to every underwriter; your newest counter is the current bid. Requester-only: the venue 403s anyone else"
+              }
+            ]
+          },
+          "format": {
+            "default": "concise",
+            "type": "string",
+            "enum": [
+              "concise",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "chainId",
+          "clientRequestId",
+          "action"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
+          },
+          "Uint64Str": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned 64-bit integer, decimal string"
+          },
+          "UnixSeconds": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
+          },
+          "TokenAmount": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "token amount in the token's own smallest unit (base units), decimal string. Convert human-readable amounts by the token's decimals, keeping the whole-number part (18-decimals token: 2.5 → '2500000000000000000', 1000 → '1000000000000000000000'); an amount already given as a raw integer of base units passes through verbatim — do not rescale it",
+            "x-units": "{qTok}"
+          },
+          "PremiumPerShareRate": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
+            "x-units": "{qPremiumTok/cST}",
+            "$ref": "#/$defs/TokenAmount"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Hex": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]*$",
+            "description": "0x-prefixed hex"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "conflict",
+              "unavailable"
+            ]
+          },
+          "data": {},
+          "warnings": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "indexer",
+                  "service",
+                  "config"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "centralized",
+                  "lite-decentralized",
+                  "full-decentralized"
+                ],
+                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+              },
+              "chainId": {
+                "type": "number",
+                "enum": [
+                  1,
+                  42161,
+                  8453,
+                  11155111,
+                  49222
+                ],
+                "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+              },
+              "block": {
+                "$ref": "#/$defs/UintStr"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "digest": {
+                "$ref": "#/$defs/Bytes32"
+              },
+              "staleness": {
+                "description": "age of the served data in SECONDS (reserved; currently never emitted)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rpc": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "default",
+                      "chainlist"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "host"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "chainId",
+              "fetchedAt"
+            ]
+          },
+          "schemaVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "data",
+          "provenance",
+          "schemaVersion"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "UintStr": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "unsigned integer, decimal string"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          }
+        }
+      },
       "annotations": {
         "title": "Cork: relay signed payload to venue",
         "readOnlyHint": false,

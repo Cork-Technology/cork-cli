@@ -59,6 +59,7 @@ const T = {
   teaching: "packages/schemas/test/teaching.test.ts",
   docTopics: "packages/core/test/doc-topics.test.ts",
   http: "packages/mcp/test/http.test.ts",
+  surfaceTier: "packages/mcp/test/surface-tier.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -1552,6 +1553,33 @@ const CATALOG: Mutant[] = [
     find: "const swallowed = typeof jsonOpt === \"string\" && /^[A-Za-z][\\w-]*$/.test(rawJson);",
     replace: "const swallowed = typeof jsonOpt === \"number\" && /^[A-Za-z][\\w-]*$/.test(rawJson);",
     tests: [T.cli],
+  },
+  // ── surface-tier boundary (owner-approved 2026-08-11): the mechanical prose/semantic gate ──
+  {
+    // The sentence guard inverts: a description that GAINED a sentence classifies as a
+    // rewording, so new semantic content ships on the cheap tier without an eval.
+    id: "surface-tier-sentence-guard-inverted",
+    file: "packages/mcp/src/surface-tier.ts",
+    find: 'kind: sentenceCount(before as string) === sentenceCount(after as string) ? "description-reworded" : "description-resized"',
+    replace: 'kind: sentenceCount(before as string) !== sentenceCount(after as string) ? "description-reworded" : "description-resized"',
+    tests: [T.surfaceTier],
+  },
+  {
+    // Non-description strings classify as prose: an x-units flip (the 100x lie) or an enum
+    // member rename would skip the eval — units are covered surface, never prose.
+    id: "surface-tier-contract-strings-as-prose",
+    file: "packages/mcp/src/surface-tier.ts",
+    find: '    } else {\n      out.push({ path, kind: "value-changed" });\n    }',
+    replace: '    } else {\n      out.push({ path, kind: "description-reworded" });\n    }',
+    tests: [T.surfaceTier],
+  },
+  {
+    // Added keys go unreported: a brand-new field rides a prose-tier regeneration.
+    id: "surface-tier-added-key-unreported",
+    file: "packages/mcp/src/surface-tier.ts",
+    find: 'for (const k of Object.keys(a)) if (!(k in b)) out.push({ path: `${path}/${k}`, kind: "key-added" });',
+    replace: "for (const k of Object.keys(a)) if (!(k in b)) void k;",
+    tests: [T.surfaceTier],
   },
 ];
 

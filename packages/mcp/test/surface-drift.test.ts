@@ -1,16 +1,21 @@
 // Layer-A eval gate: the advertised tool surface (names, descriptions incl. inline examples,
-// input/output schemas, annotations) is snapshotted to a committed fixture. Any diff fails CI
-// until the fixture is regenerated deliberately — description/schema changes are exactly what the
-// agent-eval suite (evals/) exists to gate, so a drift here means "run Layer B, then update".
+// FULL input/output schemas, annotations) is snapshotted to a committed fixture. Any diff fails
+// CI until the fixture is regenerated deliberately. The gate is TIERED mechanically
+// (surface-tier.ts, owner-approved 2026-08-11): a sentence-preserving rewording of existing
+// description strings is prose tier (regenerate, no eval); anything structural — keys, names,
+// types, enums, x-units, sentence counts — is semantic tier (run Layer B, then regenerate).
+// Schemas are stored as FULL JSON, not hashes (since 2026-08-11): a hash flip is detectable but
+// not reviewable, the classifier needs the material, and a units change should be readable in
+// the fixture diff.
 //
 // Regenerate after an intentional change:  UPDATE_SURFACE=1 bunx vitest run packages/mcp/test/surface-drift.test.ts
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createCorkServer } from "@cork/mcp";
+import { classifySurfaceDelta } from "../src/surface-tier.ts";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "tool-surface.json");
 
@@ -18,8 +23,8 @@ interface SurfaceEntry {
   name: string;
   description: string;
   descriptionTokensApprox: number; // chars/4 — a drift-visible budget proxy, not an exact count
-  inputSchemaSha256: string;
-  outputSchemaSha256: string;
+  inputSchema: unknown;
+  outputSchema: unknown;
   annotations: Record<string, unknown>;
 }
 
@@ -28,10 +33,6 @@ interface SurfaceEntry {
 interface Surface {
   instructions: string;
   tools: SurfaceEntry[];
-}
-
-function sha(v: unknown): string {
-  return createHash("sha256").update(JSON.stringify(v)).digest("hex");
 }
 
 async function currentSurface(): Promise<Surface> {
@@ -46,8 +47,8 @@ async function currentSurface(): Promise<Surface> {
       name: t.name,
       description: t.description ?? "",
       descriptionTokensApprox: Math.ceil((t.description ?? "").length / 4),
-      inputSchemaSha256: sha(t.inputSchema),
-      outputSchemaSha256: sha(t.outputSchema ?? null),
+      inputSchema: t.inputSchema,
+      outputSchema: t.outputSchema ?? null,
       annotations: (t.annotations ?? {}) as Record<string, unknown>,
     })),
   };
@@ -65,10 +66,13 @@ describe("tool-surface drift gate", () => {
     }
 
     const committed = JSON.parse(readFileSync(FIXTURE, "utf8")) as Surface;
-    expect(
-      surface,
-      "Agent-visible surface changed (instructions/names/descriptions/schemas). This is eval-gated: run the agent evals (bun run eval) against the new surface, then regenerate the fixture with UPDATE_SURFACE=1.",
-    ).toEqual(committed);
+    const verdict = classifySurfaceDelta(committed, surface);
+    const paths = verdict.changes.slice(0, 12).map((c) => `${c.kind} ${c.path}`).join("; ");
+    const guidance =
+      verdict.tier === "prose"
+        ? `PROSE-tier surface edit (sentence-preserving rewording of existing descriptions only): regenerate the fixture with UPDATE_SURFACE=1 — no eval run required (mechanical tier, surface-tier.ts). Changes: ${paths}`
+        : `SEMANTIC-tier surface change: run the agent evals against the new surface (bun run eval; EVAL_HELD_OUT=1 per the cadence), then regenerate the fixture with UPDATE_SURFACE=1. Changes: ${paths}`;
+    expect(surface, guidance).toEqual(committed);
   });
 
   it("description token budget stays bounded (context economy)", async () => {

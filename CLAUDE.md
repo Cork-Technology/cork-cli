@@ -375,8 +375,10 @@ names/descriptions/schemas fails CI until the fixture is deliberately regenerate
 (`UPDATE_SURFACE=1`). Layer B (`bun run eval`, needs an Anthropic key; self-skips): a fresh agent
 gets only the 9 tool definitions and ~20 tasks against a stubbed chain; graded on tool selection,
 parameters, outcome, efficiency, recovery. **Never tune descriptions/examples
-against the 5 held-out tasks.** Surface-change workflow: edit → run Layer B → regenerate the drift
-fixture.
+against the 5 held-out tasks.** Surface-change workflow is TIERED mechanically (surface-tier.ts;
+the drift failure message names the tier): sentence-preserving rewording of existing descriptions
+→ regenerate only; anything structural (keys/names/types/enums/x-units/sentence counts) → run
+Layer B (`EVAL_HELD_OUT=1`) → regenerate.
 
 ## Layout
 
