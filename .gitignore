@@ -47,3 +47,6 @@ cache/
 dist/
 *.bun-build
 evals/.last-run.jsonl
+
+# Slack-thread drafts are working files, never repo content (owner rule 2026-08-11)
+notes/*slack*
