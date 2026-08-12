@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { encodeAbiParameters, keccak256, parseAbi, stringToBytes, zeroAddress } from "viem";
 import { resolveRpc, runTool } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
@@ -54,134 +55,161 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
   }, 30_000);
 });
 
-// End-to-end 2.1.0 parity: our chain-native registry reads (built-in Arbitrum RPC) vs the live
-// market-registry read API (sandbox). The API comparison is best-effort — if the sandbox is
-// unreachable we still assert our own derivation is coherent, but do not fail the run on the
-// external dependency. Every route below was hand-verified 2026-08-03 (fixtures in the session
-// scratchpad); these tests keep that parity from silently regressing.
-describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry read API", () => {
+// End-to-end 2.1.0 parity: our chain-native registry reads (built-in Arbitrum RPC) vs an
+// INDEPENDENT in-test raw-read reference over the same chain. The reference declares its own
+// minimal ABI fragments HERE — nothing imported from the production reader — so a transform,
+// pagination, enum-ordering, or field-mapping bug in the reader cannot hide inside a shared
+// declaration. This replaced the external market-registry read API as the reference
+// (2026-08-12: this suite was the ONLY consumer of api-phoenix.cork.tech/registry; the
+// dependency is removed). One check retired with it, honestly: the API's free-form
+// contracts_version label has no on-chain getter and therefore no internal source of truth —
+// config still declares the label, but nothing external arbitrates a relabel anymore.
+describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-read reference", () => {
   const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
   const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610"; // sUSDS (registered on Arbitrum)
   const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55"; // LiquidityRecipe (approved)
-  const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}`; // abi.encode(1e18)
-  // Default moved to the cork-api registry module mount (0.3.3, 2026-08-12): the standalone
-  // zian-b sandbox retires after the cutover; Raouf's response-level compare was 32/32 vs it,
-  // and our registry path literals (/v1/registries, /v1/{chain}/assets, …) compose with the
-  // /registry mount into the canonical /registry/v1/… form — one env var, zero code.
-  const API = process.env.CORK_MARKET_API ?? "https://api-phoenix.cork.tech/registry";
+  const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}` as const; // abi.encode(1e18)
+  const PRICE_MODE = 0; // OracleMode.PRICE — re-declared here (the reader's ORACLE_MODE is under test)
 
-  const apiGet = async <T>(path: string): Promise<T | undefined> => {
-    try {
-      const res = await fetch(`${API}${path}`);
-      return res.ok ? ((await res.json()) as T) : undefined;
-    } catch {
-      return undefined; // sandbox down — self-consistency assertions still ran
-    }
-  };
-  const apiPost = async <T>(path: string, body: unknown): Promise<T | undefined> => {
-    try {
-      const res = await fetch(`${API}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      return res.ok ? ((await res.json()) as T) : undefined;
-    } catch {
-      return undefined;
-    }
-  };
+  // The reference ABI, re-declared from IMarketRegistry.sol / IMarketRecipe.sol (tag 2.1.0) —
+  // deliberately NOT imported from market-registry.ts (see the block comment above).
+  const refAbi = parseAbi([
+    "struct AssetSource { address addr; uint8 sourceType; uint8 sourceInterface; string denomination; }",
+    "struct Asset { address addr; string name; uint8 kind; AssetSource priceSource; AssetSource navSource; }",
+    "struct ConversionFeed { address base; address quote; address aggregatorAddress; uint8 feedDecimals; }",
+    "struct Denomination { bytes32 labelHash; address unit; }",
+    "function getAssets(uint256 offset, uint256 limit) view returns (Asset[] page, uint256 total)",
+    "function getConversionFeeds(uint256 offset, uint256 limit) view returns (ConversionFeed[] page, uint256 total)",
+    "function getDenominations(uint256 offset, uint256 limit) view returns (Denomination[] page, uint256 total)",
+    "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+    "function lookupWrapper(address ca, address ref, uint8 mode) view returns (address wrapper)",
+    "function predictFixedRateOracle(uint256 rate) view returns (address oracle)",
+    "function deploy(address ca, address ref, uint8 mode) returns (address wrapper)",
+    "function source() view returns (uint8)",
+    "function decimals() view returns (uint8)",
+    "function resolve(address ca, address ref, address rateOracle, bytes additionalData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
+  ]);
+  // RecipeSource ordinals, re-declared: NAV=0, PRICE=1, FIXED=2 (inverted vs OracleMode — the
+  // deliberate upstream trap this suite must be able to catch, so no import).
+  const REF_RECIPE_SOURCE = ["nav", "price", "fixed"] as const;
 
-  it("our configured registry matches GET /v1/registries (address + contracts_version)", async () => {
+  const ref42161 = async () => {
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr } = await resolveMarketRegistry(42161);
-    // The contracts-release label is a FREE-FORM tag the API serves (relabeled "2.1.0"→"0.3.0"
-    // ~2026-08-06, →"0.3.2" ~2026-08-10, →"0.3.3" later the same day with the collision-fix
-    // redeploy; the registry ADDRESS is the identity check, no on-chain getter arbitrates).
-    // PARITY is the contract — config == API — so no third hardcoded copy lives here to rot.
-    expect(mr?.contractsVersion).toBeDefined();
-    const api = await apiGet<{ registries: Array<{ chain_id: number; registry: string; contracts_version: string }> }>("/v1/registries");
-    if (!api) return;
-    const row = api.registries.find((r) => r.chain_id === 42161);
-    expect(row?.registry.toLowerCase()).toBe(mr!.registry.toLowerCase());
-    expect(row?.contracts_version).toBe(mr!.contractsVersion);
+    expect(mr?.registry).toBeDefined();
+    const r = await resolveRpc(42161, undefined);
+    expect(r).not.toBeNull();
+    return { registry: mr!.registry as `0x${string}`, contractsVersion: mr!.contractsVersion, client: r!.client };
+  };
+
+  it("the configured registry address answers registry views on-chain (identity check)", async () => {
+    const { registry, contractsVersion, client } = await ref42161();
+    // The contracts-release label is config-declared and free-form; the retired API was its
+    // only external arbiter (relabels "2.1.0"→"0.3.0"→"0.3.2"→"0.3.3" all happened there).
+    // What remains checkable is presence + that the ADDRESS behaves as a populated registry.
+    expect(contractsVersion).toBeDefined();
+    const [, total] = await client.readContract({ address: registry, abi: refAbi, functionName: "getAssets", args: [0n, 1n] });
+    expect(total).toBeGreaterThan(0n);
   }, 30_000);
 
-  it("registry-assets matches GET /v1/42161/assets (same address set)", async () => {
+  it("registry-assets matches a raw one-shot getAssets read (same address set)", async () => {
     const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-assets", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const ourAddrs = ((ours.data as { items: Array<{ address: string }> }).items.map((i) => i.address.toLowerCase())).sort();
-    const api = await apiGet<{ items: Array<{ address: string }> }>("/v1/42161/assets");
-    if (!api) return;
-    expect(ourAddrs).toEqual(api.items.map((i) => i.address.toLowerCase()).sort());
+    const { registry, client } = await ref42161();
+    // One-shot with a large limit — cross-checks the reader's PAGINATED assembly.
+    const [page] = await client.readContract({ address: registry, abi: refAbi, functionName: "getAssets", args: [0n, 500n] });
+    expect(ourAddrs).toEqual(page.map((a) => a.addr.toLowerCase()).sort());
   }, 60_000);
 
-  it("registry-recipes constants + args annotations match GET /v1/42161/recipes", async () => {
+  it("registry-recipes matches raw getRecipes + per-recipe source()/constant reads", async () => {
     const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
-    const ourItems = (ours.data as { items: Array<{ address: string; source: string; constants: Record<string, string>; args: { type: string } | null }> }).items;
-    const api = await apiGet<{ items: Array<{ address: string; source: string; constants: Record<string, { raw: string }>; args: { type: string } | null }> }>("/v1/42161/recipes");
-    if (!api) return;
-    for (const apiRow of api.items) {
-      const mine = ourItems.find((i) => i.address.toLowerCase() === apiRow.address.toLowerCase());
-      expect(mine, `recipe ${apiRow.address} missing from our read`).toBeDefined();
-      expect(mine!.source).toBe(apiRow.source);
-      // The API retreated its annotations (~2026-08-10: args:null, constants:{}) — ours are a
-      // deliberate teaching superset (RECIPE_CATALOG), asserted offline. Parity holds only for
-      // what the API still serves: when it re-grows an annotation, disagreement fails here.
-      if (apiRow.args !== null && apiRow.args !== undefined) expect(mine!.args?.type).toBe(apiRow.args.type);
-      for (const [name, v] of Object.entries(apiRow.constants)) {
-        expect(mine!.constants[name], `constant ${name} on ${apiRow.address}`).toBe(v.raw);
+    const ourItems = (ours.data as { items: Array<{ address: string; source: string; constants: Record<string, string> }> }).items;
+    const { registry, client } = await ref42161();
+    const [addrs] = await client.readContract({ address: registry, abi: refAbi, functionName: "getRecipes", args: [0n, 100n] });
+    expect(ourItems.map((i) => i.address.toLowerCase()).sort()).toEqual(addrs.map((a) => a.toLowerCase()).sort());
+    for (const addr of addrs) {
+      const mine = ourItems.find((i) => i.address.toLowerCase() === addr.toLowerCase())!;
+      const ordinal = await client.readContract({ address: addr, abi: refAbi, functionName: "source" });
+      expect(mine.source, `source of ${addr}`).toBe(REF_RECIPE_SOURCE[ordinal]);
+      // Every constant our read reports must exist as a live getter answering the same raw
+      // value (the reader's RECIPE_CATALOG is a teaching superset asserted offline; VALUES
+      // must come from the chain).
+      for (const [name, v] of Object.entries(mine.constants)) {
+        const raw = await client.readContract({ address: addr, abi: parseAbi([`function ${name}() view returns (uint256)`] as const), functionName: name });
+        expect(String(raw), `constant ${name} on ${addr}`).toBe(v);
+      }
+    }
+  }, 90_000);
+
+  it("registry-denominations matches raw getDenominations; labels re-hash to their labelHash", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const ourItems = (ours.data as { items: Array<{ labelHash: string; unit: string; label: string | null }> }).items;
+    const { registry, client } = await ref42161();
+    const [page] = await client.readContract({ address: registry, abi: refAbi, functionName: "getDenominations", args: [0n, 200n] });
+    expect(ourItems.length).toBe(page.length);
+    const mineByHash = Object.fromEntries(ourItems.map((i) => [i.labelHash.toLowerCase(), i]));
+    for (const row of page) {
+      const mine = mineByHash[row.labelHash.toLowerCase()];
+      expect(mine, `denomination ${row.labelHash} missing from our read`).toBeDefined();
+      expect(mine!.unit.toLowerCase()).toBe(row.unit.toLowerCase());
+      // The label is display text the reader resolves; the HASH is the identity — a resolved
+      // label must re-hash to it (labels are exact bytes, case-sensitive).
+      if (mine!.label !== null) expect(keccak256(stringToBytes(mine!.label)).toLowerCase()).toBe(row.labelHash.toLowerCase());
+    }
+  }, 60_000);
+
+  it("registry-feeds matches raw getConversionFeeds; live decimals match the aggregator's own", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-feeds", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    expect(ours.state).toBe("ok");
+    const ourItems = (ours.data as { items: Array<{ base: string; quote: string; aggregator: string; feedDecimals: number; live: { decimals: number } | null }> }).items;
+    const { registry, client } = await ref42161();
+    const [page] = await client.readContract({ address: registry, abi: refAbi, functionName: "getConversionFeeds", args: [0n, 200n] });
+    expect(ourItems.length).toBe(page.length);
+    for (const row of page) {
+      const mine = ourItems.find((i) => i.base.toLowerCase() === row.base.toLowerCase() && i.quote.toLowerCase() === row.quote.toLowerCase());
+      expect(mine, `feed ${row.base}→${row.quote} missing from our read`).toBeDefined();
+      expect(mine!.aggregator.toLowerCase()).toBe(row.aggregatorAddress.toLowerCase());
+      expect(mine!.feedDecimals).toBe(row.feedDecimals);
+      // The live answer is block-conditioned; the decimals (drift-detector input) must agree
+      // with what the aggregator itself reports.
+      if (mine!.live) {
+        const dec = await client.readContract({ address: row.aggregatorAddress, abi: refAbi, functionName: "decimals" });
+        expect(mine!.live.decimals).toBe(dec);
       }
     }
   }, 60_000);
 
-  it("registry-denominations labels/units match GET /v1/42161/denominations", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", format: "concise" }, { nowSeconds: 1_790_000_000n });
-    expect(ours.state).toBe("ok");
-    const ourItems = (ours.data as { items: Array<{ labelHash: string; unit: string; label: string | null }> }).items;
-    const api = await apiGet<{ items: Array<{ label_hash: string; unit: string; label: string }> }>("/v1/42161/denominations");
-    if (!api) return;
-    const mineByHash = Object.fromEntries(ourItems.map((i) => [i.labelHash.toLowerCase(), i]));
-    for (const apiRow of api.items) {
-      const mine = mineByHash[apiRow.label_hash.toLowerCase()];
-      expect(mine, `denomination ${apiRow.label} missing from our read`).toBeDefined();
-      expect(mine!.unit.toLowerCase()).toBe(apiRow.unit.toLowerCase());
-      expect(mine!.label).toBe(apiRow.label);
-    }
-  }, 60_000);
-
-  it("registry-feeds edges + live answers match GET /v1/42161/feeds (answers same block-ish)", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-feeds", format: "concise" }, { nowSeconds: 1_790_000_000n });
-    expect(ours.state).toBe("ok");
-    const ourItems = (ours.data as { items: Array<{ base: string; quote: string; aggregator: string; feedDecimals: number; live: { decimals: number } | null }> }).items;
-    const api = await apiGet<{ items: Array<{ base: string; quote: string; aggregator_address?: string; aggregator?: string; feed_decimals: number; live: { answer: { decimals: number } } | null }> }>("/v1/42161/feeds");
-    if (!api) return;
-    expect(ourItems.length).toBe(api.items.length);
-    for (const apiRow of api.items) {
-      const mine = ourItems.find((i) => i.base.toLowerCase() === apiRow.base.toLowerCase() && i.quote.toLowerCase() === apiRow.quote.toLowerCase());
-      expect(mine, `feed ${apiRow.base}→${apiRow.quote} missing from our read`).toBeDefined();
-      expect(mine!.aggregator.toLowerCase()).toBe(String(apiRow.aggregator_address ?? apiRow.aggregator).toLowerCase());
-      expect(mine!.feedDecimals).toBe(apiRow.feed_decimals);
-      // Live answers are block-conditioned; only the decimals (drift detector input) must agree.
-      if (mine!.live && apiRow.live) expect(mine!.live.decimals).toBe(apiRow.live.answer.decimals);
-    }
-  }, 60_000);
-
-  it("fixed-rate oracle prediction matches GET /v1/42161/oracles/fixed/{rate}", async () => {
+  it("fixed-rate oracle prediction matches the registry's own predictFixedRateOracle view", async () => {
     const RATE = (10n ** 18n).toString();
     const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { rate: RATE }, format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
-    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/fixed/${RATE}`);
-    if (!api) return;
-    expect(od.address.toLowerCase()).toBe(api.oracle.toLowerCase());
-    expect(od.deployed).toBe(api.status === "live");
+    const { registry, client } = await ref42161();
+    // Genuinely independent derivations: the reader simulates the deploy; the reference asks
+    // the on-chain prediction view and checks code existence directly.
+    const predicted = await client.readContract({ address: registry, abi: refAbi, functionName: "predictFixedRateOracle", args: [10n ** 18n] });
+    expect(od.address.toLowerCase()).toBe(predicted.toLowerCase());
+    const code = await client.getCode({ address: predicted });
+    expect(od.deployed).toBe(code !== undefined && code !== "0x");
   }, 60_000);
 
-  it("pair oracle prediction (price mode) matches GET /v1/42161/oracles/price/{ca}/{ref}", async () => {
+  it("pair oracle prediction (price mode) matches raw lookupWrapper / a raw deploy simulation", async () => {
     const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
-    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/price/${CA}/${REF}`);
-    if (!api) return;
-    expect(od.address.toLowerCase()).toBe(api.oracle.toLowerCase());
-    expect(od.deployed).toBe(api.status === "live");
+    const { registry, client } = await ref42161();
+    const wrapper = await client.readContract({ address: registry, abi: refAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    if (wrapper !== zeroAddress) {
+      expect(od.deployed).toBe(true);
+      expect(od.address.toLowerCase()).toBe(wrapper.toLowerCase());
+    } else {
+      expect(od.deployed).toBe(false);
+      const sim = await client.simulateContract({ address: registry, abi: refAbi, functionName: "deploy", args: [CA, REF, PRICE_MODE] });
+      expect(od.address.toLowerCase()).toBe(sim.result.toLowerCase());
+    }
   }, 60_000);
 
   /** 0.3.3 (2026-08-10): the recipes are deployed on 42161 but NOT YET approved there
@@ -194,7 +222,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     return (r.data as { items: Array<{ address: string }> }).items.some((i) => i.address.toLowerCase() === LIQ.toLowerCase());
   };
 
-  it("recipe-rate-constraint matches POST /v1/42161/resolve wei-for-wei (liquidity + anchor)", async () => {
+  it("recipe-rate-constraint matches a raw recipe.resolve staticcall wei-for-wei (liquidity + anchor)", async () => {
     const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_compute",
@@ -211,12 +239,16 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     }
     expect(ours.state).toBe("ok");
     const oc = (ours.data as { constraint: Record<string, string> }).constraint;
-    const api = await apiPost<{ constraint: Record<string, { raw: string }> }>("/v1/42161/resolve", { recipe: LIQ, collateral_asset: CA, reference_asset: REF, args: ANCHOR_ARGS });
-    if (!api) return;
-    expect(oc["rateMin"]).toBe(api.constraint["rate_min"]!.raw);
-    expect(oc["rateMax"]).toBe(api.constraint["rate_max"]!.raw);
-    expect(oc["rateChangePerDayMax"]).toBe(api.constraint["rate_change_per_day_max"]!.raw);
-    expect(oc["rateChangeCapacityMax"]).toBe(api.constraint["rate_change_capacity_max"]!.raw);
+    const { registry, client } = await ref42161();
+    // Mirror the documented oracle resolution independently: the pair's live wrapper if
+    // deployed, address(0) otherwise (which is what lets the liquidity recipe take the
+    // anchor fallback from args).
+    const wrapper = await client.readContract({ address: registry, abi: refAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    const raw = await client.readContract({ address: LIQ, abi: refAbi, functionName: "resolve", args: [CA, REF, wrapper, ANCHOR_ARGS] });
+    expect(oc["rateMin"]).toBe(raw.rateMin.toString());
+    expect(oc["rateMax"]).toBe(raw.rateMax.toString());
+    expect(oc["rateChangePerDayMax"]).toBe(raw.rateChangePerDayMax.toString());
+    expect(oc["rateChangeCapacityMax"]).toBe(raw.rateChangeCapacityMax.toString());
   }, 60_000);
 
   // weETH/wstETH: a second registered pair, kept so the derive leg is not single-pair. (Under
@@ -226,7 +258,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
   const CLEAN_CA = "0x35751007a407ca6FEFfE80b3cB397736D2cf4dbe"; // weETH
   const CLEAN_REF = "0x5979D7b546E38E414F7E9822514be443A4800529"; // wstETH
 
-  it("derive-market matches POST /v1/42161/market/predict (oracle address; identity when both derive one)", async () => {
+  it("derive-cork-pool: oracle matches the raw prediction; poolId re-derives from an independent encode", async () => {
     const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_query",
@@ -240,23 +272,52 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
       return;
     }
     expect(ours.state).toBe("ok");
-    const od = ours.data as { oracle: { address: string; deployed: boolean; rate?: string }; pool: { poolId: string; exists: boolean } | null; shares: { corkSwapToken: string; corkPrincipalToken: string } | null };
-    const api = await apiPost<{ oracle: { address: string; deployed: boolean; rate: { raw: string } | null }; market: { pool_id: string; exists: boolean } | null; shares: { shares_token: string; principal_token: string } | null }>(
-      "/v1/42161/market/predict",
-      { recipe: LIQ, collateral_asset: CLEAN_CA, reference_asset: CLEAN_REF, expiry: "1900000000", args: ANCHOR_ARGS },
-    );
-    if (!api) return;
-    expect(od.oracle.address.toLowerCase()).toBe(api.oracle.address.toLowerCase());
-    expect(od.oracle.deployed).toBe(api.oracle.deployed);
-    // Identity is rate-conditioned pre-creation; only compare when both derived one on the same rate.
-    if (od.pool && api.market && od.oracle.rate === api.oracle.rate?.raw) {
-      expect(od.pool.poolId).toBe(api.market.pool_id);
-      expect(od.pool.exists).toBe(api.market.exists);
-      if (od.shares && api.shares) {
-        expect(od.shares.corkSwapToken.toLowerCase()).toBe(api.shares.shares_token.toLowerCase());
-        expect(od.shares.corkPrincipalToken.toLowerCase()).toBe(api.shares.principal_token.toLowerCase());
-      }
+    const od = ours.data as { oracle: { address: string; deployed: boolean }; pool: { poolId: string; exists: boolean; constraint: Record<string, string> } | null };
+    const { registry, client } = await ref42161();
+    // Oracle leg: same independent reference as the pair-oracle test, on the clean pair.
+    const wrapper = await client.readContract({ address: registry, abi: refAbi, functionName: "lookupWrapper", args: [CLEAN_CA, CLEAN_REF, PRICE_MODE] });
+    if (wrapper !== zeroAddress) {
+      expect(od.oracle.deployed).toBe(true);
+      expect(od.oracle.address.toLowerCase()).toBe(wrapper.toLowerCase());
+    } else {
+      expect(od.oracle.deployed).toBe(false);
+      const sim = await client.simulateContract({ address: registry, abi: refAbi, functionName: "deploy", args: [CLEAN_CA, CLEAN_REF, PRICE_MODE] });
+      expect(od.oracle.address.toLowerCase()).toBe(sim.result.toLowerCase());
     }
+    // Identity leg: MarketId = keccak256(abi.encode(Market)) — re-encoded HERE with the struct
+    // layout declared independently (CorkPoolManager.sol field order), so a field-order or
+    // encoding bug in marketid.ts fails live too, against the reported constraint + oracle.
+    // (The constraint VALUES are cross-checked wei-for-wei in the resolve leg; the share
+    // prediction is proven end-to-end by the fork harness, which needs state overrides no
+    // public RPC serves reliably.)
+    expect(od.pool).not.toBeNull();
+    const c = od.pool!.constraint;
+    const encoded = encodeAbiParameters(
+      [{
+        type: "tuple",
+        components: [
+          { name: "collateralAsset", type: "address" },
+          { name: "referenceAsset", type: "address" },
+          { name: "expiryTimestamp", type: "uint256" },
+          { name: "rateMin", type: "uint256" },
+          { name: "rateMax", type: "uint256" },
+          { name: "rateChangePerDayMax", type: "uint256" },
+          { name: "rateChangeCapacityMax", type: "uint256" },
+          { name: "rateOracle", type: "address" },
+        ],
+      }],
+      [{
+        collateralAsset: CLEAN_CA,
+        referenceAsset: CLEAN_REF,
+        expiryTimestamp: 1_900_000_000n,
+        rateMin: BigInt(c["rateMin"]!),
+        rateMax: BigInt(c["rateMax"]!),
+        rateChangePerDayMax: BigInt(c["rateChangePerDayMax"]!),
+        rateChangeCapacityMax: BigInt(c["rateChangeCapacityMax"]!),
+        rateOracle: od.oracle.address as `0x${string}`,
+      }],
+    );
+    expect(od.pool!.poolId.toLowerCase()).toBe(keccak256(encoded).toLowerCase());
   }, 90_000);
 
   it("collision pair (sUSDe/sUSDS): DEPLOYABLE on the 0.3.3 registry — the wrapper-salt fix, pinned live", async () => {
@@ -277,11 +338,17 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
     const od = (ours.data as { oracle: { address: string | null; deployed: boolean; deployable: boolean } }).oracle;
     expect(od.deployable).toBe(true);
     expect(od.address).not.toBeNull();
-    // Parity with the API's predict — under 0.3.3 both sides agree again (the old divergence
-    // existed only because predict did not simulate deployability against the spent salt).
-    const api = await apiGet<{ oracle: string; status: string }>(`/v1/42161/oracles/price/${CA}/${REF}`);
-    if (!api) return;
-    expect(od.address!.toLowerCase()).toBe(api.oracle.toLowerCase());
-    expect(od.deployed).toBe(api.status === "live");
+    // Independent confirmation of the same verdict: a raw deploy simulation must succeed and
+    // predict the same address the reader reports (under 0.3.2 this very call reverted with
+    // no data — the collision), and the deployed flag must agree with a raw lookupWrapper.
+    const { registry, client } = await ref42161();
+    const wrapper = await client.readContract({ address: registry, abi: refAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    expect(od.deployed).toBe(wrapper !== zeroAddress);
+    if (wrapper === zeroAddress) {
+      const sim = await client.simulateContract({ address: registry, abi: refAbi, functionName: "deploy", args: [CA, REF, PRICE_MODE] });
+      expect(od.address!.toLowerCase()).toBe(sim.result.toLowerCase());
+    } else {
+      expect(od.address!.toLowerCase()).toBe(wrapper.toLowerCase());
+    }
   }, 90_000);
 });

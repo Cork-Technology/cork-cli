@@ -6,6 +6,22 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
+## [Unreleased]
+
+### Changed
+
+- **The registry read-API dependency is removed** (`api-phoenix.cork.tech/registry`; the
+  `CORK_MARKET_API` override with it). Its only consumer was the live parity suite, which used
+  it as the external reference for our chain-native registry reads. The suite now carries an
+  independent raw-read reference instead: its own minimal ABI declarations, one-shot enumeration
+  reads cross-checking our pagination, the registry's `predictFixedRateOracle` view plus a code
+  existence probe cross-checking our deploy simulation, a raw `recipe.resolve` staticcall
+  compared wei-for-wei, an independent Market-tuple re-encode of the poolId, and label→labelHash
+  re-hashing. All fifteen live tests pass against Arbitrum with zero requests to the service.
+  One check retired with the dependency, honestly: the API's free-form `contracts_version` label
+  has no on-chain getter, so config still declares the label but nothing external arbitrates a
+  relabel anymore.
+
 ## [0.2.0-rc.2] — 2026-08-12
 
 This release aligns the tools with cork-api 0.3.3: module-scoped routing, the registry module,

@@ -320,16 +320,18 @@ constants and the two adapter fee fields (1e18 = 1%). The fill path is LIVE on t
 flow is preserved behind the deprecation gate: `marketRegistryLegacy` config + `legacy:true` +
 `CORK_ENABLE_DEPRECATED=1` (CLI `--enable-deprecated`) — warning-code contract in
 `packages/core/src/deprecation.ts`. Naming vs
-release tag: "2.1.0" is the GENERATION name; the config's `contractsVersion` follows the free-form
-label the registry read API serves ("0.3.0" ~2026-08-06, "0.3.2" ~2026-08-10 — the registry
-ADDRESS is the identity check; the live parity test asserts config==API, so the next relabel is
-one config-field edit). ~2026-08-10 the read API also RETREATED its recipe notes: our
-RECIPE_CATALOG teaching layer is a deliberate superset; parity asserts only what the API still
-serves. The read API sandbox (`https://zian-b.feat.cork.tech`, override `CORK_MARKET_API`) is used
-ONLY in env-gated live parity tests + the `live-smoke` CI job (self-skips when unreachable) —
-never a runtime dependency; our chain-native reads were verified wei-for-wei against it, one
-deliberate difference: share prediction also works pre-oracle-deploy (the simulation prepends the
-permissionless deploy; the HTTP endpoint nulls shares). The whole 2.1.0 fill path is proven
+release tag: "2.1.0" is the GENERATION name; the config's `contractsVersion` is a free-form label
+originally sourced from the (retired) registry read API ("0.3.0" ~2026-08-06, "0.3.2"/"0.3.3"
+~2026-08-10) — the registry ADDRESS is the identity check; the label is config-declared with no
+external arbiter. The registry read API dependency was REMOVED 2026-08-12 (it was never a runtime
+dependency): the live parity suite (`rpc-live.test.ts`, CORK_RPC_LIVE=1, runs in `live-smoke`)
+now compares our chain-native reads against an INDEPENDENT in-test raw-read reference — its own
+minimal ABI declarations, one-shot enumeration reads vs our pagination, `predictFixedRateOracle`
++ code-existence vs our deploy simulation, raw `recipe.resolve` staticcall wei-for-wei, an
+independent Market-tuple re-encode of the poolId, and label→labelHash re-hashing. `CORK_MARKET_API`
+is gone. Our chain-native reads were also verified wei-for-wei against the external API before
+its retirement, one deliberate difference: share prediction also works pre-oracle-deploy (the
+simulation prepends the permissionless deploy; the HTTP endpoint nulled shares). The whole 2.1.0 fill path is proven
 END-TO-END on an Arbitrum fork (experiments/fork-harness/test/JitOrderRoundTrip210.t.sol):
 tool-prepared order + embedded cST permit filled through the real 1inch LOP — oracle deployed
 in-fill, pool created at the derived id, cST exactly equal to the prediction — plus a negative
