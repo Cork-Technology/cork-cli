@@ -129,6 +129,41 @@ jobs:
             packaging/melange.yaml
           yq '.package.version, .vars.commit, .pipeline[0].with.tag' packaging/melange.yaml
 
+      - name: Pub-key tripwire — the environment key must match the committed public half
+        env:
+          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+        run: |
+          # packaging/melange.rsa.pub is the trust anchor: Pages serves it to apk consumers and
+          # the apko keyring pins it. This step derives the public half from the environment key
+          # and fails loudly when the two disagree — a swapped or rotated secret must never
+          # self-certify a new trust root, and verifying signatures against a key derived from
+          # the signer would prove nothing. melange keygen's .pub IS the SPKI PEM that
+          # `openssl rsa -pubout` emits (verified byte-identical against melange 0.56.4).
+          if [ -z "$MELANGE_SIGNING_KEY" ]; then
+            echo "::error::MELANGE_SIGNING_KEY is not set in the 'release' environment (one-time setup: header of this file)"
+            exit 1
+          fi
+          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > tripwire.rsa
+          if ! openssl rsa -in tripwire.rsa -pubout -out derived.rsa.pub 2>/dev/null; then
+            rm -f tripwire.rsa
+            echo "::error::the 'release' environment key does not parse as an RSA private key — wrong secret material"
+            exit 1
+          fi
+          rm -f tripwire.rsa
+          if [ ! -f packaging/melange.rsa.pub ]; then
+            echo "::error::packaging/melange.rsa.pub is not committed. The public half derived from the environment key follows (public material) — commit it verbatim as packaging/melange.rsa.pub."
+            cat derived.rsa.pub
+            exit 1
+          fi
+          # Canonicalize the committed side too, so a whitespace or encoding edit cannot mask
+          # a mismatch (or fake one).
+          openssl pkey -pubin -in packaging/melange.rsa.pub -out committed.rsa.pub
+          if ! cmp -s committed.rsa.pub derived.rsa.pub; then
+            echo "::error::the 'release' environment signing key does NOT match the committed packaging/melange.rsa.pub. Do not publish — consumers verify apks against the committed half. Fix the secret, or rotate BOTH halves deliberately (rotation re-keys every consumer)."
+            exit 1
+          fi
+          echo "signing key matches packaging/melange.rsa.pub"
+
       - name: Build the apk (+ SLSA provenance, signed)
         env:
           MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}

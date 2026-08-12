@@ -94,6 +94,10 @@ tag. Before that can happen the owner must:
    environment (v*-tag deployment rule + required reviewers) + commit `packaging/melange.rsa.pub`.
    DONE 2026-08-12 for the secret; the committed public half is still missing — without it,
    `publish-pages` cannot serve the key and the candidate `apko-publish` keyring swap fails.
+   The pub-key tripwire in `melange-build` covers both states: while the file is missing, the
+   first approved run prints the public half derived from the environment key (commit it
+   verbatim); once committed, every release fails loudly if the environment key stops matching
+   it (a trust root must never self-certify).
 4. Sign off the **LICENSE** (Apache-2.0).
 5. Create a **Phala Cloud account** and set `PHALA_CLOUD_API_KEY` in the same `release`
    environment; set the CVM's encrypted secrets in the dashboard.
