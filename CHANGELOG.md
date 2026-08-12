@@ -37,19 +37,6 @@ build stops instead of silently absorbing changed behavior. Details under Change
   until the partner docs move with it (kill-checked against the rc.3 text: 3/3 drift assertions
   fail on it).
 
-### Fixed
-
-- **`docs/zyfai-quickstart.md` refreshed from the retired 0.3.2 generation to 0.3.3**
-  (issue #1): status block (roles granted 2026-08-10 on both chains; Base post-first-market with
-  live JIT fills and ~50 short-dated pilot pools), §5G's redeploy cutoff + a new
-  "which generation am I on" rule pair (abandoned generations answer with plausible values; the
-  `MARKET_REGISTRY()` cross-check and where `ch` automates it), §5A's fork evidence re-stated
-  against the current stack (suites re-run green 2026-08-12), and every worked example
-  re-captured live against 0.3.3 on Base — registry/adapter/recipe addresses, the pair's new
-  nav wrapper, re-derived poolId/cST/cPT, plus a real rate-drift episode teaching why the
-  derived constraint must be carried verbatim into the order. The step-2 decode now explains
-  `"permits": N` in place (issue #2's spot-edit) and cross-links the anatomy doc.
-
 - **`x-units` on every scaled input field** (covered-surface addition): machine-readable unit
   notation (`D18{1}`, `D18{%}`, `{qTok}`, …) valued from the same vocabulary as the `units`
   topic table; a three-axis parity test binds the wire extension, the table row, and the
@@ -141,6 +128,16 @@ build stops instead of silently absorbing changed behavior. Details under Change
 
 ### Fixed
 
+- **`docs/zyfai-quickstart.md` refreshed from the retired 0.3.2 generation to 0.3.3**
+  (issue #1): status block (roles granted 2026-08-10 on both chains; Base post-first-market with
+  live JIT fills and ~50 short-dated pilot pools), §5G's redeploy cutoff + a new
+  "which generation am I on" rule pair (abandoned generations answer with plausible values; the
+  `MARKET_REGISTRY()` cross-check and where `ch` automates it), §5A's fork evidence re-stated
+  against the current stack (suites re-run green 2026-08-12), and every worked example
+  re-captured live against 0.3.3 on Base — registry/adapter/recipe addresses, the pair's new
+  nav wrapper, re-derived poolId/cST/cPT, plus a real rate-drift episode teaching why the
+  derived constraint must be carried verbatim into the order. The step-2 decode now explains
+  `"permits": N` in place (issue #2's spot-edit) and cross-links the anatomy doc.
 - Advertised `cork_query` description named the retired `flows` resource (now
   `rollover-orders`, and `rfqs` is listed) and carried an "an trading-pair" typo; `ch mcp`
   entrypoint help and the commander stub documented different option sets and both still said
