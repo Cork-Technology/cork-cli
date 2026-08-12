@@ -452,6 +452,16 @@ const CATALOG: Mutant[] = [
     tests: [T.fetchTimeout],
   },
   {
+    // A caller-provided signal must COMPOSE with the deadline, not replace it (or be replaced
+    // by it): dropping the composition regresses to the `{ ...init, signal }` overwrite the
+    // helper exists to prevent.
+    id: "fetch-timeout-caller-signal-dropped",
+    file: "packages/core/src/fetch-timeout.ts",
+    find: "const signal = init.signal ? AbortSignal.any([init.signal, ctrl.signal]) : ctrl.signal;",
+    replace: "const signal = ctrl.signal;",
+    tests: [T.fetchTimeout],
+  },
+  {
     // probePairWrapper serves registry-oracle, recipe resolution AND prepare_market: an inverted
     // recorded-wrapper comparator reports every deployed oracle as undeployed (and simulates a
     // deploy for pairs that already have one).
@@ -1663,6 +1673,27 @@ if (!(await vitest(allTests))) {
   process.exit(1);
 }
 
+// Kill-safety: between the mutant write and the finally-restore, REAL SOURCE sits mutated on
+// disk — an interrupt in that window used to strand it there (observed 2026-08-12: a killed run
+// left failover-disclosure-dropped applied, failing an unrelated suite an hour later, one
+// deleted line with no visible cause). Track the in-flight original and restore it on any exit
+// path. SIGKILL is uncatchable — `git checkout <file>` stays the manual recovery for that case.
+let inFlight: { file: string; original: string } | null = null;
+const restoreInFlight = (): void => {
+  if (inFlight) {
+    try {
+      writeFileSync(inFlight.file, inFlight.original);
+      console.error(`\nrestored ${inFlight.file} (interrupted mid-mutant)`);
+    } catch {
+      console.error(`\nFAILED to restore ${inFlight.file} — run \`git checkout ${inFlight.file}\``);
+    }
+    inFlight = null;
+  }
+};
+process.on("exit", restoreInFlight);
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
+
 let survivors = 0;
 let rotted = 0;
 for (const m of catalog) {
@@ -1683,6 +1714,7 @@ for (const m of catalog) {
   }
   // split/join, not String.replace with a string arg — replace interprets `$$`/`$&`/$` in the
   // replacement, which would silently corrupt a future mutant quoting such source.
+  inFlight = { file: m.file, original };
   writeFileSync(m.file, original.split(m.find).join(m.replace));
   try {
     const passed = await vitest(m.tests);
@@ -1694,6 +1726,7 @@ for (const m of catalog) {
     }
   } finally {
     writeFileSync(m.file, original);
+    inFlight = null;
   }
 }
 

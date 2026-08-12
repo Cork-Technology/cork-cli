@@ -13,8 +13,12 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  // A caller-provided signal COMPOSES with the deadline: a plain `{ ...init, signal }` spread
+  // would have replaced it, so whichever aborts first wins. No current call site passes one —
+  // this guards the future caller.
+  const signal = init.signal ? AbortSignal.any([init.signal, ctrl.signal]) : ctrl.signal;
   try {
-    return await fetchImpl(url, { ...init, signal: ctrl.signal });
+    return await fetchImpl(url, { ...init, signal });
   } finally {
     clearTimeout(t);
   }

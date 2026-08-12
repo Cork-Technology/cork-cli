@@ -745,6 +745,9 @@ export async function runCli(
         // CLI flag and MCP env configuration stay one mechanism — and is RESTORED afterwards:
         // runCli is documented capture-everything/never-exit, so a flagged call must not leave
         // the gate unlocked for later runCli calls in the same process (tests, embedding).
+        // Known limit: the gate is process-global, so CONCURRENT runCli calls with differing
+        // flags still race on it — sequential embedding (the tested contract) is safe; true
+        // isolation would mean threading the opt-in through HandlerContext into deprecation.ts.
         const prevDeprecated = process.env["CORK_ENABLE_DEPRECATED"];
         if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
         const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
