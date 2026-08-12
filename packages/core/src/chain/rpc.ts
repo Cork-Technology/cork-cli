@@ -16,6 +16,7 @@ import { readFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { atomicWriteFileSync } from "../atomic-file.ts";
+import { fetchWithTimeout } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry } from "../breaker.ts";
 
 export interface ResolvedRpc {
@@ -184,18 +185,14 @@ export function filterChainlistRpcs(rpc: Array<{ url: string; tracking?: string 
 }
 
 async function realFetchChainlist(chainId: number): Promise<string[]> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 8_000);
   try {
-    const res = await fetch("https://chainlist.org/rpcs.json", { signal: ctrl.signal });
+    const res = await fetchWithTimeout("https://chainlist.org/rpcs.json", {}, 8_000);
     if (!res.ok) return [];
     const arr = (await res.json()) as Array<{ chainId: number; rpc: Array<{ url: string; tracking?: string }> }>;
     const c = arr.find((x) => x.chainId === chainId);
     return c?.rpc ? filterChainlistRpcs(c.rpc) : [];
   } catch {
     return [];
-  } finally {
-    clearTimeout(t);
   }
 }
 

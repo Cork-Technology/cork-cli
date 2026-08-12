@@ -105,6 +105,65 @@ interface RecipeMeta {
   args: { type: string; display: string } | null;
 }
 
+/** Probe a FIXED-RATE oracle: the CREATE2-predicted address + whether code is live there. ONE
+ *  implementation for the three surfaces that used to re-implement it (registry-oracle's
+ *  filters.rate path, resolveRecipeOracleConstraint's fixed branch, prepare_market
+ *  deploy-fixed-oracle) — the comments used to pin only the shared OUTPUT shape; the logic
+ *  itself could drift. Throws on a failed predict read (each caller owns its failure dialect). */
+export async function probeFixedOracle(client: RegistryClient, registry: `0x${string}`, rate: bigint): Promise<{ address: `0x${string}`; deployed: boolean }> {
+  const predicted = (await client.readContract({ address: registry, abi: marketRegistryAbi, functionName: "predictFixedRateOracle", args: [rate] })) as `0x${string}`;
+  const code = await client.getCode({ address: predicted }).catch(() => undefined);
+  return { address: predicted, deployed: code !== undefined && code !== "0x" };
+}
+
+/** Probe a PAIR's mode-keyed wrapper: recorded → deployed; else the deploy is SIMULATED on-chain
+ *  (deliberate — the CREATE2 salt embeds the RESOLVED source addresses, so an off-chain
+ *  re-derivation would duplicate the registry's nav-fallback rules and could drift from what a
+ *  fill actually does); a reverting simulation is diagnosed to the exact failure. Same three
+ *  surfaces as probeFixedOracle. A lookupWrapper transport failure THROWS (an indeterminate
+ *  read, not a deployability verdict) — only the simulation's revert becomes `reason`. */
+export async function probePairWrapper(
+  client: RegistryClient,
+  registry: `0x${string}`,
+  collateralAsset: `0x${string}`,
+  referenceAsset: `0x${string}`,
+  modeName: OracleModeName,
+): Promise<{ address: `0x${string}`; deployed: boolean; reason?: undefined } | { address: null; deployed: false; reason: string }> {
+  const reg = { address: registry, abi: marketRegistryAbi } as const;
+  const wrapper = (await client.readContract({ ...reg, functionName: "lookupWrapper", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName]] })) as `0x${string}`;
+  if (wrapper !== ZERO_ADDR) return { address: wrapper, deployed: true };
+  try {
+    const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName]] });
+    return { address: sim.result as `0x${string}`, deployed: false };
+  } catch (err) {
+    return { address: null, deployed: false, reason: await diagnoseOracleDeployFailure(client, registry, collateralAsset, referenceAsset, modeName, err) };
+  }
+}
+
+/** DEPRECATED mode-sugar resolution — ONE resolver for the three surfaces that accept a legacy
+ *  mode name (the JIT ladder, registry-recipes' filters.mode, recipe-rate-constraint): the
+ *  configured hint, or a recipe_not_found gate; a hit pushes the deprecation_notice. The field
+ *  spellings differ per surface so the teaching points at the caller's own field. */
+export function resolveModeSugar(args: {
+  mr: { recipes?: Record<string, `0x${string}`> | undefined };
+  mode: string;
+  /** The caller's own mode-field spelling (e.g. "jitMarket.mode", "filters.mode", "mode"). */
+  modeField: string;
+  /** What to pass instead (e.g. "jitMarket.recipe", "filters.recipe", "the recipe address"). */
+  recipeField: string;
+  chainId: ChainId;
+  ctx: HandlerContext;
+  warnings: Array<{ code: string; message: string }>;
+}): { recipe: `0x${string}`; gate?: undefined } | { gate: Envelope } {
+  const { mr, mode } = args;
+  const hinted = mr.recipes?.[mode];
+  if (!hinted) {
+    return { gate: unavailable(args.chainId, "recipe_not_found", `recipe mode '${mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (pass ${args.recipeField}); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}. Discover recipes with cork_query resource:"registry-recipes"`, args.ctx) };
+  }
+  args.warnings.push({ code: "deprecation_notice", message: `${args.modeField} is deprecated sugar: '${mode}' resolved to recipe ${hinted} via this tool's config hints — pass ${args.recipeField} directly; mode will be removed in a later release` });
+  return { recipe: hinted };
+}
+
 async function readRecipeMeta(client: RegistryClient, recipe: `0x${string}`, configuredRegistry: `0x${string}`): Promise<RecipeMeta> {
   const r = { address: recipe, abi: recipeAbi } as const;
   const [source, description, boundRegistry] = await Promise.all([
@@ -179,12 +238,9 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       // over the config's named-recipe hints.
       let single: `0x${string}` | undefined = filters.recipe;
       if (!single && filters.mode !== undefined) {
-        const hinted = mr.recipes?.[filters.mode];
-        if (!hinted) {
-          return unavailable(chainId, "recipe_not_found", `recipe mode '${filters.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (filters.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx);
-        }
-        warnings.push({ code: "deprecation_notice", message: `filters.mode is deprecated sugar: '${filters.mode}' resolved to recipe ${hinted} via this tool's config hints. Recipes are contract addresses in 2.1.0 — pass filters.recipe; mode will be removed in a later release` });
-        single = hinted;
+        const sugar = resolveModeSugar({ mr, mode: filters.mode, modeField: "filters.mode", recipeField: "filters.recipe", chainId, ctx, warnings });
+        if (sugar.gate) return sugar.gate;
+        single = sugar.recipe;
       }
       if (single) {
         const isRecipe = await client.readContract({ ...reg, functionName: "isRecipe", args: [single] });
@@ -260,12 +316,10 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
         return unavailable(chainId, "missing_filter", "filters.rate keys a FIXED-RATE oracle (no pair) — pass either rate OR collateralAsset+referenceAsset, not both", ctx);
       }
       if (filters.rate === 0n) return unavailable(chainId, "invalid_state", "a zero fixed rate cannot have an oracle — the FixedRateOracle constructor reverts on 0", ctx);
-      const predicted = await client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [filters.rate] });
-      const code = await client.getCode({ address: predicted }).catch(() => undefined);
-      const deployed = code !== undefined && code !== "0x";
+      const fixed = await probeFixedOracle(client, mr.registry, filters.rate);
       return envelope({
         state: "ok",
-        data: { resource: input.resource, chainId, registry: mr.registry, ...version, rate: filters.rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", oracle: { address: predicted, deployed, deployable: true }, ...(deployed ? {} : { note: "not deployed yet; registry.deployFixedRateOracle(rate) is permissionless + idempotent (CREATE2-salted by the rate) — cork_prepare_market deploy-fixed-oracle builds that tx, and a JIT fill with rateOverride deploys it automatically" }) },
+        data: { resource: input.resource, chainId, registry: mr.registry, ...version, rate: filters.rate, scale: "rate is ABSOLUTE, 1e18 = 1.0", oracle: { address: fixed.address, deployed: fixed.deployed, deployable: true }, ...(fixed.deployed ? {} : { note: "not deployed yet; registry.deployFixedRateOracle(rate) is permissionless + idempotent (CREATE2-salted by the rate) — cork_prepare_market deploy-fixed-oracle builds that tx, and a JIT fill with rateOverride deploys it automatically" }) },
         chainId,
         source: "chain",
         warnings,
@@ -280,27 +334,21 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     if (filters.mode !== undefined && filters.mode !== "price" && filters.mode !== "nav") {
       return unavailable(chainId, "missing_filter", `registry-oracle filters.mode must be 'price' or 'nav' (got '${filters.mode}') — one pair can hold BOTH wrappers at different addresses, so the mode is part of the key. For a fixed-rate oracle pass filters.rate instead`, ctx);
     }
-    const wrapper = await client.readContract({ ...reg, functionName: "lookupWrapper", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
     // The applied default is disclosed in DATA (not a warning: no caller field was ignored —
     // reserved_field_ignored means something else) so the echoed mode is never mistaken for a
     // caller choice.
     const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
-    if (wrapper !== ZERO_ADDR) {
-      const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
+    const probe = await probePairWrapper(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName);
+    if (probe.address !== null && probe.deployed) {
+      const rate = (await client.readContract({ address: probe.address, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
       // rateScale rides INSIDE the shared oracle shape (audit R1.5): the fixed-rate family
       // already labels its rate at the top level; the pair family was the unlabeled half.
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: wrapper, deployed: true, deployable: true, ...(rate !== null ? { rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: true, deployable: true, ...(rate !== null ? { rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
-    try {
-      // Simulating the real deploy (not re-deriving CREATE2 off-chain) is deliberate: the salt
-      // includes the RESOLVED source addresses, so re-deriving would duplicate the registry's
-      // nav-fallback rules — the simulation cannot drift from what a fill will actually do.
-      const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [filters.collateralAsset, filters.referenceAsset, ORACLE_MODE[modeName]] });
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: sim.result, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
-    } catch (err) {
-      const reason = await diagnoseOracleDeployFailure(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName, err);
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason }, note: `this pair cannot get a ${modeName} oracle as-registered — a JIT fill for it would revert; the reason field names the exact failure` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+    if (probe.address !== null) {
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
+    return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: null, deployed: false, deployable: false, reason: probe.reason }, note: `this pair cannot get a ${modeName} oracle as-registered — a JIT fill for it would revert; the reason field names the exact failure` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
   } catch (err) {
     return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
   }
@@ -477,12 +525,9 @@ export async function resolveRecipeOracleConstraint(args: {
     if (args.mode === undefined) {
       return bad(unavailable(chainId, "missing_filter", "a recipe CONTRACT ADDRESS is required (recipes replaced mode strings in 2.1.0) — discover them with cork_query resource:\"registry-recipes\"", ctx));
     }
-    const hinted = mr.recipes?.[args.mode];
-    if (!hinted) {
-      return bad(unavailable(chainId, "recipe_not_found", `recipe mode '${args.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now; known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}. Discover recipes with cork_query resource:"registry-recipes"`, ctx));
-    }
-    warnings.push({ code: "deprecation_notice", message: `mode is deprecated sugar: '${args.mode}' resolved to recipe ${hinted} via this tool's config hints — pass the recipe address directly; mode will be removed in a later release` });
-    recipe = hinted;
+    const sugar = resolveModeSugar({ mr, mode: args.mode, modeField: "mode", recipeField: "the recipe address", chainId, ctx, warnings });
+    if (sugar.gate) return bad(sugar.gate);
+    recipe = sugar.recipe;
   }
   const isRecipe = await client.readContract({ ...reg, functionName: "isRecipe", args: [recipe] });
   if (!isRecipe) {
@@ -503,24 +548,19 @@ export async function resolveRecipeOracleConstraint(args: {
     if (args.fixedRate === undefined) {
       oracle = { address: null, deployed: false, deployable: true, mode: null, rate: null, reason: "a FIXED recipe's oracle is keyed on the RATE — pass the rate (rateOverride) to predict it" };
     } else {
-      const predicted = (await client.readContract({ ...reg, functionName: "predictFixedRateOracle", args: [args.fixedRate] })) as `0x${string}`;
-      const code = await client.getCode({ address: predicted }).catch(() => undefined);
-      const deployed = code !== undefined && code !== "0x";
-      oracle = { address: predicted, deployed, deployable: true, mode: null, rate: deployed ? args.fixedRate : null };
+      const fixed = await probeFixedOracle(client, mr.registry, args.fixedRate);
+      oracle = { address: fixed.address, deployed: fixed.deployed, deployable: true, mode: null, rate: fixed.deployed ? args.fixedRate : null };
     }
   } else {
     const modeName: OracleModeName = source;
-    const wrapper = (await client.readContract({ ...reg, functionName: "lookupWrapper", args: [args.collateralAsset, args.referenceAsset, ORACLE_MODE[modeName]] })) as `0x${string}`;
-    if (wrapper !== ZERO_ADDR) {
-      const rate = (await client.readContract({ address: wrapper, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
-      oracle = { address: wrapper, deployed: true, deployable: true, mode: modeName, rate };
+    const probe = await probePairWrapper(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName);
+    if (probe.address !== null && probe.deployed) {
+      const rate = (await client.readContract({ address: probe.address, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
+      oracle = { address: probe.address, deployed: true, deployable: true, mode: modeName, rate };
+    } else if (probe.address !== null) {
+      oracle = { address: probe.address, deployed: false, deployable: true, mode: modeName, rate: null };
     } else {
-      try {
-        const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [args.collateralAsset, args.referenceAsset, ORACLE_MODE[modeName]] });
-        oracle = { address: sim.result as `0x${string}`, deployed: false, deployable: true, mode: modeName, rate: null };
-      } catch (err) {
-        oracle = { address: null, deployed: false, deployable: false, mode: modeName, rate: null, reason: await diagnoseOracleDeployFailure(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName, err) };
-      }
+      oracle = { address: null, deployed: false, deployable: false, mode: modeName, rate: null, reason: probe.reason };
     }
   }
   const base: RecipeResolution = { recipe, source, oracle, warnings };

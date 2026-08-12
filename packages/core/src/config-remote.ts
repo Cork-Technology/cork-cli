@@ -16,6 +16,7 @@ import { z } from "zod";
 import { Address } from "@cork/schemas";
 import { readFileSync, mkdirSync } from "node:fs";
 import { atomicWriteFileSync } from "./atomic-file.ts";
+import { fetchWithTimeout } from "./fetch-timeout.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
@@ -146,16 +147,10 @@ function cachePath(): string {
 }
 
 async function realFetchRemote(): Promise<RemoteFetchResult> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 8_000);
-  try {
-    const res = await fetch(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL, { signal: ctrl.signal });
-    if (res.status === 404 || res.status === 410) return { kind: "absent" };
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { kind: "ok", data: await res.json() };
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchWithTimeout(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL, {}, 8_000);
+  if (res.status === 404 || res.status === 410) return { kind: "absent" };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return { kind: "ok", data: await res.json() };
 }
 
 export function realConfigDeps(): ConfigDeps {

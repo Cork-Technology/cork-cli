@@ -3,7 +3,7 @@
 import { isAddressEqual } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, encodeJitExtraData, type PermitParams, predictShares } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
@@ -11,7 +11,7 @@ import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type Dec
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
 /** Maker-side 2.1.0 JIT report echoed in `data.jit` — the base always rides; the verified half is
@@ -264,7 +264,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the extension is built but the cST side-match is unverified` });
           }
         }
-        const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+        const permits = parsePermitWires(jm.permits);
         extension = buildJitExtension(
           ladder.adapter,
           encodeJitExtraData(
@@ -557,7 +557,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         if (action.interaction !== undefined) {
           throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "interaction"], message: "interaction and jitMarket are mutually exclusive — jitMarket BUILDS the interaction" }]);
         }
-        const built = await buildTakerJitInteraction({ ctx, chainId, lop, jm: action.jitMarket, taker: input.account, order: signed.order, orderExtension: signed.extension });
+        const built = await buildTakerJitInteraction({ ctx, chainId, lop, jm: action.jitMarket, order: signed.order, orderExtension: signed.extension });
         if (built.gate) return built.gate;
         interaction = built.interaction;
         jitData = built.jit;

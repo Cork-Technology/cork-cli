@@ -20,6 +20,7 @@ import { Command } from "commander";
 import { REGISTRY, RENAMED_VALUES, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
 import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, DIGIT_FILTER_KEYS, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { envFlag } from "./env.ts";
+import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
 import { runSelfUpdate } from "./self-update.ts";
@@ -874,7 +875,7 @@ export async function runCli(
 
   program
     .command("mcp")
-    .description("start the Cork MCP server (all 9 tools): stdio by default (`claude mcp add cork-defi -- ch mcp`), or Streamable HTTP with --http [--port 8080] [--host <addr>] (endpoint /mcp, health /healthz, readiness /readyz, docs /docs/<topic>; bearer auth via CORK_MCP_TOKEN)")
+    .description(`start the Cork MCP server (all 9 tools): stdio by default (\`claude mcp add cork-defi -- ch mcp\`), or Streamable HTTP with --http [--port 8080] [--host <addr>] (${MCP_HTTP_ROUTES}; bearer auth via CORK_MCP_TOKEN)`)
     .option("--http", "serve Streamable HTTP instead of stdio")
     .option("--port <port>", "HTTP port (default 8080)")
     .option("--host <addr>", "bind address (default 127.0.0.1, loopback only)")

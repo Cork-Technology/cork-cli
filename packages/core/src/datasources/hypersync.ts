@@ -175,22 +175,15 @@ const whitelistAbi = parseAbi([
   "event MarketWhitelistEnabled(bytes32 indexed poolId)",
 ]);
 
-export const MARKET_CREATED_TOPIC = toEventSelector("MarketCreated(bytes32,address,address,uint256,address,address,address)");
-export const CLONE_DEPLOYED_TOPIC = toEventSelector("RolloverContractDeployed(address,address)");
-export const ROLLOVER_FILL_TOPICS = [
-  toEventSelector("RolloverLegFilled(bytes32,address,bytes32,uint256,uint256)"),
-  toEventSelector("PremiumLegFilled(bytes32,address,address,bytes32,uint256)"),
-  toEventSelector("DefaulterResidualReclaimed(bytes32,address,address,uint256)"),
-];
-export const LOP_FILLED_TOPIC = toEventSelector("OrderFilled(bytes32,uint256)");
-export const WHITELIST_TOPICS = [
-  toEventSelector("GlobalWhitelistAdded(address)"),
-  toEventSelector("GlobalWhitelistRemoved(address)"),
-  toEventSelector("MarketWhitelistAdded(bytes32,address)"),
-  toEventSelector("MarketWhitelistRemoved(bytes32,address)"),
-  toEventSelector("MarketWhitelistDisabled(bytes32)"),
-  toEventSelector("MarketWhitelistEnabled(bytes32)"),
-];
+// Topic selectors DERIVED from the parsed declarations above — never a second hand-written
+// compact string. The filter topic and the decode ABI must agree byte-for-byte or the stream
+// silently filters for events the decoder then rejects; deriving one from the other makes that
+// drift structurally impossible (each signature used to be maintained twice in this file).
+export const MARKET_CREATED_TOPIC = toEventSelector(marketCreatedAbi[0]);
+export const CLONE_DEPLOYED_TOPIC = toEventSelector(cloneDeployedAbi[0]);
+export const ROLLOVER_FILL_TOPICS = rolloverFillAbis.map((e) => toEventSelector(e));
+export const LOP_FILLED_TOPIC = toEventSelector(lopFilledAbi[0]);
+export const WHITELIST_TOPICS = whitelistAbi.map((e) => toEventSelector(e));
 
 function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
   return l.topics.filter((t): t is string => t != null) as [Hex, ...Hex[]];

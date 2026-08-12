@@ -57,6 +57,7 @@ const T = {
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
   evalConfigPin: "evals/config-pin.test.ts",
+  fetchTimeout: "packages/core/test/fetch-timeout.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
   docTopics: "packages/core/test/doc-topics.test.ts",
   http: "packages/mcp/test/http.test.ts",
@@ -256,9 +257,11 @@ const CATALOG: Mutant[] = [
   // (The first version of these probes had the labels swapped; the survivors exposed it.)
   {
     id: "takerjit-roles-warn-dropped",
+    // Anchored WITH the readAdapterRoles line: the ladder's call (no role-override arg) is what
+    // disambiguates it from prepareJitLegacy's same-indentation roles conditional.
     file: "packages/core/src/handlers/jit.ts",
-    find: "\n      if (!adapterRoles.granted) {",
-    replace: "\n      if (false) {",
+    find: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);\n    if (!adapterRoles.granted) {",
+    replace: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);\n    if (false) {",
     tests: [T.venue],
   },
   {
@@ -436,6 +439,46 @@ const CATALOG: Mutant[] = [
     find: 'process.env.CORK_CONFIG_NO_FETCH ??= "1";',
     replace: "",
     tests: [T.evalConfigPin],
+  },
+  // ── the 2026-08-12 dedup helpers: each replaced 3-4 private copies of a rule, so a defect in
+  // the ONE implementation now reaches every consumer at once — exactly what makes it probe-worthy ──
+  {
+    // fetchWithTimeout guards the venue/config/chainlist/logs transports: a no-op abort turns
+    // the hard deadline into an unbounded hang (the 10s-timeout waste class the breakers exist for).
+    id: "fetch-timeout-abort-dropped",
+    file: "packages/core/src/fetch-timeout.ts",
+    find: "const t = setTimeout(() => ctrl.abort(), timeoutMs);",
+    replace: "const t = setTimeout(() => void ctrl, timeoutMs);",
+    tests: [T.fetchTimeout],
+  },
+  {
+    // probePairWrapper serves registry-oracle, recipe resolution AND prepare_market: an inverted
+    // recorded-wrapper comparator reports every deployed oracle as undeployed (and simulates a
+    // deploy for pairs that already have one).
+    id: "pair-probe-deployed-inverted",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "if (wrapper !== ZERO_ADDR) return { address: wrapper, deployed: true };",
+    replace: "if (wrapper === ZERO_ADDR) return { address: wrapper, deployed: true };",
+    tests: [T.mr],
+  },
+  {
+    // probeFixedOracle's deployed verdict is getCode-decided: treating empty code as deployed
+    // tells a caller the CREATE2 oracle exists when a fill would still have to deploy it.
+    id: "fixed-probe-deployed-inverted",
+    file: "packages/core/src/handlers/registry.ts",
+    find: 'return { address: predicted, deployed: code !== undefined && code !== "0x" };',
+    replace: 'return { address: predicted, deployed: code === undefined || code === "0x" };',
+    tests: [T.mr],
+  },
+  {
+    // resolveModeSugar is the ONE deprecated-mode resolver (jit ladder, registry-recipes,
+    // recipe-rate-constraint): losing the hint lookup turns every legacy mode into
+    // recipe_not_found, killing the still-supported sugar across all three surfaces.
+    id: "mode-sugar-hint-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "  const hinted = mr.recipes?.[mode];",
+    replace: "  const hinted = undefined;",
+    tests: [T.mr],
   },
   // ── runTool dispatch wiring (new seam from the per-tool split): a swapped case silently
   // answers the WRONG tool — the envelope shape hides it until a consumer trips on the data ──

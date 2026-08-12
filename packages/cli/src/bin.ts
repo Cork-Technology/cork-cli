@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
-export {}; // top-level await needs module context; this file is an entrypoint, not a library
+// The one static import in this deliberately lazy-loading entrypoint: a single string constant
+// (the HTTP route list) shared with the commander description — negligible load cost.
+import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
 
 const argv = process.argv.slice(2);
 
@@ -34,7 +36,7 @@ if (argv[0] === "mcp") {
       "Usage: ch mcp [--http [--port <n>] [--host <addr>]]\n\n" +
         "Start the Cork MCP server (all 9 tools).\n" +
         "  (default)        stdio transport — for MCP clients: claude mcp add cork-defi -- ch mcp\n" +
-        "  --http           Streamable HTTP — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/<topic> (signing, units)\n" +
+        `  --http           Streamable HTTP — ${MCP_HTTP_ROUTES} (signing, units)\n` +
         "  --port <n>       HTTP port (default 8080)\n" +
         "  --host <addr>    bind address (default 127.0.0.1 — loopback only; containers/ingress\n" +
         "                   deployments pass --host 0.0.0.0 to accept external connections)\n" +
@@ -67,7 +69,7 @@ if (argv[0] === "mcp") {
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
     const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
-    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — endpoint /mcp, health /healthz, readiness /readyz, docs /docs/<topic>; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

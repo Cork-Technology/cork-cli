@@ -11,6 +11,7 @@
 // an unlabeled event rather than being guessed [K3-honest].
 import { keccak256, stringToHex, toEventSelector } from "viem";
 import { z } from "zod";
+import { fetchWithTimeout } from "./fetch-timeout.ts";
 import { envioToken, hyperRpcHost, redactEnvioUrl, redactUrlIn } from "./datasources/envio.ts";
 
 type Hex = `0x${string}`;
@@ -139,36 +140,36 @@ export async function fetchDigestLogs(args: {
     return s;
   };
   const f = args.fetchImpl ?? fetch;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), args.timeoutMs ?? 20_000);
   let res: Response;
   try {
-    res = await f(args.url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(args.bearerToken ? { authorization: `Bearer ${args.bearerToken}` } : {}),
+    res = await fetchWithTimeout(
+      args.url,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(args.bearerToken ? { authorization: `Bearer ${args.bearerToken}` } : {}),
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "eth_getLogs",
+          params: [
+            {
+              fromBlock: `0x${args.fromBlock.toString(16)}`,
+              toBlock: "latest",
+              address: args.addresses,
+              topics: [null, args.digest],
+            },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_getLogs",
-        params: [
-          {
-            fromBlock: `0x${args.fromBlock.toString(16)}`,
-            toBlock: "latest",
-            address: args.addresses,
-            topics: [null, args.digest],
-          },
-        ],
-      }),
-      signal: ctrl.signal,
-    });
+      args.timeoutMs ?? 20_000,
+      f,
+    );
   } catch (err) {
     const raw = err instanceof Error ? err.message.split("\n")[0]! : String(err);
     throw new Error(`logs endpoint (${redactEnvioUrl(args.url)}) unreachable: ${scrub(raw)}`);
-  } finally {
-    clearTimeout(t);
   }
   const body = (await res.json().catch(() => null)) as { result?: unknown; error?: { message?: string } } | null;
   if (!body || body.error || !Array.isArray(body.result)) {

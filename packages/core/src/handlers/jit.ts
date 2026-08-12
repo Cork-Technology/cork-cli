@@ -8,7 +8,7 @@ import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
-import { resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
+import { resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
 /** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction): the
@@ -83,6 +83,12 @@ const LADDER_SIDE = {
  *  own signature so the shape has exactly one declaration site. */
 export type JitMarketWireParams = Parameters<typeof runJitPreflightLadder>[0]["jm"];
 
+/** Parse the ERC-2612 permit wire rows into bigint params — ONE spelling for the maker and
+ *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). */
+export function parsePermitWires(permits: JitMarketWireParams["permits"]): PermitParams[] {
+  return (permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+}
+
 /**
  * The 2.1.0 JIT pre-flight ladder, SHARED by the maker prepare and the taker fill: registry +
  * adapter resolution, recipe (or deprecated mode sugar), the adapter binding triple, controller
@@ -130,12 +136,9 @@ export async function runJitPreflightLadder(args: {
     if (jm.mode === undefined) {
       throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: "jitMarket needs `recipe` (the approved IMarketRecipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"); `mode` survives only as deprecated sugar" }]);
     }
-    const hinted = mr.recipes?.[jm.mode];
-    if (!hinted) {
-      return { gate: unavailable(chainId, "recipe_not_found", `recipe mode '${jm.mode}' has no configured 2.1.0 recipe hint — recipes are CONTRACT ADDRESSES now (jitMarket.recipe); known mode hints: ${Object.keys(mr.recipes ?? {}).join(", ") || "none"}`, ctx) };
-    }
-    warnings.push({ code: "deprecation_notice", message: `jitMarket.mode is deprecated sugar: '${jm.mode}' resolved to recipe ${hinted} via this tool's config hints — pass jitMarket.recipe directly; mode will be removed in a later release` });
-    recipe = hinted;
+    const sugar = resolveModeSugar({ mr, mode: jm.mode, modeField: "jitMarket.mode", recipeField: "jitMarket.recipe", chainId, ctx, warnings });
+    if (sugar.gate) return { gate: sugar.gate };
+    recipe = sugar.recipe;
   }
   const rateOverride = BigInt(jm.rateOverride ?? "0");
   const additionalData = (jm.additionalData ?? "0x") as `0x${string}`;
@@ -153,65 +156,63 @@ export async function runJitPreflightLadder(args: {
     warnings.push({ code: "funding_needs_rpc", message: `no RPC resolved — JIT pre-flights (adapter bindings, roles, recipe membership, source/rateOverride coherence, oracle, verify, cST side-match) were SKIPPED; the ${words.artifact} is built from the caller-supplied constraint but unverified` });
     return { ...base, constraint };
   }
-  {
-    const client = resolved.client;
-    try {
-      const [boundLop, boundRegistry, boundController] = await Promise.all([
-        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
-        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
-        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
-      ]);
-      if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
-      }
-      const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
-      if (!adapterRoles.granted) {
-        warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change)${words.rolesTail}` });
-      }
-      const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
-      warnings.push(...res.warnings);
-      if (res.gate) return { gate: res.gate };
-      const { source, oracle } = res;
-      // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the caller
-      // gets the real rule, not a downstream recipe revert: the fill REJECTS a non-zero
-      // override on a price/nav recipe (UnexpectedRateOverride), and a fixed fill deploys
-      // FixedRateOracle(rateOverride), whose constructor reverts on 0.
-      if (source === "fixed" && rateOverride === 0n) {
-        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx) };
-      }
-      if (source !== "fixed" && rateOverride !== 0n) {
-        return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx) };
-      }
-      if (!constraint) {
-        const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
-        if ("gate" in c) return { gate: c.gate };
-        constraint = c.constraint;
-      }
-      if (oracle.address === null) {
-        return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx) };
-      }
-      // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
-      // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside the
-      // window, so a predicted oracle can't answer yet (the fill deploys it first).
-      if (oracle.deployed) {
-        const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
-        if (ok === false) {
-          warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
-        } else if (ok === null) {
-          warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
-        }
-      } else {
-        warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
-      }
-      const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
-      return { ...base, constraint, verified: { client, boundController, source, oracle: { ...oracle, address: oracle.address }, derived } };
-    } catch (err) {
-      if (!constraint) {
-        return { gate: unavailable(chainId, "chain_read_failed", `the JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER, so the ${words.artifact} cannot be built. Retry, or pass jitMarket.constraint from cork_compute recipe-rate-constraint`, ctx) };
-      }
-      warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${revertReason(err)}) — the ${words.artifact} is built from the caller-supplied constraint but unverified` });
-      return { ...base, constraint };
+  const client = resolved.client;
+  try {
+    const [boundLop, boundRegistry, boundController] = await Promise.all([
+      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
+      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
+    ]);
+    if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
+      return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
     }
+    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
+    if (!adapterRoles.granted) {
+      warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change)${words.rolesTail}` });
+    }
+    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
+    warnings.push(...res.warnings);
+    if (res.gate) return { gate: res.gate };
+    const { source, oracle } = res;
+    // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the caller
+    // gets the real rule, not a downstream recipe revert: the fill REJECTS a non-zero
+    // override on a price/nav recipe (UnexpectedRateOverride), and a fixed fill deploys
+    // FixedRateOracle(rateOverride), whose constructor reverts on 0.
+    if (source === "fixed" && rateOverride === 0n) {
+      return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx) };
+    }
+    if (source !== "fixed" && rateOverride !== 0n) {
+      return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx) };
+    }
+    if (!constraint) {
+      const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
+      if ("gate" in c) return { gate: c.gate };
+      constraint = c.constraint;
+    }
+    if (oracle.address === null) {
+      return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx) };
+    }
+    // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
+    // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside the
+    // window, so a predicted oracle can't answer yet (the fill deploys it first).
+    if (oracle.deployed) {
+      const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
+      if (ok === false) {
+        warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
+      } else if (ok === null) {
+        warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
+      }
+    } else {
+      warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
+    }
+    const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
+    return { ...base, constraint, verified: { client, boundController, source, oracle: { ...oracle, address: oracle.address }, derived } };
+  } catch (err) {
+    if (!constraint) {
+      return { gate: unavailable(chainId, "chain_read_failed", `the JIT pre-flight reads failed (${revertReason(err)}) and no explicit constraint was supplied — the constraint comes from recipe.resolve and is PART OF THE SIGNED ORDER, so the ${words.artifact} cannot be built. Retry, or pass jitMarket.constraint from cork_compute recipe-rate-constraint`, ctx) };
+    }
+    warnings.push({ code: "chain_read_failed", message: `JIT pre-flight reads failed (${revertReason(err)}) — the ${words.artifact} is built from the caller-supplied constraint but unverified` });
+    return { ...base, constraint };
   }
 }
 
@@ -227,7 +228,6 @@ export async function buildTakerJitInteraction(args: {
   chainId: ChainId;
   lop: `0x${string}`;
   jm: JitMarketWireParams;
-  taker: `0x${string}`;
   order: LopOrder;
   orderExtension: `0x${string}` | undefined;
 }): Promise<{ gate: Envelope } | { gate?: undefined; interaction: `0x${string}`; jit: TakerJitReport; warnings: Array<{ code: string; message: string }> }> {
@@ -288,7 +288,7 @@ export async function buildTakerJitInteraction(args: {
       warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the interaction is built but the cST side-match is unverified` });
     }
   }
-  const permits: PermitParams[] = (jm.permits ?? []).map((p) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), v: p.v, r: p.r, s: p.s }));
+  const permits = parsePermitWires(jm.permits);
   const extraData = encodeJitExtraData(
     { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
     permits,

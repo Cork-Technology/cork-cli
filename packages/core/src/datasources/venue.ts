@@ -5,6 +5,7 @@
 // key fields typed, extra fields passed through, because the venue's own zod schemas are the
 // authoritative contract and it may add fields).
 import { z } from "zod";
+import { fetchWithTimeout } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
 import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
@@ -122,10 +123,8 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     const waitMs = breakerRemainingMs(br.byHost[host], now(), VENUE_BREAKER_POLICY);
     throw new VenueUnreachable(`venue unreachable: failing fast — ${host} failed ${br.byHost[host]!.failures} consecutive transport attempts and its breaker is open for another ${Math.ceil(waitMs / 1000)}s; check connectivity or CORK_VENUE_URL`);
   }
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), deps.timeoutMs ?? 10_000);
   try {
-    const res = await f(`${venueBaseUrl(deps.baseUrl)}${path}`, { ...init, signal: ctrl.signal });
+    const res = await fetchWithTimeout(`${venueBaseUrl(deps.baseUrl)}${path}`, init ?? {}, deps.timeoutMs ?? 10_000, f);
     if (br) br.byHost[host] = breakerOnSuccess();
     if (br === moduleBreaker) lastOutcome = { ok: true, host, atMs: now() };
     return res;
@@ -133,8 +132,6 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     if (br) br.byHost[host] = breakerOnFailure(br.byHost[host], now(), VENUE_BREAKER_POLICY);
     if (br === moduleBreaker) lastOutcome = { ok: false, host, atMs: now() };
     throw new VenueUnreachable(`venue unreachable: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
-  } finally {
-    clearTimeout(t);
   }
 }
 
