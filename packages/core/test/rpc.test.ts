@@ -35,6 +35,13 @@ const CFG: RpcConfig = {
 
 const MAINNET_DEFAULT = DEFAULT_RPCS[1]!;
 
+describe("committed defaults — the executable form of the 'never commit an RPC URL' exception", () => {
+  it("exactly the owner-approved three chains (1 + 42161 on 2026-07-17, 8453 on 2026-08-12), all Tenderly gateways", () => {
+    expect(Object.keys(DEFAULT_RPCS).map(Number).sort((a, b) => a - b)).toEqual([1, 8453, 42161]);
+    for (const url of Object.values(DEFAULT_RPCS)) expect(url).toMatch(/^https:\/\/[a-z]+\.gateway\.tenderly\.co\/\w+$/);
+  });
+});
+
 function harness(opts: {
   now?: number;
   probe: (url: string) => ProbeResult;

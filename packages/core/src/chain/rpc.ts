@@ -31,10 +31,14 @@ export interface ResolvedRpc {
 }
 
 // Committed defaults. NOTE: these Tenderly gateway URLs embed access tokens and are intentionally
-// committed (owner decision 2026-07-17) — unlike CORK_RPC_URL/CORK_TEST_RPC, which stay env-only.
+// committed (owner decision 2026-07-17; Base added 2026-08-12 — chainlist.org was previously the
+// ONLY automatic path for 8453, the #3 finding of the dependency SPOF audit) — unlike
+// CORK_RPC_URL/CORK_TEST_RPC, which stay env-only. All three are one provider: a Tenderly-wide
+// outage degrades every chain to the chainlist fallback at once (accepted; disclosed in /readyz).
 export const DEFAULT_RPCS: Readonly<Record<number, string>> = {
   1: "https://mainnet.gateway.tenderly.co/680LWYrzQFiGUyJKWf05oo",
   42161: "https://arbitrum.gateway.tenderly.co/5xUnQJ7Qylkv7D0wQfSynT",
+  8453: "https://base.gateway.tenderly.co/5SUsK15GXzYm4MP8bjDJTN",
 };
 
 // Chains eligible for the chainlist.org fallback (real public networks). The private staging vnet

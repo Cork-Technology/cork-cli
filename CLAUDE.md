@@ -249,7 +249,7 @@ token, spender=adapter) — both layers must be in place or the bundle reverts.
 ## RPC resolution (chain-backed tools work by default)
 
 Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`;
-`eth_chainId` verified once per process — a wrong-chain endpoint is refused as invalid input) → **built-in default** (committed mainnet + Arbitrum endpoints, jittered backoff behind
+`eth_chainId` verified once per process — a wrong-chain endpoint is refused as invalid input) → **built-in default** (committed mainnet + Arbitrum + Base endpoints, jittered backoff behind
 per-endpoint breakers) → **chainlist.org fallback** (chains 1/42161/8453/11155111:
 latency-probe, verify chainId, pick fastest; adds `rpc_fallback`). Endpoint + breaker state are
 cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`;
@@ -338,8 +338,8 @@ control proving an out-of-window constraint reverts RecipeRejectedConstraint.
   (owner ruling 2026-07-20), so bytes re-anchor on a later retry — pin `ctx.nowSeconds` (or
   `at.block` for reads) for bit-identical replay.
 - **Never commit an RPC URL** — `CORK_RPC_URL` / `CORK_TEST_RPC` come from the environment only.
-  The two built-in defaults in `chain/rpc.ts` are a deliberate committed exception (owner
-  decision); don't add more.
+  The three built-in defaults in `chain/rpc.ts` (mainnet + Arbitrum 2026-07-17, Base 2026-08-12)
+  are a deliberate committed exception (owner decision); don't add more.
 - **Math is bit-exact and empirically verified** against live on-chain reads (wei-for-wei). Trust
   the tool's numbers over hand-derived ones.
 

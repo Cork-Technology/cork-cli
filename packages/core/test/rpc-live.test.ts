@@ -1,6 +1,7 @@
 // Live smoke for the RPC resolver against the real network. Self-skips unless CORK_RPC_LIVE=1 so
-// CI stays offline/deterministic. Proves end-to-end: the committed default resolves and answers, and
-// a chain with NO committed default (Base 8453) falls back to a real chainlist public RPC.
+// CI stays offline/deterministic. Proves end-to-end: the committed defaults resolve and answer,
+// and a chain with NO committed default (Sepolia 11155111 — Base graduated to a committed
+// default 2026-08-12) falls back to a real chainlist public RPC.
 import { describe, expect, it } from "vitest";
 import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,11 +18,18 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
     expect(await r!.client.getChainId()).toBe(1);
   }, 30_000);
 
-  it("chain 8453 (no default) falls back to a chainlist public RPC answering eth_chainId=8453", async () => {
+  it("chain 8453 uses the committed default (added 2026-08-12) and answers eth_chainId=8453", async () => {
     const r = await resolveRpc(8453, undefined);
     expect(r).not.toBeNull();
-    expect(r!.source).toBe("chainlist");
+    expect(r!.source).toBe("default");
     expect(await r!.client.getChainId()).toBe(8453);
+  }, 30_000);
+
+  it("chain 11155111 (no default) falls back to a chainlist public RPC answering eth_chainId=11155111", async () => {
+    const r = await resolveRpc(11155111, undefined);
+    expect(r).not.toBeNull();
+    expect(r!.source).toBe("chainlist");
+    expect(await r!.client.getChainId()).toBe(11155111);
   }, 60_000);
 
   it("chain 49222 (staging vnet, not on chainlist) resolves to null without an explicit RPC", async () => {

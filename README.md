@@ -80,9 +80,9 @@ claude mcp add cork-defi -e CORK_RPC_URL=https://your-rpc-endpoint -- "$(mise wh
 ```
 
 Chain-backed tools work **without any RPC setup**: the server ships with built-in default endpoints for
-Ethereum mainnet and Arbitrum, and just-in-time fetches a fast public RPC from chainlist.org (with a
-circuit breaker + retry/backoff) if a default is unreachable — see "How RPC endpoints are resolved"
-below. Variant B is only for overriding that.
+Ethereum mainnet, Arbitrum, and Base, and just-in-time fetches a fast public RPC from chainlist.org
+(with a circuit breaker + retry/backoff) if a default is unreachable — see "How RPC endpoints are
+resolved" below. Variant B is only for overriding that.
 
 **Why the absolute `bun` path.** Claude Code launches the server as a subprocess that may not inherit
 your shell's `PATH` (notably the desktop app), so a bare `bun` can fail with "command not found."
@@ -290,8 +290,8 @@ Chain-backed reads pick an endpoint in this order, so the tools "just work" on p
 staying overridable:
 
 1. **Explicit** — `CORK_RPC_URL` (env) or `--rpc-url` (CLI). Used verbatim, no probing, no fallback.
-2. **Built-in default** — a committed endpoint for the chain (Ethereum mainnet, Arbitrum). Tried with
-   retries + exponential backoff; a per-endpoint **circuit breaker** stops hammering one that's down.
+2. **Built-in default** — a committed endpoint for the chain (Ethereum mainnet, Arbitrum, Base). Tried
+   with retries + exponential backoff; a per-endpoint **circuit breaker** stops hammering one that's down.
 3. **chainlist.org fallback** — for public chains (mainnet, Arbitrum, Base, Sepolia), the tool fetches
    candidate public RPCs just-in-time, latency-probes them in parallel, **verifies each reports the
    right chainId**, and uses the fastest healthy one. The private staging vnet (49222) is not on

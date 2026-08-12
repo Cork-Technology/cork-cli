@@ -34,6 +34,11 @@ build stops instead of silently absorbing changed behavior. Details under Change
   `evals/.last-run.jsonl`; eval fixtures read deployment addresses from `cork-defaults.json`
   (a pinned 0.3.2 registry address had silently turned two tasks red after the 0.3.3 redeploy).
 - apk release channel fails fast with teaching when `MELANGE_SIGNING_KEY` is unset.
+- **Committed default RPC for Base (8453)** (owner-provided 2026-08-12): chainlist.org was
+  previously the ONLY automatic path for Base — the #3 finding of the dependency SPOF audit,
+  and the cause of a flaky live-smoke CI run. Base chain reads now work out of the box like
+  mainnet and Arbitrum; the chainlist fallback remains behind the breaker. The three-default
+  set is pinned by an executable test (the "never commit an RPC URL" exception, as code).
 - **Taker-side `jitMarket` fee fields carry `x-units`** (covered-surface addition): the maker
   copy had the markers, the taker copy had silently lost them — an omission the three-axis
   parity test cannot see (it checks that emitted values agree; a site emitting nothing is
