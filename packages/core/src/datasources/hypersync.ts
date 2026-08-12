@@ -164,6 +164,11 @@ const rolloverFillAbis = parseAbi([
   "event DefaulterResidualReclaimed(bytes32 indexed orderId, address indexed defaulterFiller, address indexed recipientRolloverContract, uint256 amount)",
 ]);
 const lopFilledAbi = parseAbi(["event OrderFilled(bytes32 orderHash, uint256 remainingAmount)"]);
+// The canonical ERC-20 Transfer — the join key that Cork-scopes the LOP fill feed: every Cork
+// order has a pool share token on one side by construction, so a transaction that both fills a
+// LOP order and moves a Cork share token is a Cork fill (JIT mints included: the mint is a
+// Transfer from the zero address in the same transaction).
+const erc20TransferAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
 // WhitelistManager events, verbatim from phoenix-private IWhitelistManager.sol: the membership
 // mappings are NOT enumerable on-chain, so these six events are the only enumeration source.
 const whitelistAbi = parseAbi([
@@ -183,6 +188,7 @@ export const MARKET_CREATED_TOPIC = toEventSelector(marketCreatedAbi[0]);
 export const CLONE_DEPLOYED_TOPIC = toEventSelector(cloneDeployedAbi[0]);
 export const ROLLOVER_FILL_TOPICS = rolloverFillAbis.map((e) => toEventSelector(e));
 export const LOP_FILLED_TOPIC = toEventSelector(lopFilledAbi[0]);
+export const ERC20_TRANSFER_TOPIC = toEventSelector(erc20TransferAbi[0]);
 export const WHITELIST_TOPICS = whitelistAbi.map((e) => toEventSelector(e));
 
 function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
@@ -268,6 +274,25 @@ export function decodeRolloverFillRows(logs: HyperSyncLog[]): RolloverFillRow[] 
         return [{ leg: "PREMIUM", orderDigest: d.args.orderDigest, premiumPayer: d.args.premiumPayer, filler: d.args.rolloverFiller, subFiller: d.args.subFiller, premium: d.args.premium.toString(), ...meta(l) }];
       }
       return [{ leg: "RECLAIM", orderDigest: d.args.orderId, filler: d.args.defaulterFiller, recipientRolloverContract: d.args.recipientRolloverContract, amount: d.args.amount.toString(), ...meta(l) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** One ERC-20 Transfer touching a Cork share token — the raw material of the fills join. */
+export type ShareTransferRow = LogMeta & {
+  token: Address;
+  from: Address;
+  to: Address;
+  value: string;
+};
+
+export function decodeShareTransferRows(logs: HyperSyncLog[]): ShareTransferRow[] {
+  return logs.flatMap((l) => {
+    try {
+      const d = decodeEventLog({ abi: erc20TransferAbi, topics: strictTopics(l), data: l.data as Hex });
+      return [{ token: l.address as Address, from: d.args.from, to: d.args.to, value: d.args.value.toString(), ...meta(l) }];
     } catch {
       return [];
     }

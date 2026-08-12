@@ -16,6 +16,8 @@ import {
   normalizeNapiLog,
   MARKET_CREATED_TOPIC,
   CLONE_DEPLOYED_TOPIC,
+  ERC20_TRANSFER_TOPIC,
+  LOP_FILLED_TOPIC,
   type HandlerContext,
   type HyperSyncLog,
   type HyperSyncSource,
@@ -106,7 +108,6 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({}) };
     for (const input of [
       { resource: "orderbook", chainId: 42161, mode: "full-decentralized" },
-      { resource: "trading-pairs", chainId: 42161, mode: "full-decentralized" },
       { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized" }, // kind defaults to orders
     ]) {
       const env = await runTool("cork_query", { ...input, pageSize: 25, format: "concise" }, ctx);
@@ -114,6 +115,22 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
       expect(env.warnings[0]?.code).toBe("mode_unavailable");
       expect(env.warnings[0]?.message).toContain("emit no events");
     }
+  });
+
+  it("trading-pairs: served event-derived — one pair row per created pool, honest-subset note", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "trading-pairs", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [MARKET_CREATED_TOPIC]: [marketLog()] }), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    expect(env.provenance.mode).toBe("full-decentralized");
+    const d = env.data as { count: number; items: Array<Record<string, unknown>>; note?: string };
+    expect(d.count).toBe(1);
+    expect(d.items[0]).toMatchObject({ poolId: POOL, corkSwapToken: expect.stringMatching(/^0x/) as unknown, collateralAsset: expect.stringMatching(/^0x/) as unknown });
+    // The pair row is a projection, not the raw market row: no oracle/principal fields ride.
+    expect(d.items[0]!.rateOracle).toBeUndefined();
+    expect(d.note).toMatch(/listing metadata.*off-chain|off-chain/i);
   });
 
   it("chains without a rollover deployment gate flows honestly", async () => {
@@ -258,14 +275,93 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(false);
   });
 
-  it("fills WITHOUT an orderHash filter warns the rows are the whole 1inch LOP, not Cork-scoped", async () => {
+});
+
+// ── fills Cork-scoping join: pools → share tokens → same-transaction Transfer membership ──────
+// (closes the old "rows are NOT Cork-scoped" gap — the feed now answers with Cork fills only,
+// each annotated with the poolIds its transaction touched)
+describe("full-decentralized fills — the Cork-scoping join", () => {
+  const transferAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
+  const filledAbi = parseAbi(["event OrderFilled(bytes32 orderHash, uint256 remainingAmount)"]);
+  const LOP42161 = "0x111111125421ca6dc452d289314280a0f8842a65";
+  const CORK_TX = `0x${"a1".repeat(32)}` as const;
+  const FOREIGN_TX = `0x${"b2".repeat(32)}` as const;
+  const CORK_ORDER = `0x${"0d".repeat(32)}` as const;
+  const FOREIGN_ORDER = `0x${"0e".repeat(32)}` as const;
+
+  function transferLog(token: string, txHash: `0x${string}`): HyperSyncLog {
+    const topics = encodeEventTopics({ abi: transferAbi, eventName: "Transfer", args: { from: OWNER, to: CLONE } });
+    return { address: token, topics: [...topics] as Array<string | null>, data: encodeAbiParameters([{ type: "uint256" }], [7n]), blockNumber: 485000010, transactionHash: txHash };
+  }
+  function fillLog(orderHash: `0x${string}`, txHash: `0x${string}`): HyperSyncLog {
+    const topics = encodeEventTopics({ abi: filledAbi, eventName: "OrderFilled" });
+    return { address: LOP42161, topics: [...topics] as Array<string | null>, data: encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [orderHash, 0n]), blockNumber: 485000011, transactionHash: txHash };
+  }
+  const joinSource = (seen: Array<{ fromBlock: number; address?: string[] }> = []) =>
+    fakeSource(
+      {
+        [MARKET_CREATED_TOPIC]: [marketLog()],
+        [ERC20_TRANSFER_TOPIC]: [transferLog(CST, CORK_TX)],
+        [LOP_FILLED_TOPIC]: [fillLog(CORK_ORDER, CORK_TX), fillLog(FOREIGN_ORDER, FOREIGN_TX)],
+      },
+      seen,
+    );
+
+  it("keeps only fills whose transaction moved a Cork share token, annotated with poolIds", async () => {
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
     const env = await runTool(
       "cork_query",
       { resource: "fills", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
-      { nowSeconds: NOW, hyperSync: fakeSource({}), resolveRpc: noRpc },
+      { nowSeconds: NOW, hyperSync: joinSource(seen), resolveRpc: noRpc },
     );
     expect(env.state).toBe("ok");
-    expect(env.warnings.some((w) => w.code === "pagination_incomplete" && /1inch LOP|Cork-scoped/i.test(w.message))).toBe(true);
+    const d = env.data as { count: number; items: Array<Record<string, unknown>>; note?: string };
+    expect(d.count).toBe(1);
+    expect(d.items[0]).toMatchObject({ orderHash: CORK_ORDER, poolIds: [POOL] });
+    expect(d.items.some((i) => i.orderHash === FOREIGN_ORDER)).toBe(false);
+    expect(d.note).toMatch(/Cork-scoped by same-transaction share-token movement/);
+    // Scan-span cut: pool discovery walks from genesis, but transfers and fills start at the
+    // FIRST pool's creation block — nothing Cork can have filled before a pool existed.
+    expect(seen.map((s) => s.fromBlock)).toEqual([0, 485000001, 485000001]);
+    expect(seen[1]!.address!.map((x) => x.toLowerCase())).toEqual(expect.arrayContaining([CST.toLowerCase(), CPT.toLowerCase()]));
+  });
+
+  it("filters.orderHash still isolates one order with a single scan (no join phases)", async () => {
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "fills", chainId: 42161, mode: "full-decentralized", filters: { orderHash: FOREIGN_ORDER }, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: joinSource(seen), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; items: Array<Record<string, unknown>> };
+    expect(d.count).toBe(1);
+    expect(d.items[0]!.orderHash).toBe(FOREIGN_ORDER);
+    expect(seen.length).toBe(1);
+  });
+
+  it("no pools on the chain → an honestly empty Cork feed, not the whole 1inch firehose", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "fills", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: fakeSource({ [LOP_FILLED_TOPIC]: [fillLog(FOREIGN_ORDER, FOREIGN_TX)] }), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; note?: string };
+    expect(d.count).toBe(0);
+    expect(d.note).toMatch(/no Cork pools exist/);
+  });
+
+  it("filters.poolId scopes the join to that pool's share tokens", async () => {
+    const env = await runTool(
+      "cork_query",
+      { resource: "fills", chainId: 42161, mode: "full-decentralized", filters: { poolId: `0x${"dd".repeat(32)}` }, pageSize: 25, format: "concise" },
+      { nowSeconds: NOW, hyperSync: joinSource(), resolveRpc: noRpc },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { count: number; note?: string };
+    expect(d.count).toBe(0);
+    expect(d.note).toMatch(/matching poolId/);
   });
 });
 

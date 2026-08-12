@@ -7,7 +7,7 @@ import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abi
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeWhitelistRows, type HyperSyncLog, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS } from "../datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -90,6 +90,62 @@ async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScan
   }
 }
 
+/** One backfill+tail scan: HyperSync archive pages, then the RPC live-tail merge. The shared
+ *  primitive every event-derived read runs — including the fills join's pool-discovery and
+ *  share-transfer pre-phases — so the backfill and the tail can never diverge per resource,
+ *  and a join built from two scans stays coherent through both layers. */
+type ScanRun = {
+  rows: Array<Record<string, unknown>>;
+  archiveHeight?: number;
+  complete: boolean;
+  nextBlock?: number;
+  tail: { status: "merged"; fromBlock: number; headBlock: number; merged: number } | { status: "skipped" } | { status: "current" } | { status: "no-rpc" } | { status: "error"; message: string };
+};
+
+async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperSyncSource, spec: HsScanSpec): Promise<ScanRun> {
+  const r = await hs.queryLogs({ fromBlock: spec.fromBlock, address: spec.address, topics: spec.topics });
+  let rows = spec.postFilter(spec.decode(r.logs));
+  // Live-tail merge [freshness]: cover blocks the archive index hasn't ingested yet by scanning
+  // (archiveHeight, chain head] over the regular RPC — ONLY when the backfill actually reached
+  // its archive head. A page-capped partial already left an interior gap; a disjoint tail atop
+  // it would mislead, so that read stays honestly labeled pagination_incomplete instead.
+  if (r.complete === false || r.archiveHeight === undefined) {
+    return { rows, ...(r.archiveHeight !== undefined ? { archiveHeight: r.archiveHeight } : {}), complete: r.complete !== false, ...(r.nextBlock !== undefined ? { nextBlock: r.nextBlock } : {}), tail: { status: "skipped" } };
+  }
+  const tail = await fetchLiveTail(ctx, chainId, spec, r.archiveHeight);
+  if (tail.status === "merged") {
+    // The tail is block-disjoint from the backfill; the seen-set is a defensive guard against a
+    // boundary reorg re-emitting an archived log, never the primary correctness mechanism.
+    const have = new Set(rows.map(spec.key));
+    const fresh = tail.rows.filter((row) => !have.has(spec.key(row)));
+    rows = rows.concat(fresh);
+    return { rows, archiveHeight: r.archiveHeight, complete: true, tail: { status: "merged", fromBlock: r.archiveHeight + 1, headBlock: tail.headBlock, merged: fresh.length } };
+  }
+  return { rows, archiveHeight: r.archiveHeight, complete: true, tail };
+}
+
+/** The MarketCreated scan over every configured Phoenix pool manager on the chain (primary
+ *  deployment + named profiles) — shared by cork-pools, the event-derived trading-pairs view,
+ *  and the fills join's pool discovery. */
+async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promise<{ spec: HsScanSpec } | { unknownDeployment: true }> {
+  const cfg = await resolveConfig();
+  const pms = new Set<`0x${string}`>();
+  const primary = cfg.defaults.deployments[String(chainId)];
+  if (primary) pms.add(primary.poolManager);
+  for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
+  if (pms.size === 0) return { unknownDeployment: true };
+  return {
+    spec: {
+      fromBlock: 0,
+      address: [...pms],
+      topics: [[MARKET_CREATED_TOPIC]],
+      decode: decodeMarketRows,
+      postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
+      key: (m) => `market:${String(m.poolId).toLowerCase()}`,
+    },
+  };
+}
+
 /**
  * full-decentralized [C12]: the event-derived subset over HyperSync, with a live-tail RPC merge for
  * freshness (see fetchLiveTail). Structural honesty: resting orders / RFQs emit no events — those
@@ -98,8 +154,8 @@ async function fetchLiveTail(ctx: HandlerContext, chainId: ChainId, spec: HsScan
 async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   const kind = filters.kind ?? "orders";
   const structural =
-    input.resource === "orderbook" || input.resource === "trading-pairs"
-      ? `'${input.resource}' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)`
+    input.resource === "orderbook"
+      ? "'orderbook' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)"
       : input.resource === "rfqs"
         ? "'rfqs' cannot be served in full-decentralized mode: RFQ requests and answers are off-chain venue JSON that never binds and emits no events, by design — omit mode or use 'centralized'"
         : input.resource === "rollover-orders" && kind === "orders"
@@ -118,39 +174,103 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
     // Build the per-resource scan ONCE (address/topics/decoder/filter); both the HyperSync backfill
     // and the live-tail RPC merge below run it, so they can never diverge.
     let spec: HsScanSpec;
-    if (input.resource === "cork-pools") {
-      // Scan every configured Phoenix PM on this chain (primary deployment + named profiles).
-      const cfg = await resolveConfig();
-      const pms = new Set<`0x${string}`>();
-      const primary = cfg.defaults.deployments[String(chainId)];
-      if (primary) pms.add(primary.poolManager);
-      for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
-      if (pms.size === 0) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
-      spec = {
-        fromBlock: 0,
-        address: [...pms],
-        topics: [[MARKET_CREATED_TOPIC]],
-        decode: decodeMarketRows,
-        postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
-        key: (m) => `market:${String(m.poolId).toLowerCase()}`,
-      };
+    let note: string | undefined;
+    if (input.resource === "cork-pools" || input.resource === "trading-pairs") {
+      const ms = await marketCreatedSpec(chainId, filters);
+      if ("unknownDeployment" in ms) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
+      spec = ms.spec;
+      if (input.resource === "trading-pairs") {
+        // The event-derived view answers "which pairs CAN trade": every Cork order carries the
+        // pool's cST on one side by construction, so each created pool IS one tradable pair.
+        spec = {
+          ...ms.spec,
+          decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),
+          key: (row) => `pair:${String(row.poolId).toLowerCase()}`,
+        };
+        note = "derived from pool-creation events: the pairs that CAN trade (each pool's corkSwapToken against its collateralAsset). The venue's listing metadata (resting depth, premium annotations) is off-chain and not represented — use centralized mode for the listed view";
+      }
     } else if (input.resource === "fills") {
       const lop = LOP_ADDRESSES[chainId];
       if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
-      if (!filters.orderHash) {
-        // OrderFilled's orderHash is NOT an indexed topic, so this scan sees the ENTIRE 1inch
-        // LOP — a very high-volume address. Without an orderHash filter the rows are all of
-        // 1inch's fills, not Cork's; disclose instead of presenting them as Cork activity (F15).
-        hsWarnings.push({ code: "pagination_incomplete", message: "fills in full-decentralized mode scan the whole 1inch LOP (orderHash is not an indexed topic) — rows are NOT Cork-scoped; pass filters.orderHash to isolate one order, or use centralized mode for the Cork-only feed" });
+      if (filters.orderHash) {
+        // Single-order isolation: OrderFilled's orderHash is not an indexed topic, so the scan
+        // still reads the whole LOP and filters client-side — but the answer is one order's.
+        spec = {
+          fromBlock: 0,
+          address: [lop],
+          topics: [[LOP_FILLED_TOPIC]],
+          decode: decodeLopFillRows,
+          postFilter: (rows) => rows.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase()),
+          key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
+        };
+      } else {
+        // ── Cork-scoping join (closes the old "rows are NOT Cork-scoped" gap): pools → share
+        // tokens → same-transaction share-token movement. Every Cork order carries the pool's
+        // cST on one side by construction, so a transaction that both fills a LOP order and
+        // moves a Cork share token is a Cork fill — JIT creations included (the mint IS a
+        // Transfer from the zero address in that same transaction). Both pre-phases run the
+        // same backfill+tail primitive as the main scan, so the join map covers the tail too.
+        const ms = await marketCreatedSpec(chainId, filters);
+        if ("unknownDeployment" in ms) return unavailable(chainId, "unknown_deployment", `no Cork deployment configured for chainId ${chainId}`, ctx);
+        const markets = await runScanWithTail(ctx, chainId, hs, ms.spec);
+        if (!markets.complete) {
+          hsWarnings.push({ code: "pagination_incomplete", message: "the pool-discovery scan behind the Cork-scoping join hit the page bound — pools created later are missing from the join, so fills on them are missing from this feed; partial evidence" });
+        }
+        const tokenToPool = new Map<string, string>();
+        let firstPoolBlock = Number.MAX_SAFE_INTEGER;
+        for (const m of markets.rows) {
+          tokenToPool.set(String(m.corkSwapToken).toLowerCase(), String(m.poolId));
+          tokenToPool.set(String(m.corkPrincipalToken).toLowerCase(), String(m.poolId));
+          const b = Number(m.blockNumber);
+          if (Number.isFinite(b) && b < firstPoolBlock) firstPoolBlock = b;
+        }
+        if (tokenToPool.size === 0) {
+          return envelope({
+            state: "ok",
+            data: { resource: input.resource, count: 0, items: [], ...(markets.archiveHeight !== undefined ? { archiveHeight: markets.archiveHeight } : {}), note: `no Cork pools exist on chainId ${chainId}'s configured pool managers${filters.poolId ? ` matching poolId ${filters.poolId}` : ""} — an empty Cork fill feed` },
+            chainId,
+            source: "chain",
+            mode: "full-decentralized",
+            warnings: hsWarnings,
+            ctx,
+          });
+        }
+        const transferSpec: HsScanSpec = {
+          fromBlock: firstPoolBlock,
+          address: [...tokenToPool.keys()] as `0x${string}`[],
+          topics: [[ERC20_TRANSFER_TOPIC]],
+          decode: decodeShareTransferRows,
+          postFilter: (rows) => rows,
+          key: (t) => `xfer:${String(t.txHash)}:${String(t.token)}:${String(t.from)}:${String(t.to)}:${String(t.value)}`,
+        };
+        const transfers = await runScanWithTail(ctx, chainId, hs, transferSpec);
+        if (!transfers.complete) {
+          hsWarnings.push({ code: "pagination_incomplete", message: "the share-token transfer scan behind the Cork-scoping join hit the page bound — fills past the bound are missing from this feed; partial evidence" });
+        }
+        const txPools = new Map<string, Set<string>>();
+        for (const t of transfers.rows) {
+          const pool = tokenToPool.get(String(t.token).toLowerCase());
+          if (!pool) continue;
+          const tx = String(t.txHash).toLowerCase();
+          const set = txPools.get(tx) ?? new Set<string>();
+          set.add(pool);
+          txPools.set(tx, set);
+        }
+        spec = {
+          // Nothing Cork can have filled before the first pool existed — a real scan-span cut.
+          fromBlock: firstPoolBlock,
+          address: [lop],
+          topics: [[LOP_FILLED_TOPIC]],
+          decode: decodeLopFillRows,
+          postFilter: (rows) =>
+            rows.flatMap((f) => {
+              const pools = txPools.get(String(f.txHash).toLowerCase());
+              return pools ? [{ ...f, poolIds: [...pools].sort() }] : [];
+            }),
+          key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
+        };
+        note = `Cork-scoped by same-transaction share-token movement across ${String(tokenToPool.size / 2)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or centralized mode for the venue's own feed`;
       }
-      spec = {
-        fromBlock: 0,
-        address: [lop],
-        topics: [[LOP_FILLED_TOPIC]],
-        decode: decodeLopFillRows,
-        postFilter: (rows) => (filters.orderHash ? rows.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase()) : rows),
-        key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
-      };
     } else {
       // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
       const { rollover } = await resolveRollover(chainId);
@@ -178,47 +298,29 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       }
     }
 
-    const r = await hs.queryLogs({ fromBlock: spec.fromBlock, address: spec.address, topics: spec.topics });
-    const archiveHeight = r.archiveHeight;
+    const run = await runScanWithTail(ctx, chainId, hs, spec);
     // Honest completeness (F15): a HyperSync scan that hits the page bound is partial EVIDENCE,
     // never presented as the complete set — mirroring the venue path's pagination discipline.
-    if (r.complete === false) {
-      hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${r.nextBlock !== undefined ? ` (stopped at block ${r.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
+    if (!run.complete) {
+      hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${run.nextBlock !== undefined ? ` (stopped at block ${run.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
     }
-    let items = spec.postFilter(spec.decode(r.logs));
-
-    // Live-tail merge [freshness]: cover blocks the archive index hasn't ingested yet by scanning
-    // (archiveHeight, chain head] over the regular RPC. Only when the backfill actually reached its
-    // archive head — a page-capped partial already left an interior gap, so a disjoint tail atop it
-    // would mislead; that read is honestly labeled pagination_incomplete instead.
-    let liveTail: { fromBlock: number; headBlock: number; merged: number } | undefined;
-    if (r.complete !== false && archiveHeight !== undefined) {
-      const tail = await fetchLiveTail(ctx, chainId, spec, archiveHeight);
-      if (tail.status === "merged") {
-        // The tail is block-disjoint from the backfill; the seen-set is a defensive guard against a
-        // boundary reorg re-emitting an archived log, never the primary correctness mechanism.
-        const have = new Set(items.map(spec.key));
-        const fresh = tail.rows.filter((row) => !have.has(spec.key(row)));
-        items = items.concat(fresh);
-        liveTail = { fromBlock: archiveHeight + 1, headBlock: tail.headBlock, merged: fresh.length };
-        if (fresh.length > 0) {
-          hsWarnings.push({ code: "live_tail_merged", message: `merged ${fresh.length} recent event row(s) from the RPC tail (blocks ${archiveHeight + 1}–${tail.headBlock}) beyond HyperSync's archive height ${archiveHeight}; results reflect chain head, not just the indexer` });
-        }
-      } else if (tail.status === "error") {
-        hsWarnings.push({ code: "live_tail_unavailable", message: `${tail.message} — results reflect the HyperSync archive (height ${archiveHeight}) only; blocks after it may be missing` });
-      }
-      // "no-rpc" (nothing configured) and "current" (archive already at/above head) add nothing, silently.
+    if (run.tail.status === "merged" && run.tail.merged > 0) {
+      hsWarnings.push({ code: "live_tail_merged", message: `merged ${run.tail.merged} recent event row(s) from the RPC tail (blocks ${run.tail.fromBlock}–${run.tail.headBlock}) beyond HyperSync's archive height ${run.archiveHeight}; results reflect chain head, not just the indexer` });
+    } else if (run.tail.status === "error") {
+      hsWarnings.push({ code: "live_tail_unavailable", message: `${run.tail.message} — results reflect the HyperSync archive (height ${run.archiveHeight}) only; blocks after it may be missing` });
     }
+    // "no-rpc" (nothing configured) and "current" (archive already at/above head) add nothing, silently.
 
     return envelope({
       state: "ok",
       data: {
         resource: input.resource,
         ...(input.resource === "rollover-orders" ? { kind } : {}),
-        count: items.length,
-        items,
-        ...(archiveHeight !== undefined ? { archiveHeight } : {}),
-        ...(liveTail ? { liveTail } : {}),
+        count: run.rows.length,
+        items: run.rows,
+        ...(run.archiveHeight !== undefined ? { archiveHeight: run.archiveHeight } : {}),
+        ...(run.tail.status === "merged" ? { liveTail: { fromBlock: run.tail.fromBlock, headBlock: run.tail.headBlock, merged: run.tail.merged } } : {}),
+        ...(note !== undefined ? { note } : {}),
       },
       chainId,
       source: "chain",
@@ -316,7 +418,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     // Default/centralized: the as-built venue (api-phoenix). Mode is explicit, never a silent
     // substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
     if (input.mode !== undefined && input.mode !== "centralized") {
-      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (cork-pools, fills, flows kind=fills|contracts)`, ctx);
+      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
     const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), pageSize: input.pageSize, maxPages: input.maxPages };

@@ -397,6 +397,60 @@ const CATALOG: Mutant[] = [
     replace: "l.blockNumber === null && l.transactionHash === null",
     tests: [T.hypersync],
   },
+  // ── full-decentralized fills join + trading-pairs derivation (2026-08-12) ─────────────────
+  {
+    // The join membership gate regresses to passthrough: every 1inch fill leaks into a feed
+    // that claims to be Cork-scoped — the exact defect the join closed.
+    id: "fills-join-membership-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "return pools ? [{ ...f, poolIds: [...pools].sort() }] : [];",
+    replace: "return [{ ...f, poolIds: pools ? [...pools].sort() : [] }];",
+    tests: [T.hypersync],
+  },
+  {
+    // The poolIds annotation is lost: rows stop saying WHICH pool their transaction touched.
+    id: "fills-join-annotation-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: "return pools ? [{ ...f, poolIds: [...pools].sort() }] : [];",
+    replace: "return pools ? [{ ...f }] : [];",
+    tests: [T.hypersync],
+  },
+  {
+    // The scan-span cut regresses to genesis: the fills scan walks the whole 1inch history
+    // again instead of starting where the first Cork pool exists.
+    id: "fills-join-span-regressed",
+    file: "packages/core/src/handlers/query.ts",
+    find: "// Nothing Cork can have filled before the first pool existed — a real scan-span cut.\n          fromBlock: firstPoolBlock,",
+    replace: "// Nothing Cork can have filled before the first pool existed — a real scan-span cut.\n          fromBlock: 0,",
+    tests: [T.hypersync],
+  },
+  {
+    // cPT movements stop keying the join: fills that only touch the principal token vanish,
+    // and the transfer scan's address set silently halves.
+    id: "fills-join-cpt-key-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "tokenToPool.set(String(m.corkPrincipalToken).toLowerCase(), String(m.poolId));",
+    replace: "",
+    tests: [T.hypersync],
+  },
+  {
+    // The empty-pools early return is lost: a chain with no pools serves a joined-over-nothing
+    // feed without the honest "no Cork pools exist" note.
+    id: "fills-join-empty-pools-note-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: "if (tokenToPool.size === 0) {",
+    replace: "if (false) {",
+    tests: [T.hypersync],
+  },
+  {
+    // trading-pairs regresses to raw market rows: the pair projection (and its honest-subset
+    // shape) disappears while the resource still answers.
+    id: "trading-pairs-projection-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: "decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),",
+    replace: "decode: decodeMarketRows,",
+    tests: [T.hypersync],
+  },
   // ── port-to-public transform gates (2026-08-10): a wrong port = wrong PUBLISHED tree ─────
   {
     // Dropping notes/ from the exclusion list leaks the private tree into the public repo.
