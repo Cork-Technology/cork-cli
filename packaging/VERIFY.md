@@ -76,10 +76,12 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
 
 - `.github/workflows/release.yml` — determinism gate (two independent byte-identical builds),
   immutable release from attested bytes.
-- `.github/workflows/apk-repo.yml` — melange build (SLSA provenance, signed index) → Pages
-  publish (immutable apks) → apko publish (version-pinned, SBOM, digest attested) →
-  **phala-deploy** (digest substituted into `packaging/phala-compose.yml`,
-  `phala deploy -c … -n cork-mcp --wait`, name-keyed in-place update).
+- `.github/workflows/apk-repo.yml` — `melange-build` (SLSA provenance, signed per-arch index),
+  then one `production-publish` job in strict order: Pages publish (immutable apks) → apko
+  publish (version-pinned, SBOM, digest attested) → **Phala deploy last** (digest substituted
+  into `packaging/phala-compose.yml`, `phala deploy -c … -n cork-mcp --wait`, name-keyed
+  in-place update; a deploy failure never blocks or undoes the publishes). Candidates take the
+  ungated `apko-publish` job instead (image only, no secrets).
 - Runtime secrets (`CORK_MCP_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 
@@ -93,7 +95,8 @@ tag. Before that can happen the owner must:
 3. Create the melange keypair: store `MELANGE_SIGNING_KEY` as a secret in the `release`
    environment (v*-tag deployment rule + required reviewers) + commit `packaging/melange.rsa.pub`.
    DONE 2026-08-12 for the secret; the committed public half is still missing — without it,
-   `publish-pages` cannot serve the key and the candidate `apko-publish` keyring swap fails.
+   `production-publish` cannot serve the key from the Pages root and the candidate
+   `apko-publish` keyring swap fails.
    The pub-key tripwire in `melange-build` covers both states: while the file is missing, the
    first approved run prints the public half derived from the environment key (commit it
    verbatim); once committed, every release fails loudly if the environment key stops matching

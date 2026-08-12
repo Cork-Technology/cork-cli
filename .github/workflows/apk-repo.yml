@@ -18,8 +18,9 @@
 #     Every secret-reading job below declares `environment: release`, so the secrets resolve
 #     from the environment directly — a run from any other ref cannot read them at all, and each
 #     job wave waits for a reviewer click that shows which workflow and ref asked. A production
-#     release gates up to four times (melange-build → publish-pages → apko-publish →
-#     phala-deploy), a candidate twice; `plan` is deliberately ungated so tag parsing fails fast
+#     release gates twice (melange-build, then production-publish), a candidate once
+#     (melange-build only — its signed per-arch index feeds the ungated candidate image job);
+#     `plan` is deliberately ungated so tag parsing fails fast
 #     before anyone is asked to approve.
 #
 # Three triggers, one gate:
@@ -181,31 +182,134 @@ jobs:
             --signing-key melange.rsa \
             --generate-provenance \
             --out-dir packages
+          # Sign the per-arch index HERE, while the key is already materialized: the candidate
+          # image job then needs no secret at all (one fewer reviewer gate), and on the
+          # candidate path the key never leaves this job. Production regenerates its own
+          # CUMULATIVE index in production-publish; this local one is candidate-only.
+          (cd "packages/${{ matrix.arch }}" && sudo -E "$(command -v melange)" index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
           rm -f melange.rsa
           ls -l "packages/${{ matrix.arch }}/"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: apk-${{ matrix.arch }}
-          path: packages/${{ matrix.arch }}/*.apk*
+          path: |
+            packages/${{ matrix.arch }}/*.apk*
+            packages/${{ matrix.arch }}/APKINDEX.tar.gz
           if-no-files-found: error
           retention-days: 7
 
-  publish-pages:
-    # Production only: the cumulative apk repository is the partner channel; candidates never
-    # enter it (their OCI images compose from the local build instead).
+  apko-publish:
+    # CANDIDATES only: compose the OCI image from the locally-built signed apks (the Pages
+    # channel never carries candidates). This job holds NO secret and declares NO environment —
+    # melange-build already signed the per-arch APKINDEX, so the image composes and pushes
+    # without a second reviewer gate. Production images compose in production-publish instead,
+    # downstream of the published Pages channel.
     needs: [plan, melange-build]
-    if: ${{ needs.plan.outputs.candidate == 'false' }}
-    environment: release # resolves MELANGE_SIGNING_KEY (index re-sign)
+    if: ${{ needs.plan.outputs.candidate == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
-      contents: write # pushes the gh-pages branch
+      contents: read
+      packages: write # ghcr push
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 — main: for packaging/{aqua.yaml,melange.rsa.pub}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
         with:
           aqua_version: v2.53.5
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: apk-x86_64
+          path: packages/x86_64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: apk-aarch64
+          path: packages/aarch64
+      - name: Point the spec at the local signed repo
+        run: |
+          # The signed per-arch APKINDEX arrived in the build artifact (signed inside
+          # melange-build, where the key already lives). The image resolves cork-cli from
+          # ./packages instead of the Pages channel: swap the spec's published repo/keyring for
+          # the local pair (the wolfi repo stays as-is).
+          for arch in x86_64 aarch64; do
+            test -f "packages/$arch/APKINDEX.tar.gz" || { echo "::error::no signed APKINDEX for $arch in the build artifact — melange-build should have produced it"; exit 1; }
+          done
+          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./packages"' packaging/cork-cli.apko.yaml
+          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
+          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
+
+      - name: Pin the apk version in the apko spec
+        env:
+          APKVER: ${{ needs.plan.outputs.apkver }}
+        run: |
+          # An independent `apko build` of this spec must resolve the SAME package as this run —
+          # pin cork-cli to the exact version-revision instead of floating on the index head.
+          # (epoch is 0 in melange.yaml; a future epoch bump must be mirrored here.)
+          PIN="cork-cli=${APKVER}-r0" \
+          yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
+          yq '.contents.packages' packaging/cork-cli.apko.yaml
+
+      - name: Build + push the image (candidate — never :latest)
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
+          # Candidates never move :latest (policy R7: the pointer tracks production only).
+          apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+          apko publish packaging/cork-cli.apko.yaml "ghcr.io/$owner/cork-cli:$TAG" \
+            --sbom-path sboms/ | tee digest.txt
+          # apko prints the pushed ref with digest as the last line: capture for attestation.
+          digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
+
+      - name: Attest the image digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
+          push-to-registry: true
+
+  production-publish:
+    # PRODUCTION only — the whole publish wave as ONE gated job (one reviewer click), in strict
+    # order: add the apks to the cumulative Pages repository and re-sign its index, wait for
+    # Pages to serve them, compose the image FROM that published channel (so the image is a
+    # downstream consumer of the exact channel users `apk add` from), attest the digest, and
+    # deploy the Phala CVM LAST. The apk repository and the image are fully published before
+    # the deploy starts: a Phala failure marks the run red but blocks and undoes nothing.
+    #
+    # Re-runs after a deploy failure are safe end-to-end: an already-published byte-identical
+    # apk is skipped (different bytes still refuse — published apks stay immutable), an
+    # unchanged gh-pages tree skips the push, re-composing moves the tags to a fresh attested
+    # digest, and the CVM update is name-keyed.
+    #
+    # Phala notes (Phase 2b of the remote-MCP plan): the CVM runs the EXACT attested digest —
+    # the compose is digest-pinned (verification breaks on tags) and its runtime secrets live
+    # as encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
+    # Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
+    # quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
+    needs: [plan, melange-build]
+    if: ${{ needs.plan.outputs.candidate == 'false' }}
+    environment: release # resolves MELANGE_SIGNING_KEY (index re-sign) + PHALA_CLOUD_API_KEY
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # pushes the gh-pages branch
+      packages: write # ghcr push
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 — main: for packaging/{aqua.yaml,melange.rsa.pub,cork-cli.apko.yaml,phala-compose.yml}
+      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
+        with:
+          aqua_version: v2.53.5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
 
       - name: Check out (or initialize) the gh-pages apk repository
         run: |
@@ -225,7 +329,7 @@ jobs:
           name: apk-aarch64
           path: incoming/aarch64
 
-      - name: Add packages (immutably) and re-sign the index
+      - name: Add packages (immutably, re-run-safe) and re-sign the index
         env:
           MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
         run: |
@@ -233,8 +337,15 @@ jobs:
           for arch in x86_64 aarch64; do
             for f in incoming/$arch/*; do
               base="$(basename "$f")"
+              # The artifact carries the per-arch candidate index — never published; the
+              # cumulative index below replaces it.
+              [ "$base" = "APKINDEX.tar.gz" ] && continue
               if [ -e "site/apk/$arch/$base" ]; then
-                echo "REFUSING to overwrite already-published $arch/$base — published apks are immutable (bump the epoch instead)" >&2
+                if cmp -s "$f" "site/apk/$arch/$base"; then
+                  echo "already published byte-identical: $arch/$base — skipping (re-run)"
+                  continue
+                fi
+                echo "REFUSING to overwrite already-published $arch/$base with DIFFERENT bytes — published apks are immutable (bump the epoch instead)" >&2
                 exit 1
               fi
               cp "$f" "site/apk/$arch/$base"
@@ -253,36 +364,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "apk repo: add cork-cli $TAG"
-          git push origin HEAD:gh-pages
+          if git diff --cached --quiet; then
+            echo "nothing new to publish — Pages already current (re-run)"
+          else
+            git commit -m "apk repo: add cork-cli $TAG"
+            git push origin HEAD:gh-pages
+          fi
 
-  apko-publish:
-    # Runs for EVERY release: candidates compose from the locally-built signed apks (the Pages
-    # channel never carries them), production composes FROM the published Pages repo so the image
-    # is a downstream consumer of the exact channel users `apk add` from.
-    needs: [plan, melange-build, publish-pages]
-    if: ${{ !cancelled() && needs.melange-build.result == 'success' && (needs.publish-pages.result == 'success' || needs.plan.outputs.candidate == 'true') }}
-    environment: release # resolves MELANGE_SIGNING_KEY (candidate index signing)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write # ghcr push
-      id-token: write
-      attestations: write
-    outputs:
-      # The pushed image digest, for phala-deploy (and anyone else downstream).
-      digest: ${{ steps.publish.outputs.digest }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
-        with:
-          aqua_version: v2.53.5
-
-      - name: Wait for Pages to serve the new package (production)
-        if: ${{ needs.plan.outputs.candidate == 'false' }}
+      - name: Wait for Pages to serve the new package
         env:
-          TAG: ${{ needs.plan.outputs.tag }}
           APKVER: ${{ needs.plan.outputs.apkver }}
         run: |
           url="https://cork-technology.github.io/cork-cli/apk/x86_64/APKINDEX.tar.gz"
@@ -293,32 +383,6 @@ jobs:
             echo "waiting for Pages deploy ($i/60)…"; sleep 15
           done
           echo "Pages never served ${APKVER}" >&2; exit 1
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: ${{ needs.plan.outputs.candidate == 'true' }}
-        with:
-          name: apk-x86_64
-          path: packages/x86_64
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: ${{ needs.plan.outputs.candidate == 'true' }}
-        with:
-          name: apk-aarch64
-          path: packages/aarch64
-      - name: Assemble the local signed repo (candidate)
-        if: ${{ needs.plan.outputs.candidate == 'true' }}
-        env:
-          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
-        run: |
-          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          for arch in x86_64 aarch64; do
-            (cd "packages/$arch" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
-          done
-          rm -f melange.rsa
-          # The image resolves cork-cli from ./packages instead of the Pages channel: swap the
-          # spec's published repo/keyring for the local pair (the wolfi repo stays as-is).
-          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./packages"' packaging/cork-cli.apko.yaml
-          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
-          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
 
       - name: Pin the apk version in the apko spec
         env:
@@ -331,25 +395,20 @@ jobs:
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
 
-      - name: Build + push the image
-        id: publish
+      - name: Build + push the image (production — moves :latest)
         env:
           TAG: ${{ needs.plan.outputs.tag }}
-          CANDIDATE: ${{ needs.plan.outputs.candidate }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
-          # Candidates never move :latest (policy R7: the pointer tracks production only).
-          refs=("ghcr.io/$owner/cork-cli:$TAG")
-          [ "$CANDIDATE" = "false" ] && refs+=("ghcr.io/$owner/cork-cli:latest")
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
-          apko publish packaging/cork-cli.apko.yaml "${refs[@]}" \
+          apko publish packaging/cork-cli.apko.yaml \
+            "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
             --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation.
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest the image digest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
@@ -358,38 +417,16 @@ jobs:
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
 
-  # Phala Cloud attestable deploy (Phase 2b of the remote-MCP plan): a CVM running the EXACT
-  # attested image digest, name-keyed so re-deploys update in place. The compose is digest-pinned
-  # (verification breaks on tags) and its runtime secrets live as encrypted CVM secrets in the
-  # Phala dashboard — never in the compose or this workflow. Third-party verification:
-  # packaging/VERIFY.md + scripts/verify-deployment.ts (six checks: quote signature, RTMR3
-  # replay, compose-hash, digest pinning, gh attestation link to source).
-  # Requires PHALA_CLOUD_API_KEY in the `release` environment; the determinism gate already ran before this
-  # workflow's trigger (release.yml publishes only byte-identical, attested builds).
-  phala-deploy:
-    # Actual releases only — a candidate image never reaches the CVM; the attested production
-    # digest is what packaging/VERIFY.md's six checks bind to.
-    needs: [plan, apko-publish]
-    if: ${{ !cancelled() && needs.plan.outputs.candidate == 'false' && needs.apko-publish.result == 'success' }}
-    environment: release # resolves PHALA_CLOUD_API_KEY
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22"
-
+      # Everything above is published and attested; only the deploy remains. A failure from
+      # here on marks the run red WITHOUT touching the apk repo or the image.
       - name: Substitute the attested digest into the compose
-        env:
-          DIGEST: ${{ needs.apko-publish.outputs.digest }}
         run: |
-          test -n "$DIGEST" || { echo "no image digest from apko-publish" >&2; exit 1; }
-          sed "s|\${DIGEST}|$DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
+          test -n "$IMAGE_DIGEST" || { echo "no image digest captured from apko publish" >&2; exit 1; }
+          sed "s|\${DIGEST}|$IMAGE_DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
           grep -q "@sha256:[0-9a-f]\{64\}" phala-compose.deploy.yml || { echo "compose image is not digest-pinned after substitution" >&2; exit 1; }
           grep "image:" phala-compose.deploy.yml
 
-      - name: Deploy the CVM (name-keyed in-place update)
+      - name: Deploy the CVM (name-keyed in-place update, LAST by design)
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |

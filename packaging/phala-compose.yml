@@ -1,4 +1,5 @@
-# Phala Cloud CVM compose — deployed by the `phala-deploy` job in .github/workflows/apk-repo.yml.
+# Phala Cloud CVM compose — deployed by the final step of the `production-publish` job in
+# .github/workflows/apk-repo.yml (deploy runs LAST: a failure never blocks the apk/image publish).
 #
 # VERIFICATION CONTRACT (packaging/VERIFY.md): the CVM measures the SHA256 of the effective
 # app-compose.json (this file + metadata) into RTMR3 via a hardware event chain, so what this file
