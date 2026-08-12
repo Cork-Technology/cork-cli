@@ -1,348 +1,364 @@
 # Changelog
 
 All notable changes to this component. Versioning follows the
-[Versioning and Distribution Policy](https://github.com/Cork-Technology/cork-knowledge/blob/main/policies/versioning-and-release.md):
-plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps the **minor**
-(policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
-schemas, and exit codes — human-readable text and log formats are not covered.
+[Versioning and Distribution Policy](https://github.com/Cork-Technology/cork-knowledge/blob/main/policies/versioning-and-release.md).
+We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surface bumps the
+**minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
+schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
 ## [0.2.0-rc.2] — 2026-08-12
 
-The cork-api 0.3.3 alignment (Raouf's 2026-08-12 API day: module-scoped routing, the registry
-module, and the premium convention convergence). Nothing here breaks an rc.1 caller: both premium
-spellings are accepted through the venue's migration window, and the old venue paths would have
-kept working via the venue's temporary rewrite anyway — this release simply moves off it before
-it retires.
+This release aligns the tools with cork-api 0.3.3: module-scoped routing, the registry module,
+and the new premium convention (Raouf's 2026-08-12 API day). Nothing here breaks an rc.1 caller.
+We accept both premium spellings through the venue's migration window. The old venue paths also
+still work through the venue's temporary rewrite; this release moves off that rewrite before the
+venue retires it.
 
 ### Added
 
-- **`premiumAnnualized` on lop-order and the finalize listing** — the venue's successor premium
-  field (annualized decimal-fraction STRING, `"0.041"` = 4.1%; same name and convention as the
-  RFQ surface, the R13 new-unit-new-name mechanism working as designed). The venue's premium
-  resolution is replicated operation-for-operation from its post-order route: at least one
-  spelling required (taught locally, `invalid_order_terms`), fraction canonicalized by
-  `parseFloat × 100`, both-sent disagreement refused with the venue's exact 1e-9-relative
-  comparison (new conflict code `premium_fields_disagree`), fraction precedence, and the
-  quote_ref band running on the canonical percent — so a fraction-declared order needs no ×100
-  step anywhere. The book's own fraction gate is layered like the RFQ's: the published pattern
-  is structure, the ≤ 100 bound (the legacy 10000% ceiling's mirror) is policy. The percent
-  `premium` is now optional and DEPRECATED (venue removes it 2026-08-17; using it warns
-  `deprecation_notice` with the date). Eleven new mutation probes pin the gates.
-- **In-band venue notices surface as `venue_notice`** — cork-api 0.3.3 responses carry a
-  `warnings[]` channel (first use: the premium deprecation with its removal date); venue list
-  reads, taker-fill's book search, and successful submit relays now relay each notice verbatim
-  under the label, deduped across traversal pages.
-- **Deprecated-path telemetry as `venue_deprecated_path`** — a call served by the venue's
-  temporary `/v1/<module>` rewrite (`Deprecation: true` + `x-cork-canonical-path`) announces
-  itself; after this release's canonical literals, seeing it means a stale base override or a
-  stale literal.
-- **Approved-implementations guard (interface-first model)** — the config gains an
-  `approvedImplementations` allowlist (per chain, per trusted role, resolved against the address
-  blocks that already exist; hashes captured live 2026-08-12), and every `cork_prepare_phoenix`
-  pre-flight now fingerprints the LIVE runtime code behind corkAdapter, whitelistManager (via
-  its EIP-1967 implementation slot — the proxy's own code never changes on an upgrade),
-  marketRegistry, and jitAdapter. Code that hashes off the list warns
-  `implementation_not_approved` (build-and-warn; approved/unreadable stay silent). An
-  implementation joins the list only after the behavioral suite passes against it. The same
-  schema is proposed for the distribution repo
-  (notes/distribution-interface-manifest-proposal.md, with `byteParams` — the interface
-  revisions ABIs cannot express); until adopted there, the guard runs entirely from our config.
-- **Venue spec-hash tripwire** — a live-gated test (CORK_RPC_LIVE=1) canonicalizes the venue's
-  published openapi and compares it against a committed capture, so a venue contract change
-  arrives as a named alert with a reviewable fixture diff instead of unexplained 400s;
-  re-capture deliberately with UPDATE_VENUE_SPEC=1 (the surface-drift workflow, pointed
-  outward).
+- **`premiumAnnualized` on lop-order and the finalize listing.** This is the venue's successor
+  premium field: an annualized fraction as a decimal string, so `"0.041"` means 4.1%. The RFQ
+  surface already uses the same name and unit — the policy R13 new-unit-new-name mechanism,
+  working as designed. We replicated the venue's premium resolution operation for operation from
+  its post-order route:
+  - You must send at least one spelling. We teach this locally (`invalid_order_terms`).
+  - We canonicalize the fraction with `parseFloat × 100`, exactly as the venue does.
+  - If you send both spellings and they disagree, we refuse with the venue's exact 1e-9-relative
+    comparison. The new conflict code is `premium_fields_disagree`.
+  - The fraction takes precedence, and the quote_ref band runs on the canonical percent. A
+    fraction-declared order needs no ×100 step anywhere.
+
+  The book's fraction gate has two layers, like the RFQ's: the published pattern is structure;
+  the ≤ 100 bound (the mirror of the legacy 10000% ceiling) is policy. The percent `premium` is
+  now optional and DEPRECATED. The venue removes it on 2026-08-17; if you send it, we warn
+  `deprecation_notice` with that date. Eleven new mutation probes pin these gates.
+- **Venue notices surface as `venue_notice`.** cork-api 0.3.3 responses carry a `warnings[]`
+  channel; its first use is the premium deprecation with its removal date. Venue list reads,
+  taker-fill's book search, and successful submit relays now show each notice verbatim under
+  this label. We dedupe notices across traversal pages.
+- **Deprecated-path telemetry as `venue_deprecated_path`.** When the venue serves a call through
+  its temporary `/v1/<module>` rewrite, it sets `Deprecation: true` and `x-cork-canonical-path`.
+  We now report that. This release uses the canonical path literals, so this warning means one
+  of two things: a stale base override, or a stale path literal.
+- **Approved-implementations guard (the interface-first model).** The config gains an
+  `approvedImplementations` allowlist: per chain, per trusted role, resolved against the address
+  blocks that already exist. We captured the hashes live on 2026-08-12. Every
+  `cork_prepare_phoenix` pre-flight now hashes the LIVE runtime code behind four roles:
+  corkAdapter, whitelistManager, marketRegistry, and jitAdapter. For whitelistManager we read
+  the EIP-1967 implementation slot first, because a proxy's own code never changes on an
+  upgrade. Code that is not on the list warns `implementation_not_approved`. The guard builds
+  and warns; approved and unreadable code stay silent. An implementation joins the list only
+  after the behavioral suite passes against it. We proposed the same schema for the
+  distribution repo (notes/distribution-interface-manifest-proposal.md), with `byteParams` —
+  the interface revisions that ABIs cannot express. Until the repo adopts it, the guard runs
+  entirely from our config.
+- **Venue spec-hash tripwire.** A live-gated test (CORK_RPC_LIVE=1) canonicalizes the venue's
+  published openapi and compares it against a committed capture. A venue contract change now
+  arrives as a named alert with a reviewable fixture diff, not as unexplained 400s. Re-capture
+  deliberately with UPDATE_VENUE_SPEC=1 — the surface-drift workflow, pointed outward.
 
 ### Changed
 
-- **Venue routing is module-scoped (cork-api 0.3.3 canonical form)**: `DEFAULT_VENUE_URL` is now
-  the bare origin and every path literal carries its module's version (`/limit-orders/v1/…`,
-  `/rollover/v1/orders`, `/rfqs/v1`, `/pools/v1`). A configured `CORK_VENUE_URL` still ending in
-  `/v<n>` (the pre-0.3.3 convention) is normalized by stripping that suffix — it would otherwise
-  compose into `/v1/<module>/v1/…`, a path no form of the API ever served.
-- **Registry live-parity default moved to the cork-api registry module**
-  (`https://api-phoenix.cork.tech/registry`; override `CORK_MARKET_API`) — the standalone zian-b
-  sandbox retires after the cutover; our path literals compose with the mount into the canonical
-  `/registry/v1/…` form unchanged.
+- **Venue routing is module-scoped (the cork-api 0.3.3 canonical form).** `DEFAULT_VENUE_URL` is
+  now the bare origin, and every path literal carries its module's version
+  (`/limit-orders/v1/…`, `/rollover/v1/orders`, `/rfqs/v1`, `/pools/v1`). If a configured
+  `CORK_VENUE_URL` still ends in `/v<n>` (the pre-0.3.3 convention), we strip that suffix.
+  Without the strip, requests would compose into `/v1/<module>/v1/…` — a path no form of the
+  API ever served.
+- **The registry live-parity default moved to the cork-api registry module**
+  (`https://api-phoenix.cork.tech/registry`; override with `CORK_MARKET_API`). The standalone
+  zian-b sandbox retires after the cutover. Our path literals compose with the mount into the
+  canonical `/registry/v1/…` form, unchanged.
 
 ### Fixed
 
-- **ERC-1271 maker orders were unpostable, and contract-maker book rows unreadable** — the venue's
-  wire vocabulary is `EOA | CONTRACT` (verified against its post/get schemas), while this relay
-  posted `makerAccountType: "ERC1271"` verbatim (schema-rejected, HTTP 400) and its row parser
-  refused `"CONTRACT"` rows (`invalid_service_response` on taker-fill). Both directions now
-  translate at the boundary; our own surface vocabulary is unchanged.
-- The premium-paste teaching message now computes its suggested spelling with exact string math —
-  a float division produced suggestions like `0.041000000000000002`, teaching the wrong lesson.
+- **ERC-1271 maker orders could not post, and contract-maker book rows could not parse.** The
+  venue's wire vocabulary is `EOA | CONTRACT`; we verified this against its post and get
+  schemas. Our relay posted `makerAccountType: "ERC1271"` verbatim, and the venue schema
+  rejected it with HTTP 400. Our row parser refused `"CONTRACT"` rows, so taker-fill returned
+  `invalid_service_response`. We now translate in both directions at the boundary. Our own
+  surface vocabulary is unchanged.
+- The premium-paste teaching message now computes its suggested spelling with exact string
+  math. A float division produced suggestions like `0.041000000000000002` — the wrong lesson.
 
 ## [0.2.0-rc.1] — 2026-08-12
 
-**New line (0.1 → 0.2), declared by the integrability owner under policy R5/R14** (2026-08-11):
-this cut carries three behavior changes in R14's class — visible to no schema diff, judged (by a
-non-author, as R14 requires) to change what adapted integrations observe. Per R10, `y` plays the
-major's role below 1.0.0, and at `^0.1.x` a resolver will NOT cross into 0.2.x: an rc.3 runner's
-build stops instead of silently absorbing changed behavior. Details under Changed.
+**This cut starts a new line (0.1 → 0.2).** The integrability owner declared it on 2026-08-11
+under policy R5/R14. The cut carries three behavior changes in R14's class: no schema diff shows
+them, but a non-author judged (as R14 requires) that they change what adapted integrations
+observe. Under policy R10, `y` plays the major's role below 1.0.0, so a `^0.1.x` resolver will
+NOT cross into 0.2.x: an rc.3 runner's build stops instead of silently absorbing changed
+behavior. Details under Changed.
 
 ### Added
 
-- **`docs/jit-order-anatomy.md`** (issue #2): the chain-agnostic, address-free contract reference
-  for JIT orders — the `extraData` structs field by field, the permit rule (who signs, the LOP
-  as sole spender, execution right after the mint, the ForSelf non-interaction), `rateOverride`
-  and fee-field rules, the four-step fill sequence, the maker/taker entry-point asymmetry
-  (`enableJitMint` IGNORED on the taker path), both event signatures, the full adapter +
-  creation-bounds error table, the adapter's four immutables with the `MARKET_REGISTRY()`
-  cross-generation check, and the on-chain-verified roles precondition (`POOL_CREATOR_ROLE` +
-  `FEE_MANAGER_ROLE` — the pre-v1.3 `CONFIGURATOR_ROLE` pair reports a false negative against
-  the live fill path; verified on the deployed controller 2026-08-12).
-- **Registry-semantics block in `docs/cli.md`** (issue #2): oracle mode composition rule,
-  pair-order/mode asymmetry, feed direction + decimals-drift check, recipe args tuple-notation
-  trap and mixed constant scales, derivation-simulates-deploy with the state-override RPC
-  requirement and `ch`'s honest degradation (`share_prediction_unavailable`), and the
-  never-infer-chain-from-address rule.
-- **Docs-freshness gate** (`packages/core/test/docs-freshness.test.ts`): the quickstart's
-  generation markers (registry/adapter/recipe addresses, every "contracts release X" claim) are
-  now asserted against `cork-defaults.json`, retired-generation addresses are asserted absent,
-  and the anatomy doc is asserted address-free — the next registry redeploy fails the suite
-  until the partner docs move with it (kill-checked against the rc.3 text: 3/3 drift assertions
-  fail on it).
+- **`docs/jit-order-anatomy.md`** (issue #2): the chain-agnostic, address-free contract
+  reference for JIT orders. It covers: the `extraData` structs field by field; the permit rule
+  (who signs, the LOP as the sole spender, execution right after the mint, the ForSelf
+  non-interaction); the `rateOverride` and fee-field rules; the four-step fill sequence; the
+  maker/taker entry-point asymmetry (`enableJitMint` is IGNORED on the taker path); both event
+  signatures; the full adapter and creation-bounds error table; the adapter's four immutables
+  with the `MARKET_REGISTRY()` cross-generation check; and the roles precondition
+  (`POOL_CREATOR_ROLE` + `FEE_MANAGER_ROLE`). We verified the roles on the deployed controller
+  on 2026-08-12 — the pre-v1.3 `CONFIGURATOR_ROLE` pair reports a false negative against the
+  live fill path.
+- **Registry-semantics block in `docs/cli.md`** (issue #2). It explains: the oracle mode
+  composition rule; the pair-order/mode asymmetry; feed direction and the decimals-drift check;
+  the recipe args tuple-notation trap and the mixed constant scales; how derivation simulates
+  the deploy, the state-override RPC it needs, and how `ch` degrades honestly
+  (`share_prediction_unavailable`); and the rule to never infer the chain from an address.
+- **Docs-freshness gate** (`packages/core/test/docs-freshness.test.ts`). The suite asserts the
+  quickstart's generation markers — registry, adapter, and recipe addresses, and every
+  "contracts release X" claim — against `cork-defaults.json`. It asserts that retired-generation
+  addresses are absent, and that the anatomy doc stays address-free. The next registry redeploy
+  fails the suite until the partner docs move with it. We kill-checked the gate against the
+  rc.3 text: 3 of 3 drift assertions fail on it.
 
-- **`x-units` on every scaled input field** (covered-surface addition): machine-readable unit
-  notation (`D18{1}`, `D18{%}`, `{qTok}`, …) valued from the same vocabulary as the `units`
-  topic table; a three-axis parity test binds the wire extension, the table row, and the
-  description prose per field. The surface-drift fixture now stores FULL schemas (was hashes),
-  so unit changes are reviewable in the fixture diff, not just detectable.
-- **Audit R2 closed** (input schema descriptions): `permits[].value` typed as a TokenAmount with
-  the predicted-cST teaching; the four JIT constraint bounds carry PER-FIELD scale + x-units
-  (shared `RateConstraintWire`); rollover `orderSize`/`minCaReceived`/`minSharesOut` and
-  `dstCstProduced` state their token and decimals; `notionalAssets` names its `one_of`-decimals
-  ambiguity with the remediation; the rfq-answer options gate is advertised in the schema
-  (structure vs relaxable-policy split per the COR-35 ruling).
-- **Tiered surface-drift gate** (dev-infra): drift failures classify mechanically
-  (`surface-tier.ts`) into prose (regenerate only) vs semantic (Layer B first, held-out
-  included); ambiguity fails expensive by construction; classifier mutation-probed.
-- **Eval harness persistence** (dev-infra): every Layer B run writes per-task rows to
-  `evals/.last-run.jsonl`; eval fixtures read deployment addresses from `cork-defaults.json`
-  (a pinned 0.3.2 registry address had silently turned two tasks red after the 0.3.3 redeploy).
-- apk release channel fails fast with teaching when `MELANGE_SIGNING_KEY` is unset.
-- **Committed default RPC for Base (8453)** (owner-provided 2026-08-12): chainlist.org was
+- **`x-units` on every scaled input field** (a covered-surface addition): machine-readable unit
+  notation (`D18{1}`, `D18{%}`, `{qTok}`, …), valued from the same vocabulary as the `units`
+  topic table. A three-axis parity test binds the wire extension, the table row, and the
+  description prose for each field. The surface-drift fixture now stores FULL schemas (it
+  stored hashes), so a unit change shows in the fixture diff — you can review it, not just
+  detect it.
+- **Audit R2 closed** (input schema descriptions). `permits[].value` is typed as a TokenAmount
+  with the predicted-cST teaching. The four JIT constraint bounds carry per-field scale and
+  x-units (the shared `RateConstraintWire`). Rollover `orderSize`, `minCaReceived`,
+  `minSharesOut`, and `dstCstProduced` state their token and decimals. `notionalAssets` names
+  its `one_of`-decimals ambiguity and the remediation. The rfq-answer options gate is
+  advertised in the schema, with the structure vs relaxable-policy split per the COR-35 ruling.
+- **Tiered surface-drift gate** (dev-infra). Drift failures now classify mechanically
+  (`surface-tier.ts`): a prose change needs a regenerate only; a semantic change needs Layer B
+  first, held-out included. An ambiguous change fails expensive by construction. The classifier
+  is mutation-probed.
+- **Eval harness persistence** (dev-infra). Every Layer B run writes per-task rows to
+  `evals/.last-run.jsonl`. Eval fixtures now read deployment addresses from
+  `cork-defaults.json` — a pinned 0.3.2 registry address had silently turned two tasks red
+  after the 0.3.3 redeploy.
+- The apk release channel fails fast with teaching when `MELANGE_SIGNING_KEY` is unset.
+- **Committed default RPC for Base (8453)** (owner-provided 2026-08-12). chainlist.org was
   previously the ONLY automatic path for Base — the #3 finding of the dependency SPOF audit,
-  and the cause of a flaky live-smoke CI run. Base chain reads now work out of the box like
-  mainnet and Arbitrum; the chainlist fallback remains behind the breaker. The three-default
-  set is pinned by an executable test (the "never commit an RPC URL" exception, as code).
-- **Taker-side `jitMarket` fee fields carry `x-units`** (covered-surface addition): the maker
-  copy had the markers, the taker copy had silently lost them — an omission the three-axis
-  parity test cannot see (it checks that emitted values agree; a site emitting nothing is
-  invisible). Both paths now share one schema constant per fee field, so the omission class is
-  structurally closed. Same batch: `cork_submit` rollover pool ids teach via `MarketId` and
-  `permits[].value` via `TokenAmount` (wire-compatible `$ref` upgrades — identical patterns).
-- **Taker JIT pre-flights disclose what the maker path already did**: a failed `recipe.verify`
-  read (`chain_read_failed`) and an undeployed oracle (`oracle_not_deployed`) now warn on fills
-  too — the shared pre-flight ladder made the asymmetry visible and impossible to reintroduce.
-- **`cork_submit` rollover-order settler disclosures** (F14 parity with prepare): an
+  and the cause of a flaky live-smoke CI run. Base chain reads now work out of the box, like
+  mainnet and Arbitrum. The chainlist fallback stays behind the breaker. An executable test
+  pins the three-default set — the "never commit an RPC URL" exception, as code.
+- **Taker-side `jitMarket` fee fields carry `x-units`** (a covered-surface addition). The maker
+  copy had the markers; the taker copy had silently lost them. The three-axis parity test
+  cannot see that omission — it checks that emitted values agree, and a site that emits nothing
+  is invisible. Both paths now share one schema constant per fee field, which closes the
+  omission class structurally. Same batch: `cork_submit` rollover pool ids teach via `MarketId`
+  and `permits[].value` via `TokenAmount` — wire-compatible `$ref` upgrades with identical
+  patterns.
+- **Taker JIT pre-flights disclose what the maker path already did.** A failed `recipe.verify`
+  read now warns `chain_read_failed`, and an undeployed oracle now warns `oracle_not_deployed`,
+  on fills too. The shared pre-flight ladder made the asymmetry visible and impossible to
+  reintroduce.
+- **`cork_submit` rollover-order settler disclosures** (F14 parity with prepare). An
   unrecognized settler, or a chain with no rollover config, now relays WITH
-  `settler_not_recognized` instead of silently skipping the check a prepare-path caller gets.
-- **Offline drift gates for hand-maintained address tables** (dev-infra): `RECIPE_CATALOG` and
+  `settler_not_recognized`. Before, the submit path silently skipped the check a prepare-path
+  caller gets.
+- **Offline drift gates for hand-maintained address tables** (dev-infra). `RECIPE_CATALOG` and
   the worked examples' recipe addresses are now parity-tested against `cork-defaults.json`
-  offline — the 0.3.3-redeploy hand-edit class fails in CI, not in a live run someone happens
-  to start. The mutation-probe runner also hardened: an ambiguous anchor is rot (a
-  first-occurrence replace could mutate the wrong site and still report "caught").
+  offline. The 0.3.3-redeploy hand-edit class fails in CI, not in a live run someone happens to
+  start. The mutation-probe runner also hardened: an ambiguous anchor is now rot, because a
+  first-occurrence replace could mutate the wrong site and still report "caught".
 
 ### Changed
 
 - **[R14 prose] `permit2Internal.expired` now replicates Permit2's own gate exactly**
-  (`block.timestamp > expiration`; audit R9). Two observable flips: an allowance with
-  `expiration: 0` now reports `expired: true` (Permit2 has no zero special-case — the old
-  `false` certified an allowance the chain would reject with `AllowanceExpired`), and the exact
-  boundary second now reports `expired: false` (spending is legal AT expiration). **What to do:**
-  if your tests or logic pinned `expired: false` for zero-expiration states, update them — the
-  old verdict walked funding flows into on-chain reverts; the new one matches what a fill will
-  actually do.
+  (`block.timestamp > expiration`; audit R9). Two verdicts flip. An allowance with
+  `expiration: 0` now reports `expired: true` — Permit2 has no zero special-case, and the old
+  `false` certified an allowance the chain rejects with `AllowanceExpired`. The exact boundary
+  second now reports `expired: false` — spending is legal AT expiration. **What to do:** if
+  your tests or logic pinned `expired: false` for zero-expiration states, update them. The old
+  verdict walked funding flows into on-chain reverts; the new one matches what a fill does.
 - **[R14 prose] CLI argument-parse errors now honor the JSON error contract.** Under
-  `CORK_JSON=1` or any `--json` spelling, unknown-option/unknown-command/excess-argument errors
-  emit the standard `{"error":{"code":"invalid_input",…}}` envelope on stderr instead of
-  commander's plain text (the one stderr path a JSON consumer could not parse). Exit codes are
-  unchanged. **What to do:** a script that regex-parsed the old plain text (an uncovered
-  surface) should `JSON.parse` stderr like every other error path; plain-text mode without JSON
-  intent is byte-compatible.
-- **[R14 prose] Oversized values in integer-typed flags reclassify** `invalid_input` →
-  `invalid_amount`: integer flags now share the amount-sugar dialect (`1_000` and `1e3` both
-  work — previously two adjacent flags accepted different spellings by accident), and a value
-  expanding past 2^53 is refused as `invalid_amount` with teaching instead of falling through
-  to a schema type error. **What to do:** if you branch on `error.code` for absurd-magnitude
+  `CORK_JSON=1` or any `--json` spelling, unknown-option, unknown-command, and excess-argument
+  errors emit the standard `{"error":{"code":"invalid_input",…}}` envelope on stderr. Before,
+  commander printed plain text — the one stderr path a JSON consumer could not parse. Exit
+  codes are unchanged. **What to do:** if a script regex-parsed the old plain text (an
+  uncovered surface), change it to `JSON.parse` stderr like every other error path. Plain-text
+  mode without JSON intent is byte-compatible.
+- **[R14 prose] Oversized values in integer-typed flags reclassify from `invalid_input` to
+  `invalid_amount`.** Integer flags now share the amount-sugar dialect, so `1_000` and `1e3`
+  both work — before, two adjacent flags accepted different spellings by accident. A value that
+  expands past 2^53 is refused as `invalid_amount` with teaching, instead of falling through to
+  a schema type error. **What to do:** if you branch on `error.code` for absurd-magnitude
   inputs to integer fields, add `invalid_amount` to that branch.
-- `ch query --json pools` (a bare `--json` swallowing a positional) now teaches the exact
+- `ch query --json pools` (a bare `--json` that swallows a positional) now teaches the exact
   corrected spelling instead of a bare parse error.
-- **[R14 prose] The auction `phase` label agrees with the price at the start boundary**: at
-  exactly `t == startTime` all three reporting surfaces now say `"pre-start"` (two of them said
-  `"decaying"` while the price beside them was still the full-bump ceiling — the settlement
-  port charges `initialRateBump` AT startTime, `<=`). **What to do:** if you branched on
-  `phase == "decaying"` to mean "the order is live", include `"pre-start"` — the order was
-  always fillable in that state, at the ceiling price.
-- **[R14 prose] Failure attribution corrected on two JIT/oracle paths**: a missing
-  `poolManager` deployment during cST prediction now reports `share_prediction_unavailable`
-  (was a misattributed `chain_read_failed` TypeError), and a `lookupWrapper` TRANSPORT failure
-  in `cork_prepare_market` now reports `chain_read_failed` (was `oracle_not_deployable` — a
-  deployability verdict an indeterminate read cannot support). **What to do:** branch on the
-  new codes if you pinned the old ones for these situations; the situations themselves are
-  unchanged.
-- **[R14 prose] `CORK_EXPLAIN_JSON` speaks the strict CORK_* dialect** (`"1"`/`"true"` only):
-  it alone accepted any non-`"0"`/`"false"` value. Loose spellings like `yes` now render prose.
-- Teaching-error remediation says "all enums are closed" only when some issue actually carries
-  a closed value set — it used to ride every remediation, misleading checksum/timestamp/missing-
-  field failures into hunting for a nonexistent enum.
+- **[R14 prose] The auction `phase` label agrees with the price at the start boundary.** At
+  exactly `t == startTime`, all three reporting surfaces now say `"pre-start"`. Before, two of
+  them said `"decaying"` while the price beside them was still the full-bump ceiling — the
+  settlement port charges `initialRateBump` AT startTime (`<=`). **What to do:** if you
+  branched on `phase == "decaying"` to mean "the order is live", include `"pre-start"`. The
+  order was always fillable in that state, at the ceiling price.
+- **[R14 prose] Failure attribution corrected on two JIT/oracle paths.** A missing
+  `poolManager` deployment during cST prediction now reports `share_prediction_unavailable`;
+  before, it was a misattributed `chain_read_failed` TypeError. A `lookupWrapper` TRANSPORT
+  failure in `cork_prepare_market` now reports `chain_read_failed`; before, it was
+  `oracle_not_deployable` — a deployability verdict an indeterminate read cannot support.
+  **What to do:** branch on the new codes if you pinned the old ones for these situations. The
+  situations themselves are unchanged.
+- **[R14 prose] `CORK_EXPLAIN_JSON` speaks the strict CORK_* dialect** (`"1"`/`"true"` only).
+  It alone accepted any value other than `"0"`/`"false"`. Loose spellings like `yes` now render
+  prose.
+- The teaching-error remediation says "all enums are closed" only when some issue actually
+  carries a closed value set. Before, the line rode every remediation and misled checksum,
+  timestamp, and missing-field failures into hunting for a nonexistent enum.
 - `--enable-deprecated` no longer leaks `CORK_ENABLE_DEPRECATED` into later `runCli` calls in
-  the same process (tests, embedding); the flagged call itself is unchanged.
-- The "(formerly digest_mismatch)" message suffixes from rc.3 remain through this release; the
+  the same process (tests, embedding). The flagged call itself is unchanged.
+- The "(formerly digest_mismatch)" message suffixes from rc.3 remain through this release. The
   one-release notice window closes with the next cut.
 
 ### Fixed
 
 - **`docs/zyfai-quickstart.md` refreshed from the retired 0.3.2 generation to 0.3.3**
-  (issue #1): status block (roles granted 2026-08-10 on both chains; Base post-first-market with
-  live JIT fills and ~50 short-dated pilot pools), §5G's redeploy cutoff + a new
-  "which generation am I on" rule pair (abandoned generations answer with plausible values; the
-  `MARKET_REGISTRY()` cross-check and where `ch` automates it), §5A's fork evidence re-stated
-  against the current stack (suites re-run green 2026-08-12), and every worked example
-  re-captured live against 0.3.3 on Base — registry/adapter/recipe addresses, the pair's new
-  nav wrapper, re-derived poolId/cST/cPT, plus a real rate-drift episode teaching why the
-  derived constraint must be carried verbatim into the order. The step-2 decode now explains
-  `"permits": N` in place (issue #2's spot-edit) and cross-links the anatomy doc.
-- Advertised `cork_query` description named the retired `flows` resource (now
-  `rollover-orders`, and `rfqs` is listed) and carried an "an trading-pair" typo; `ch mcp`
-  entrypoint help and the commander stub documented different option sets and both still said
+  (issue #1). The status block now says: roles granted 2026-08-10 on both chains; Base is past
+  its first market, with live JIT fills and ~50 short-dated pilot pools. §5G gains the redeploy
+  cutoff and a new "which generation am I on" rule pair — an abandoned generation answers with
+  plausible values; the `MARKET_REGISTRY()` cross-check catches that, and the doc shows where
+  `ch` automates it. §5A's fork evidence is re-stated against the current stack (suites re-run
+  green 2026-08-12). We re-captured every worked example live against 0.3.3 on Base: registry,
+  adapter, and recipe addresses; the pair's new nav wrapper; re-derived poolId, cST, and cPT;
+  plus a real rate-drift episode that teaches why the order must carry the derived constraint
+  verbatim. The step-2 decode now explains `"permits": N` in place (issue #2's spot-edit) and
+  cross-links the anatomy doc.
+- The advertised `cork_query` description named the retired `flows` resource (now
+  `rollover-orders`, and `rfqs` is listed) and carried an "an trading-pair" typo. The `ch mcp`
+  entrypoint help and the commander stub documented different option sets, and both still said
   `/docs/signing` though the route serves every topic.
-- Advertised `cork_prepare_market` description stated the 2-arg `deploy(ca, ref)` (it takes
-  `mode`) and named only Arbitrum (live on 42161 + 8453); registry-view maturity reasons still
-  cited the superseded 2026-08-03 deployment.
-- **Two audit passes over the whole tree** (2026-08-11/12), verified byte-equivalent on a
-  12-call offline behavioral battery against rc.3 (unsigned bundle bytes, maker typed-data,
-  decode outputs, and math identical; only the deliberate teaching deltas differ): the
-  maker/taker JIT pre-flight ladder single-sourced (`runJitPreflightLadder` — the copies had
-  already drifted); `cork_submit` now derives the LOP order hash and makerTraits fields from
-  the same `orders.ts` code the maker path signs (its private re-implementations deleted); ONE
-  salt↔extension comparator, oracle-status probe, deprecated-mode resolver, permit-wire
-  parser, fetch-timeout, and first-line-error helper replace 3–6 private copies each;
-  HyperSync topic selectors derive from the parsed event declarations (each signature was
-  maintained twice in that file); dead exports and a dead config resolution path
-  (`deploymentFor` — bundled-only, contradicting remote-first) removed. 13 new tests; probe
-  catalog grew 172 → 176, all caught, zero rot.
+- The advertised `cork_prepare_market` description stated the 2-arg `deploy(ca, ref)` — it
+  takes `mode` — and named only Arbitrum (it is live on 42161 + 8453). Registry-view maturity
+  reasons still cited the superseded 2026-08-03 deployment.
+- **Two audit passes over the whole tree** (2026-08-11/12). We verified them byte-equivalent on
+  a 12-call offline behavioral battery against rc.3: unsigned bundle bytes, maker typed-data,
+  decode outputs, and math are identical; only the deliberate teaching deltas differ. The work:
+  the maker/taker JIT pre-flight ladder is single-sourced (`runJitPreflightLadder` — the copies
+  had already drifted). `cork_submit` now derives the LOP order hash and makerTraits fields
+  from the same `orders.ts` code the maker path signs; its private re-implementations are
+  deleted. ONE salt↔extension comparator, oracle-status probe, deprecated-mode resolver,
+  permit-wire parser, fetch-timeout, and first-line-error helper replace 3–6 private copies
+  each. HyperSync topic selectors derive from the parsed event declarations — each signature
+  was maintained twice in that file. Dead exports and a dead config resolution path
+  (`deploymentFor` — bundled-only, which contradicted remote-first) are removed. 13 new tests;
+  the probe catalog grew from 172 to 176, all caught, zero rot.
 
 ## [0.1.0-rc.3] — 2026-08-10
 
 ### Added
 
-- **RFQ negotiation surface** (venue a2b03bd): `cork_submit rfq-counter` — the requester's
-  non-committal counter-bid, with the venue's own gates replicated client-side (fraction
-  contract, requester/expiry/citation pre-flights); optional `supersedes` on `rfq-answer`;
-  `filters.view` (`full`|`current`) on the `rfqs` read serving the negotiation frontier, with
-  `version`-based change polling taught in the schema.
+- **RFQ negotiation surface** (venue a2b03bd). `cork_submit rfq-counter` is the requester's
+  non-committal counter-bid, with the venue's own gates replicated client-side: the fraction
+  contract, and the requester, expiry, and citation pre-flights. `rfq-answer` gains an optional
+  `supersedes`. The `rfqs` read gains `filters.view` (`full`|`current`), which serves the
+  negotiation frontier; the schema teaches `version`-based change polling.
 - **`units` doc topic** — the scale table agents can ask for (`cork_capabilities
-  topic:"units"`), wired into every numbers-contract tripwire message; money/rate outputs across
-  compute, query, and decode now carry explicit `scales` blocks (audit R1 closed).
-- **market-registry 0.3.3** (Arbitrum One + Base, identical addresses): the CREATE2-collision
-  fix integrated and live-verified; CREATE2 attestations extended with public rebuild pointers
-  (`source`: repo@tag + forge path) and config-binding declarations (`binds`), coverage pinned —
-  15 entries, all re-derived locally.
-- **Live venue contract test** (`venue-live.test.ts`): the negotiation read contract asserted
-  against the deployed venue (frontier partition arithmetic, version monotonicity), wired into
-  CI's live-smoke.
+  topic:"units"`), wired into every numbers-contract tripwire message. Money and rate outputs
+  across compute, query, and decode now carry explicit `scales` blocks (audit R1 closed).
+- **market-registry 0.3.3** (Arbitrum One + Base, identical addresses). The CREATE2-collision
+  fix is integrated and live-verified. CREATE2 attestations gain public rebuild pointers
+  (`source`: repo@tag + forge path) and config-binding declarations (`binds`); coverage is
+  pinned — 15 entries, all re-derived locally.
+- **Live venue contract test** (`venue-live.test.ts`). It asserts the negotiation read contract
+  against the deployed venue — frontier partition arithmetic and version monotonicity — and
+  runs in CI's live-smoke.
 
 ### Changed
 
-- **`digest_mismatch` split into four branchable codes** (covered-surface change, rc-line only:
-  `artifact_digest_mismatch`, `intent_hash_mismatch`, `venue_digest_mismatch`,
-  `order_hash_mismatch`); messages carry "(formerly digest_mismatch)" for one release.
-- **RFQ pre-flights now predict the deployed venue, not an idealized decimal contract**: the
-  fraction cap mirrors the venue's `parseFloat` refine; the `quote_ref` premium band replicates
-  the venue's strict float gate operation-for-operation (eliminating two false-block classes);
-  citations unresolvable on a truncated answers embed relay flagged `citation_unresolved`
-  instead of false-refusing; the venue's provenance checks (maker==requester, option chain and
-  collateral coherence) run client-side with teaching.
-- **One CLI synonym resolver across every input path** (audit R4): resource aliases are
-  case-insensitive like chain names; positional fields also ride as flags (`--resource`,
-  `--chain-id`); variant subcommands and top-level verbs accept the parent's positional
-  (`ch exercise 1`); canonicalised variant spellings are rewritten pre-parse so `--explain`
-  can no longer show the wrong contract; `ch capabilities <query>` searches.
+- **`digest_mismatch` split into four branchable codes** (covered-surface change, rc-line
+  only): `artifact_digest_mismatch`, `intent_hash_mismatch`, `venue_digest_mismatch`,
+  `order_hash_mismatch`. Messages carry "(formerly digest_mismatch)" for one release.
+- **RFQ pre-flights now predict the deployed venue, not an idealized decimal contract.** The
+  fraction cap mirrors the venue's `parseFloat` refine. The `quote_ref` premium band replicates
+  the venue's strict float gate operation for operation, which removes two false-block classes.
+  A citation the truncated answers embed cannot resolve now relays flagged
+  `citation_unresolved` instead of false-refusing. The venue's provenance checks —
+  maker==requester, option chain, and collateral coherence — run client-side with teaching.
+- **One CLI synonym resolver across every input path** (audit R4). Resource aliases are
+  case-insensitive, like chain names. Positional fields also ride as flags (`--resource`,
+  `--chain-id`). Variant subcommands and top-level verbs accept the parent's positional
+  (`ch exercise 1`). Canonicalised variant spellings are rewritten pre-parse, so `--explain`
+  can no longer show the wrong contract. `ch capabilities <query>` searches.
 
 ### Fixed
 
-- Footgun-audit hardening: `rollover-premium-floor` rounds CEIL (settler parity);
-  unsafe-integer JSON numbers refuse instead of silently rounding (order records,
-  `filters.rate`); `chainid_defaulted` warns when an omitted chainId picked mainnet for
-  chain-specific hashes.
+- Footgun-audit hardening. `rollover-premium-floor` now rounds CEIL (settler parity).
+  Unsafe-integer JSON numbers refuse instead of silently rounding (order records,
+  `filters.rate`). `chainid_defaulted` warns when an omitted chainId picked mainnet for a
+  chain-specific hash.
 
 ## [0.1.0-rc.2] — 2026-08-10
 
-Identical content to 0.1.0-rc.1 plus one release-pipeline fix: the cross-OS smoke step used
-`tee /dev/stderr`, a device Windows git-bash lacks, so `pipefail` failed a PASSING Windows
-binary check and the publish gate (correctly) withheld the release. The rc.1 rehearsal proved
-everything else: version-gate, two independent byte-identical builds, provenance attestation,
-and the binaries themselves on all four OS families. rc.1's tag remains unpublished history.
+Identical content to 0.1.0-rc.1, plus one release-pipeline fix. The cross-OS smoke step used
+`tee /dev/stderr` — a device Windows git-bash lacks — so `pipefail` failed a PASSING Windows
+binary check, and the publish gate correctly withheld the release. The rc.1 rehearsal proved
+everything else: the version gate, two independent byte-identical builds, the provenance
+attestation, and the binaries themselves on all four OS families. rc.1's tag remains unpublished
+history.
 
 ## [0.1.0-rc.1] — 2026-08-09 (tag exists; release not published — smoke-script bug, see rc.2)
 
-First tagged release candidate: the Cork Phoenix **MCP server + CLI over one typed core**
-(9 tools; MCP and CLI are thin projections of the same `runTool` dispatch).
+The first tagged release candidate: the Cork Phoenix **MCP server + CLI over one typed core**.
+Nine tools; MCP and CLI are thin projections of the same `runTool` dispatch.
 
 ### Added
 
 - The 9-tool surface: `cork_capabilities`, `cork_query`, `cork_compute`, `cork_decode`,
   `cork_prepare_phoenix`, `cork_prepare_orders`, `cork_prepare_market`, `cork_track`,
-  `cork_submit` — prepare/sign/submit separation throughout (nothing signs; only `cork_submit`
-  relays caller-signed payloads).
-- CLI `ch`: one command per tool, discriminated actions as subcommands, schema-derived flags with
-  exact amount sugar (`1000e18`), `--explain` contracts, prose-by-default / JSON-on-request
-  output, exit codes mapped to envelope state (0 ok · 2 invalid · 3 unavailable · 4 conflict).
+  `cork_submit`. Prepare, sign, and submit stay separate throughout: nothing signs, and only
+  `cork_submit` relays caller-signed payloads.
+- The CLI `ch`: one command per tool; discriminated actions as subcommands; schema-derived flags
+  with exact amount sugar (`1000e18`); `--explain` contracts; prose by default and JSON on
+  request; exit codes mapped to envelope state (0 ok · 2 invalid · 3 unavailable · 4 conflict).
 - MarketRegistry **2.1.0 model, contracts release 0.3.2** (Arbitrum One + Base, identical
-  addresses): registry reads (`registry-assets/-recipes/-denominations/-feeds/-oracle`),
-  `derive-cork-pool` (full pre-existence pool identity, oracle-undeployed included),
-  `recipe-rate-constraint` (the off-chain `recipe.resolve` a JIT order signs), JIT maker/taker
-  order building with carried constraints, and oracle-deploy transactions with a typed-error
-  post-mortem (`oracle_not_deployable` diagnoses registration problems vs the cross-generation
-  CREATE2-collision class).
-- Cork-native decaying-premium auctions (1inch Fusion v3.1 as a pure amount getter):
-  maker-order `auction`, `dutch-auction-price` local pricing, auction-aware taker-fill caps.
+  addresses): registry reads (`registry-assets/-recipes/-denominations/-feeds/-oracle`);
+  `derive-cork-pool` (full pool identity before the pool exists, oracle-undeployed included);
+  `recipe-rate-constraint` (the off-chain `recipe.resolve` a JIT order signs); JIT maker/taker
+  order building with carried constraints; and oracle-deploy transactions with a typed-error
+  post-mortem (`oracle_not_deployable` separates registration problems from the
+  cross-generation CREATE2-collision class).
+- Cork-native decaying-premium auctions (1inch Fusion v3.1 as a pure amount getter): maker-order
+  `auction`, local pricing with `dutch-auction-price`, and auction-aware taker-fill caps.
 - ForSelf integrator mode (`forSelf`) for parameter-blind session-key wallets, with adapter
-  binding + whitelist-generation pre-flights; ERC-1271 contract-maker signature verification.
-- Sweep-back legs on every capped funding input (the adapter-residual theft window is closed in
-  the same bundle); pre-flight guards (expiry / pause / two-address whitelist) as build-and-warn.
-- Bounded venue traversals with honest pagination, HyperSync full-decentralized reads with a
-  live-tail RPC merge, per-host circuit breakers, RPC failover with in-call disclosure.
-- Teaching errors (structured issues + did-you-mean + corrected examples that themselves
-  validate) on every schema failure, on both surfaces.
-- Single-binary release pipeline: reproducible `bun build --compile` (7 targets), dual-runner
-  determinism gate, SLSA build-provenance attestations, `ch self-update` verifying attestations
-  before swapping.
+  binding and whitelist-generation pre-flights; ERC-1271 contract-maker signature verification.
+- Sweep-back legs on every capped funding input — the adapter-residual theft window closes in
+  the same bundle. Pre-flight guards (expiry, pause, the two-address whitelist) build and warn.
+- Bounded venue traversals with honest pagination; HyperSync full-decentralized reads with a
+  live-tail RPC merge; per-host circuit breakers; RPC failover that discloses in-call.
+- Teaching errors on every schema failure, on both surfaces: structured issues, a did-you-mean,
+  and corrected examples that themselves validate.
+- A single-binary release pipeline: reproducible `bun build --compile` (7 targets), a
+  dual-runner determinism gate, SLSA build-provenance attestations, and `ch self-update`, which
+  verifies attestations before it swaps the binary.
 
 ### Changed (behaviour a diff cannot see — policy R14 prose)
 
-- **Taxonomy (2026-08-08/09, pre-release — old names answer with teaching, never silently):**
-  a *cork-pool* is one expiry of a *market* (the family over one collateral/reference pair);
-  a *trading-pair* is an LOP venue listing. Resource renames: `market`→`cork-pool`,
+- **Taxonomy (2026-08-08/09, pre-release; old names answer with teaching, never silently).** A
+  *cork-pool* is one expiry of a *market* — the family over one collateral/reference pair. A
+  *trading-pair* is an LOP venue listing. The resource renames: `market`→`cork-pool`,
   `markets`→`cork-pools`, `derive-market`→`derive-cork-pool`,
-  `limit-order-markets`→`trading-pairs`, `flows`→`rollover-orders`; compute kind
+  `limit-order-markets`→`trading-pairs`, `flows`→`rollover-orders`; the compute kind
   `resolve-recipe`→`recipe-rate-constraint`; prepare-market `deploy-wrapper`→`deploy-oracle`.
-  Every pre-rename value is rejected with a `was renamed to …` teaching error — nothing old
-  silently works, and nothing old silently breaks either. Schema *field* names (`jitMarket`,
-  `poolId`, the on-chain `Market` struct) are deliberately unchanged.
-- Amount/rate outputs are unit-labelled (`scales` blocks, `collateralDecimals` /
-  `referenceDecimals`); never assume 18 decimals.
-- Auction taker-fills default the slippage cap to the curve **ceiling** (not the signed floor),
-  so the artifact stays valid at any broadcast time; the decayed/floor/ceiling prices are
-  reported and an explicit below-price cap warns `would_revert`.
+  Every pre-rename value is rejected with a "was renamed to …" teaching error. Nothing old
+  silently works, and nothing old silently breaks. Schema *field* names (`jitMarket`, `poolId`,
+  the on-chain `Market` struct) are deliberately unchanged.
+- Amount and rate outputs are unit-labelled (`scales` blocks, `collateralDecimals` /
+  `referenceDecimals`). Never assume 18 decimals.
+- Auction taker-fills default the slippage cap to the curve **ceiling**, not the signed floor,
+  so the artifact stays valid at any broadcast time. The decayed, floor, and ceiling prices are
+  reported; an explicit below-price cap warns `would_revert`.
 
 ### Deprecated
 
 - The pre-2.1.0 registry generation (mode-string JIT, fill-time band resolution) survives intact
-  behind `legacy:true` + `CORK_ENABLE_DEPRECATED=1` (CLI `--enable-deprecated`); invoking it
+  behind `legacy:true` + `CORK_ENABLE_DEPRECATED=1` (CLI `--enable-deprecated`). Invoking it
   without the opt-in returns `deprecated_gated` with the replacement named. `jitMarket.mode` as
   sugar for a recipe address still works and warns `deprecation_notice`.
 
 ### Known gaps (recorded per Checklist A)
 
-- `cork_compute` rfq-quote stays `phase_gated` by design (a pricing model is a product decision;
-  the decaying-premium auction is the modeled-quote-free alternative).
+- `cork_compute` rfq-quote stays `phase_gated` by design. A pricing model is a product decision;
+  the decaying-premium auction is the modeled-quote-free alternative.
 - Distribution reporting (`--version` naming a Distribution, policy R4) awaits the distribution
-  repo/manifest — adoption Phase 2. This release is a component version only.
-- No pools exist on the v1.3.0-rc.1 pool manager yet; `cork-pool` reads against derived-but-
-  uncreated pools return `chain_read_failed` (documented expected state).
+  repo and manifest — adoption Phase 2. This release is a component version only.
+- No pools exist on the v1.3.0-rc.1 pool manager yet. `cork-pool` reads against derived but
+  uncreated pools return `chain_read_failed` — a documented, expected state.
