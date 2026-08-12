@@ -6,7 +6,7 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
-## [0.2.0-rc.2] — unreleased
+## [0.2.0-rc.2] — 2026-08-12
 
 The cork-api 0.3.3 alignment (Raouf's 2026-08-12 API day: module-scoped routing, the registry
 module, and the premium convention convergence). Nothing here breaks an rc.1 caller: both premium
