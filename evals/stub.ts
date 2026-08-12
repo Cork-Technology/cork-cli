@@ -127,12 +127,12 @@ function whitelistHyperSync() {
 function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
   if (init?.method === "POST") {
-    if (url.includes("/rollover/orders")) return r(201, {}); // handler fills the digest from its local recomputation
+    if (url.includes("/rollover/v1/orders")) return r(201, {}); // handler fills the digest from its local recomputation
     if (url.includes("/limit-orders")) return r(201, { orderHash: "0x" });
     if (url.includes("/rfqs")) return r(201, { rfq_id: "rfq_eval1", state: "open" });
   }
   if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
-  if (/\/rollover\/orders\/0x/.test(url)) return r(404, { message: "not found" });
+  if (/\/rollover\/v1\/orders\/0x/.test(url)) return r(404, { message: "not found" });
   if (url.includes("/rollover/")) return r(200, { items: [] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });

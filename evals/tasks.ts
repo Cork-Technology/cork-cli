@@ -64,7 +64,10 @@ export const TASKS: EvalTask[] = [
   // ── prepare ────────────────────────────────────────────────────────────
   { id: "prepare-deposit", prompt: `Build me an unsigned bundle that deposits 10 sUSDe (10e18) into Cork pool ${P} for receiver ${A}, minimum 1 share out, request id "eval-dep-0001". Use erc20-approve funding.`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "deposit", poolId: P } }, state: "ok", maxCalls: 2 } },
   { id: "prepare-swap", prompt: `Prepare an unsigned Cork swap: I want exactly 1e18 collateral out of pool ${P}, receiver ${A}, willing to spend at most 2e18 cST and 2e6 reference. Request id "eval-swap-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "swap" } }, state: "ok", maxCalls: 2 } },
-  { id: "prepare-unwind", prompt: `I hold a locked Cork position in pool ${P}. Prepare the unwind-swap bundle: 3e18 collateral back in, receiver ${A}, no slippage floors, request id "eval-unw-0001".`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities"], params: { action: { type: "unwind-swap" } }, state: "ok", maxCalls: 3 } },
+  // prelude includes cork_query: "a locked position I hold" legitimately invites a state-verify
+  // hop before building (observed 1-in-3 on sonnet, 2026-08-12 re-trial; params/state 100% on
+  // every trial) — a correct-behavior first call, not a wrong tool pick.
+  { id: "prepare-unwind", prompt: `I hold a locked Cork position in pool ${P}. Prepare the unwind-swap bundle: 3e18 collateral back in, receiver ${A}, no slippage floors, request id "eval-unw-0001".`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "unwind-swap" } }, state: "ok", maxCalls: 3 } },
   { id: "prepare-order", prompt: `Create the signable 1inch maker order selling 1 sUSDe (${"1000000000000000000"}) for 1 vbUSDC (1000000) on Cork pool ${P}: maker ${A}, sUSDe is 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, vbUSDC is 0x53E82ABbb12638F09d9e624578ccB666217a765e, request id "eval-ord-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "maker-order", side: "SELL" } }, state: "ok", maxCalls: 2 } },
 
   // ── parameter-accuracy probes (from the 2026-07 live A/B pass — each pins the EXACT value,

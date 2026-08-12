@@ -1,19 +1,36 @@
-// Centralized-mode datasource: the as-built Cork venue at api-phoenix.cork.tech/v1
+// Centralized-mode datasource: the as-built Cork venue at api-phoenix.cork.tech
 // (cork-knowledge: rollover-venue-interface.md + agent-rfq-venue-interface.md, both live).
 // Read endpoints are keyless; the fetch implementation is injectable so the entire surface is
 // testable offline. Responses are UNTRUSTED input: shapes are zod-validated before use (lenient —
 // key fields typed, extra fields passed through, because the venue's own zod schemas are the
 // authoritative contract and it may add fields).
+//
+// Routing follows cork-api 0.3.3 (2026-08-12): versions belong to the MODULE, not the base —
+// the canonical form is /<module>/v<n> (/limit-orders/v1/orderbook, /rollover/v1/orders). The
+// base URL is therefore the bare origin, and every path literal below carries its module's own
+// version. The old base-versioned form (/v1/<module>) survives on a temporary server-side
+// rewrite that answers with `Deprecation: true` + `x-cork-canonical-path`; those headers are
+// captured per call and surfaced as telemetry so a stale literal (or a stale user override)
+// announces itself instead of riding the shim silently until the shim retires.
 import { z } from "zod";
 import { fetchWithTimeout } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
 import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
 
-export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech/v1";
+export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
 
+/** Resolve the venue base and normalize away the retired base-versioned form: a configured
+ *  base ending in /v<n> (the pre-0.3.3 convention, when the version lived in the base) would
+ *  compose with the module-versioned literals into /v1/<module>/v1/… — a path no form of the
+ *  API ever served. Stripping the suffix is safe in both directions: against cork-api the
+ *  canonical paths are the primary form, and a proxy of the old form was passing through to
+ *  the same host the canonical paths hit. The strip is disclosed in the changelog rather than
+ *  per-call (it is a config migration, not a per-request event); the per-request radar is the
+ *  Deprecation-header capture below. */
 export function venueBaseUrl(override?: string): string {
-  return override ?? process.env.CORK_VENUE_URL ?? DEFAULT_VENUE_URL;
+  const raw = override ?? process.env.CORK_VENUE_URL ?? DEFAULT_VENUE_URL;
+  return raw.replace(/\/+$/u, "").replace(/\/v\d+$/u, "").replace(/\/+$/u, "");
 }
 
 export type VenueFetch = (url: string, init?: RequestInit) => Promise<Response>;
@@ -87,6 +104,10 @@ const ListResponse = z
     nextCursor: z.unknown().optional(),
     next_cursor: z.unknown().optional(),
     hasMore: z.boolean().optional(),
+    // In-band venue notices (cork-api 0.3.3+): deprecations and operational warnings ride on
+    // the response body ({code, message, deprecates?, effectiveAt?}). UNTRUSTED rows — callers
+    // relay them as labeled venue text, never act on them as instructions.
+    warnings: z.array(Row).optional(),
   })
   .loose();
 
@@ -96,6 +117,13 @@ export interface VenueList {
   hasMore?: boolean;
   /** False only for a legacy bare-array response, whose completeness cannot be proven. */
   paginationKnown: boolean;
+  /** The venue's own in-band notices for this response, verbatim and untrusted. */
+  venueWarnings?: Array<Record<string, unknown>>;
+  /** Set when the response was served by the deprecated-path rewrite (`Deprecation: true`):
+   *  the canonical path the venue says this call should use. Our literals are canonical, so
+   *  seeing this means either a stale literal (a bug here) or a base override re-adding the
+   *  old form — both worth announcing. */
+  deprecatedPath?: string;
 }
 
 /** Cursor + page-size passthrough for a paged venue read (both optional; the venue ignores what it doesn't support). */
@@ -109,6 +137,8 @@ export interface VenuePostResult {
   body: unknown;
   /** Seconds the venue asked us to wait (429 Retry-After), when it said. */
   retryAfterSeconds?: number;
+  /** Canonical path from the deprecated-path rewrite's headers, when the shim served this call. */
+  deprecatedPath?: string;
 }
 
 /** One transport attempt: breaker-gated (fail fast while open), breaker-fed (a fetch throw /
@@ -169,7 +199,13 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
   return s ? `?${s}` : "";
 }
 
-async function getJson(deps: VenueDeps, path: string): Promise<unknown> {
+/** The shim's fingerprint: `Deprecation: true` plus the canonical path it wants instead. */
+function deprecatedPathOf(res: Response): string | undefined {
+  if ((res.headers.get("deprecation") ?? "").toLowerCase() !== "true") return undefined;
+  return res.headers.get("x-cork-canonical-path") ?? "(header x-cork-canonical-path absent)";
+}
+
+async function getJson(deps: VenueDeps, path: string): Promise<{ body: unknown; deprecatedPath?: string }> {
   const res = await getFetch(deps, path);
   let body: unknown;
   try {
@@ -181,7 +217,8 @@ async function getJson(deps: VenueDeps, path: string): Promise<unknown> {
     const msg = body && typeof body === "object" && "message" in body ? String((body as { message: unknown }).message) : `HTTP ${res.status}`;
     throw new VenueHttpError(res.status, msg, body, parseRetryAfter(res.headers.get("retry-after"), (deps.now ?? Date.now)()));
   }
-  return body;
+  const deprecatedPath = deprecatedPathOf(res);
+  return { body, ...(deprecatedPath !== undefined ? { deprecatedPath } : {}) };
 }
 
 /** Non-2xx venue response with the parsed body attached (message says why). */
@@ -198,15 +235,16 @@ export class VenueHttpError extends Error {
   }
 }
 
-function asList(raw: unknown, what: string): VenueList {
-  const parsed = ListResponse.safeParse(raw);
+function asList(raw: { body: unknown; deprecatedPath?: string }, what: string): VenueList {
+  const parsed = ListResponse.safeParse(raw.body);
+  const meta = raw.deprecatedPath !== undefined ? { deprecatedPath: raw.deprecatedPath } : {};
   if (!parsed.success) {
     // A bare array carries no pagination metadata — completeness is unprovable. safeParse, not
     // parse: a malformed element must surface as the same venue-typed shape error every other
     // malformed response gets, never as a raw ZodError (which read as internal_error).
-    if (Array.isArray(raw)) {
-      const rows = z.array(Row).safeParse(raw);
-      if (rows.success) return { items: rows.data, paginationKnown: false };
+    if (Array.isArray(raw.body)) {
+      const rows = z.array(Row).safeParse(raw.body);
+      if (rows.success) return { items: rows.data, paginationKnown: false, ...meta };
     }
     throw new VenueUnreachable(`venue ${what} response did not match the expected list shape`);
   }
@@ -216,14 +254,16 @@ function asList(raw: unknown, what: string): VenueList {
     nextCursor: p.nextCursor ?? p.next_cursor,
     paginationKnown: true,
     ...(p.hasMore !== undefined ? { hasMore: p.hasMore } : {}),
+    ...(p.warnings !== undefined && p.warnings.length > 0 ? { venueWarnings: p.warnings } : {}),
+    ...meta,
   };
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
 
-/** GET /v1/pools — indexed Phoenix pools (new markets appear within seconds of MarketCreated). */
+/** GET /pools/v1 — indexed Phoenix pools (new markets appear within seconds of MarketCreated). */
 export async function getPools(deps: VenueDeps, chainId: number, page: PageParams = {}): Promise<VenueList> {
-  return asList(await getJson(deps, `/pools${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "pools");
+  return asList(await getJson(deps, `/pools/v1${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "pools");
 }
 
 export interface LopBookParams extends PageParams {
@@ -233,19 +273,19 @@ export interface LopBookParams extends PageParams {
   status?: string;
 }
 
-/** GET /v1/limit-orders/orderbook — resting orders (each row carries the full signed order). */
+/** GET /limit-orders/v1/orderbook — resting orders (each row carries the full signed order). */
 export async function getLopOrderbook(deps: VenueDeps, p: LopBookParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, cursor: p.cursor, limit: p.limit })}`), "orderbook");
+  return asList(await getJson(deps, `/limit-orders/v1/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, cursor: p.cursor, limit: p.limit })}`), "orderbook");
 }
 
-/** GET /v1/limit-orders/fills. */
+/** GET /limit-orders/v1/fills. */
 export async function getLopFills(deps: VenueDeps, p: { chainId: number; orderHash?: string; cursor?: string; limit?: number }): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/fills${qs(p)}`), "fills");
+  return asList(await getJson(deps, `/limit-orders/v1/fills${qs(p)}`), "fills");
 }
 
-/** GET /v1/limit-orders/markets — enumerable cPT/cST markets. */
+/** GET /limit-orders/v1/markets — enumerable cPT/cST markets. */
 export async function getLopMarkets(deps: VenueDeps, chainId: number, page: PageParams = {}): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "trading-pairs");
+  return asList(await getJson(deps, `/limit-orders/v1/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "trading-pairs");
 }
 
 export interface RolloverOrdersParams extends PageParams {
@@ -258,30 +298,34 @@ export interface RolloverOrdersParams extends PageParams {
   source?: string;
 }
 
-/** GET /v1/rollover/orders — the rollover order feed (solver feed with fillable=true). */
+/** GET /rollover/v1/orders — the rollover order feed (solver feed with fillable=true). */
 export async function getRolloverOrders(deps: VenueDeps, p: RolloverOrdersParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
+  return asList(await getJson(deps, `/rollover/v1/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
 }
 
-/** GET /v1/rollover/orders/{orderDigest} — one order fully resolved ({order, fills, slots}). */
+/** GET /rollover/v1/orders/{orderDigest} — one order fully resolved ({order, fills, slots}).
+ *  Known scope cut, here and on getRfq: single-record gets return the row only — body-level
+ *  venue warnings[] and the shim's deprecation header are surfaced on the LIST and POST paths
+ *  (where the venue actually attaches them today); thread a meta return through these two if a
+ *  single-get ever starts carrying notices. */
 export async function getRolloverOrder(deps: VenueDeps, orderDigest: string): Promise<Record<string, unknown> | null> {
   try {
-    const raw = await getJson(deps, `/rollover/orders/${orderDigest}`);
-    return Row.parse(raw);
+    const raw = await getJson(deps, `/rollover/v1/orders/${orderDigest}`);
+    return Row.parse(raw.body);
   } catch (err) {
     if (err instanceof VenueHttpError && err.status === 404) return null;
     throw err;
   }
 }
 
-/** GET /v1/rollover/fills — indexed rollover fill legs (ROLLOVER/PREMIUM/RECLAIM/REFUND). */
+/** GET /rollover/v1/fills — indexed rollover fill legs (ROLLOVER/PREMIUM/RECLAIM/REFUND). */
 export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; orderDigest?: string; filler?: string; cursor?: string; limit?: number }): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/fills${qs(p)}`), "rollover fills");
+  return asList(await getJson(deps, `/rollover/v1/fills${qs(p)}`), "rollover fills");
 }
 
-/** GET /v1/rollover/contracts — per-user rollover clones (setup gate: "does my clone exist?"). */
+/** GET /rollover/v1/contracts — per-user rollover clones (setup gate: "does my clone exist?"). */
 export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string; cursor?: string; limit?: number }): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/contracts${qs(p)}`), "rollover contracts");
+  return asList(await getJson(deps, `/rollover/v1/contracts${qs(p)}`), "rollover contracts");
 }
 
 export interface RfqListParams extends PageParams {
@@ -294,7 +338,7 @@ export interface RfqListParams extends PageParams {
 }
 
 /**
- * GET /v1/rfqs — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
+ * GET /rfqs/v1 — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
  * Server defaults: state=open, newest first, keyset-paged on rfq_id ({items, next_cursor}).
  * with_answers=true embeds each RFQ's answers (newest first, venue-capped per row);
  * view=current narrows the embed to the negotiation frontier (one current answer per
@@ -305,17 +349,17 @@ export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueL
   return asList(
     await getJson(
       deps,
-      `/rfqs${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, cursor: p.cursor, limit: p.limit })}`,
+      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );
 }
 
-/** GET /v1/rfqs/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
+/** GET /rfqs/v1/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
 export async function getRfq(deps: VenueDeps, rfqId: string, view?: "full" | "current"): Promise<Record<string, unknown> | null> {
   try {
-    const raw = await getJson(deps, `/rfqs/${encodeURIComponent(rfqId)}${qs({ view })}`);
-    return Row.parse(raw);
+    const raw = await getJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}${qs({ view })}`);
+    return Row.parse(raw.body);
   } catch (err) {
     if (err instanceof VenueHttpError && err.status === 404) return null;
     throw err;
@@ -381,7 +425,10 @@ const SignedLopOrderRow = z
   }))
   .transform((v, ctx): SignedLopOrder => {
     const kind = v.makerAccountType.toUpperCase().replace(/[-_]/gu, "");
-    const makerAccountType = kind === "EOA" ? "EOA" : kind === "ERC1271" || kind === "EIP1271" ? "ERC1271" : null;
+    // "CONTRACT" is the venue's own vocabulary (its post/get schemas say EOA|CONTRACT); it
+    // means the same thing our surface calls ERC1271 — the standard the fill invokes. Without
+    // this mapping every contract-maker book row failed row validation.
+    const makerAccountType = kind === "EOA" ? "EOA" : kind === "ERC1271" || kind === "EIP1271" || kind === "CONTRACT" ? "ERC1271" : null;
     if (makerAccountType === null) {
       ctx.addIssue({ code: "custom", message: `unsupported makerAccountType '${v.makerAccountType}'` });
       return z.NEVER;
@@ -428,30 +475,31 @@ async function postJson(deps: VenueDeps, path: string, body: unknown): Promise<V
     /* some errors have empty bodies — keep the status */
   }
   const retryAfter = parseRetryAfter(res.headers.get("retry-after"), (deps.now ?? Date.now)());
-  return { httpStatus: res.status, body: parsed, ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}) };
+  const deprecatedPath = deprecatedPathOf(res);
+  return { httpStatus: res.status, body: parsed, ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}), ...(deprecatedPath !== undefined ? { deprecatedPath } : {}) };
 }
 
-/** POST /v1/rollover/orders — relay a signed rollover order. */
+/** POST /rollover/v1/orders — relay a signed rollover order. */
 export async function postRolloverOrder(deps: VenueDeps, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, "/rollover/orders", body);
+  return postJson(deps, "/rollover/v1/orders", body);
 }
 
-/** POST /v1/limit-orders — relay a signed LOP order. */
+/** POST /limit-orders/v1 — relay a signed LOP order. */
 export async function postLopOrder(deps: VenueDeps, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, "/limit-orders", body);
+  return postJson(deps, "/limit-orders/v1", body);
 }
 
-/** POST /v1/rfqs — open an RFQ (parameter envelope). */
+/** POST /rfqs/v1 — open an RFQ (parameter envelope). */
 export async function postRfq(deps: VenueDeps, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, "/rfqs", body);
+  return postJson(deps, "/rfqs/v1", body);
 }
 
-/** POST /v1/rfqs/{rfqId}/answers — answer an RFQ with priced options or a typed pass. */
+/** POST /rfqs/v1/{rfqId}/answers — answer an RFQ with priced options or a typed pass. */
 export async function postRfqAnswer(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, `/rfqs/${encodeURIComponent(rfqId)}/answers`, body);
+  return postJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}/answers`, body);
 }
 
-/** POST /v1/rfqs/{rfqId}/counters — the requester's non-committal counter-bid (requester-only). */
+/** POST /rfqs/v1/{rfqId}/counters — the requester's non-committal counter-bid (requester-only). */
 export async function postRfqCounter(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, `/rfqs/${encodeURIComponent(rfqId)}/counters`, body);
+  return postJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}/counters`, body);
 }

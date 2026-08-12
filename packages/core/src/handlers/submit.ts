@@ -7,6 +7,7 @@ import { resolveRollover } from "../config-remote.ts";
 import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { venueNoticeWarnings } from "./query.ts";
 
 /**
  * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-indexing-api
@@ -32,6 +33,20 @@ export function premiumFractionViolation(p: unknown): string | null {
 }
 
 /**
+ * The BOOK's premium_annualized contract (cork-api 0.3.3 post-order.schema.ts), replicated
+ * operation-for-operation — deliberately a SEPARATE function from the RFQ gate above, because
+ * the two surfaces share the fraction convention but not the bounds: the RFQ caps at < 0.5
+ * (pilot posture), the book at <= 100 (the mirror of its legacy 10000% percent ceiling).
+ * Same layering as above: the regex is STRUCTURE (published in the venue's openapi.json), the
+ * 100 bound is a zod refine — server-enforced, spec-prose-only, and policy.
+ */
+export function bookPremiumAnnualizedViolation(p: unknown): string | null {
+  if (typeof p !== "string" || !/^\d{1,3}(\.\d{1,18})?$/.test(p)) return 'is not a decimal-fraction string — STRUCTURE: the book listing\'s published wire shape (openapi pattern ^\\d{1,3}(\\.\\d{1,18})?$, "0.041" = 4.1% annualized)';
+  if (Number.parseFloat(p) > 100) return "parses above 100 (= 10000% annualized) — the venue's refine bound, the mirror of the legacy percent field's 10000 ceiling. POLICY, not structure: relaxable someday, never the fraction shape";
+  return null;
+}
+
+/**
  * Resolve a cited option inside a fetched RFQ record. The venue validates citations against
  * its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get embed
  * we pre-flight against is READ-BOUNDED (READ_LIMIT rows, flagged `truncated`) — so a missing
@@ -50,12 +65,19 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
   const action = input.action;
   const deps = venueDepsOf(ctx);
 
-  /** Shared POST-outcome mapping (201 created / 200 idempotent replay / 4xx per venue docs). */
+  /** Shared POST-outcome mapping (201 created / 200 idempotent replay / 4xx per venue docs).
+   *  Successful relays also surface the venue's own in-band notices — the body `warnings[]`
+   *  channel (cork-api 0.3.3+; deprecations announce their removal dates there) and the
+   *  deprecated-path rewrite's canonical-path header. */
   const mapPost = (res: VenuePostResult, okData: (body: Record<string, unknown>, replay: boolean) => Record<string, unknown>, okWarnings: Array<{ code: string; message: string }> = []): Envelope => {
     const body = (res.body ?? {}) as Record<string, unknown>;
     const msg = typeof body.message === "string" ? body.message : `HTTP ${res.httpStatus}`;
     if (res.httpStatus === 201 || res.httpStatus === 200) {
-      return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", warnings: okWarnings, ctx });
+      const notices = venueNoticeWarnings({
+        venueWarnings: Array.isArray(body.warnings) ? (body.warnings.filter((w) => w !== null && typeof w === "object") as Array<Record<string, unknown>>) : [],
+        ...(res.deprecatedPath !== undefined ? { deprecatedPath: res.deprecatedPath } : {}),
+      });
+      return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", warnings: [...okWarnings, ...notices], ctx });
     }
     if (res.httpStatus === 409) {
       return envelope({ state: "conflict", data: { venueResponse: body }, chainId, source: "service", warnings: [{ code: "venue_conflict", message: `venue 409: ${msg} (same id/digest already stored with a DIFFERENT payload — use a fresh clientRequestId for a genuinely new request [K2])` }], ctx });
@@ -317,12 +339,57 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           });
         }
       }
-      // Numbers-contract tripwires (RFQ doc §2.1): the book `premium` is a PERCENT number
-      // (4.1 = 4.1%), RFQ premiums are FRACTION strings ("0.041"). A sub-0.1% premium is the
+      // ── The listing premium, resolved the venue's way (cork-api 0.3.3 post-order.ts,
+      // operation-for-operation): at least one of premium/premiumAnnualized; the fraction is
+      // canonicalized by parseFloat × 100; when both are sent they must agree within the
+      // venue's exact 1e-9-relative comparison, and the fraction takes precedence. Replicating
+      // the resolution — not just the gates — is what lets every check below (suspect
+      // tripwires, the quote_ref band) compare exactly what the venue will compare.
+      if (action.premium === undefined && action.premiumAnnualized === undefined) {
+        return unavailable(chainId, "invalid_order_terms", `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field is deprecated and the venue removes it 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
+      }
+      if (action.premiumAnnualized !== undefined) {
+        const problem = bookPremiumAnnualizedViolation(action.premiumAnnualized);
+        if (problem) {
+          return unavailable(chainId, "invalid_order_terms", `premiumAnnualized ${JSON.stringify(action.premiumAnnualized)} ${problem}; percent numbers (4.1) belong only in the deprecated premium field, and the RFQ's < 0.5 cap does not apply to the book. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
+        }
+      }
+      const annualizedPct = action.premiumAnnualized !== undefined ? Number.parseFloat(action.premiumAnnualized) * 100 : undefined;
+      if (action.premium !== undefined && annualizedPct !== undefined) {
+        const scale = Math.max(1, action.premium, annualizedPct);
+        if (Math.abs(action.premium - annualizedPct) > 1e-9 * scale) {
+          return envelope({
+            state: "conflict",
+            data: { premiumPercent: action.premium, premiumAnnualized: action.premiumAnnualized, annualizedPercentEquivalent: annualizedPct },
+            chainId,
+            source: "config",
+            warnings: [{ code: "premium_fields_disagree", message: `premium (${action.premium}%) and premiumAnnualized (= ${annualizedPct}%) disagree — the classic percent-vs-fraction mistake, and the venue hard-rejects it (its exact 1e-9-relative comparison, replicated here). Send only premiumAnnualized, or make them agree; NOT relayed. Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
+            ctx,
+          });
+        }
+      }
+      const premiumPct = annualizedPct ?? action.premium!;
+      if (action.premium !== undefined) {
+        lopWarnings.push({ code: "deprecation_notice", message: `the percent-number premium listing field is DEPRECATED — the venue removes it 2026-08-17 (the date rides in-band in warnings[] on every limit-orders response); send premiumAnnualized instead: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface` });
+      }
+      // Numbers-contract tripwires, on the venue's CANONICAL percent: a sub-0.1% premium is the
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
-      // orders can be legitimately tiny).
-      if (action.premium > 0 && action.premium < 0.1) {
-        lopWarnings.push({ code: "premium_scale_suspect", message: `premium ${action.premium} is below 0.1% — if you meant a fraction ("${action.premium}" = ${action.premium * 100}%), the book field is the PERCENT number (RFQ §2.1); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
+      // orders can be legitimately tiny; the venue logs this same signal without rejecting).
+      if (premiumPct > 0 && premiumPct < 0.1) {
+        // Teaching by exemplar, not by computed suggestion: premiumPct is a float and any
+        // arithmetic on it for display re-teaches the very artifact this warning polices.
+        lopWarnings.push({ code: "premium_scale_suspect", message: `the declared premium resolves to ${premiumPct}% — below 0.1%. The classic cause is a scale mix-up between the two spellings (4.1% is premiumAnnualized "0.041", or 4.1 in the deprecated percent field); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
+      }
+      // The successor field's own paste mistake runs the OTHER way: a percent number typed into
+      // the fraction field ("4.1" = 410% annualized). Legal at the venue (its cap is 100), and
+      // genuinely reachable by short-tenor distressed markets — so a warning, never a block.
+      // The suggested spelling is exact STRING math (shift the point two left), never a float
+      // division — a teaching message reading `0.041000000000000002` teaches the wrong lesson.
+      if (action.premiumAnnualized !== undefined && Number.parseFloat(action.premiumAnnualized) > 1) {
+        const [int = "0", dec = ""] = action.premiumAnnualized.split(".");
+        const digits = int.padStart(3, "0");
+        const suggested = `${digits.slice(0, -2)}.${digits.slice(-2)}${dec}`;
+        lopWarnings.push({ code: "premium_scale_suspect", message: `premiumAnnualized "${action.premiumAnnualized}" parses above 1 — that is ${premiumPct}% annualized. If you meant ${action.premiumAnnualized}%, write "${suggested}". Relayed as given (the venue accepts fractions up to 100). Full scale table: ${UNITS_TOPIC_REFERENCE}` });
       }
       // quote_ref pre-flight [K3-style]: replicate the venue's own POST-time gate (post-order.ts
       // "Verify RFQ provenance") so a bad citation fails EARLY with teaching instead of a venue
@@ -371,21 +438,22 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
               ctx,
             });
           }
-          // The venue's band, operation-for-operation: fraction -> percent in float, strict
-          // inequalities, guarded on BOTH premiums being positive (a zero declared premium is
-          // accepted there — the signed amounts are the truth, premium is display metadata).
+          // The venue's band, operation-for-operation: BOTH sides canonicalized to percent by
+          // parseFloat × 100 (the declared side already was, above), strict inequalities,
+          // guarded on BOTH premiums being positive (a zero declared premium is accepted
+          // there — the signed amounts are the truth, premium is display metadata).
           const referencedPercent = referenced * 100;
-          const ratio = action.premium / referencedPercent;
-          if (referencedPercent > 0 && action.premium > 0 && (ratio > 10 || ratio < 0.1)) {
+          const ratio = premiumPct / referencedPercent;
+          if (referencedPercent > 0 && premiumPct > 0 && (ratio > 10 || ratio < 0.1)) {
             // Display-only cleanup: 0.036*100 floats to 3.5999999999999996 — the DECISION uses
             // that raw value (it is the venue's), the teaching message shows the human 3.6.
             const displayPercent = Number(referencedPercent.toPrecision(12));
             return envelope({
               state: "conflict",
-              data: { declaredPremiumPercent: action.premium, citedOptionFraction: option.premium_annualized, expectedPercent: referencedPercent },
+              data: { declaredPremiumPercent: premiumPct, ...(action.premiumAnnualized !== undefined ? { declaredPremiumAnnualized: action.premiumAnnualized } : {}), citedOptionFraction: option.premium_annualized, expectedPercent: referencedPercent },
               chainId,
               source: "service",
-              warnings: [{ code: "premium_scale_mismatch", message: `declared premium ${action.premium} diverges ${ratio > 10 ? ">10" : "<1/10"}x from the cited quote (${option.premium_annualized} fraction = ${displayPercent}%) — outside the venue's own strict 10x acceptance band (replicated exactly, float and all), so this would be rejected on relay; NOT relayed. Percent goes on the listing (3.6), fraction lives in the RFQ ("0.036"). Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
+              warnings: [{ code: "premium_scale_mismatch", message: `the declared premium (= ${premiumPct}%) diverges ${ratio > 10 ? ">10" : "<1/10"}x from the cited quote (${option.premium_annualized} fraction = ${displayPercent}%) — outside the venue's own strict 10x acceptance band (replicated exactly, float and all), so this would be rejected on relay; NOT relayed. The book and the RFQ now share the fraction convention: premiumAnnualized "0.036" = 3.6%. Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
               ctx,
             });
           }
@@ -417,10 +485,15 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         extension: action.extension === "0x" ? "" : action.extension,
         orderHash,
         signature: action.signature,
-        makerAccountType: action.makerAccountType,
+        // Wire translation: the venue's enum is EOA|CONTRACT (it verifies against the maker's
+        // on-chain bytecode); our surface says ERC1271 — the standard the fill actually invokes.
+        // Posting "ERC1271" verbatim was a live defect: the venue's schema 400s it, so no
+        // contract-maker order ever reached the book through this relay.
+        makerAccountType: action.makerAccountType === "ERC1271" ? "CONTRACT" : "EOA",
         makerPermit2: action.makerPermit2,
         side: action.side,
-        premium: action.premium,
+        ...(action.premium !== undefined ? { premium: action.premium } : {}),
+        ...(action.premiumAnnualized !== undefined ? { premium_annualized: action.premiumAnnualized } : {}),
         expiry: action.expiry,
         nonce: action.nonce,
         allowsPartialFills: action.allowsPartialFills,

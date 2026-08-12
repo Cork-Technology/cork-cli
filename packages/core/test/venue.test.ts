@@ -97,13 +97,13 @@ describe("cork_query venue-backed resources", () => {
     const env = await runTool(
       "cork_query",
       { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc", chainId: 42161 }] } }], seen),
+      ctxWith([{ match: "/pools/v1", body: { items: [{ poolId: "0xabc", chainId: 42161 }] } }], seen),
     );
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("centralized");
     expect(env.provenance.source).toBe("indexer");
     expect((env.data as { count: number }).count).toBe(1);
-    expect(seen[0]!.url).toContain("/pools?chainId=42161");
+    expect(seen[0]!.url).toContain("/pools/v1?chainId=42161");
   });
 
   it("orderbook forwards poolId/side/status filters", async () => {
@@ -111,7 +111,7 @@ describe("cork_query venue-backed resources", () => {
     const env = await runTool(
       "cork_query",
       { resource: "orderbook", chainId: 42161, filters: { poolId: `0x${"ab".repeat(32)}`, side: "BUY", status: "OPEN" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/orderbook", body: { items: [] } }], seen),
+      ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [] } }], seen),
     );
     expect(env.state).toBe("ok");
     const url = seen[0]!.url;
@@ -129,7 +129,7 @@ describe("cork_query venue-backed resources", () => {
     const env = await runTool(
       "cork_query",
       { resource: "orderbook", chainId: 42161, filters: { orderHash: target.toUpperCase().replace("0X", "0x") }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/orderbook", body: { items: [{ orderHash: target, status: "OPEN" }, { orderHash: other, status: "OPEN" }] } }], seen),
+      ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [{ orderHash: target, status: "OPEN" }, { orderHash: other, status: "OPEN" }] } }], seen),
     );
     expect(env.state).toBe("ok");
     const data = env.data as { count: number; items: Array<{ orderHash: string }> };
@@ -143,8 +143,8 @@ describe("cork_query venue-backed resources", () => {
     const seen: Seen[] = [];
     const ctx = ctxWith(
       [
-        { match: "/rollover/orders", body: { items: [{ orderDigest: "0x1", status: "PENDING" }], hasMore: false } },
-        { match: "/rollover/contracts", body: { items: [] } },
+        { match: "/rollover/v1/orders", body: { items: [{ orderDigest: "0x1", status: "PENDING" }], hasMore: false } },
+        { match: "/rollover/v1/contracts", body: { items: [] } },
       ],
       seen,
     );
@@ -164,7 +164,7 @@ describe("cork_query venue-backed resources", () => {
       ctx,
     );
     expect(contracts.state).toBe("ok");
-    expect(seen[1]!.url).toContain("/rollover/contracts");
+    expect(seen[1]!.url).toContain("/rollover/v1/contracts");
     expect(seen[1]!.url).toContain("owner=0xc0ffee0000000000000000000000000000000001");
   });
 
@@ -202,7 +202,7 @@ describe("cork_query venue-backed resources", () => {
     const found = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/rfq_abc", body: { rfq_id: "rfq_abc", state: "open" } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_abc", body: { rfq_id: "rfq_abc", state: "open" } }]),
     );
     expect(found.state).toBe("ok");
     expect((found.data as { items: unknown[] }).items).toHaveLength(1);
@@ -228,7 +228,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     const env = await runTool(
       "cork_submit",
       example,
-      ctxWith([{ match: "/rollover/orders", status: 201, body: { orderDigest: "0xVENUE" } }], seen),
+      ctxWith([{ match: "/rollover/v1/orders", status: 201, body: { orderDigest: "0xVENUE" } }], seen),
     );
     // The venue's digest differs from the local recomputation in this stub → conflict surfaces.
     expect(env.state).toBe("conflict");
@@ -252,7 +252,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
       },
     };
     // Probe once with a mismatching stub to learn the local digest from the conflict data.
-    const probe = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: { orderDigest: "0xother" } }]));
+    const probe = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: { orderDigest: "0xother" } }]));
     captured = (probe.data as { localDigest: string }).localDigest;
     const env = await runTool("cork_submit", example, echoCtx);
     expect(env.state).toBe("ok");
@@ -267,7 +267,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     const seen: Seen[] = [];
     const tampered = JSON.parse(JSON.stringify(example)) as { action: { intent: { nonce: string } } };
     tampered.action.intent.nonce = "999";
-    const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("intent_hash_mismatch");
     expect(seen.length).toBe(0); // the broken payload never left the process
@@ -275,22 +275,22 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
 
   it("rollover-order: 200 → idempotent replay; 409 → conflict; 429 → rate-limited", async () => {
     let captured = "";
-    const probe = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: { orderDigest: "0xother" } }]));
+    const probe = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: { orderDigest: "0xother" } }]));
     captured = (probe.data as { localDigest: string }).localDigest;
 
-    const replay = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 200, body: { orderDigest: captured } }]));
+    const replay = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 200, body: { orderDigest: captured } }]));
     expect(replay.state).toBe("ok");
     expect((replay.data as { replay: boolean }).replay).toBe(true);
 
-    const conflict = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 409, body: { message: "digest exists with different payload" } }]));
+    const conflict = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 409, body: { message: "digest exists with different payload" } }]));
     expect(conflict.state).toBe("conflict");
     expect(conflict.warnings[0]?.code).toBe("venue_conflict");
 
-    const limited = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 429, body: { message: "open-order cap reached" } }]));
+    const limited = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 429, body: { message: "open-order cap reached" } }]));
     expect(limited.state).toBe("unavailable");
     expect(limited.warnings[0]?.code).toBe("venue_rate_limited");
 
-    const rejected = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 400, body: { message: "signature invalid" } }]));
+    const rejected = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 400, body: { message: "signature invalid" } }]));
     expect(rejected.state).toBe("unavailable");
     expect(rejected.warnings[0]?.code).toBe("venue_rejected");
     expect(rejected.warnings[0]?.message).toContain("signature invalid");
@@ -313,7 +313,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
         allowsPartialFills: true,
       },
     };
-    const ok = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0xdead" } }], seen));
+    const ok = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0xdead" } }], seen));
     expect(ok.state).toBe("ok");
     const body = seen[0]!.body as Record<string, unknown>;
     expect(String(body.orderHash)).toMatch(/^0x[0-9a-f]{64}$/); // locally recomputed, never caller-supplied
@@ -322,7 +322,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     const badExt = await runTool(
       "cork_submit",
       { ...base, action: { ...base.action, extension: "0xdeadbeef" } },
-      ctxWith([{ match: "/limit-orders", status: 201, body: {} }]),
+      ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(badExt.state).toBe("conflict");
     expect(badExt.warnings[0]?.code).toBe("extension_salt_mismatch");
@@ -331,7 +331,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
   it("rfq-open: clientRequestId becomes the venue request_id (idempotency [K2] on the wire)", async () => {
     const seen: Seen[] = [];
     const example2 = TOOL_EXAMPLES.cork_submit![1]!.input;
-    const env = await runTool("cork_submit", example2, ctxWith([{ match: "/rfqs", status: 201, body: { rfq_id: "rfq_001", state: "open" } }], seen));
+    const env = await runTool("cork_submit", example2, ctxWith([{ match: "/rfqs/v1", status: 201, body: { rfq_id: "rfq_001", state: "open" } }], seen));
     expect(env.state).toBe("ok");
     expect((env.data as { rfqId: string }).rfqId).toBe("rfq_001");
     const body = seen[0]!.body as Record<string, unknown>;
@@ -351,12 +351,12 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
 
   it("F3: listing fields contradicting the signed makerTraits → conflict listing_traits_mismatch, NOT relayed", async () => {
     const seen: Seen[] = [];
-    const env = await runTool("cork_submit", await lop({ expiry: 1795000000 }), ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", await lop({ expiry: 1795000000 }), ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("listing_traits_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
 
-    const partialLie = await runTool("cork_submit", await lop({ allowsPartialFills: false }), ctxWith([{ match: "/limit-orders", status: 201, body: {} }]));
+    const partialLie = await runTool("cork_submit", await lop({ allowsPartialFills: false }), ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }]));
     expect(partialLie.state).toBe("conflict");
     expect(partialLie.warnings[0]?.code).toBe("listing_traits_mismatch");
   });
@@ -365,7 +365,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const seen: Seen[] = [];
     const base = await lop();
     const forged = { ...base, action: { ...base.action, order: { ...order, maker: "0xc0ffee0000000000000000000000000000000001" } } };
-    const env = await runTool("cork_submit", forged, ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", forged, ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
@@ -376,12 +376,12 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
     const rpcAnswering = (magic: string) => async () =>
       stubResolved({ readContract: async (a: { functionName: string }) => (a.functionName === "isValidSignature" ? magic : (() => { throw new Error(`no stub for ${a.functionName}`); })()) });
-    const rejected = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0xffffffff") });
+    const rejected = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0xffffffff") });
     expect(rejected.state).toBe("conflict");
     expect(rejected.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
 
-    const accepted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0x1626ba7e") });
+    const accepted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: rpcAnswering("0x1626ba7e") });
     expect(accepted.state).toBe("ok");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
@@ -391,12 +391,12 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
     const throwing = (err: Error) => async () => stubResolved({ readContract: async () => { throw err; } });
 
-    const reverted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: throwing(new Error("execution reverted")) });
+    const reverted = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: throwing(new Error("execution reverted")) });
     expect(reverted.state).toBe("conflict");
     expect(reverted.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
 
-    const transport = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: throwing(Object.assign(new Error("fetch failed"), { name: "HttpRequestError" })) });
+    const transport = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: throwing(Object.assign(new Error("fetch failed"), { name: "HttpRequestError" })) });
     expect(transport.state).toBe("ok");
     expect(transport.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("transport"))).toBe(true);
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
@@ -405,7 +405,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   it("F3/ERC-1271: with no RPC the gap is DISCLOSED (relayed with chain_read_failed), never silent", async () => {
     const seen: Seen[] = [];
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
-    const env = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders", status: 201, body: {} }], seen), resolveRpc: async () => null });
+    const env = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("NOT pre-verified"))).toBe(true);
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
@@ -415,7 +415,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const seen: Seen[] = [];
     const tampered = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: { orderSize: string } } };
     tampered.action.order.orderSize = "999"; // digest changes → the example's real signature no longer matches
-    const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
@@ -425,7 +425,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const seen: Seen[] = [];
     const flipped = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: Record<string, unknown> } };
     flipped.action.order.allowPartialFills = true; // example settler is the ExactSettler
-    const env = await runTool("cork_submit", flipped, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", flipped, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("settler_mode_mismatch");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
@@ -436,7 +436,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const env = await runTool(
       "cork_submit",
       await lop({ premium: 410, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
@@ -447,7 +447,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const env = await runTool(
       "cork_submit",
       await lop({ quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("quote_ref_unverifiable");
@@ -457,7 +457,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   it("F5: the rfq-answer 0.5 cap replicates the venue's parseFloat refine — a 17-digit just-under value fails THERE, so it fails here", async () => {
     const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
     // 16 digits: parseFloat = 0.4999999999999999 < 0.5 — the venue accepts, so we relay.
-    const justUnder = await runTool("cork_submit", answer("0.4999999999999999"), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
+    const justUnder = await runTool("cork_submit", answer("0.4999999999999999"), ctxWith([{ match: "/rfqs/v1/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
     expect(justUnder.state).toBe("ok");
     // 17 digits: a smaller decimal, but Number.parseFloat rounds it to exactly 0.5 — and the
     // venue's PremiumFractionSchema refines with THAT parse, so it 400s. A pre-flight that
@@ -483,7 +483,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     // are the classic cross-surface scale mistakes, both fail the R13-pinned wire shape.
     for (const bad of ["4.1", "41000000000000000"]) {
       const seen: Seen[] = [];
-      const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
+      const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/v1/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
       expect(env.state, bad).toBe("unavailable");
       expect(env.warnings[0]?.code, bad).toBe("invalid_order_terms");
       // Structure, not policy: this rejection is permanent under R13 and the message says so.
@@ -502,13 +502,13 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const inverted = JSON.parse(JSON.stringify(base));
     (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
     (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notAfter = 1795000000;
-    const r1 = await runTool("cork_submit", inverted, ctxWith([{ match: "/rfqs", status: 201, body: {} }], seen));
+    const r1 = await runTool("cork_submit", inverted, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
     expect(r1.state).toBe("unavailable");
     expect(r1.warnings[0]?.message).toContain("inverted");
 
     const expired = JSON.parse(JSON.stringify(base));
     (expired.action as { validUntil: number }).validUntil = Number(NOW) - 10;
-    const r2 = await runTool("cork_submit", expired, ctxWith([{ match: "/rfqs", status: 201, body: {} }], seen));
+    const r2 = await runTool("cork_submit", expired, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
     expect(r2.state).toBe("unavailable");
     expect(r2.warnings[0]?.message).toContain("validUntil");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
@@ -522,7 +522,7 @@ describe("cork_track reconcile via venue lifecycle", () => {
     const env = await runTool(
       "cork_track",
       { mode: "reconcile", subject: { kind: "orderHash", orderHash: digest }, format: "concise" },
-      ctxWith([{ match: `/rollover/orders/${digest}`, body: { order: { status: "PARTIALLY_FILLED", remainingSize: "5" }, fills: [{ leg: "ROLLOVER" }], slots: [] } }]),
+      ctxWith([{ match: `/rollover/v1/orders/${digest}`, body: { order: { status: "PARTIALLY_FILLED", remainingSize: "5" }, fills: [{ leg: "ROLLOVER" }], slots: [] } }]),
     );
     expect(env.state).toBe("ok");
     const d = env.data as Record<string, unknown>;
@@ -537,9 +537,9 @@ describe("cork_track reconcile via venue lifecycle", () => {
       "cork_track",
       { mode: "reconcile", subject: { kind: "orderHash", orderHash: digest }, format: "concise" },
       ctxWith([
-        { match: `/rollover/orders/${digest}`, status: 404, body: { message: "not found" } },
-        { match: "/limit-orders/fills", body: { items: [{ txHash: "0xaa" }] } },
-        { match: "/limit-orders/orderbook", body: { items: [] } },
+        { match: `/rollover/v1/orders/${digest}`, status: 404, body: { message: "not found" } },
+        { match: "/limit-orders/v1/fills", body: { items: [{ txHash: "0xaa" }] } },
+        { match: "/limit-orders/v1/orderbook", body: { items: [] } },
       ]),
     );
     expect(withFills.state).toBe("ok");
@@ -552,9 +552,9 @@ describe("cork_track reconcile via venue lifecycle", () => {
       "cork_track",
       { mode: "reconcile", subject: { kind: "submissionRef", submissionRef: digest }, format: "concise" },
       ctxWith([
-        { match: `/rollover/orders/${digest}`, status: 404, body: { message: "not found" } },
-        { match: "/limit-orders/fills", body: { items: [] } },
-        { match: "/limit-orders/orderbook", body: { items: [] } },
+        { match: `/rollover/v1/orders/${digest}`, status: 404, body: { message: "not found" } },
+        { match: "/limit-orders/v1/fills", body: { items: [] } },
+        { match: "/limit-orders/v1/orderbook", body: { items: [] } },
       ]),
     );
     expect(nowhere.state).toBe("unavailable");
@@ -581,7 +581,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
 
   it("sub-0.1% premium → premium_scale_suspect warning (relayed, matching venue leniency)", async () => {
     const lopBase = await lopBaseP;
-    const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]));
+    const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }]));
     expect(env.state).toBe("ok");
     const suspect = env.warnings.find((w) => w.code === "premium_scale_suspect");
     expect(suspect).toBeDefined();
@@ -597,7 +597,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premium: 0.036, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: {} }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }], seen),
     );
     // declared 0.036 percent vs cited 3.6 percent = 1/100x divergence
     expect(env.state).toBe("conflict");
@@ -612,9 +612,9 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([...extraRoutes, { match: "/rfqs/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
+        ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
       );
-    const ok = [{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }];
+    const ok = [{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }];
 
     // "0.036"*100 floats to 3.5999999999999996, so 36/it = 10.000000000000002 > 10: the venue
     // rejects this nominal exactly-10x — and therefore so do we.
@@ -647,7 +647,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([{ match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }, { match: "/rfqs/rfq_1", body: rfq }]),
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
       );
     const goodOption = { option_id: "1", premium_annualized: "0.036" };
     const answersWith = (option: Record<string, unknown>) => [{ answer_id: "ans_1", answer: { options: [option] } }];
@@ -682,8 +682,8 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premium: 999, quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
       ctxWith([
-        { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } },
-        { match: "/rfqs/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
+        { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } },
+        { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
       ], seen),
     );
     expect(env.state).toBe("ok");
@@ -697,7 +697,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premium: 3.6, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfq }, { match: "/limit-orders", status: 201, body: { orderHash: "0x1" } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }]),
     );
     expect(env.state).toBe("ok");
   });
@@ -738,7 +738,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const env = await runTool(
       "cork_submit",
       { chainId: 42161, clientRequestId: "test-pass-0001", action: { type: "rfq-answer", rfqId: "rfq_9", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "pass", reasonCode: "NO_CAPACITY", signature: "0x00" } },
-      ctxWith([{ match: "/rfqs/rfq_9/answers", status: 201, body: { answer_id: "ans_9" } }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_9/answers", status: 201, body: { answer_id: "ans_9" } }], seen),
     );
     expect(env.state).toBe("ok");
     const body = seen[0]!.body as Record<string, unknown>;
@@ -768,7 +768,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     // The intent hash changed, so the order digest changed — re-sign the mutated order.
     (example.action as unknown as { signature: string }).signature = await signRollover(42161, example.action.order);
     const seen: Seen[] = [];
-    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("ok");
     const posted = seen[0]!.body as { intent: { preRolloverHooks: unknown[] } };
     expect(posted.intent.preRolloverHooks.length).toBe(1);
@@ -785,7 +785,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     example.action.order.rolloverParams.settler = stranger;
     example.action.signature = await signRollover(42161, example.action.order);
     const seen: Seen[] = [];
-    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/orders", status: 201, body: {} }], seen));
+    const env = await runTool("cork_submit", example, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "settler_not_recognized" && w.message.includes(stranger))).toBe(true);
   });
@@ -794,7 +794,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const env = await runTool(
       "cork_query",
       { resource: "trading-pairs", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/markets", body: [{ poolId: "0x1" }, { poolId: "0x2" }] }]),
+      ctxWith([{ match: "/limit-orders/v1/markets", body: [{ poolId: "0x1" }, { poolId: "0x2" }] }]),
     );
     expect(env.state).toBe("ok");
     expect((env.data as { count: number }).count).toBe(2);
@@ -804,7 +804,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const env = await runTool(
       "cork_query",
       { resource: "trading-pairs", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/markets", body: [{ poolId: "0x1" }, 42] }]),
+      ctxWith([{ match: "/limit-orders/v1/markets", body: [{ poolId: "0x1" }, 42] }]),
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("venue_unreachable");
@@ -817,7 +817,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const env = await runTool(
       "cork_submit",
       { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premium: 3.6, expiry: 0, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/rfq_missing", status: 404, body: { message: "not found" } }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_missing", status: 404, body: { message: "not found" } }], seen),
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
@@ -853,7 +853,7 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     const env = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { state: "open", account: "0xc0ffee0000000000000000000000000000000001", withAnswers: true }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
+      ctxWith([{ match: "/rfqs/v1?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
     );
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("centralized");
@@ -875,7 +875,7 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
       { resource: "rfqs", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([
         { match: "cursor=rfq_a", body: { items: [{ rfq_id: "rfq_b" }], next_cursor: null } },
-        { match: "/rfqs?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } },
+        { match: "/rfqs/v1?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } },
       ]),
     );
     expect(env.state).toBe("ok");
@@ -890,16 +890,16 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     const hit = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/rfq_abc123", body: { rfq_id: "rfq_abc123", state: "open", answers: [], answer_count: 0, truncated: false, request: {} } }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_abc123", body: { rfq_id: "rfq_abc123", state: "open", answers: [], answer_count: 0, truncated: false, request: {} } }], seen),
     );
     expect(hit.state).toBe("ok");
     expect((hit.data as { items: Array<{ rfq_id: string }> }).items[0]!.rfq_id).toBe("rfq_abc123");
-    expect(seen[0]!.url).toContain("/rfqs/rfq_abc123");
+    expect(seen[0]!.url).toContain("/rfqs/v1/rfq_abc123");
 
     const miss = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_missing" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/rfq_missing", status: 404, body: { message: "Unknown rfq_id" } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_missing", status: 404, body: { message: "Unknown rfq_id" } }]),
     );
     expect(miss.state).toBe("unavailable");
     expect(miss.warnings[0]?.code).toBe("rfq_not_found");
@@ -973,7 +973,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     const env = await runTool(
       "cork_query",
       { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/pools", body: { items: [{ x: 1 }], next_cursor: "loop" } }]),
+      ctxWith([{ match: "/pools/v1", body: { items: [{ x: 1 }], next_cursor: "loop" } }]),
     );
     expect(env.state).toBe("conflict");
     expect(pgOf(env).reason).toBe("cursor_repeated");
@@ -984,7 +984,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     const env = await runTool(
       "cork_query",
       { resource: "fills", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/fills", body: [{ orderHash: "0x1" }] }]),
+      ctxWith([{ match: "/limit-orders/v1/fills", body: [{ orderHash: "0x1" }] }]),
     );
     expect(env.state).toBe("ok");
     const pg = pgOf(env);
@@ -997,7 +997,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     const env = await runTool(
       "cork_query",
       { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xabc" }], hasMore: false } }]),
+      ctxWith([{ match: "/pools/v1", body: { items: [{ poolId: "0xabc" }], hasMore: false } }]),
     );
     expect(env.state).toBe("ok");
     expect(pgOf(env).complete).toBe(true);
@@ -1008,7 +1008,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     const env = await runTool(
       "cork_query",
       { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/pools", body: { items: [{ poolId: "0xa" }], hasMore: true } }]),
+      ctxWith([{ match: "/pools/v1", body: { items: [{ poolId: "0xa" }], hasMore: true } }]),
     );
     expect(env.state).toBe("ok");
     expect(pgOf(env).reason).toBe("cursor_absent");
@@ -1066,7 +1066,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     runTool("cork_prepare_orders", { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" }, ctxWith(routes));
 
   it("finds the resting order, re-hashes it, and returns unsigned canonical fill calldata", async () => {
-    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]);
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]);
     expect(env.state).toBe("ok");
     const d = env.data as { kind: string; to: string; from: string; orderHash: string; calldata: string; fillFunction: string };
     expect(d.kind).toBe("taker-fill");
@@ -1084,7 +1084,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-dead-01", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: deadChain },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: deadChain },
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("status_mismatch");
@@ -1096,13 +1096,13 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const live = await runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-live-01", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: liveChain },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: liveChain },
     );
     expect(live.state).toBe("ok");
     const broken = await runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-live-02", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: async () => stubResolved({ readContract: async () => { throw new Error("rpc down"); } }) },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: async () => stubResolved({ readContract: async () => { throw new Error("rpc down"); } }) },
     );
     expect(broken.state).toBe("ok"); // liveness is best-effort — a failed read never blocks bytes
   });
@@ -1110,27 +1110,27 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
   it("a row that does not hash to the requested order → conflict digest_mismatch (no fill bytes)", async () => {
     // Claim the requested hash but carry an order that hashes elsewhere (different salt).
     const liar = { orderHash: hash, order: { ...orderWire, salt: "9999" }, signature: SIG, extension: "0x" };
-    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [liar], hasMore: false } }]);
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [liar], hasMore: false } }]);
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("order_hash_mismatch");
   });
 
   it("order absent from a COMPLETE book → order_not_found (a normal outcome)", async () => {
-    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [], hasMore: false } }]);
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [], hasMore: false } }]);
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("order_not_found");
   });
 
   it("order absent from an INCOMPLETE book → conflict, never a false not-found", async () => {
     // Bare array = unprovable completeness (metadata_absent).
-    const env = await fill([{ match: "/limit-orders/orderbook", body: [] }]);
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: [] }]);
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("pagination_incomplete");
   });
 
   it("malformed signed row → invalid_service_response (honest, not a crash)", async () => {
     const bad = { orderHash: hash, order: { ...orderWire, maker: "nope" }, signature: SIG, extension: "0x" };
-    const env = await fill([{ match: "/limit-orders/orderbook", body: { items: [bad], hasMore: false } }]);
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [bad], hasMore: false } }]);
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_service_response");
   });
@@ -1178,7 +1178,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: (row["orderHash"] as string) ?? buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
-        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over, code) },
+        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over, code) },
       );
 
     it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
@@ -1250,7 +1250,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
         runTool(
           "cork_prepare_orders",
           { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0002", action: { type: "taker-fill", orderHash: buyHash, interaction: "0xdeadbeef", jitMarket: jm }, format: "concise" },
-          { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub() },
+          { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub() },
         ),
       ).rejects.toThrow(/invalid input/);
     });
@@ -1269,7 +1269,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       const env = await runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0003", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, constraint: { rateMin: "1", rateMax: (2n * WAD).toString(), rateChangePerDayMax: WAD.toString(), rateChangeCapacityMax: (3n * WAD).toString() } } }, format: "concise" },
-        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
+        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
       );
       expect(env.state).toBe("ok");
       expect((env.data as { jit: unknown }).jit).toBeDefined();
@@ -1280,7 +1280,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       const env = await runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0004", action: { type: "taker-fill", orderHash: buyHash, jitMarket: jm }, format: "concise" },
-        { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
+        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
       );
       expect(env.state).toBe("unavailable");
       expect(env.warnings[0]?.code).toBe("requires_rpc");
@@ -1308,7 +1308,7 @@ describe("taker-fill of an auction-priced resting order", () => {
     runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-fill-0001", action: { type: "taker-fill", orderHash, ...extra }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2 },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2 },
     );
 
   it("defaults the slippage cap to the curve CEILING (not the floor) and reports current/floor prices", async () => {
@@ -1355,7 +1355,7 @@ describe("taker-fill of an auction-priced resting order", () => {
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-forself-0001", action: { type: "taker-fill", orderHash: built.orderHash, forSelf: { adapter: forSelfAdapter, poolId: `0x${"11".repeat(32)}` } }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { fillFunction: string; forSelf: { pullCap: string }; auction: Record<string, unknown> };
@@ -1415,7 +1415,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const env = await runTool(
       "cork_submit",
       counter({ freshUntil: 1795000000 }),
-      ctxWith([{ match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_1" } }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_1" } }], seen),
     );
     expect(env.state).toBe("ok");
     expect((env.data as { kind: string; counterId: string | null }).kind).toBe("rfq-counter");
@@ -1452,7 +1452,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const miss = await runTool(
       "cork_submit",
       counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", status: 404, body: { message: "Unknown rfq_id" } }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", status: 404, body: { message: "Unknown rfq_id" } }], seen),
     );
     expect(miss.state).toBe("unavailable");
     expect(miss.warnings[0]?.code).toBe("rfq_not_found");
@@ -1463,7 +1463,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const forbidden = await runTool(
       "cork_submit",
       counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", body: rfqOtherRequester }], seen2),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfqOtherRequester }], seen2),
     );
     expect(forbidden.state).toBe("unavailable");
     expect(forbidden.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1476,7 +1476,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const refuse = await runTool(
       "cork_submit",
       counter({ optionRef: { answerId: "ans_1", optionId: "99" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", body: { ...base, truncated: false } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: { ...base, truncated: false } }]),
     );
     expect(refuse.state).toBe("unavailable");
     expect(refuse.warnings[0]?.message).toContain("optionRef");
@@ -1486,8 +1486,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
       "cork_submit",
       counter({ optionRef: { answerId: "ans_old", optionId: "1" } }),
       ctxWith([
-        { match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_2" } },
-        { match: "/rfqs/rfq_1", body: { ...base, truncated: true } },
+        { match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_2" } },
+        { match: "/rfqs/v1/rfq_1", body: { ...base, truncated: true } },
       ], seen),
     );
     expect(relayed.state).toBe("ok");
@@ -1501,8 +1501,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
       "cork_submit",
       counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
       ctxWith([
-        { match: "/rfqs/rfq_1/counters", status: 201, body: { counter_id: "ctr_3" } },
-        { match: "/rfqs/rfq_1", body: { ...base, truncated: false } },
+        { match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_3" } },
+        { match: "/rfqs/v1/rfq_1", body: { ...base, truncated: false } },
       ]),
     );
     expect(ok.state).toBe("ok");
@@ -1514,7 +1514,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const env = await runTool(
       "cork_submit",
       counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/rfq_1", body: expired }], seen),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: expired }], seen),
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1526,7 +1526,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const env = await runTool(
       "cork_submit",
       counter(),
-      ctxWith([{ match: "/rfqs/rfq_1/counters", status: 200, body: { counter_id: "ctr_1" } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1/counters", status: 200, body: { counter_id: "ctr_1" } }]),
     );
     expect(env.state).toBe("ok");
     expect((env.data as { replay: boolean }).replay).toBe(true);
@@ -1551,7 +1551,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const list = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { withAnswers: true, view: "current" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs?", body: { items: [], next_cursor: null } }], seen),
+      ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen),
     );
     expect(list.state).toBe("ok");
     expect(seen[0]!.url).toContain("view=current");
@@ -1560,7 +1560,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b0
     const single = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123", view: "current" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/rfq_abc123", body: { rfq_id: "rfq_abc123", version: 3, answers: [], counter: null } }], seen2),
+      ctxWith([{ match: "/rfqs/v1/rfq_abc123", body: { rfq_id: "rfq_abc123", version: 3, answers: [], counter: null } }], seen2),
     );
     expect(single.state).toBe("ok");
     expect(seen2[0]!.url).toContain("view=current");

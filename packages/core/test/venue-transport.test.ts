@@ -5,10 +5,25 @@
 // network), which is what keeps the rest of the offline suite from polluting shared state.
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_VENUE_URL,
+  getLopFills,
+  getLopMarkets,
+  getLopOrderbook,
   getPools,
+  getRfq,
+  getRfqs,
+  getRolloverContracts,
+  getRolloverFills,
+  getRolloverOrder,
+  getRolloverOrders,
   postLopOrder,
+  postRfq,
+  postRfqAnswer,
+  postRfqCounter,
+  postRolloverOrder,
   resetVenueBreaker,
   runTool,
+  venueBaseUrl,
   venueDiagnostics,
   VenueHttpError,
   VENUE_BREAKER_POLICY,
@@ -138,5 +153,119 @@ describe("429 Retry-After propagation", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]!.code).toBe("venue_rate_limited");
     expect(env.warnings[0]!.message).toContain("retry after 17s");
+  });
+});
+
+describe("module-scoped routing (cork-api 0.3.3): base normalization + canonical literals", () => {
+  const seenUrl = (capture: string[]): VenueDeps => ({
+    fetch: async (url: string) => (capture.push(url), okList()),
+    breaker: null,
+  });
+
+  it("DEFAULT_VENUE_URL is the bare origin — the version moved into the module paths", () => {
+    expect(DEFAULT_VENUE_URL).toBe("https://api-phoenix.cork.tech");
+    expect(venueBaseUrl()).toBe("https://api-phoenix.cork.tech");
+  });
+
+  it("normalizes a configured base still carrying the retired base-versioned form", () => {
+    // The pre-0.3.3 convention (version in the base) composes with module-versioned literals
+    // into /v1/<module>/v1/… — a path no form of the API ever served. One trailing /v<n>
+    // segment strips, with or without a trailing slash.
+    expect(venueBaseUrl("https://api-phoenix.cork.tech/v1")).toBe("https://api-phoenix.cork.tech");
+    expect(venueBaseUrl("https://api-phoenix.cork.tech/v1/")).toBe("https://api-phoenix.cork.tech");
+    expect(venueBaseUrl("https://api-phoenix.cork.tech/v2")).toBe("https://api-phoenix.cork.tech");
+    expect(venueBaseUrl("https://proxy.example/venue/")).toBe("https://proxy.example/venue");
+    // Only a trailing VERSION segment strips — a path that merely contains "v1" is untouched.
+    expect(venueBaseUrl("https://proxy.example/v1proxy")).toBe("https://proxy.example/v1proxy");
+    expect(venueBaseUrl("https://proxy.example/v1/venue")).toBe("https://proxy.example/v1/venue");
+  });
+
+  it("composes canonical module-versioned paths (exact URLs — literal rot dies here)", async () => {
+    const urls: string[] = [];
+    await getPools(seenUrl(urls), 42161);
+    await getLopOrderbook(seenUrl(urls), { chainId: 42161 });
+    await getLopFills(seenUrl(urls), { chainId: 42161 });
+    await getLopMarkets(seenUrl(urls), 42161);
+    await getRolloverOrders(seenUrl(urls), { chainId: 42161 });
+    await getRolloverFills(seenUrl(urls), { chainId: 42161 });
+    await getRolloverContracts(seenUrl(urls), { chainId: 42161 });
+    await getRfqs(seenUrl(urls), { chainId: 42161 });
+    await getRfq(seenUrl(urls), "rfq_x");
+    await getRolloverOrder(seenUrl(urls), "0xdigest");
+    expect(urls).toEqual([
+      "https://api-phoenix.cork.tech/pools/v1?chainId=42161",
+      "https://api-phoenix.cork.tech/limit-orders/v1/orderbook?chainId=42161",
+      "https://api-phoenix.cork.tech/limit-orders/v1/fills?chainId=42161",
+      "https://api-phoenix.cork.tech/limit-orders/v1/markets?chainId=42161",
+      "https://api-phoenix.cork.tech/rollover/v1/orders?chainId=42161",
+      "https://api-phoenix.cork.tech/rollover/v1/fills?chainId=42161",
+      "https://api-phoenix.cork.tech/rollover/v1/contracts?chainId=42161",
+      "https://api-phoenix.cork.tech/rfqs/v1?chain_id=42161",
+      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x",
+      "https://api-phoenix.cork.tech/rollover/v1/orders/0xdigest",
+    ]);
+  });
+
+  it("POST paths are canonical too", async () => {
+    const urls: string[] = [];
+    const deps: VenueDeps = { fetch: async (url: string) => (urls.push(url), new Response("{}", { status: 201 })), breaker: null };
+    await postLopOrder(deps, {});
+    await postRolloverOrder(deps, {});
+    await postRfq(deps, {});
+    await postRfqAnswer(deps, "rfq_x", {});
+    await postRfqCounter(deps, "rfq_x", {});
+    expect(urls).toEqual([
+      "https://api-phoenix.cork.tech/limit-orders/v1",
+      "https://api-phoenix.cork.tech/rollover/v1/orders",
+      "https://api-phoenix.cork.tech/rfqs/v1",
+      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x/answers",
+      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x/counters",
+    ]);
+  });
+});
+
+describe("shim telemetry (Deprecation: true) + in-band venue warnings[]", () => {
+  const shimHeaders = { "content-type": "application/json", deprecation: "true", "x-cork-canonical-path": "/limit-orders/v1/orderbook?chainId=1" };
+
+  it("a GET served by the deprecated-path rewrite carries deprecatedPath; a canonical answer does not", async () => {
+    const shimmed: VenueDeps = { fetch: async () => new Response(JSON.stringify({ items: [] }), { status: 200, headers: shimHeaders }), breaker: null };
+    expect((await getLopOrderbook(shimmed, { chainId: 1 })).deprecatedPath).toBe("/limit-orders/v1/orderbook?chainId=1");
+    expect((await getLopOrderbook({ fetch: async () => okList(), breaker: null }, { chainId: 1 })).deprecatedPath).toBeUndefined();
+  });
+
+  it("a POST served by the rewrite carries deprecatedPath on the post result", async () => {
+    const deps: VenueDeps = { fetch: async () => new Response("{}", { status: 201, headers: shimHeaders }), breaker: null };
+    expect((await postLopOrder(deps, {})).deprecatedPath).toBe("/limit-orders/v1/orderbook?chainId=1");
+  });
+
+  it("body warnings[] ride through as venueWarnings, verbatim; absent/empty stays omitted", async () => {
+    const notice = { code: "limit-orders-premium-pct-deprecated", message: "`premium` is removed 2026-08-17", deprecates: "premium", effectiveAt: "2026-08-17" };
+    const deps: VenueDeps = { fetch: async () => new Response(JSON.stringify({ items: [], warnings: [notice] }), { status: 200, headers: { "content-type": "application/json" } }), breaker: null };
+    expect((await getLopOrderbook(deps, { chainId: 1 })).venueWarnings).toEqual([notice]);
+    const empty: VenueDeps = { fetch: async () => new Response(JSON.stringify({ items: [], warnings: [] }), { status: 200 }), breaker: null };
+    expect((await getLopOrderbook(empty, { chainId: 1 })).venueWarnings).toBeUndefined();
+  });
+
+  it("cork_query surfaces both as info warnings on an ok result — deduped across pages", async () => {
+    const notice = { code: "limit-orders-premium-pct-deprecated", message: "removed 2026-08-17" };
+    let page = 0;
+    const ctx = {
+      nowSeconds: 0n,
+      venueFetch: async () => {
+        page += 1;
+        return new Response(
+          JSON.stringify({ items: [{ orderHash: `0x${page}` }], warnings: [notice], hasMore: page < 2, nextCursor: page < 2 ? "c2" : undefined }),
+          { status: 200, headers: shimHeaders },
+        );
+      },
+    } as never;
+    const env = await runTool("cork_query", { resource: "orderbook", chainId: 1 }, ctx);
+    expect(env.state).toBe("ok");
+    const codes = env.warnings.map((w: { code: string }) => w.code);
+    expect(codes.filter((c: string) => c === "venue_notice")).toHaveLength(1); // deduped across 2 pages
+    expect(codes).toContain("venue_deprecated_path");
+    const noticeWarning = env.warnings.find((w: { code: string }) => w.code === "venue_notice")!;
+    expect(noticeWarning.message).toContain("limit-orders-premium-pct-deprecated");
+    expect(noticeWarning.message).toContain("removed 2026-08-17");
   });
 });

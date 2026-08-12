@@ -37,7 +37,7 @@ function stubCtx(args: {
   const ctx: HandlerContext = {
     nowSeconds: NOW,
     venueFetch: async (url) => {
-      if (url.includes(`/rollover/orders/${DIGEST}`)) return new Response(JSON.stringify(venueRow(args.venueStatus)), { status: 200 });
+      if (url.includes(`/rollover/v1/orders/${DIGEST}`)) return new Response(JSON.stringify(venueRow(args.venueStatus)), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     },
     resolveRpc:

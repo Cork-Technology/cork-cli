@@ -45,6 +45,7 @@ const T = {
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
+  venuePremium: "packages/core/test/venue-premium.test.ts",
   breaker: "packages/core/test/breaker.test.ts",
   rpc: "packages/core/test/rpc.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
@@ -1394,7 +1395,7 @@ const CATALOG: Mutant[] = [
     // `premium > 0` guard skips the band) computes ratio 0 < 0.1 and gets falsely refused.
     id: "premium-band-zero-guard-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (referencedPercent > 0 && action.premium > 0 && (ratio > 10 || ratio < 0.1)) {",
+    find: "if (referencedPercent > 0 && premiumPct > 0 && (ratio > 10 || ratio < 0.1)) {",
     replace: "if (referencedPercent > 0 && (ratio > 10 || ratio < 0.1)) {",
     tests: [T.venue],
   },
@@ -1648,6 +1649,106 @@ const CATALOG: Mutant[] = [
     find: 'for (const k of Object.keys(a)) if (!(k in b)) out.push({ path: `${path}/${k}`, kind: "key-added" });',
     replace: "for (const k of Object.keys(a)) if (!(k in b)) void k;",
     tests: [T.surfaceTier],
+  },
+  // ── cork-api 0.3.3 module routing + the premium_annualized migration ──────────────────────
+  {
+    // Base normalization regresses to matching a version segment no config carries: a user
+    // override still ending /v1 then composes /v1/<module>/v1/… — a path no API form serves.
+    id: "venue-base-version-strip-inert",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'return raw.replace(/\\/+$/u, "").replace(/\\/v\\d+$/u, "").replace(/\\/+$/u, "");',
+    replace: 'return raw.replace(/\\/+$/u, "").replace(/\\/v99\\d+$/u, "").replace(/\\/+$/u, "");',
+    tests: [T.venueTransport],
+  },
+  {
+    // Canonical literal regresses to the retired base-versioned form: the call rides the
+    // temporary rewrite (or 404s once it retires) instead of the canonical module path.
+    id: "venue-orderbook-path-legacy-form",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "`/limit-orders/v1/orderbook${qs(",
+    replace: "`/v1/limit-orders/orderbook${qs(",
+    tests: [T.venueTransport],
+  },
+  {
+    // The shim fingerprint stops matching: deprecated-path telemetry never surfaces and the
+    // shim's retirement becomes a silent outage instead of an announced migration.
+    id: "venue-deprecation-header-ignored",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'if ((res.headers.get("deprecation") ?? "").toLowerCase() !== "true") return undefined;',
+    replace: 'if ((res.headers.get("deprecation") ?? "").toLowerCase() !== "yes") return undefined;',
+    tests: [T.venueTransport],
+  },
+  {
+    // Per-page dedup key regresses to per-occurrence uniqueness: every page re-emits the same
+    // venue notice and a 10-page traversal warns 10 times.
+    id: "venue-notice-dedup-key-unique-per-page",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const key = JSON.stringify(w);",
+    replace: "const key = JSON.stringify({ ...w, occurrence: notice.venueWarnings.length });",
+    tests: [T.venueTransport],
+  },
+  {
+    // The book fraction pattern tightens to two integer digits: "100" — a value the venue's
+    // published pattern and refine both accept — gets refused, out-rejecting the venue.
+    id: "book-premium-pattern-tightened",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (typeof p !== \"string\" || !/^\\d{1,3}(\\.\\d{1,18})?$/.test(p)) return 'is not a decimal-fraction string",
+    replace: "if (typeof p !== \"string\" || !/^\\d{1,2}(\\.\\d{1,18})?$/.test(p)) return 'is not a decimal-fraction string",
+    tests: [T.venuePremium],
+  },
+  {
+    // The book bound comparator regresses to exclusive: exactly 100 (venue-legal, <= 100
+    // refine) gets refused — a relay must never out-reject its venue.
+    id: "book-premium-bound-exclusive",
+    file: "packages/core/src/handlers/submit.ts",
+    find: 'if (Number.parseFloat(p) > 100) return "parses above 100',
+    replace: 'if (Number.parseFloat(p) >= 100) return "parses above 100',
+    tests: [T.venuePremium],
+  },
+  {
+    // The agreement tolerance regresses from the venue's relative comparison to absolute:
+    // float noise at premium 100 reads as disagreement the venue would accept.
+    id: "premium-agreement-scale-absolute",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const scale = Math.max(1, action.premium, annualizedPct);",
+    replace: "const scale = 1;",
+    tests: [T.venuePremium],
+  },
+  {
+    // The agreement tolerance regresses 100x tighter than the venue's: benign fraction×100
+    // float noise becomes a refusal the venue would not issue.
+    id: "premium-agreement-tolerance-tightened",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (Math.abs(action.premium - annualizedPct) > 1e-9 * scale) {",
+    replace: "if (Math.abs(action.premium - annualizedPct) > 1e-16 * scale) {",
+    tests: [T.venuePremium],
+  },
+  {
+    // The at-least-one gate regresses to unreachable: a premium-less listing relays and fails
+    // only as an opaque venue 400 instead of local teaching.
+    id: "premium-at-least-one-unreachable",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (action.premium === undefined && action.premiumAnnualized === undefined) {",
+    replace: "if (action.premium === undefined && action.premiumAnnualized === undefined && chainId === 0) {",
+    tests: [T.venuePremium],
+  },
+  {
+    // The wire translation regresses to passthrough: ERC1271 posts verbatim, which the venue's
+    // EOA|CONTRACT enum schema-rejects — the defect this translation fixed.
+    id: "maker-kind-wire-translation-passthrough",
+    file: "packages/core/src/handlers/submit.ts",
+    find: 'makerAccountType: action.makerAccountType === "ERC1271" ? "CONTRACT" : "EOA",',
+    replace: "makerAccountType: action.makerAccountType,",
+    tests: [T.venuePremium],
+  },
+  {
+    // The read-side mapping loses the venue's own vocabulary: every contract-maker book row
+    // fails row validation again.
+    id: "maker-kind-read-mapping-lost",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'kind === "ERC1271" || kind === "EIP1271" || kind === "CONTRACT"',
+    replace: 'kind === "ERC1271" || kind === "EIP1271"',
+    tests: [T.venuePremium],
   },
 ];
 

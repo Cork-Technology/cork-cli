@@ -10,7 +10,7 @@ import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
-import { collectVenuePages } from "./query.ts";
+import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -49,6 +49,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "finalize-maker-order") {
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
+    // The listing must carry a premium in at least one spelling (the venue's own at-least-one
+    // rule) — checked HERE, not just at submit, so the emitted submitInput is relayable as-is
+    // and the failure lands before a signature ceremony, not after it.
+    if (action.listing.premium === undefined && action.listing.premiumAnnualized === undefined) {
+      return unavailable(chainId, "invalid_order_terms", `the listing needs a premium: send listing.premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface (the percent-number listing.premium is deprecated; the venue removes it 2026-08-17)`, ctx);
+    }
     const p = action.prepared;
     if (p.clientRequestId !== input.clientRequestId || p.typedData.domain.chainId !== chainId || !isAddressEqual(p.lop, lop) || !isAddressEqual(p.typedData.domain.verifyingContract, lop)) {
       return envelope({
@@ -126,7 +132,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           signature: finalized.signature,
           extension: finalized.extension,
           side: action.listing.side,
-          premium: action.listing.premium,
+          ...(action.listing.premium !== undefined ? { premium: action.listing.premium } : {}),
+          ...(action.listing.premiumAnnualized !== undefined ? { premiumAnnualized: action.listing.premiumAnnualized } : {}),
           expiry: action.listing.expiry,
           nonce: action.listing.nonce,
           allowsPartialFills: action.listing.allowsPartialFills,
@@ -666,7 +673,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         },
         chainId,
         source: "service",
-        warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }],
+        // venueNoticeWarnings: the venue's in-band notices ride the book pages this search read
+        // (e.g. the premium-field deprecation) — the fill path is exactly who they are for.
+        warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...venueNoticeWarnings(book)],
         ctx,
       });
     } catch (err) {

@@ -1,6 +1,6 @@
 {
   "name": "@cork/core",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0-rc.2",
   "description": "Cork helper core: math ports, chain reads, Bundler3 encode/decode, and the runTool dispatch.",
   "license": "UNLICENSED",
   "private": false,

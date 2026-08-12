@@ -359,6 +359,21 @@ export type PreparePhoenixInput = z.infer<typeof PreparePhoenixInput>;
 // ────────────────────────────────────────────────────────────────────────────
 const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
 
+/** The two premium spellings a venue listing accepts during the cork-api 0.3.3 migration
+ *  window. `premiumAnnualized` is the successor: the venue minted a NEW field for the fraction
+ *  unit (COR-35/R13 — a unit change is a new name), shared verbatim with the RFQ surface, so we
+ *  mirror name and unit and never convert between them. `premium` (percent) is REMOVED by the
+ *  venue on 2026-08-17. At least one is required — enforced at relay with teaching, mirroring
+ *  the venue (whose own at-least-one rule is prose + refine, not schema shape). */
+const ListingPremiumFields = {
+  premium: z.number().min(0).max(1000).optional()
+    .describe("DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying")
+    .meta({ "x-units": X_UNITS.percent }),
+  premiumAnnualized: z.string().min(1).optional()
+    .describe('the listing premium as an annualized decimal-fraction STRING ("0.041" = 4.1%) — the venue\'s successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement')
+    .meta({ "x-units": X_UNITS.percent }),
+};
+
 // The exact `data` object cork_prepare_orders maker-order returns, handed back verbatim to
 // finalize-maker-order. Wire-serialized: message amounts/salt/traits are decimal strings.
 // z.object strips the extra fields (types, jit) the caller round-trips.
@@ -440,7 +455,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]"),
     listing: z.strictObject({
       side: z.enum(["BUY", "SELL"]),
-      premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000").meta({ "x-units": X_UNITS.percent }),
+      ...ListingPremiumFields,
       expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
       nonce: UintStr,
       allowsPartialFills: z.boolean(),
@@ -657,10 +672,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
     signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]"),
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
-    // Deliberately TIGHTER than the venue's own bound (it accepts up to 10000 to tolerate
-    // basis-point-era clients): this surface is percent-only by contract, so 1001..10000 here
-    // is a scale mistake worth refusing with teaching, not a value worth relaying.
-    premium: z.number().min(0).max(1000).describe("PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected").meta({ "x-units": X_UNITS.percent }),
+    ...ListingPremiumFields,
     expiry: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("absolute unix SECONDS (not ms; bounded to year 2100); 0 = no expiry"),
     nonce: UintStr,
     allowsPartialFills: z.boolean(),

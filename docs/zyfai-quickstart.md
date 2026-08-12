@@ -8,7 +8,7 @@ EIP-712/ERC-1271, ERC-2612 permits, ERC-4626/7540, CREATE2. **Chain:** Base (845
 changing only the chain id and the asset addresses. Base is **post-first-market**: the JIT
 adapter's POOL_CREATOR + FEE_MANAGER roles were granted on both chains 2026-08-10, the first JIT
 market-creating fills landed the same day, and the venue has listed ~50 short-dated pilot pools
-on Base since — all on this doc's own sUSDe/mwUSDC pair. **Tool:** cork-cli `v0.2.0-rc.1`. Every
+on Base since — all on this doc's own sUSDe/mwUSDC pair. **Tool:** cork-cli `v0.2.0-rc.2`. Every
 live output below was re-captured 2026-08-12 against 0.3.3; still, **treat this doc as
 orientation and pull the authoritative values from the tool** (`ch query protocol-config`),
 never hardcode them.
@@ -516,7 +516,7 @@ are quoting there):
   "mode": "liquidity_only", "package_id": "balanced-v1",
   "market_template": { "inline": { "oracle_recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d" } },
   "reference_asset": "0xc1256ae5…a2ca", "collateral_asset": "0x211cc4dd…5fe5d2",
-  "premium_annualized": "0.032",       // fractions in RFQ land: 0.032 = 3.2% — listings use percent instead
+  "premium_annualized": "0.032",       // fraction: 0.032 = 3.2% — the book listing now shares this convention (its percent `premium` is removed 2026-08-17)
   "fresh_until": 1786014948
 } ] }
 ```
@@ -950,7 +950,7 @@ whole registry stack (registry, adapter, all three recipes) was redeployed 2026-
 contracts release **0.3.3** (identical addresses on Base and Arbitrum One), so anything cached
 before then is stale. Installed copies of the tool pick up redeployed addresses automatically
 within an hour (remote config), so reads need no update from you. The current venue pool list is
-`api-phoenix.cork.tech/v1/pools/`.
+`api-phoenix.cork.tech/pools/v1/`.
 
 Two rules make redeploys safe to live through:
 - **An abandoned generation does not go dark — it answers.** The interfaces are identical across

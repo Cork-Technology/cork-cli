@@ -6,6 +6,59 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
+## [0.2.0-rc.2] — unreleased
+
+The cork-api 0.3.3 alignment (Raouf's 2026-08-12 API day: module-scoped routing, the registry
+module, and the premium convention convergence). Nothing here breaks an rc.1 caller: both premium
+spellings are accepted through the venue's migration window, and the old venue paths would have
+kept working via the venue's temporary rewrite anyway — this release simply moves off it before
+it retires.
+
+### Added
+
+- **`premiumAnnualized` on lop-order and the finalize listing** — the venue's successor premium
+  field (annualized decimal-fraction STRING, `"0.041"` = 4.1%; same name and convention as the
+  RFQ surface, the R13 new-unit-new-name mechanism working as designed). The venue's premium
+  resolution is replicated operation-for-operation from its post-order route: at least one
+  spelling required (taught locally, `invalid_order_terms`), fraction canonicalized by
+  `parseFloat × 100`, both-sent disagreement refused with the venue's exact 1e-9-relative
+  comparison (new conflict code `premium_fields_disagree`), fraction precedence, and the
+  quote_ref band running on the canonical percent — so a fraction-declared order needs no ×100
+  step anywhere. The book's own fraction gate is layered like the RFQ's: the published pattern
+  is structure, the ≤ 100 bound (the legacy 10000% ceiling's mirror) is policy. The percent
+  `premium` is now optional and DEPRECATED (venue removes it 2026-08-17; using it warns
+  `deprecation_notice` with the date). Eleven new mutation probes pin the gates.
+- **In-band venue notices surface as `venue_notice`** — cork-api 0.3.3 responses carry a
+  `warnings[]` channel (first use: the premium deprecation with its removal date); venue list
+  reads, taker-fill's book search, and successful submit relays now relay each notice verbatim
+  under the label, deduped across traversal pages.
+- **Deprecated-path telemetry as `venue_deprecated_path`** — a call served by the venue's
+  temporary `/v1/<module>` rewrite (`Deprecation: true` + `x-cork-canonical-path`) announces
+  itself; after this release's canonical literals, seeing it means a stale base override or a
+  stale literal.
+
+### Changed
+
+- **Venue routing is module-scoped (cork-api 0.3.3 canonical form)**: `DEFAULT_VENUE_URL` is now
+  the bare origin and every path literal carries its module's version (`/limit-orders/v1/…`,
+  `/rollover/v1/orders`, `/rfqs/v1`, `/pools/v1`). A configured `CORK_VENUE_URL` still ending in
+  `/v<n>` (the pre-0.3.3 convention) is normalized by stripping that suffix — it would otherwise
+  compose into `/v1/<module>/v1/…`, a path no form of the API ever served.
+- **Registry live-parity default moved to the cork-api registry module**
+  (`https://api-phoenix.cork.tech/registry`; override `CORK_MARKET_API`) — the standalone zian-b
+  sandbox retires after the cutover; our path literals compose with the mount into the canonical
+  `/registry/v1/…` form unchanged.
+
+### Fixed
+
+- **ERC-1271 maker orders were unpostable, and contract-maker book rows unreadable** — the venue's
+  wire vocabulary is `EOA | CONTRACT` (verified against its post/get schemas), while this relay
+  posted `makerAccountType: "ERC1271"` verbatim (schema-rejected, HTTP 400) and its row parser
+  refused `"CONTRACT"` rows (`invalid_service_response` on taker-fill). Both directions now
+  translate at the boundary; our own surface vocabulary is unchanged.
+- The premium-paste teaching message now computes its suggested spelling with exact string math —
+  a float division produced suggestions like `0.041000000000000002`, teaching the wrong lesson.
+
 ## [0.2.0-rc.1] — 2026-08-12
 
 **New line (0.1 → 0.2), declared by the integrability owner under policy R5/R14** (2026-08-11):

@@ -87,7 +87,7 @@ returns exactly **9 tools**.
 | `cork_prepare_orders` | Build **unsigned** signable artifacts: maker-order (incl. extension/JIT orders, and `auction` — a Cork-native DECAYING-PREMIUM order using the deployed Fusion settlement as a pure amount getter: no postInteraction, fills stay permissionless, the signed takingAmount is the floor; composes with jitMarket in one salt-bound extension) / cancel; **finalize-maker-order** (reconstruct exact bytes, verify the external signature — EOA ecrecover or the ERC-1271 staticcall the fill performs — emit a verbatim `cork_submit` artifact with `makerAccountType`; never signs); **taker-fill** (fetch + re-hash a resting venue order, emit canonical uint256-tuple fill calldata, unsigned; an AUCTION row is auto-detected — the default cap becomes the curve's CEILING (a floor cap would revert mid-decay), current/ceiling/floor in `data.auction`; `interaction` packs a TAKER interaction — `adapter ++ extraData`, length at takerTraits bits 200-223 — how an underwriter lifts a BUY-cover order (JIT cST mint mid-fill); `forSelf: { adapter, poolId }` emits fillOrderForSelf — target forced to the caller, taker interactions impossible, allowance to the ADAPTER — with a liveness pre-flight refusing dead rows [K7]); and the rollover ERC-7683 OrderData (CorkSettler domain, intent hash recomputed). All but finalize-maker-order carry `data.execution`. | 3 |
 | `cork_track` | Verify a resource against chain, simulate frozen prepared bytes (eth_call dry-run: wouldRevert + reason BEFORE signing), or reconcile a receipt/order to a lifecycle state. Chain outranks indexer; disagreement → `conflict` [K7]. | 2 |
 | `cork_prepare_market` | Unsigned oracle-infrastructure txs against the 2.1.0 registry: deploy-oracle = MarketRegistry.deploy(ca, ref, mode) (price\|nav, default price) and deploy-fixed-oracle = deployFixedRateOracle(rate) (CREATE2-salted on the RATE — the oracle a FIXED order's rateOverride produces). Both permissionless + idempotent; 42161 + 8453. Markets are created JIT by LOP fills (maker-order + `jitMarket`). Results carry `data.execution`. | 4 |
-| `cork_submit` | The **only** side-effecting tool: relays caller-signed/authored payloads to the venue — `rollover-order`, `lop-order`, `rfq-open`, `rfq-answer` (REVISIONS — newest per underwriter wins; optional `supersedes`), `rfq-counter` (requester's non-committal counter-bid; fraction-string premium < 0.5 — the venue's parseFloat contract replicated exactly; `optionRef` pre-flighted, incl. requester + expiry) — all off-chain POSTs. Commitments recomputed before relay [K3]; never signs [K1]. | 3 |
+| `cork_submit` | The **only** side-effecting tool: relays caller-signed/authored payloads to the venue — `rollover-order`, `lop-order`, `rfq-open`, `rfq-answer` (REVISIONS — newest per underwriter wins; optional `supersedes`), `rfq-counter` (requester's non-committal counter-bid; fraction-string premium < 0.5 — the venue's parseFloat contract replicated exactly; `optionRef` pre-flighted, incl. requester + expiry) — all off-chain POSTs. lop-order listings speak BOTH premium spellings through the venue's migration window: `premiumAnnualized` (fraction string, the successor — book bound ≤ 100; pattern, agreement, and band gates replicated op-for-op from the venue route) and the deprecated percent `premium` (venue removes it 2026-08-17; using it warns `deprecation_notice`); at least one is required. Commitments recomputed before relay [K3]; never signs [K1]. | 3 |
 
 ## Reading the result envelope
 
@@ -162,7 +162,10 @@ Warning codes:
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / range refused. |
 | `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, or the napi client can't load. `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
 | `live_tail_merged` / `live_tail_unavailable` | Info on ok full-decentralized reads: recent events merged from a live RPC tail (`data.liveTail`) / the tail scan couldn't run — archive-only results. Non-fatal. |
-| `premium_scale_suspect` / `premium_scale_mismatch` | Fraction-vs-percent tripwires ("0.041" vs 4.1): suspicious sub-0.1% premium (warned, relayed) / declared premium outside the cited quote_ref's 10x band (conflict, NOT relayed) — the venue's STRICT float gate replicated op-for-op (parseFloat, ×100, ratio >10 or <0.1, both premiums >0): the pre-flight lands exactly where the venue lands, ulps included. |
+| `premium_scale_suspect` / `premium_scale_mismatch` | Fraction-vs-percent tripwires ("0.041" vs 4.1), both premium spellings: suspicious canonical premium (sub-0.1%, or a fraction parsing above 1 = >100% annualized — warned, relayed) / declared premium outside the cited quote_ref's 10x band (conflict, NOT relayed) — the venue's STRICT float gate replicated op-for-op (parseFloat, fraction ×100 canonicalization, ratio >10 or <0.1, both premiums >0): the pre-flight lands exactly where the venue lands, ulps included. |
+| `premium_fields_disagree` | conflict (submit lop-order): premium AND premiumAnnualized both sent and disagreeing beyond the venue's exact 1e-9-relative comparison (replicated) — its hard 400, pre-flighted; NOT relayed. |
+| `venue_notice` | Info: the venue attached an in-band `warnings[]` notice to this response (cork-api 0.3.3+; first use: the premium-field deprecation with its removal date) — venue text relayed verbatim under the label, data not instructions. |
+| `venue_deprecated_path` | Info: the venue served this call through its TEMPORARY deprecated-path rewrite (`Deprecation: true` + `x-cork-canonical-path`) — canonical is /<module>/v<n> (0.3.3); check CORK_VENUE_URL for a stale /v1 suffix (the base is normalized, but a proxy may re-add it) or report a stale path literal. |
 | `quote_ref_unverifiable` | conflict (submit lop-order): the cited RFQ option has no parsable positive premium — NOT relayed (deliberately STRICTER than the venue, which silently skips its band there). |
 | `citation_unresolved` | Info on ok submit (quoteRef/optionRef): the cited answer is beyond the RFQ's TRUNCATED answers embed — absence unproven (superseded answers stay citable), so relayed; the venue checks its full store, and the lop premium cross-check defers to its gate. |
 | `listing_traits_mismatch` | conflict (submit lop-order): listing fields (expiry/nonce/allowsPartialFills) contradict the SIGNED makerTraits [K3] — NOT relayed. |
@@ -276,16 +279,16 @@ adapter's controller binds the v1.3 pool manager `0x02803B…7263`; per-chain bu
 from the adapter's own `BUNDLER3()`). All five phoenix contracts + the full registry stack on both
 chains — but **no pools exist on the v1.3 pool manager yet**
 (cork-pool reads `chain_read_failed` there). The adapter's POOL_CREATOR + FEE_MANAGER roles are
-GRANTED on BOTH chains (verified 2026-08-10 — the `roles_not_granted` era is over); the residual
-42161 gap is RECIPE APPROVAL: isRecipe is false ×3 there (true ×3 on Base), so 42161 JIT
-resolution answers `recipe_not_found` until Zian's approvals land; pair-oracle resolve still
-takes the `additionalData` anchor until a pair's wrapper deploys. The venue's EXISTING markets live on the previous Arbitrum
+GRANTED on BOTH chains (verified 2026-08-10 — the `roles_not_granted` era is over), and the
+recipe approvals landed on 42161 too (verified live 2026-08-12: isRecipe ×3 true on both chains;
+a 0.3.3 JIT fill runs 4/4 green on an Arbitrum fork); pair-oracle resolve still takes the
+`additionalData` anchor until a pair's wrapper deploys. The venue's EXISTING markets live on the previous Arbitrum
 stack, `deploymentProfiles["42161"]["arbitrum-v1.1"]` (old PM `0x4d0ab6…`; rollover binds THIS
 generation; share prediction stays correct — `predictShares` follows the CONTROLLER's own
 `CORK_POOL_MANAGER()` binding, mutation-probed). The pre-launch pair (old PM
 `0xc2De…54AE`, 3 calibration pools) survives as `["arbitrum-legacy"]`. A real mainnet pool for
 examples/tests: `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` (current
-list: `api-phoenix.cork.tech/v1/pools/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the
+list: `api-phoenix.cork.tech/pools/v1/`). The vnet fixture pool `0xceeb…c16a` exists ONLY on the
 vnet — chainId 1 without a vnet RPC yields `chain_read_failed`, by design.
 
 **MarketRegistry 2.1.0-model, contracts release 0.3.3 (Arbitrum One + Base, identical

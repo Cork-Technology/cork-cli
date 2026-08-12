@@ -104,9 +104,9 @@ function stubCtx(args: {
   return {
     nowSeconds: 1_790_000_000n,
     venueFetch: async (url) => {
-      if (url.includes("/rollover/orders/")) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-      if (url.includes("/limit-orders/fills")) return new Response(JSON.stringify({ items: args.fills ?? [] }), { status: 200 });
-      if (url.includes("/limit-orders/orderbook")) return new Response(JSON.stringify({ items: args.bookRow ? [args.bookRow] : [] }), { status: 200 });
+      if (url.includes("/rollover/v1/orders/")) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+      if (url.includes("/limit-orders/v1/fills")) return new Response(JSON.stringify({ items: args.fills ?? [] }), { status: 200 });
+      if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: args.bookRow ? [args.bookRow] : [] }), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     },
     resolveRpc:

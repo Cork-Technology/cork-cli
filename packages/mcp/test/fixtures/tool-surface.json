@@ -2155,7 +2155,13 @@
                         "type": "number",
                         "minimum": 0,
                         "maximum": 1000,
-                        "description": "PERCENT number for the venue listing (4.1 = 4.1%), not a fraction; must be 0..1000",
+                        "description": "DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying",
+                        "x-units": "{%}"
+                      },
+                      "premiumAnnualized": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "the listing premium as an annualized decimal-fraction STRING (\"0.041\" = 4.1%) — the venue's successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement",
                         "x-units": "{%}"
                       },
                       "expiry": {
@@ -2194,7 +2200,6 @@
                     },
                     "required": [
                       "side",
-                      "premium",
                       "expiry",
                       "nonce",
                       "allowsPartialFills"
@@ -3688,7 +3693,13 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1000,
-                    "description": "PERCENT number for the venue listing (4.1 means 4.1%) — NOT a fraction; 0.041 would be read as 0.041% and trips the premium_scale tripwires. Must be 0..1000: a negative or wad-scale (4.1e18) value is a unit mistake, rejected",
+                    "description": "DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying",
+                    "x-units": "{%}"
+                  },
+                  "premiumAnnualized": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "the listing premium as an annualized decimal-fraction STRING (\"0.041\" = 4.1%) — the venue's successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement",
                     "x-units": "{%}"
                   },
                   "expiry": {
@@ -3741,7 +3752,6 @@
                   "order",
                   "signature",
                   "side",
-                  "premium",
                   "expiry",
                   "nonce",
                   "allowsPartialFills"

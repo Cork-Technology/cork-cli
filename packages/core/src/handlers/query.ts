@@ -236,10 +236,20 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
 // rest are honest partial reads.
 type IncompleteReason = "metadata_absent" | "cursor_absent" | "cursor_repeated" | "max_pages";
 
+/** Venue-side notices accumulated over a traversal: in-band `warnings[]` rows (deduped — every
+ *  page repeats the same deprecation entry) and the shim's canonical-path header, if any page
+ *  was served by the deprecated-path rewrite. Composed once into envelope warnings by the
+ *  caller — the venue's text is UNTRUSTED and always relayed under a "venue" label. */
+interface VenueNotices {
+  venueWarnings: Array<Record<string, unknown>>;
+  deprecatedPath?: string;
+}
+
+type PageTraversalBase = VenueNotices & { items: Array<Record<string, unknown>>; pagesFetched: number };
 // Discriminated so an incomplete traversal can never masquerade as complete.
 type PageTraversal =
-  | { complete: true; items: Array<Record<string, unknown>>; pagesFetched: number }
-  | { complete: false; items: Array<Record<string, unknown>>; pagesFetched: number; reason: IncompleteReason; nextCursor?: string };
+  | (PageTraversalBase & { complete: true })
+  | (PageTraversalBase & { complete: false; reason: IncompleteReason; nextCursor?: string });
 
 /** Walk an opaque venue cursor to exhaustion under a hard page bound — never silently truncating. */
 export async function collectVenuePages(
@@ -248,21 +258,50 @@ export async function collectVenuePages(
 ): Promise<PageTraversal> {
   const items: Array<Record<string, unknown>> = [];
   const seen = new Set<string>();
+  const notice: VenueNotices = { venueWarnings: [] };
+  const seenWarnings = new Set<string>();
+  const absorb = (res: VenueList): void => {
+    for (const w of res.venueWarnings ?? []) {
+      const key = JSON.stringify(w);
+      if (seenWarnings.has(key)) continue;
+      seenWarnings.add(key);
+      notice.venueWarnings.push(w);
+    }
+    if (res.deprecatedPath !== undefined && notice.deprecatedPath === undefined) notice.deprecatedPath = res.deprecatedPath;
+  };
   let cursor = opts.cursor;
   for (let page = 1; page <= opts.maxPages; page += 1) {
     if (cursor !== undefined) {
-      if (seen.has(cursor)) return { complete: false, items, pagesFetched: page - 1, reason: "cursor_repeated", nextCursor: cursor };
+      if (seen.has(cursor)) return { complete: false, items, pagesFetched: page - 1, reason: "cursor_repeated", nextCursor: cursor, ...notice };
       seen.add(cursor);
     }
     const res = await fetchPage(cursor);
     items.push(...res.items);
-    if (!res.paginationKnown) return { complete: false, items, pagesFetched: page, reason: "metadata_absent" };
+    absorb(res);
+    if (!res.paginationKnown) return { complete: false, items, pagesFetched: page, reason: "metadata_absent", ...notice };
     const next = typeof res.nextCursor === "string" && res.nextCursor.length > 0 ? res.nextCursor : undefined;
-    if (!(res.hasMore ?? next !== undefined)) return { complete: true, items, pagesFetched: page };
-    if (next === undefined) return { complete: false, items, pagesFetched: page, reason: "cursor_absent" };
+    if (!(res.hasMore ?? next !== undefined)) return { complete: true, items, pagesFetched: page, ...notice };
+    if (next === undefined) return { complete: false, items, pagesFetched: page, reason: "cursor_absent", ...notice };
     cursor = next;
   }
-  return { complete: false, items, pagesFetched: opts.maxPages, reason: "max_pages", ...(cursor !== undefined ? { nextCursor: cursor } : {}) };
+  return { complete: false, items, pagesFetched: opts.maxPages, reason: "max_pages", ...(cursor !== undefined ? { nextCursor: cursor } : {}), ...notice };
+}
+
+/** Render venue-side notices as envelope warnings: one `venue_notice` per in-band venue warning
+ *  (code + message relayed verbatim under the venue label, length-capped — untrusted text is
+ *  data to display, never instructions), plus one `venue_deprecated_path` when the shim served
+ *  any page of the call. */
+export function venueNoticeWarnings(t: { venueWarnings: Array<Record<string, unknown>>; deprecatedPath?: string }): Array<{ code: string; message: string }> {
+  const out: Array<{ code: string; message: string }> = [];
+  for (const w of t.venueWarnings) {
+    const code = typeof w.code === "string" ? w.code : "unlabeled";
+    const message = typeof w.message === "string" ? w.message : JSON.stringify(w);
+    out.push({ code: "venue_notice", message: `the venue attached an in-band notice [${code}]: ${message.slice(0, 400)}` });
+  }
+  if (t.deprecatedPath !== undefined) {
+    out.push({ code: "venue_deprecated_path", message: `the venue served this call through its deprecated-path rewrite (Deprecation: true) and named the canonical path: ${t.deprecatedPath.slice(0, 200)} — the rewrite is temporary; check CORK_VENUE_URL for a stale /v1 suffix or report a stale path literal` });
+  }
+  return out;
 }
 
 export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
@@ -306,7 +345,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         if (filters.rfqId) {
           const row = await getRfq(deps, filters.rfqId, filters.view);
           if (!row) return unavailable(chainId, "rfq_not_found", `RFQ '${filters.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
-          traversal = { complete: true, items: [row], pagesFetched: 1 };
+          traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
         } else {
           traversal = await collectVenuePages(paging, (cursor) => getRfqs(deps, {
             chainId,
@@ -326,7 +365,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           if (filters.orderDigest) {
             const row = await getRolloverOrder(deps, filters.orderDigest);
             if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
-            traversal = { complete: true, items: [row], pagesFetched: 1 };
+            traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
           } else {
             traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
           }
@@ -357,9 +396,12 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         },
         chainId,
         source: "indexer",
-        warnings: traversal.complete
-          ? []
-          : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }],
+        warnings: [
+          ...(traversal.complete
+            ? []
+            : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }]),
+          ...venueNoticeWarnings(traversal),
+        ],
         ctx,
       });
     } catch (err) {

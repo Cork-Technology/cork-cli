@@ -64,7 +64,11 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs the market-registry re
   const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610"; // sUSDS (registered on Arbitrum)
   const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55"; // LiquidityRecipe (approved)
   const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}`; // abi.encode(1e18)
-  const API = process.env.CORK_MARKET_API ?? "https://zian-b.feat.cork.tech";
+  // Default moved to the cork-api registry module mount (0.3.3, 2026-08-12): the standalone
+  // zian-b sandbox retires after the cutover; Raouf's response-level compare was 32/32 vs it,
+  // and our registry path literals (/v1/registries, /v1/{chain}/assets, …) compose with the
+  // /registry mount into the canonical /registry/v1/… form — one env var, zero code.
+  const API = process.env.CORK_MARKET_API ?? "https://api-phoenix.cork.tech/registry";
 
   const apiGet = async <T>(path: string): Promise<T | undefined> => {
     try {

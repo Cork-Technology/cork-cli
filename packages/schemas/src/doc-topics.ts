@@ -124,7 +124,7 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
     name: "units",
     aliases: ["scales", "decimals", "wad", "fixed-point"],
     summary:
-      "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (book `premium` is a percent number 0..1000, RFQ premiums are fraction strings like \"0.041\"), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats — for your OWN conversions; guards that predict a venue verdict instead replicate the venue's own arithmetic exactly. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
+      "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (premiums are fraction strings like \"0.041\" on the RFQ and, since cork-api 0.3.3, the book's premiumAnnualized; the book's legacy percent-number `premium` is removed 2026-08-17), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats — for your OWN conversions; guards that predict a venue verdict instead replicate the venue's own arithmetic exactly. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
     body: `# Numeric units and scales
 
 Ten scale conventions live on this surface — the table below is exhaustive. (The footgun audit
@@ -160,8 +160,8 @@ they are the same claim, so a field description and this table can be checked ag
 |---|---|---|---|---|
 | \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax (the four constraint values a JIT order carries and signs), rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
 | \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (cap 5e18 = 5%), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
-| \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing — cork_submit lop-order and the finalize listing block | cork-api v0.1.3 |
-| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized, and sibling premium fields | venue RFQ — scale is SCHEMA-GATED at write since launch (openapi pattern \`^(0\|0\\.[0-9]{1,18})$\` = structure; the < 0.5 cap = relaxable, spec-invisible POLICY); quote ECONOMICS are stored verbatim. PINNED forever by R13 — a WAD variant would be a NEW field name |
+| \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing (cork_submit lop-order and the finalize listing block) — DEPRECATED: the venue removes it 2026-08-17; its successor is the fraction-string premiumAnnualized in the next row | cork-api ≤0.3.2 (the legacy book scale) |
+| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized — AND, since cork-api 0.3.3, the BOOK listing's premiumAnnualized (same name, same convention, per-surface bounds: RFQ pattern \`^(0\|0\\.[0-9]{1,18})$\` with the < 0.5 cap; book pattern \`^\\d{1,3}(\\.\\d{1,18})?$\` with a ≤ 100 cap mirroring the legacy 10000% ceiling — the patterns are structure, both caps are relaxable POLICY) | the venue — scale SCHEMA-GATED at write on every surface; quote ECONOMICS stored verbatim. PINNED forever by R13 — a WAD variant would be a NEW field name |
 | \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
 | \`D5{%}\` | 1e5 base | \`5000\` | integratorFee, resolverFee (uint16, decoded from Fusion extraData) | 1inch Fusion FeeTaker |
 | \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
@@ -176,10 +176,14 @@ they are the same claim, so a field description and this table can be checked ag
 any field whose name ends \`Percentage\`, and any recipe constant ending \`_PERCENTAGE\`, is the
 \`D18{%}\` family — everything else documented "1e18 = 1.0" is \`D18{1}\`.
 
-**2 — \`premium\` means four different things.** Book listing \`4.1\` (percent number) · RFQ option
-\`"0.041"\` (fraction string) · rollover \`minPremiumPerShare\` \`12000000000000000\` (base units per
-1e18 share) · auction \`initialRateBump\` \`500000\` (1e7 above the signed floor). Confirm which
-surface you are on before writing the number.
+**2 — \`premium\` means four different things.** Book listing \`4.1\` (percent number — DEPRECATED,
+venue-removed 2026-08-17) · RFQ option \`"0.041"\` (fraction string) · rollover
+\`minPremiumPerShare\` \`12000000000000000\` (base units per 1e18 share) · auction
+\`initialRateBump\` \`500000\` (1e7 above the signed floor). Confirm which surface you are on before
+writing the number. The book and the RFQ have CONVERGED (cork-api 0.3.3): the book's successor
+field \`premiumAnnualized\` shares the RFQ's name and fraction convention — the R13 mechanism
+working as designed, a new unit arriving as a new name — so this collision shrinks to three once
+the percent field is gone.
 
 **3 — rateMin/rateMax across generations.** Under the 2.1.0 model these four constraint values are
 ABSOLUTE rates at \`D18{1}\`. On the pre-2.1.0 path the same names carried PERCENTAGE bands. The
