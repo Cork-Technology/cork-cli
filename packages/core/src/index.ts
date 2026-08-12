@@ -37,5 +37,6 @@ export * from "./bundle/legs.ts";
 export * from "./version.ts";
 export * from "./config.ts";
 export * from "./config-remote.ts";
+export * from "./implementations.ts";
 export * from "./handlers.ts";
 export * from "./phala-attest.ts";

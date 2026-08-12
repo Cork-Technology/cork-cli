@@ -10,6 +10,7 @@ import { decodeBundle } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { canAutoFund, type FundingMode, fundingPlan } from "../bundle/funding.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
+import { approvedImplementationGuard } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, unavailable } from "./shared.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
@@ -159,6 +160,9 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
               nowSeconds: nowSecs,
               atBlock: ctx.atBlock,
             })),
+            // Interface-first guard: is the code behind every trusted role still an APPROVED
+            // implementation? Same best-effort posture as the pool pre-flight above.
+            ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock)),
           );
         } catch {
           // best-effort — pre-funded byte-building stays offline-capable by design
@@ -204,6 +208,9 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
         nowSeconds: nowSecondsOf(ctx),
         atBlock: ctx.atBlock,
       })),
+      // Interface-first guard, same posture: warn when a trusted role's live code is off the
+      // approved-implementations list (a proxy upgrade nobody admitted yet, or config drift).
+      ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock)),
     );
     // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
     // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's

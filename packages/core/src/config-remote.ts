@@ -106,6 +106,24 @@ const DefaultsSchema = z.object({
   // Consumers must opt in by profile name; `deployments` stays the default read path.
   deploymentProfiles: z.record(z.string(), z.record(z.string(), DeploymentSchema)).optional(),
   rollover: z.record(z.string(), RolloverDeploymentSchema).optional(),
+  // Approved-implementations allowlist (interface-first model, mirrored in the distribution-repo
+  // proposal): per chain, per ROLE (resolved against deployments/marketRegistry — addresses are
+  // never duplicated here), the runtime-codehash set admitted by the behavioral suite. Optional:
+  // an older bundled copy without it simply skips the guard.
+  approvedImplementations: z
+    .record(
+      z.string(),
+      z.record(
+        z.string(),
+        z
+          .object({
+            proxy: z.literal("eip1967").optional(),
+            approved: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/u)),
+          })
+          .strip(),
+      ),
+    )
+    .optional(),
 });
 export type CorkDefaults = z.infer<typeof DefaultsSchema>;
 

@@ -36,6 +36,22 @@ it retires.
   temporary `/v1/<module>` rewrite (`Deprecation: true` + `x-cork-canonical-path`) announces
   itself; after this release's canonical literals, seeing it means a stale base override or a
   stale literal.
+- **Approved-implementations guard (interface-first model)** — the config gains an
+  `approvedImplementations` allowlist (per chain, per trusted role, resolved against the address
+  blocks that already exist; hashes captured live 2026-08-12), and every `cork_prepare_phoenix`
+  pre-flight now fingerprints the LIVE runtime code behind corkAdapter, whitelistManager (via
+  its EIP-1967 implementation slot — the proxy's own code never changes on an upgrade),
+  marketRegistry, and jitAdapter. Code that hashes off the list warns
+  `implementation_not_approved` (build-and-warn; approved/unreadable stay silent). An
+  implementation joins the list only after the behavioral suite passes against it. The same
+  schema is proposed for the distribution repo
+  (notes/distribution-interface-manifest-proposal.md, with `byteParams` — the interface
+  revisions ABIs cannot express); until adopted there, the guard runs entirely from our config.
+- **Venue spec-hash tripwire** — a live-gated test (CORK_RPC_LIVE=1) canonicalizes the venue's
+  published openapi and compares it against a committed capture, so a venue contract change
+  arrives as a named alert with a reviewable fixture diff instead of unexplained 400s;
+  re-capture deliberately with UPDATE_VENUE_SPEC=1 (the surface-drift workflow, pointed
+  outward).
 
 ### Changed
 

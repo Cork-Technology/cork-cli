@@ -46,6 +46,7 @@ const T = {
   venue: "packages/core/test/venue.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
   venuePremium: "packages/core/test/venue-premium.test.ts",
+  implementations: "packages/core/test/implementations.test.ts",
   breaker: "packages/core/test/breaker.test.ts",
   rpc: "packages/core/test/rpc.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
@@ -1758,6 +1759,52 @@ const CATALOG: Mutant[] = [
     find: "const suffix = /\\/v\\d+$/u.exec(configured)?.[0];",
     replace: "const suffix = /\\/v99\\d+$/u.exec(configured)?.[0];",
     tests: [T.venueTransport],
+  },
+  // ── approved-implementations guard (interface-first model) ────────────────────────────────
+  {
+    // The EIP-1967 slot constant drifts by one nibble: the guard reads the wrong storage word
+    // and every proxy role resolves garbage.
+    id: "impl-1967-slot-drift",
+    file: "packages/core/src/implementations.ts",
+    find: '"0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"',
+    replace: '"0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbd"',
+    tests: [T.implementations],
+  },
+  {
+    // The approval comparator inverts: off-list code reads as approved and the guard waves
+    // through exactly what it exists to flag.
+    id: "impl-approval-comparator-inverted",
+    file: "packages/core/src/implementations.ts",
+    find: "const approved = entry.approved.some((h) => h.toLowerCase() === codehash.toLowerCase());",
+    replace: "const approved = entry.approved.some((h) => h.toLowerCase() !== codehash.toLowerCase());",
+    tests: [T.implementations],
+  },
+  {
+    // Proxy resolution regresses to never matching: the guard fingerprints the proxy SHELL,
+    // whose code never changes on an upgrade — the exact blindness this module removes.
+    id: "impl-proxy-resolution-lost",
+    file: "packages/core/src/implementations.ts",
+    find: 'if (entry.proxy === "eip1967") {',
+    replace: 'if (entry.proxy === ("eip1967x" as string)) {',
+    tests: [T.implementations],
+  },
+  {
+    // The implementation address regresses to the padded word's FIRST 20 bytes (zeros): every
+    // healthy proxy reads as unresolved.
+    id: "impl-address-slice-misaligned",
+    file: "packages/core/src/implementations.ts",
+    find: "const impl = word ? (`0x${word.slice(-40)}` as `0x${string}`) : undefined;",
+    replace: "const impl = word ? (`0x${word.slice(2, 42)}` as `0x${string}`) : undefined;",
+    tests: [T.implementations],
+  },
+  {
+    // The warning renderer's verdict gate regresses to a verdict that never warns: positive
+    // findings go silent.
+    id: "impl-warning-gate-silenced",
+    file: "packages/core/src/implementations.ts",
+    find: 'if (c.verdict === "not_approved") {',
+    replace: 'if (c.verdict === ("not_approved_x" as string)) {',
+    tests: [T.implementations],
   },
 ];
 

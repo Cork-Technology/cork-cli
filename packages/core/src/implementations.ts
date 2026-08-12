@@ -1,0 +1,152 @@
+// The approved-implementations guard: the interface-first model's runtime half.
+//
+// The model (mirrored in the distribution-repo proposal): an INTERFACE — ABIs plus the layouts
+// inside `bytes` parameters — is what this tool supports; an IMPLEMENTATION is one deployed
+// codebase behind that interface, admitted to the config's `approvedImplementations` allowlist
+// only after the behavioral suite passes against it. This module answers the runtime question:
+// "is the code I am about to trust on the approved list?" — by fingerprinting the LIVE runtime
+// code (keccak256 of eth_getCode, equal to EXTCODEHASH for deployed code) and comparing against
+// the allowlist. It closes the one drift class the address/binding guards cannot see: a proxy
+// whose implementation was swapped under its stable address. For a `proxy: "eip1967"` role the
+// guard therefore resolves the implementation address from the EIP-1967 slot FIRST and hashes
+// that code — the proxy shell's own code never changes on an upgrade.
+//
+// Posture matches the other pre-flights: best-effort disclosure. Bytes are built regardless; an
+// unreadable view degrades to silence (a read failure must never turn byte-building into a hard
+// error); only a POSITIVE finding — code that hashes off-list, an empty account, an empty proxy
+// slot — warns.
+import { keccak256 } from "viem";
+import { resolveConfig, type CorkDefaults } from "./config-remote.ts";
+
+/** ERC-1967 implementation slot: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1). */
+export const EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" as const;
+
+/** The minimal client surface the guard needs. Structural on purpose: handler stubs that do not
+ *  implement these views skip the guard silently, exactly like the other best-effort legs. */
+export interface CodeReader {
+  getCode?: (args: { address: `0x${string}`; blockNumber?: bigint }) => Promise<`0x${string}` | undefined>;
+  getStorageAt?: (args: { address: `0x${string}`; slot: `0x${string}`; blockNumber?: bigint }) => Promise<`0x${string}` | undefined>;
+}
+
+export interface ImplementationCheck {
+  role: string;
+  address: `0x${string}`;
+  /** Present for proxy roles: the implementation the EIP-1967 slot named. */
+  implementation?: `0x${string}`;
+  /** keccak256 of the live runtime code, when readable. */
+  codehash?: `0x${string}`;
+  verdict: "approved" | "not_approved" | "no_code" | "proxy_unresolved" | "unreadable";
+}
+
+/** Resolve a config role to the address the guard fingerprints — against the SAME blocks that
+ *  already own the addresses (deployments / marketRegistry), so the allowlist never duplicates
+ *  an address that could then skew. Unknown roles resolve to undefined and are skipped: an
+ *  UPDATED remote config may name roles an older binary does not know, and that must not warn. */
+export function implementationRoleAddress(role: string, defaults: CorkDefaults, chainId: number): `0x${string}` | undefined {
+  const dep = defaults.deployments[String(chainId)];
+  const mr = defaults.marketRegistry?.[String(chainId)];
+  switch (role) {
+    case "corkAdapter":
+      return dep?.corkAdapter as `0x${string}` | undefined;
+    case "whitelistManager":
+      return dep?.whitelistManager as `0x${string}` | undefined;
+    case "marketRegistry":
+      return mr?.registry as `0x${string}` | undefined;
+    case "jitAdapter":
+      return mr?.adapter as `0x${string}` | undefined;
+    default:
+      return undefined;
+  }
+}
+
+const NOT_DEPLOYED = new Set(["0x", "", undefined] as Array<string | undefined>);
+
+async function checkOne(
+  client: CodeReader,
+  role: string,
+  entry: { proxy?: "eip1967" | undefined; approved: string[] },
+  address: `0x${string}`,
+  blockArg: { blockNumber?: bigint },
+): Promise<ImplementationCheck> {
+  try {
+    let subject = address;
+    let implementation: `0x${string}` | undefined;
+    if (entry.proxy === "eip1967") {
+      if (typeof client.getStorageAt !== "function") return { role, address, verdict: "unreadable" };
+      const word = await client.getStorageAt({ address, slot: EIP1967_IMPLEMENTATION_SLOT, ...blockArg });
+      const impl = word ? (`0x${word.slice(-40)}` as `0x${string}`) : undefined;
+      if (impl === undefined || /^0x0{40}$/u.test(impl)) {
+        // A configured proxy whose implementation slot is empty is a positive finding, not a
+        // degradation: either the role is no longer the proxy the config believes, or the
+        // proxy was gutted. Neither is a state to sign against silently.
+        return { role, address, verdict: "proxy_unresolved" };
+      }
+      implementation = impl;
+      subject = impl;
+    }
+    const code = await client.getCode!({ address: subject, ...blockArg });
+    if (NOT_DEPLOYED.has(code)) return { role, address, ...(implementation ? { implementation } : {}), verdict: "no_code" };
+    const codehash = keccak256(code as `0x${string}`);
+    const approved = entry.approved.some((h) => h.toLowerCase() === codehash.toLowerCase());
+    return { role, address, ...(implementation ? { implementation } : {}), codehash, verdict: approved ? "approved" : "not_approved" };
+  } catch {
+    return { role, address, verdict: "unreadable" };
+  }
+}
+
+/** Fingerprint every configured role for the chain. Reads are issued together (one extra round
+ *  trip, like the pool pre-flight); a client without `getCode` skips the whole guard. */
+export async function checkApprovedImplementations(
+  client: CodeReader,
+  chainId: number,
+  defaults: CorkDefaults,
+  atBlock?: bigint,
+): Promise<ImplementationCheck[]> {
+  const chain = defaults.approvedImplementations?.[String(chainId)];
+  if (!chain || typeof client.getCode !== "function") return [];
+  const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
+  const jobs = Object.entries(chain).flatMap(([role, entry]) => {
+    const address = implementationRoleAddress(role, defaults, chainId);
+    return address ? [checkOne(client, role, entry, address, blockArg)] : [];
+  });
+  return Promise.all(jobs);
+}
+
+/** The one-call form the prepare handlers use beside their pool pre-flight: resolve the current
+ *  config (remote-first, same path every address read takes) and return only the warnings.
+ *  Swallows its own failures whole — this guard reports drift; it must never be the reason a
+ *  bundle fails to build. */
+export async function approvedImplementationGuard(client: CodeReader, chainId: number, atBlock?: bigint): Promise<Array<{ code: string; message: string }>> {
+  try {
+    const cfg = await resolveConfig();
+    return implementationWarnings(await checkApprovedImplementations(client, chainId, cfg.defaults, atBlock));
+  } catch {
+    return [];
+  }
+}
+
+/** Render positive findings as build-and-warn messages; `approved` and `unreadable` are silent
+ *  (the guard discloses drift, it does not gate on its own availability). */
+export function implementationWarnings(checks: ImplementationCheck[]): Array<{ code: string; message: string }> {
+  const out: Array<{ code: string; message: string }> = [];
+  for (const c of checks) {
+    if (c.verdict === "not_approved") {
+      const via = c.implementation ? ` (implementation ${c.implementation}, resolved from its EIP-1967 proxy slot)` : "";
+      out.push({
+        code: "implementation_not_approved",
+        message: `the live code behind ${c.role} ${c.address}${via} hashes to ${c.codehash}, which is NOT on the approved-implementations list — the logic changed after the last behavioral-suite admission. Refresh cork-defaults.json (a legitimate upgrade lands there after the suite passes) or treat the target as unverified before signing`,
+      });
+    } else if (c.verdict === "no_code") {
+      out.push({
+        code: "implementation_not_approved",
+        message: `${c.role} ${c.implementation ?? c.address} has NO code on chain ${c.implementation ? "(the address its EIP-1967 proxy slot names)" : ""} — the configured address does not host a contract here; the config and the chain disagree`,
+      });
+    } else if (c.verdict === "proxy_unresolved") {
+      out.push({
+        code: "implementation_not_approved",
+        message: `${c.role} ${c.address} is configured as an EIP-1967 proxy but its implementation slot is empty — either it is not (or no longer) that proxy shape, or it points nowhere; the guard cannot vouch for the code behind it`,
+      });
+    }
+  }
+  return out;
+}

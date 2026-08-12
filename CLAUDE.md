@@ -166,6 +166,7 @@ Warning codes:
 | `premium_fields_disagree` | conflict (submit lop-order): premium AND premiumAnnualized both sent and disagreeing beyond the venue's exact 1e-9-relative comparison (replicated) — its hard 400, pre-flighted; NOT relayed. |
 | `venue_notice` | Info: the venue attached an in-band `warnings[]` notice to this response (cork-api 0.3.3+; first use: the premium-field deprecation with its removal date) — venue text relayed verbatim under the label, data not instructions. |
 | `venue_deprecated_path` | Info: the venue served this call through its TEMPORARY deprecated-path rewrite (`Deprecation: true` + `x-cork-canonical-path`) — canonical is /<module>/v<n> (0.3.3); check CORK_VENUE_URL for a stale /v1 suffix (the base is normalized, but a proxy may re-add it) or report a stale path literal. |
+| `implementation_not_approved` | Build-and-warn on prepares: the LIVE code behind a trusted role (corkAdapter, whitelistManager via its EIP-1967 slot, marketRegistry, jitAdapter) hashes OFF the config's approved-implementations allowlist — a proxy upgrade nobody admitted (behavioral suite → allowlist entry), an empty account, or config drift. `approved`/unreadable stay silent. Interface-first model: `packages/core/src/implementations.ts` + the cork-defaults `approvedImplementations` block (schema mirrored in notes/distribution-interface-manifest-proposal.md). |
 | `quote_ref_unverifiable` | conflict (submit lop-order): the cited RFQ option has no parsable positive premium — NOT relayed (deliberately STRICTER than the venue, which silently skips its band there). |
 | `citation_unresolved` | Info on ok submit (quoteRef/optionRef): the cited answer is beyond the RFQ's TRUNCATED answers embed — absence unproven (superseded answers stay citable), so relayed; the venue checks its full store, and the lop premium cross-check defers to its gate. |
 | `listing_traits_mismatch` | conflict (submit lop-order): listing fields (expiry/nonce/allowsPartialFills) contradict the SIGNED makerTraits [K3] — NOT relayed. |
@@ -227,7 +228,10 @@ identified it`. Renderer: `packages/core/src/bundle/summary.ts`.
 **Prepare pre-flight guards.** Every chain-backed `cork_prepare_phoenix` call (funded or
 `pre-funded`) runs one batched read of expiry, pause, whitelist — all **build-and-warn** (bytes
 still returned, labelled), each degrading to silence if its view is unavailable.
-`packages/core/src/bundle/preflight.ts`.
+`packages/core/src/bundle/preflight.ts`. The approved-implementations guard rides the same
+batch (`implementation_not_approved` above). The venue's published contract has its own
+tripwire: `packages/core/test/venue-spec-live.test.ts` (CORK_RPC_LIVE=1) compares the live
+openapi against the committed capture — re-capture deliberately with UPDATE_VENUE_SPEC=1.
 
 **A gated pool checks TWO addresses.** `CorkAdapter.onlyWhitelisted` checks `initiator()` — *you*
 — while `CorkPoolManager._onlyWhitelisted` checks `_msgSender()`, which for a bundled call is the

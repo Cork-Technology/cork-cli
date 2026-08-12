@@ -1,7 +1,7 @@
 {
   "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
   "schemaVersion": 1,
-  "updated": "2026-08-10",
+  "updated": "2026-08-12",
   "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix v1.3.0-rc.1, prerelease 2026-08-07): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). Adopted together with market-registry 0.3.2 (Zian's redeploy against this pool manager) — the generations are ALIGNED. The previous Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']; rollover still binds the v1.1 stack (its redeploy is pending).",
   "deployments": {
     "1": {
@@ -35,15 +35,22 @@
   "fusionSettlements": {
     "1": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
-      "legacy": ["0xfb2809A5314473E1165f6B58018E20ed8F07B840", "0xA88800CD213dA5Ae406ce248380802BD53b47647"]
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840",
+        "0xA88800CD213dA5Ae406ce248380802BD53b47647"
+      ]
     },
     "42161": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
-      "legacy": ["0xfb2809A5314473E1165f6B58018E20ed8F07B840"]
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
+      ]
     },
     "8453": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
-      "legacy": ["0xfb2809A5314473E1165f6B58018E20ed8F07B840"]
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
+      ]
     }
   },
   "deploymentProfiles": {
@@ -109,8 +116,73 @@
       "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
       "exactSettler": "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
       "partialSettler": "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
-      "settlerDomain": { "name": "CorkSettler", "version": "1.0.0" },
+      "settlerDomain": {
+        "name": "CorkSettler",
+        "version": "1.0.0"
+      },
       "seededAtBlock": 484973917
+    }
+  },
+  "$implementationsComment": "Approved implementations per interface role (2026-08-12; schema mirrored in the distribution-repo proposal, notes/distribution-interface-manifest-proposal.md): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups). Hashes are keccak256(eth_getCode) — equal to EXTCODEHASH for deployed code — captured live 2026-08-12. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Roles resolve against the address blocks that already own them (deployments / marketRegistry) — no address is duplicated here.",
+  "approvedImplementations": {
+    "1": {
+      "corkAdapter": {
+        "approved": [
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0xda2db6d29d610aece5f4faa313ae92bf55d38b7587391eb6f33b78ff563d49eb"
+        ]
+      }
+    },
+    "42161": {
+      "corkAdapter": {
+        "approved": [
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
+        ]
+      },
+      "marketRegistry": {
+        "approved": [
+          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284"
+        ]
+      },
+      "jitAdapter": {
+        "approved": [
+          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
+        ]
+      }
+    },
+    "8453": {
+      "corkAdapter": {
+        "approved": [
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
+        ]
+      },
+      "marketRegistry": {
+        "approved": [
+          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284"
+        ]
+      },
+      "jitAdapter": {
+        "approved": [
+          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
+        ]
+      }
     }
   }
 }
