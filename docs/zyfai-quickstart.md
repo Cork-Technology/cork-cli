@@ -2,15 +2,16 @@
 
 **Audience:** the Zyfai engineering team. **Assumes:** fluency with Safe/ERC-7579, 1inch LOP v4,
 EIP-712/ERC-1271, ERC-2612 permits, ERC-4626/7540, CREATE2. **Chain:** Base (8453).
-**Status:** as of 2026-08-08, against MarketRegistry contracts release **0.3.2** and the phoenix
-v1.3 pool-manager stack it binds — both deployed at **identical addresses on Base and Arbitrum
-One**, so everything here transfers to 42161 by changing only the chain id and the asset
-addresses. Base is pre-first-market: the registry is fully seeded (assets, denominations, feeds,
-recipes) and every read/derive/prepare below runs today, but no pool exists until the first JIT
-fill creates one, and that first fill waits on one governance signature (the JIT adapter's
-POOL_CREATOR + FEE_MANAGER roles — prepares disclose this as `roles_not_granted` until it lands).
-Addresses/rates below were read live from chain; still, **treat this doc as orientation and pull
-the authoritative values from the tool** (`ch query protocol-config`), never hardcode them.
+**Status:** as of 2026-08-12, against MarketRegistry contracts release **0.3.3** (registry
+`0xa78d8137…11F1`) and the phoenix v1.3 pool-manager stack it binds — both deployed at
+**identical addresses on Base and Arbitrum One**, so everything here transfers to 42161 by
+changing only the chain id and the asset addresses. Base is **post-first-market**: the JIT
+adapter's POOL_CREATOR + FEE_MANAGER roles were granted on both chains 2026-08-10, the first JIT
+market-creating fills landed the same day, and the venue has listed ~50 short-dated pilot pools
+on Base since — all on this doc's own sUSDe/mwUSDC pair. **Tool:** cork-cli `v0.2.0-rc.1`. Every
+live output below was re-captured 2026-08-12 against 0.3.3; still, **treat this doc as
+orientation and pull the authoritative values from the tool** (`ch query protocol-config`),
+never hardcode them.
 
 This is a two-part handoff: (1) a compact model of what Cork gives you and where your agent plugs
 in, and (2) `cork-cli` — a helper you drive from an MCP client or the shell to read state,
@@ -42,8 +43,8 @@ The pool itself is **identified by the keccak of its on-chain `Market` struct** 
 rate rules come from a **recipe** — since 2.1.0 a recipe is an approved *contract*, not a mode
 string. Three are live: **fixed** (rate pinned forever — simplest cover) and **liquidity** in two
 flavors that share one policy and differ only in the rate's source — **price** (a market feed;
-the depeg view) and **nav** (the vault's own accounting; the book-value view). One 0.3.2 fact to
-carry into term selection: the registry bounds market life (`maxExpiryDuration`, 30 days at
+the depeg view) and **nav** (the vault's own accounting; the book-value view). One registry fact
+to carry into term selection: the registry bounds market life (`maxExpiryDuration`, 30 days at
 deployment, governance-movable) — a fill that would CREATE a longer-dated market reverts.
 
 **You are the demand side:** you buy cST cover on a position your yield agent manages, and you
@@ -93,17 +94,19 @@ Implementation notes:
 ## 3. The flow, step by step
 
 One full cover cycle end to end. Every step has a real `ch` command you can run as-is, followed by a
-trimmed real response (read live from Base, 2026-08-08) and a short note on what to check. Where
-Base is pre-first-market and has no live data to show (the order book, RFQ answers), the response
-is shown as the shape the live Arbitrum flow produces, and it is labeled as such. Each command
-returns **unsigned** artifacts or plain reads — you sign with your own Safe stack.
+trimmed real response (read live from Base, 2026-08-12) and a short note on what to check. Where
+Base has no live data at capture time (the order book between quoting waves — markets here are
+short-dated, so the book empties and refills; RFQ answers), the response is shown as the shape
+the live flow produces, and it is labeled as such. Each command returns **unsigned** artifacts or
+plain reads — you sign with your own Safe stack.
 
 **A few conventions for every command below:**
 - Replace **`0xYOUR_SAFE`** with the user smart account (Safe) you're driving.
 - Steps 3–4 reuse one market's `poolId` and `cST` address. The values shown come from the
-  **sUSDe / mwUSDC** market derived in step 1c — a market that doesn't exist yet, so run the
-  derivation yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real
-  and runnable today.
+  **sUSDe / mwUSDC** market derived in step 1c — the pilot pair has had live pools since
+  2026-08-10, but the specific expiry derived below doesn't exist yet, so run the derivation
+  yourself and paste *your* output. Everything else (asset addresses, `chainId`) is real and
+  runnable today.
 - **Commands read like English: the action is a subcommand, its fields are flags.**
   `ch prepare pool exercise --pool-id 0x… --cst-shares-in 1000e18 …`,
   `ch compute recipe-rate-constraint --recipe 0x…`, `ch submit rfq-open …` — every action/kind of every
@@ -223,7 +226,7 @@ ch query registry-feeds --input '{"chainId":8453}' --json
 // 4 directed edges live on Base: ETH→USD, wstETH→ETH, USDC→USD, cbETH→USD — trimmed to one
 { "base": "0x833589fC…", "quote": "0x…0348",   // USDC → USD
   "aggregator": "0x7e860098…", "feedDecimals": 8,
-  "live": { "answer": "99986002", "decimals": 8, "updatedAt": "1786113135" } }
+  "live": { "answer": "99981162", "decimals": 8, "updatedAt": "1786458815" } }
 ```
 Feeds are **directed** conversion edges with live answers — base→quote is not quote→base. When
 your CA's and REF's sources speak different denominations, the registry needs a feed path to
@@ -244,8 +247,9 @@ ch query registry-oracle --chain-id 8453 --input '{"filters":{…same, "mode":"n
 ```
 ```jsonc
 { "mode": "nav",
-  "oracle": { "address": "0x0846D8849887fC377891E716D3bF4ad46208aA82",
-              "deployed": true, "deployable": true, "rate": "872514177192352508" } }
+  "oracle": { "address": "0x9a1d121380AC3337B155A80854bea59961CABF0E",
+              "deployed": true, "deployable": true, "rate": "872582269293287498",
+              "rateScale": "ABSOLUTE, 1e18 = 1.0" } }
 ```
 The mode is explicit here because this pair only composes as `nav` (see Stop 1) — omit it and the
 default `price` answers for a *different*, non-viable wrapper. Read `oracle` as a three-state
@@ -256,9 +260,10 @@ answer:
   idempotent, and a JIT fill performs it inside the fill transaction. You lose nothing by waiting.
 - **`deployable: false`** — the pair is not viable as asked, and `reason` names the exact failure
   (the registry's own typed error — e.g. `MissingSource` for this pair in `price` mode, since
-  mwUSDC has no market feed; an unregistered leg is named by address; a fully-registered pair
-  whose deploy still reverts is called out as the known cross-generation CREATE2 collision). The
-  fix is Cork-side (register the asset / add the feed) — ask, don't retry.
+  mwUSDC has no market feed; an unregistered leg is named by address). The fix is Cork-side
+  (register the asset / add the feed) — ask, don't retry. (0.3.3 scoped each registry's wrapper
+  CREATE2 salts to the registry itself, retiring the cross-generation address-collision failure
+  the previous release could hit here.)
 
 **Stop 5 — recipes: the actual terms of the cover.**
 Step 1b lists the three approved recipe contracts. To see what a recipe would *actually commit you
@@ -267,21 +272,22 @@ to* on your pair, ask it — `recipe-rate-constraint` is the very staticcall a f
 
 ```sh
 ch compute recipe-rate-constraint --chain-id 8453 --json \
-  --recipe 0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506 \
+  --recipe 0xAeD3D0e3C86A994d88741C285657c3e78550f66d \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca
 # alternative — the canonical wire blob:
-ch compute --chain-id 8453 --input '{"params":{"kind":"recipe-rate-constraint","recipe":"0x1cF1…C1506","collateralAsset":"0x211C…5d2","referenceAsset":"0xc125…A2Ca"}}' --json
+ch compute --chain-id 8453 --input '{"params":{"kind":"recipe-rate-constraint","recipe":"0xAeD3…f66d","collateralAsset":"0x211C…5d2","referenceAsset":"0xc125…A2Ca"}}' --json
 ```
 ```jsonc
-{ "kind": "recipe-rate-constraint", "recipe": "0x1cF1ef3F…C1506", "source": "nav",
-  "constraint": { "rateMin": "1", "rateMax": "1745028354384705016",
-                  "rateChangePerDayMax": "872514177192352508",
-                  "rateChangeCapacityMax": "2617542531577057524" },
-  "rateOracle": { "address": "0x0846D884…aA82", "status": "live", "mode": "nav", "rate": "872514177192352508" },
-  "scales": { "constraint": "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" } }
+{ "kind": "recipe-rate-constraint", "recipe": "0xAeD3D0e3…f66d", "source": "nav",
+  "constraint": { "rateMin": "1", "rateMax": "1745164538586574996",
+                  "rateChangePerDayMax": "872582269293287498",
+                  "rateChangeCapacityMax": "2617746807879862494" },
+  "rateOracle": { "address": "0x9a1d1213…BF0E", "status": "live", "mode": "nav", "rate": "872582269293287498" },
+  "scales": { "constraint": "ABSOLUTE rates, 1e18 = 1.0 — these four raw values are what a JIT order carries, in this order" },
+  "note": "resolved against the LIVE oracle rate" }
 ```
-Simply put, for the **liquidity** recipes (anchor = the oracle rate at resolve time, ~0.8725
+Simply put, for the **liquidity** recipes (anchor = the oracle rate at resolve time, ~0.8726
 here — sUSDe per mwUSDC by book value): the market's tracked rate may fall all the way to 1 wei
 (`rateMin: 1` — the cover never stops paying out on the way down), may never exceed twice the
 anchor (`rateMax`), and may move at most one whole anchor per day (`rateChangePerDayMax`) with a
@@ -337,8 +343,8 @@ ch query registry-assets --input '{"chainId":8453}'
 OK  ·  ch query  ·  chain 8453
 
 resource               registry-assets
-registry               0xF5323F305360A792284814a7EDe78c2209A1DC94
-contractsVersion       0.3.2
+registry               0xa78d8137B01058dD23e545b6557209eBBc9611F1
+contractsVersion       0.3.3
 count                  5
 items
   [1]  sUSDe
@@ -372,28 +378,34 @@ ch query registry-recipes --input '{"chainId":8453}'
 OK  ·  ch query  ·  chain 8453
 
 resource               registry-recipes
-contractsVersion       0.3.2
+registry               0xa78d8137B01058dD23e545b6557209eBBc9611F1
+contractsVersion       0.3.3
+scale                  constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are
+                       ABSOLUTE rates, 1e18 = 1.0; read each value's own name
 count                  3
 items
-  [1]  0xD27c7BB8564Db019B41d9C48d1ABCEd9A7d90291
+  [1]  0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55
     source             price
     description        Liquidity: the widest rate window CorkPoolManager will accept. rateMin is
                        1 wei always, rateMax is twice the anchor rate, rateChangePerDayMax is the
                        whole anchor rate…
-  [2]  0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506
+    args
+      type             (uint256)
+      display          abi.encode(uint256 anchorRate)
+  [2]  0xAeD3D0e3C86A994d88741C285657c3e78550f66d
     source             nav
     description        (same liquidity policy, anchored to the vault's net asset value…)
-  [3]  0x6d838136bbbE7D34Ce8dDDc431Ce1bB4A1F9D98D
+  [3]  0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1
     source             fixed
     description        Fixed rate: the market's rate is whatever immutable FixedRateOracle the
                        order names, and it can never move.…
 ```
-- **liquidity, price flavor** (`0xD27c…0291`) — the rate follows a market feed inside wide speed
+- **liquidity, price flavor** (`0xb881…Dc55`) — the rate follows a market feed inside wide speed
   limits: the depeg view.
-- **liquidity, nav flavor** (`0x1cF1…C1506`) — byte-for-byte the same policy anchored to the
+- **liquidity, nav flavor** (`0xAeD3…f66d`) — byte-for-byte the same policy anchored to the
   vault's own accounting: the book-value view. **This walkthrough's pair is nav-only, so this is
   the recipe used throughout** (RFQ mode `liquidity_only` pairs with either liquidity flavor).
-- **fixed** (`0x6d83…D98D`) — the rate is pinned at creation and can never move. Simplest cover.
+- **fixed** (`0x133a…65C1`) — the rate is pinned at creation and can never move. Simplest cover.
 
 To see the exact rate limits a recipe would impose on your pair (the same math a fill runs, checked
 bit-for-bit against chain): `ch compute` → `recipe-rate-constraint` with the recipe address.
@@ -412,21 +424,21 @@ EXP=$(date -u -d '+7 days' +%s)
 ch query derive-cork-pool --chain-id 8453 --json \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
-  --expiry "$EXP" --recipe 0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506
+  --expiry "$EXP" --recipe 0xAeD3D0e3C86A994d88741C285657c3e78550f66d
 # alternative — the rest in one --input blob (`--json` stays the bare output flag):
 ch query derive-cork-pool --chain-id 8453 --json \
-  --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca\",\"expiry\":\"$EXP\",\"recipe\":\"0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506\"}}"
+  --input "{\"filters\":{\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca\",\"expiry\":\"$EXP\",\"recipe\":\"0xAeD3D0e3C86A994d88741C285657c3e78550f66d\"}}"
 ```
 ```jsonc
 { "state": "ok", "data": {
-  "recipe": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506", "source": "nav",
-  "oracle": { "address": "0x0846D8849887fC377891E716D3bF4ad46208aA82", "deployed": true, "mode": "nav", "rate": "872514177192352508" },
-  "pool": { "poolId": "0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953",
+  "recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d", "source": "nav",
+  "oracle": { "address": "0x9a1d121380AC3337B155A80854bea59961CABF0E", "deployed": true, "mode": "nav", "rate": "872582269293287498" },
+  "pool": { "poolId": "0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8",
               "exists": false,
-              "constraint": { "rateMin": "1", "rateMax": "1745028354384705016",
-                              "rateChangePerDayMax": "872514177192352508", "rateChangeCapacityMax": "2617542531577057524" } },
-  "shares": { "corkSwapToken": "0xA7A56a84e29247F7e2651c3877c0DC628B952e27",
-              "corkPrincipalToken": "0xd233Bf6b1b185d6504bfEb64028af6625A61a196", "source": "simulated" } },
+              "constraint": { "rateMin": "1", "rateMax": "1745164538586574996",
+                              "rateChangePerDayMax": "872582269293287498", "rateChangeCapacityMax": "2617746807879862494" } },
+  "shares": { "corkSwapToken": "0x4DFf44154fE5D33431B187c63322e43c7B1dd1C0",
+              "corkPrincipalToken": "0xFd268B82c787d1cD5395053Da2CAd7731b2B647b", "source": "simulated" } },
   "warnings": [ { "code": "rate_drift_notice",
     "message": "…an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves…" } ] }
 ```
@@ -438,11 +450,16 @@ What to check:
 - **`constraint`** — the four rate limits. These are literally what gets embedded in a signed order;
   once an order carrying them is signed, the market identity is **pinned** and no longer drifts.
 - Until something is signed, the prediction is conditioned on *today's* oracle rate — so derive,
-  quote, and sign close together.
+  quote, and sign close together, and **carry the derived constraint verbatim into the order**
+  rather than letting the order builder re-resolve it. This is not theoretical: a NAV oracle
+  accrues continuously, and while capturing this doc the rate ticked between two commands minutes
+  apart — the re-resolved constraint named a *different* pool, and the tool refused the mismatched
+  order with `jit_side_mismatch` naming the fresh cST. Pass `constraint: {…}` from this output
+  into `--jit-market` and the identity holds exactly.
 
 The steps below use this market: `poolId` =
-`0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953`, `cST` =
-`0xA7A56a84e29247F7e2651c3877c0DC628B952e27`.
+`0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8`, `cST` =
+`0x4DFf44154fE5D33431B187c63322e43c7B1dd1C0`.
 
 #### 1d. Open the RFQ
 
@@ -459,7 +476,7 @@ ch submit rfq-open --chain-id 8453 --client-request-id rfq-0001 --json \
   --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
   --modes '["liquidity_only"]' --package-ids '["balanced-v1"]' \
   --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
-  --market-template '{"inline":{"oracle_recipe":"0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506"}}' \
+  --market-template '{"inline":{"oracle_recipe":"0xAeD3D0e3C86A994d88741C285657c3e78550f66d"}}' \
   --notional-assets … --valid-until $VU --signature 0x…
 # alternative — the canonical wire blob behind the positional chainId:
 ch submit 8453 --client-request-id rfq-0001 --json \
@@ -497,7 +514,7 @@ are quoting there):
 { "status": "quoted", "options": [ {
   "option_id": "e7dda7c5-…-liquidity_only-1786021200",
   "mode": "liquidity_only", "package_id": "balanced-v1",
-  "market_template": { "inline": { "oracle_recipe": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506" } },
+  "market_template": { "inline": { "oracle_recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d" } },
   "reference_asset": "0xc1256ae5…a2ca", "collateral_asset": "0x211cc4dd…5fe5d2",
   "premium_annualized": "0.032",       // fractions in RFQ land: 0.032 = 3.2% — listings use percent instead
   "fresh_until": 1786014948
@@ -517,16 +534,18 @@ order's own bytes:
 
 ```sh
 ch query orderbook --chain-id 8453 --json \
-  --pool-id 0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953
+  --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8
 # alternative:
 ch query orderbook --chain-id 8453 --json \
-  --input '{"filters":{"poolId":"0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953"}}'
+  --input '{"filters":{"poolId":"0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8"}}'
 ```
 ```jsonc
-// Base today, pre-first-market — the book is honestly empty:
+// An empty book is a normal result, not an error — markets here are short-dated, so the book
+// empties and refills between quoting waves (at capture time Base's launch-wave orders had all
+// been filled; their ~50 pools are visible in `ch query cork-pools --chain-id 8453`):
 { "count": 0, "items": [], "pagination": { "complete": true, "pagesFetched": 1 } }
 ```
-Once underwriters post on Base, a row looks like this (shape from the live Arbitrum book — the
+When a quoting wave is live, a row looks like this (shape from the live Arbitrum book — the
 venue serves both chains through the same API):
 ```jsonc
 { "items": [ {
@@ -549,16 +568,33 @@ ch decode order --chain-id 8453 --data '{…the signed order row…}' --json
 ch decode order --chain-id 8453 --input '{"data":{…the signed order row…}}' --json
 ```
 ```jsonc
-{ "state": "ok", "data": { "jit": {          // what a 0.3.2-generation row decodes to
-  "generation": "2.1.0", "adapter": "0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE",
+{ "state": "ok", "data": { "jit": {          // what a current-generation (0.3.3) order decodes to
+  "generation": "2.1.0", "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
   "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0xc1256Ae5…A2Ca",
-  "recipe": "0x1cF1ef3F0d2f59Bf26A373ce7Dcf0F88612C1506",
-  "constraint": { "rateMin": "1", "rateMax": "1745028354384705016", /* … */ },
-  "enableJitMint": true, "permits": 1 } } }  // ← the fill WILL mint the cST just-in-time
+  "recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+  "constraint": { "rateMin": "1", "rateMax": "1745164538586574996", /* … */ },
+  "enableJitMint": true, "permits": 0 } } }  // ← enableJitMint: the fill WILL mint just-in-time
 ```
-(The `generation` label reads `2.1.0` for every recipe-carrying order — that is the payload
-LAYOUT's name; the adapter address is what tells you which deployment generation the row fills
-through: `0x1b75…c7CE` is the 0.3.2 stack, identical on both chains.)
+(Captured from a tool-prepared, permit-free order against the step-1c market — an underwriter's
+live row decodes identically and additionally shows `"permits": 1`. The `generation` label reads
+`2.1.0` for every recipe-carrying order — that
+is the payload LAYOUT's name; the **adapter address** is what tells you which deployment
+generation the row fills through. `0x8902…374f` is the 0.3.3 stack the Distribution pins,
+identical on both chains; rows naming an older adapter fill through a superseded deployment —
+fine for reading, but not the stack this doc targets.)
+
+**What `"permits": 1` means — the JIT permit rule.** A token that does not exist yet cannot be
+pre-approved, so the order carries the maker's **ERC-2612 permit over the predicted cST**:
+signed by **the party being served** (here the underwriter-maker), spender **always the 1inch
+LOP**, executed by the adapter **immediately after the JIT mint** — one failed permit reverts
+the whole fill. That is the only bridge between "token born mid-transaction" and "protocol must
+pull it seconds later". Two things follow for you: the permit is the *maker's* problem, never
+yours — as the filler you sign nothing but your own transaction; and on the `fillOrderForSelf`
+route the two allowance systems never touch — the maker's order-carried permit still points at
+the LOP, while *your* taker-asset approval goes to your ForSelf adapter (§5, item C). The full
+contract-level reference — the `extraData` structs field by field, the fill sequence, every
+adapter error — is [jit-order-anatomy.md](jit-order-anatomy.md).
+
 If step 1c showed `exists: false`, there may be no orders yet — you're the first mover, and the underwriter's
 SELL is the order whose first fill creates the market.
 
@@ -575,7 +611,7 @@ for you. Three commands: re-verify, build, dry-run.
 #    chain_read_failed — that is the expected pre-creation state, not a problem. Your fill is what
 #    creates the market. Verify the order's carried constraint with `ch decode order` instead.
 ch query cork-pool --chain-id 8453 --json \
-  --pool-id 0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953
+  --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8
 
 # 2. build the unsigned fill (use an OPEN orderHash from step 2; replace 0xYOUR_SAFE)
 ch fill --chain-id 8453 --account 0xYOUR_SAFE --client-request-id buy-0001 --json \
@@ -658,12 +694,12 @@ counterparty needed, so it works exactly when the market is stressed.
 # replace 0xYOUR_SAFE (used for both account and receiver); REF (mwUSDC) and CA (sUSDe) are both 18-dec
 # amounts use exact sugar: 1000e18 cST in, floor 0.95 sUSDe out, at most 1 mwUSDC (1e18) in
 ch exercise --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
-  --pool-id 0x5931fc2642030588b3a98095af09afdda6d6b200ffdb317d360be5b45d86b953 \
+  --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8 \
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
   --min-collateral-assets-out 95e16 --max-reference-assets-in 1e18
 # alternative — the canonical wire blob behind the positional chainId:
 ch prepare pool 8453 --json \
-  --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x5931…b953","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000000000000000"}}'
+  --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x4a97…30b8","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000000000000000"}}'
 ```
 Build with `--rpc-url <your node>` so the funding legs resolve — without an explicit RPC the bundle
 still builds, but with `fundingLegs: 0` and a `funding_needs_rpc` warning (funding-leg resolution is
@@ -864,8 +900,9 @@ sweeps back in a single transaction), every output structurally delivered to the
 **no receiver parameter exists anywhere on it** — every fill bound on-chain to a named Cork
 market, and all ERC-20 approvals go to the adapter itself, never to the LOP or the pool manager.
 It was exercised end-to-end on live-chain forks against the real 1inch LOP, both pool-manager
-generations, and both JIT adapter generations — including the 0.3.2 stack this doc targets
-(the same deployment on Base and Arbitrum). **You still audit, vet, and deploy it** — your users trust Zyfai, not Cork —
+generations, and both JIT payload generations — including the 0.3.x registry stack this doc
+targets (the same deployment on Base and Arbitrum; the suites were re-run green 2026-08-12
+against live chain state). **You still audit, vet, and deploy it** — your users trust Zyfai, not Cork —
 and the guardrail stands: *"Zyfai-owned" says who is accountable, not what makes it safe*; the
 wrapper is only safe because it structurally forces the receiver, holds nothing, and has been
 audited. (Cork can share the full analysis and on-chain evidence — the "Scope & Ownership"
@@ -907,12 +944,26 @@ pilot positions small and monitor the REF's pause status.
 (`ch track simulate`) before signing and reconcile (`ch track` → `reconcile/orderHash`) after;
 chain outranks the indexer on any disagreement.
 
-**G. Addresses drift; read them live.** Pull the deployment from `ch query protocol-config` and
-the registry stack from `ch query registry-assets` — the whole registry stack was redeployed
-2026-08-07 (contracts release 0.3.2, identical addresses on Base and Arbitrum One), so anything
-cached before then is stale. Installed copies of the tool pick up
-redeployed addresses automatically within an hour (remote config), so reads need no update from
-you. The current venue pool list is `api-phoenix.cork.tech/v1/pools/`.
+**G. Addresses drift; read them live — and know which generation answered.** Pull the deployment
+from `ch query protocol-config` and the registry stack from `ch query registry-assets` — the
+whole registry stack (registry, adapter, all three recipes) was redeployed 2026-08-10 as
+contracts release **0.3.3** (identical addresses on Base and Arbitrum One), so anything cached
+before then is stale. Installed copies of the tool pick up redeployed addresses automatically
+within an hour (remote config), so reads need no update from you. The current venue pool list is
+`api-phoenix.cork.tech/v1/pools/`.
+
+Two rules make redeploys safe to live through:
+- **An abandoned generation does not go dark — it answers.** The interfaces are identical across
+  generations, so a current-shaped call against a superseded registry or adapter returns
+  plausible-looking values, not a revert. Never conclude "this address works, so it must be
+  current".
+- **The "which generation am I on" check:** compare the `registry` field that every `registry-*`
+  read echoes (and `ch query protocol-config`'s addresses) against the Distribution manifest your
+  integration pins. Anything that *signs* against an adapter must confirm the adapter's
+  `MARKET_REGISTRY()` immutable equals that pinned registry — `ch` runs this guard automatically
+  on every order prepare and refuses a mismatch (`adapter_binding_mismatch`), so the check is
+  only manual when you bypass the tool (e.g. constructing calls in your own stack, or deploying
+  a ForSelf adapter from copied constructor addresses).
 
 ---
 

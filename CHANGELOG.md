@@ -16,6 +16,40 @@ build stops instead of silently absorbing changed behavior. Details under Change
 
 ### Added
 
+- **`docs/jit-order-anatomy.md`** (issue #2): the chain-agnostic, address-free contract reference
+  for JIT orders — the `extraData` structs field by field, the permit rule (who signs, the LOP
+  as sole spender, execution right after the mint, the ForSelf non-interaction), `rateOverride`
+  and fee-field rules, the four-step fill sequence, the maker/taker entry-point asymmetry
+  (`enableJitMint` IGNORED on the taker path), both event signatures, the full adapter +
+  creation-bounds error table, the adapter's four immutables with the `MARKET_REGISTRY()`
+  cross-generation check, and the on-chain-verified roles precondition (`POOL_CREATOR_ROLE` +
+  `FEE_MANAGER_ROLE` — the pre-v1.3 `CONFIGURATOR_ROLE` pair reports a false negative against
+  the live fill path; verified on the deployed controller 2026-08-12).
+- **Registry-semantics block in `docs/cli.md`** (issue #2): oracle mode composition rule,
+  pair-order/mode asymmetry, feed direction + decimals-drift check, recipe args tuple-notation
+  trap and mixed constant scales, derivation-simulates-deploy with the state-override RPC
+  requirement and `ch`'s honest degradation (`share_prediction_unavailable`), and the
+  never-infer-chain-from-address rule.
+- **Docs-freshness gate** (`packages/core/test/docs-freshness.test.ts`): the quickstart's
+  generation markers (registry/adapter/recipe addresses, every "contracts release X" claim) are
+  now asserted against `cork-defaults.json`, retired-generation addresses are asserted absent,
+  and the anatomy doc is asserted address-free — the next registry redeploy fails the suite
+  until the partner docs move with it (kill-checked against the rc.3 text: 3/3 drift assertions
+  fail on it).
+
+### Fixed
+
+- **`docs/zyfai-quickstart.md` refreshed from the retired 0.3.2 generation to 0.3.3**
+  (issue #1): status block (roles granted 2026-08-10 on both chains; Base post-first-market with
+  live JIT fills and ~50 short-dated pilot pools), §5G's redeploy cutoff + a new
+  "which generation am I on" rule pair (abandoned generations answer with plausible values; the
+  `MARKET_REGISTRY()` cross-check and where `ch` automates it), §5A's fork evidence re-stated
+  against the current stack (suites re-run green 2026-08-12), and every worked example
+  re-captured live against 0.3.3 on Base — registry/adapter/recipe addresses, the pair's new
+  nav wrapper, re-derived poolId/cST/cPT, plus a real rate-drift episode teaching why the
+  derived constraint must be carried verbatim into the order. The step-2 decode now explains
+  `"permits": N` in place (issue #2's spot-edit) and cross-links the anatomy doc.
+
 - **`x-units` on every scaled input field** (covered-surface addition): machine-readable unit
   notation (`D18{1}`, `D18{%}`, `{qTok}`, …) valued from the same vocabulary as the `units`
   topic table; a three-axis parity test binds the wire extension, the table row, and the

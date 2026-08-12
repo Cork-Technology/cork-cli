@@ -44,6 +44,41 @@ ch query derive-cork-pool --chain-id <id> \
   # derive one pool BEFORE it exists: poolId, cST/cPT, constraint, existence
 ```
 
+**Registry semantics these commands assume** (the contract-level rules; the JIT-order side is
+[jit-order-anatomy.md](jit-order-anatomy.md)):
+
+- **Oracle modes compose differently.** `price` requires **every** leg of the pair to carry a
+  price source; `nav` lets a leg fall back to its price source but requires **at least one**
+  leg to carry a real NAV source. A pair that cannot compose in the mode you asked reports
+  `deployable: false` with the registry's own error (`MissingSource`,
+  `NavModeWithoutNavSource`) — the fix is registration (Cork-side), not retrying.
+- **Pair order matters, and so does mode.** `(ca, ref)` and `(ref, ca)` are different pairs
+  with different oracles, and one pair can hold a `price` wrapper *and* a `nav` wrapper at
+  different addresses. A wrapper's identity also folds in which source each leg actually
+  resolved to (a `nav` leg that fell back to price is part of the key, not hidden).
+- **Feeds are directed edges with two decimals fields.** base→quote ≠ quote→base. Each feed
+  carries `feedDecimals` (recorded at registration) and `live.decimals` (the aggregator now);
+  comparing them is how you spot a feed whose decimals drifted after registration.
+- **Recipe values mix two scales by name.** In `registry-recipes` constants, anything ending
+  `_PERCENTAGE` is on the 1e18-=-1% scale; `RATE_MIN`-style values are absolute rates
+  (1e18 = 1.0); a bare count is neither. Read each value's own name — `ch capabilities
+  --topic units` is the full table.
+- **Recipe `args` is a verbatim ABI tuple string.** Use `args.type` exactly as served: a recipe
+  taking one *struct* reads `((string,uint256))` — double brackets — while loose values read
+  `(string,uint256)`, and the encodings differ whenever a member is dynamic. Never convert one
+  form to the other by hand.
+- **`derive-cork-pool` simulates the registry's own `deploy`.** The prediction comes from an
+  `eth_call` simulation of the real deployment (state overrides let it run before the oracle
+  exists), not from a local salt re-derivation — so it cannot drift from what a fill will do.
+  Consequence: the RPC must honor `eth_call` state overrides / `eth_simulateV1`. The built-in
+  default endpoints do; on an RPC that doesn't, `ch` returns the derivation **without** share
+  addresses and says so (`share_prediction_unavailable`) rather than inventing them.
+- **Never infer the chain from an address.** The stack deploys at identical addresses across
+  chains by design; only `--chain-id` selects the deployment. And a superseded generation's
+  contracts still *answer* current-shaped calls with plausible values — pin the registry
+  address from `ch query protocol-config` (or the Distribution manifest) and let the prepare
+  guard (`adapter_binding_mismatch`) do the cross-check on anything you sign.
+
 ## Deterministic math — `ch compute`
 
 ```sh
