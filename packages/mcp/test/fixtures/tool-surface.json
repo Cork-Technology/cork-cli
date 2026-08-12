@@ -29,7 +29,7 @@
               "derive-cork-pool",
               "rfqs"
             ],
-            "description": "Taxonomy: a CORK-POOL is one expiry of a MARKET (the family of pools over one (collateralAsset, referenceAsset) pair); a TRADING-PAIR is a tradable pair listing on the LOP venue book. cork-pools=list all pools; cork-pool=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); rollover-orders=rollover orders/fills/contracts — pool migrations to a successor expiry (filters.kind); trading-pairs=tradable LOP pairs; orderbook=resting limit orders; fills=executed trades; account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); derive-cork-pool=derive ONE pool (expiry included) BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed; rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers; filters.view 'current' for the negotiation frontier). RFQ rows carry `version`, a monotonic change counter bumped by every stored answer/counter — poll the list and re-read only RFQs whose version moved; embedded-answers reads also carry `counter`, the requester's current counter-bid (null when none). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a pool's on-chain Market struct (the struct keeps its on-chain name) is the same contract that registry-oracle/derive-cork-pool report under oracle{address}"
+            "description": "Taxonomy: a CORK-POOL is one expiry of a MARKET (the family of pools over one (collateralAsset, referenceAsset) pair); a TRADING-PAIR is a tradable pair listing on the LOP venue book. cork-pools=list all pools; cork-pool=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); rollover-orders=rollover orders/fills/contracts — pool migrations to a successor expiry (filters.kind); trading-pairs=tradable LOP pairs (centralized = the venue's listed view; mode 'full-decentralized' = the pairs that CAN trade, derived from pool-creation events); orderbook=resting limit orders; fills=executed trades (mode 'full-decentralized' = Cork-scoped by a same-transaction share-token join, each row annotated with the poolIds its transaction touched); account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); derive-cork-pool=derive ONE pool (expiry included) BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed; rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers; filters.view 'current' for the negotiation frontier). RFQ rows carry `version`, a monotonic change counter bumped by every stored answer/counter — poll the list and re-read only RFQs whose version moved; embedded-answers reads also carry `counter`, the requester's current counter-bid (null when none). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a pool's on-chain Market struct (the struct keeps its on-chain name) is the same contract that registry-oracle/derive-cork-pool report under oracle{address}"
           },
           "chainId": {
             "type": "number",
@@ -2226,6 +2226,65 @@
                   "orderHash": {
                     "$ref": "#/$defs/Bytes32"
                   },
+                  "signedOrder": {
+                    "type": "object",
+                    "properties": {
+                      "order": {
+                        "type": "object",
+                        "properties": {
+                          "salt": {
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "maker": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "receiver": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "makerAsset": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "takerAsset": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "makingAmount": {
+                            "$ref": "#/$defs/TokenAmount"
+                          },
+                          "takingAmount": {
+                            "$ref": "#/$defs/TokenAmount"
+                          },
+                          "makerTraits": {
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "salt",
+                          "maker",
+                          "receiver",
+                          "makerAsset",
+                          "takerAsset",
+                          "makingAmount",
+                          "takingAmount",
+                          "makerTraits"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "signature": {
+                        "description": "the maker's signature over the order — verified locally before any bytes are built [K3]: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "extension": {
+                        "description": "the order's own extension bytes, verbatim (the salt commits to them; a wrong extension is refused before building)",
+                        "$ref": "#/$defs/Hex"
+                      }
+                    },
+                    "required": [
+                      "order",
+                      "signature"
+                    ],
+                    "additionalProperties": false,
+                    "description": "fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs [K7]. Omit to discover the order on the venue book by `orderHash`"
+                  },
                   "fillMakingAmount": {
                     "description": "making amount to receive; omit for the full remaining order",
                     "$ref": "#/$defs/TokenAmount"
@@ -2416,7 +2475,7 @@
                     "minimum": 1,
                     "maximum": 50,
                     "default": 10,
-                    "description": "hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"
+                    "description": "hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete. Ignored when `signedOrder` is supplied (no venue search happens)"
                   }
                 },
                 "required": [
@@ -2424,7 +2483,7 @@
                   "orderHash"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"
+                "description": "unsigned fill calldata for a resting order: fetches the signed order from the venue book by `orderHash` (or takes it inline via `signedOrder`, venue-free), locally re-hashes and verifies it, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"
               },
               {
                 "type": "object",

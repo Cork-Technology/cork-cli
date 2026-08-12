@@ -217,6 +217,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           hsWarnings.push({ code: "pagination_incomplete", message: "the pool-discovery scan behind the Cork-scoping join hit the page bound — pools created later are missing from the join, so fills on them are missing from this feed; partial evidence" });
         }
         const tokenToPool = new Map<string, string>();
+        const poolCount = new Set(markets.rows.map((m) => String(m.poolId).toLowerCase())).size;
         let firstPoolBlock = Number.MAX_SAFE_INTEGER;
         for (const m of markets.rows) {
           tokenToPool.set(String(m.corkSwapToken).toLowerCase(), String(m.poolId));
@@ -224,6 +225,9 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           const b = Number(m.blockNumber);
           if (Number.isFinite(b) && b < firstPoolBlock) firstPoolBlock = b;
         }
+        // A row with an unparsable block number must widen the span, never strand it at
+        // MAX_SAFE_INTEGER (which would scan an empty range and silently answer nothing).
+        if (firstPoolBlock === Number.MAX_SAFE_INTEGER) firstPoolBlock = 0;
         if (tokenToPool.size === 0) {
           return envelope({
             state: "ok",
@@ -269,7 +273,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
             }),
           key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
         };
-        note = `Cork-scoped by same-transaction share-token movement across ${String(tokenToPool.size / 2)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or centralized mode for the venue's own feed`;
+        note = `Cork-scoped by same-transaction share-token movement across ${String(poolCount)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or centralized mode for the venue's own feed`;
       }
     } else {
       // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).

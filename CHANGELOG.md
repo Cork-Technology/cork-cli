@@ -8,6 +8,30 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Added
+
+- **`taker-fill` accepts an inline `signedOrder` — the venue-free fill path.** The caller
+  supplies the order, signature, and extension (the exact shape `finalize-maker-order`'s
+  submitInput carries, or bytes the maker handed over), and the venue is not contacted at all:
+  a flaky book or a dropped row can no longer block a fill of bytes in hand. Verification
+  meets the venue path's bar and adds what the venue used to check at post time: a local
+  re-hash against the claimed `orderHash`, the salt↔extension binding OrderLib enforces at
+  fill, and the maker signature verified the way the fill verifies it — EOA by ecrecover,
+  contract makers by the same ERC-1271 staticcall. The on-chain liveness pre-flight still
+  runs. Both acquisition paths share one tail, pinned byte-identical by a parity test.
+- **`trading-pairs` serves `full-decentralized`**: one pair row per created pool, derived from
+  pool-creation events (every Cork order carries the pool's cST on one side by construction).
+  The honest-subset note names what is absent: the venue's listing metadata is off-chain.
+- **The `full-decentralized` fills feed is now Cork-scoped.** Without an `orderHash` filter it
+  used to return the whole 1inch LOP with a "NOT Cork-scoped" warning. It now joins fills to
+  Cork by same-transaction share-token movement (JIT creations included — the mint is a
+  Transfer from the zero address in that transaction): rows carry the `poolIds` their
+  transaction touched, `filters.poolId` scopes the join, the scan starts at the first pool's
+  creation block instead of genesis, and a chain with no pools answers an honestly empty feed.
+  Cost disclosed: the join runs three scans (pools, share-token transfers, fills) instead of
+  one. A transaction that fills an unrelated 1inch order AND moves a Cork share token would
+  also match — the note says so.
+
 ### Changed
 
 - **The registry read-API dependency is removed** (`api-phoenix.cork.tech/registry`; the

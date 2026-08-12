@@ -862,8 +862,12 @@ reads — already the default for `cork-pool` / `account-state` / `derive-cork-p
 `full-decentralized` (HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports
 more than one backend you can force it with `mode` on `ch query`, and every result's
 `provenance.mode` says which one answered. When indexer and chain disagree, chain wins — the
-reconcile principle behind `ch track` (§5, item F). RFQs are the one venue-only resource by
-construction: a request-for-quote emits no on-chain events.
+reconcile principle behind `ch track` (§5, item F). Venue-only by construction: `orderbook`
+(signed-but-unfilled orders emit no events), `rfqs` (quote negotiation is off-chain JSON), and
+`rollover-orders kind=orders`. Everything event-backed serves `full-decentralized`: `cork-pools`,
+`trading-pairs` (the pairs that can trade, one row per created pool), `fills` (Cork-scoped by a
+same-transaction share-token join, rows annotated with `poolIds`), and `rollover-orders`
+fills/contracts.
 
 </details>
 

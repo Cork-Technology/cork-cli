@@ -319,7 +319,7 @@ describe("full-decentralized fills — the Cork-scoping join", () => {
     expect(d.count).toBe(1);
     expect(d.items[0]).toMatchObject({ orderHash: CORK_ORDER, poolIds: [POOL] });
     expect(d.items.some((i) => i.orderHash === FOREIGN_ORDER)).toBe(false);
-    expect(d.note).toMatch(/Cork-scoped by same-transaction share-token movement/);
+    expect(d.note).toMatch(/Cork-scoped by same-transaction share-token movement across 1 pool\(s\)/);
     // Scan-span cut: pool discovery walks from genesis, but transfers and fills start at the
     // FIRST pool's creation block — nothing Cork can have filled before a pool existed.
     expect(seen.map((s) => s.fromBlock)).toEqual([0, 485000001, 485000001]);

@@ -660,167 +660,164 @@ async function buildTakerFillArtifact(a: {
   acquisitionWarnings: Array<{ code: string; message: string }>;
   artifactSource: "service" | "config" | "chain";
 }): Promise<Envelope> {
-  const { ctx, chainId, action, lop, signed, localOrderHash } = a;
-  const input = { account: a.account, clientRequestId: a.clientRequestId };
+  const { ctx, chainId, account, clientRequestId, action, lop, signed, localOrderHash } = a;
+  // Liveness pre-flight [K7]: the venue can list rows whose on-chain invalidator already
+  // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
+  // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
+  // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
+  // resolved RPC or a failed read builds as before (this tool never claimed liveness).
   {
-      // Liveness pre-flight [K7]: the venue can list rows whose on-chain invalidator already
-      // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
-      // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
-      // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
-      // resolved RPC or a failed read builds as before (this tool never claimed liveness).
-      {
-        const resolved = await getRpc(ctx, chainId);
-        if (resolved) {
-          try {
-            const plan = lopInvalidatorPlan(signed.order.makerTraits);
-            const status =
-              plan.mode === "bit"
-                ? classifyBitInvalidator((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [signed.order.maker, plan.slot] })) as bigint, plan.mask)
-                : classifyRemainingRaw((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [signed.order.maker, localOrderHash] })) as bigint);
-            if (status.status === "filled-or-cancelled") {
-              return envelope({
-                state: "conflict",
-                data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
-                chainId,
-                source: "chain",
-                warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue [K7]; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
-                ctx,
-              });
-            }
-          } catch {
-            /* liveness could not be read — build as before; the fill's own check decides */
-          }
-        }
-      }
-      // ForSelf mode contradictions are teaching errors BEFORE any building: the wrapper
-      // structurally forces the target to the caller and cannot carry taker interactions.
-      if (action.forSelf) {
-        if (action.receiver !== undefined) {
-          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "receiver"], message: "forSelf and receiver are mutually exclusive — the ForSelf wrapper structurally delivers the bought asset to the CALLING account (that is its whole point); drop receiver, or drop forSelf to route a custom receiver through the raw LOP path" }]);
-        }
-        if (action.interaction !== undefined || action.jitMarket !== undefined) {
-          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.interaction !== undefined ? "interaction" : "jitMarket"], message: "forSelf cannot carry a taker interaction — the wrapper zeroes the interaction-length bits by design (a mid-fill callee while it holds a live allowance would defeat its custody model). Lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path" }]);
-        }
-      }
-      // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.
-      let interaction = action.interaction;
-      let jitData: TakerJitReport | undefined;
-      const jitWarnings: Array<{ code: string; message: string }> = [];
-      if (action.jitMarket) {
-        if (action.interaction !== undefined) {
-          throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "interaction"], message: "interaction and jitMarket are mutually exclusive — jitMarket BUILDS the interaction" }]);
-        }
-        const built = await buildTakerJitInteraction({ ctx, chainId, lop, jm: action.jitMarket, order: signed.order, orderExtension: signed.extension });
-        if (built.gate) return built.gate;
-        interaction = built.interaction;
-        jitData = built.jit;
-        jitWarnings.push(...built.warnings);
-      }
-      // Auction-priced resting order (fusion F2): the amount getter charges the DECAYED price,
-      // not the signed floor — so buildTakerFill's default slippage cap (the signed ratio, i.e.
-      // the floor) would make the artifact revert TakingAmountTooHigh for the entire decay
-      // window. Default the cap to the curve's CEILING instead: valid at ANY broadcast time
-      // (the getter only ever charges less; the cap is a threshold, not a payment), with the
-      // current/floor prices reported so the taker sees what they are agreeing to.
-      let auctionData: AuctionPriceReport | undefined;
-      let auctionCap: bigint | undefined;
-      if (signed.extension !== undefined && signed.extension !== "0x") {
-        let auctionDec: DecodedFusionOrder | undefined;
-        try {
-          auctionDec = decodeFusionOrder(signed.order, signed.extension, chainId);
-        } catch {
-          /* not auction-priced — the plain signed-ratio cap is correct */
-        }
-        if (auctionDec) {
-          const nowSecs = nowSecondsOf(ctx);
-          const fillMaking = action.fillMakingAmount ? BigInt(action.fillMakingAmount) : signed.order.makingAmount;
-          const whitelisted = isGetterWhitelisted(auctionDec.fees, input.account);
-          const fee = fusionTotalFee(auctionDec.fees, whitelisted);
-          const bumpNow = fusionRateBump(auctionDec.auction, nowSecs, null);
-          // Foreign curves may put a point ABOVE initialRateBump (our own encoder refuses, the
-          // parser does not) — the safe ceiling is the curve's MAXIMUM bump, wherever it sits.
-          const maxBump = auctionDec.auction.points.reduce((m, p) => (p.rateBump > m ? p.rateBump : m), auctionDec.auction.initialRateBump);
-          const M = signed.order.makingAmount;
-          const T = signed.order.takingAmount;
-          const currentTakerPays = fusionTakerPays(M, T, fillMaking, fee, bumpNow.effective);
-          const ceilingTakerPays = fusionTakerPays(M, T, fillMaking, fee, maxBump);
-          const finish = auctionDec.auction.startTime + auctionDec.auction.duration;
-          if (action.maximumTakingAmount === undefined) auctionCap = ceilingTakerPays;
-          auctionData = {
-            settlement: auctionDec.settlement,
-            phase: auctionPhase(auctionDec.auction, nowSecs),
-            currentTakerPays: String(currentTakerPays),
-            ceilingTakerPays: String(ceilingTakerPays),
-            floorTakerPays: String(fusionTakerPays(M, T, fillMaking, fee, 0n)),
-            decayEndsAt: String(finish),
-            takerIsGetterWhitelisted: whitelisted,
-            priceBasis: "basefee-independent upper bound — the gas bump can only LOWER the charge",
-          };
-          jitWarnings.push({ code: "decaying_price_notice", message: `this resting order is AUCTION-priced: the getter charges the DECAYED price (currently ${currentTakerPays}, floor at ${fusionTakerPays(M, T, fillMaking, fee, 0n)}, decay ends at ${finish})${action.maximumTakingAmount === undefined ? ` — the slippage cap was defaulted to the curve ceiling ${ceilingTakerPays} so the artifact stays valid at any broadcast time` : ""}. Re-price with cork_compute dutch-auction-price at broadcast time and simulate first` });
-          if (action.maximumTakingAmount !== undefined && BigInt(action.maximumTakingAmount) < currentTakerPays) {
-            jitWarnings.push({ code: "would_revert", message: `your maximumTakingAmount ${action.maximumTakingAmount} is BELOW the current decayed price ${currentTakerPays} — the fill reverts until the price decays under your cap (a resting-bid strategy; fine if intended, dead bytes if not; decay ends at ${finish})` });
-          }
-        }
-      }
-      // ForSelf mode: the same fill, emitted as a call to the integrator-deployed wrapper.
-      if (action.forSelf) {
-        return await prepareForSelfTakerFill({
-          ctx,
-          chainId,
-          account: input.account,
-          clientRequestId: input.clientRequestId,
-          lop,
-          forSelf: action.forSelf,
-          signed,
-          localOrderHash,
-          ...(action.fillMakingAmount !== undefined ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
-          ...(action.maximumTakingAmount !== undefined ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
-          ...(auctionCap !== undefined ? { auctionCap } : {}),
-          ...(auctionData !== undefined ? { auctionData } : {}),
-          priorWarnings: jitWarnings,
-        });
-      }
-      let fill: TakerFillResult;
+    const resolved = await getRpc(ctx, chainId);
+    if (resolved) {
       try {
-        fill = buildTakerFill({
-          order: signed.order,
-          signature: signed.signature,
-          makerAccountType: signed.makerAccountType,
-          taker: input.account,
-          extension: signed.extension,
-          ...(action.receiver ? { receiver: action.receiver } : {}),
-          ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
-          ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),
-          ...(interaction ? { interaction } : {}),
-        });
-      } catch (err) {
-        return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "the resting order cannot be filled by this variant", ctx);
+        const plan = lopInvalidatorPlan(signed.order.makerTraits);
+        const status =
+          plan.mode === "bit"
+            ? classifyBitInvalidator((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [signed.order.maker, plan.slot] })) as bigint, plan.mask)
+            : classifyRemainingRaw((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [signed.order.maker, localOrderHash] })) as bigint);
+        if (status.status === "filled-or-cancelled") {
+          return envelope({
+            state: "conflict",
+            data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
+            chainId,
+            source: "chain",
+            warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue [K7]; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
+            ctx,
+          });
+        }
+      } catch {
+        /* liveness could not be read — build as before; the fill's own check decides */
       }
-      return envelope({
-        state: "ok",
-        data: {
-          kind: "taker-fill",
-          to: lop,
-          calldata: fill.calldata,
-          value: "0",
-          from: input.account,
-          orderHash: localOrderHash,
-          makerAsset: signed.order.makerAsset,
-          takerAsset: signed.order.takerAsset,
-          fillFunction: fill.functionName,
-          requiredMakingAmount: fill.requiredMakingAmount,
-          requiredTakingAmount: fill.requiredTakingAmount,
-          takerTraits: fill.takerTraits,
-          ...(jitData ? { jit: jitData } : {}),
-          ...(auctionData ? { auction: auctionData } : {}),
-          simulationRequired: true,
-          execution: executionEthTransaction(),
-          clientRequestId: input.clientRequestId,
-        },
-        chainId,
-        source: a.artifactSource,
-        warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...a.acquisitionWarnings],
-        ctx,
-      });
+    }
   }
+  // ForSelf mode contradictions are teaching errors BEFORE any building: the wrapper
+  // structurally forces the target to the caller and cannot carry taker interactions.
+  if (action.forSelf) {
+    if (action.receiver !== undefined) {
+      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "receiver"], message: "forSelf and receiver are mutually exclusive — the ForSelf wrapper structurally delivers the bought asset to the CALLING account (that is its whole point); drop receiver, or drop forSelf to route a custom receiver through the raw LOP path" }]);
+    }
+    if (action.interaction !== undefined || action.jitMarket !== undefined) {
+      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.interaction !== undefined ? "interaction" : "jitMarket"], message: "forSelf cannot carry a taker interaction — the wrapper zeroes the interaction-length bits by design (a mid-fill callee while it holds a live allowance would defeat its custody model). Lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path" }]);
+    }
+  }
+  // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.
+  let interaction = action.interaction;
+  let jitData: TakerJitReport | undefined;
+  const jitWarnings: Array<{ code: string; message: string }> = [];
+  if (action.jitMarket) {
+    if (action.interaction !== undefined) {
+      throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "interaction"], message: "interaction and jitMarket are mutually exclusive — jitMarket BUILDS the interaction" }]);
+    }
+    const built = await buildTakerJitInteraction({ ctx, chainId, lop, jm: action.jitMarket, order: signed.order, orderExtension: signed.extension });
+    if (built.gate) return built.gate;
+    interaction = built.interaction;
+    jitData = built.jit;
+    jitWarnings.push(...built.warnings);
+  }
+  // Auction-priced resting order (fusion F2): the amount getter charges the DECAYED price,
+  // not the signed floor — so buildTakerFill's default slippage cap (the signed ratio, i.e.
+  // the floor) would make the artifact revert TakingAmountTooHigh for the entire decay
+  // window. Default the cap to the curve's CEILING instead: valid at ANY broadcast time
+  // (the getter only ever charges less; the cap is a threshold, not a payment), with the
+  // current/floor prices reported so the taker sees what they are agreeing to.
+  let auctionData: AuctionPriceReport | undefined;
+  let auctionCap: bigint | undefined;
+  if (signed.extension !== undefined && signed.extension !== "0x") {
+    let auctionDec: DecodedFusionOrder | undefined;
+    try {
+      auctionDec = decodeFusionOrder(signed.order, signed.extension, chainId);
+    } catch {
+      /* not auction-priced — the plain signed-ratio cap is correct */
+    }
+    if (auctionDec) {
+      const nowSecs = nowSecondsOf(ctx);
+      const fillMaking = action.fillMakingAmount ? BigInt(action.fillMakingAmount) : signed.order.makingAmount;
+      const whitelisted = isGetterWhitelisted(auctionDec.fees, account);
+      const fee = fusionTotalFee(auctionDec.fees, whitelisted);
+      const bumpNow = fusionRateBump(auctionDec.auction, nowSecs, null);
+      // Foreign curves may put a point ABOVE initialRateBump (our own encoder refuses, the
+      // parser does not) — the safe ceiling is the curve's MAXIMUM bump, wherever it sits.
+      const maxBump = auctionDec.auction.points.reduce((m, p) => (p.rateBump > m ? p.rateBump : m), auctionDec.auction.initialRateBump);
+      const M = signed.order.makingAmount;
+      const T = signed.order.takingAmount;
+      const currentTakerPays = fusionTakerPays(M, T, fillMaking, fee, bumpNow.effective);
+      const ceilingTakerPays = fusionTakerPays(M, T, fillMaking, fee, maxBump);
+      const finish = auctionDec.auction.startTime + auctionDec.auction.duration;
+      if (action.maximumTakingAmount === undefined) auctionCap = ceilingTakerPays;
+      auctionData = {
+        settlement: auctionDec.settlement,
+        phase: auctionPhase(auctionDec.auction, nowSecs),
+        currentTakerPays: String(currentTakerPays),
+        ceilingTakerPays: String(ceilingTakerPays),
+        floorTakerPays: String(fusionTakerPays(M, T, fillMaking, fee, 0n)),
+        decayEndsAt: String(finish),
+        takerIsGetterWhitelisted: whitelisted,
+        priceBasis: "basefee-independent upper bound — the gas bump can only LOWER the charge",
+      };
+      jitWarnings.push({ code: "decaying_price_notice", message: `this resting order is AUCTION-priced: the getter charges the DECAYED price (currently ${currentTakerPays}, floor at ${fusionTakerPays(M, T, fillMaking, fee, 0n)}, decay ends at ${finish})${action.maximumTakingAmount === undefined ? ` — the slippage cap was defaulted to the curve ceiling ${ceilingTakerPays} so the artifact stays valid at any broadcast time` : ""}. Re-price with cork_compute dutch-auction-price at broadcast time and simulate first` });
+      if (action.maximumTakingAmount !== undefined && BigInt(action.maximumTakingAmount) < currentTakerPays) {
+        jitWarnings.push({ code: "would_revert", message: `your maximumTakingAmount ${action.maximumTakingAmount} is BELOW the current decayed price ${currentTakerPays} — the fill reverts until the price decays under your cap (a resting-bid strategy; fine if intended, dead bytes if not; decay ends at ${finish})` });
+      }
+    }
+  }
+  // ForSelf mode: the same fill, emitted as a call to the integrator-deployed wrapper.
+  if (action.forSelf) {
+    return await prepareForSelfTakerFill({
+      ctx,
+      chainId,
+      account: account,
+      clientRequestId: clientRequestId,
+      lop,
+      forSelf: action.forSelf,
+      signed,
+      localOrderHash,
+      ...(action.fillMakingAmount !== undefined ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+      ...(action.maximumTakingAmount !== undefined ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
+      ...(auctionCap !== undefined ? { auctionCap } : {}),
+      ...(auctionData !== undefined ? { auctionData } : {}),
+      priorWarnings: jitWarnings,
+    });
+  }
+  let fill: TakerFillResult;
+  try {
+    fill = buildTakerFill({
+      order: signed.order,
+      signature: signed.signature,
+      makerAccountType: signed.makerAccountType,
+      taker: account,
+      extension: signed.extension,
+      ...(action.receiver ? { receiver: action.receiver } : {}),
+      ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+      ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),
+      ...(interaction ? { interaction } : {}),
+    });
+  } catch (err) {
+    return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "the resting order cannot be filled by this variant", ctx);
+  }
+  return envelope({
+    state: "ok",
+    data: {
+      kind: "taker-fill",
+      to: lop,
+      calldata: fill.calldata,
+      value: "0",
+      from: account,
+      orderHash: localOrderHash,
+      makerAsset: signed.order.makerAsset,
+      takerAsset: signed.order.takerAsset,
+      fillFunction: fill.functionName,
+      requiredMakingAmount: fill.requiredMakingAmount,
+      requiredTakingAmount: fill.requiredTakingAmount,
+      takerTraits: fill.takerTraits,
+      ...(jitData ? { jit: jitData } : {}),
+      ...(auctionData ? { auction: auctionData } : {}),
+      simulationRequired: true,
+      execution: executionEthTransaction(),
+      clientRequestId: clientRequestId,
+    },
+    chainId,
+    source: a.artifactSource,
+    warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...a.acquisitionWarnings],
+    ctx,
+  });
 }
