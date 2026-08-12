@@ -398,6 +398,17 @@ const PreparedMakerOrderWire = z.object({
   clientRequestId: ClientRequestId,
 });
 
+const LopOrderStructWire = z.strictObject({
+  salt: UintStr,
+  maker: Address,
+  receiver: Address,
+  makerAsset: Address,
+  takerAsset: Address,
+  makingAmount: TokenAmount,
+  takingAmount: TokenAmount,
+  makerTraits: UintStr,
+});
+
 export const OrdersAction = z.discriminatedUnion("type", [
   A("maker-order", {
     poolId: MarketId,
@@ -464,6 +475,14 @@ export const OrdersAction = z.discriminatedUnion("type", [
   }).describe("verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs [K1]"),
   A("taker-fill", {
     orderHash: Bytes32,
+    signedOrder: z
+      .strictObject({
+        order: LopOrderStructWire,
+        signature: Hex.describe("the maker's signature over the order — verified locally before any bytes are built [K3]: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs"),
+        extension: Hex.default("0x").describe("the order's own extension bytes, verbatim (the salt commits to them; a wrong extension is refused before building)"),
+      })
+      .optional()
+      .describe("fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs [K7]. Omit to discover the order on the venue book by `orderHash`"),
     fillMakingAmount: TokenAmount.optional().describe("making amount to receive; omit for the full remaining order"),
     maximumTakingAmount: TokenAmount.optional().describe("hard cap on taking amount paid (slippage guard); omit to use the exact rounded-up signed ratio"),
     receiver: Address.optional().describe("recipient of the maker asset; defaults to account"),
@@ -502,8 +521,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
       })
       .optional()
       .describe("emit the unsigned fill as a call to a Cork ForSelf ADAPTER (fillOrderForSelf) instead of raw LOP calldata — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The wrapper structurally forces the bought asset to the CALLER, disables taker interactions and Permit2 sourcing, pulls the taker asset from the caller up to the slippage cap and sweeps back the unspent remainder, and binds the fill to `poolId`. Approve the ORDER's taker asset to the ADAPTER (not the LOP). Mutually exclusive with receiver, interaction, and jitMarket — lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path"),
-    maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"),
-  }).describe("unsigned fill calldata for a resting venue order: fetches and locally re-hashes the signed order, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"),
+    maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete. Ignored when `signedOrder` is supplied (no venue search happens)"),
+  }).describe("unsigned fill calldata for a resting order: fetches the signed order from the venue book by `orderHash` (or takes it inline via `signedOrder`, venue-free), locally re-hashes and verifies it, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"),
   A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order") })
     .describe("on-chain cancel calldata for a resting LOP order you made"),
   A("rollover-intent", {
@@ -650,17 +669,6 @@ const RolloverIntentWire = z.strictObject({
   postRolloverHooks: z.array(HookCallWire).max(32),
   premiumHooks: z.array(HookCallWire).max(32),
 });
-const LopOrderStructWire = z.strictObject({
-  salt: UintStr,
-  maker: Address,
-  receiver: Address,
-  makerAsset: Address,
-  takerAsset: Address,
-  makingAmount: TokenAmount,
-  takingAmount: TokenAmount,
-  makerTraits: UintStr,
-});
-
 export const SubmitAction = z.discriminatedUnion("type", [
   A("rollover-order", {
     order: RolloverOrderWire,

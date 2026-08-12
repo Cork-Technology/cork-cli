@@ -52,6 +52,7 @@ const T = {
   handlers: "packages/core/test/handlers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
+  inlineFill: "packages/core/test/taker-fill-inline.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
@@ -1732,6 +1733,70 @@ const CATALOG: Mutant[] = [
     find: "if (premium === undefined && premiumAnnualized === undefined) {",
     replace: "if (premium === undefined && premiumAnnualized === undefined && premium !== undefined) {",
     tests: [T.venuePremium],
+  },
+  // ── taker-fill signedOrder: the venue-free fill path's verification gates ─────────────────
+  {
+    // The inline re-hash gate disappears: bytes build for an order that does not hash to the
+    // orderHash the caller claimed — the [K3] property the path exists to enforce.
+    id: "inline-fill-hash-gate-removed",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      if (localOrderHash.toLowerCase() !== wanted) {",
+    replace: "      if (false) {",
+    tests: [T.inlineFill],
+  },
+  {
+    // The salt↔extension binding gate disappears: bytes build that can only revert
+    // InvalidExtension at fill.
+    id: "inline-fill-binding-gate-removed",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'if (so.extension !== "0x" && !saltExtensionBinding(order.salt, so.extension).bound) {',
+    replace: "if (false) {",
+    tests: [T.inlineFill],
+  },
+  {
+    // Attribution regresses: a caller-supplied zero-making order gets blamed on the venue.
+    id: "inline-fill-zero-attribution-swapped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'return unavailable(chainId, "invalid_order_terms", "the supplied signed order has makingAmount 0 — nothing is fillable", ctx);',
+    replace: 'return unavailable(chainId, "invalid_service_response", "the supplied signed order has makingAmount 0 — nothing is fillable", ctx);',
+    tests: [T.inlineFill],
+  },
+  {
+    // The signature ladder is skipped: fill bytes build for an order whose signature the fill
+    // can only revert on — the check that makes inline bytes trustworthy without the venue.
+    id: "inline-fill-signature-ladder-skipped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const verdict = await verifyMakerSignatureLadder({ ctx, chainId, maker: order.maker, orderHash: localOrderHash, signature: so.signature });",
+    replace: 'const verdict = { kind: "eoa", recoveredSigner: order.maker, codeUnknown: false } as MakerSignatureVerdict;',
+    tests: [T.inlineFill],
+  },
+  {
+    // The ERC-1271 magic-value comparison loosens to "any string answer": a contract maker
+    // whose isValidSignature rejects still gets fill bytes.
+    id: "ladder-magic-comparison-loosened",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {',
+    replace: 'if (typeof magic !== "string") {',
+    tests: [T.inlineFill],
+  },
+  {
+    // Code detection is lost: every contract maker falls into the ecrecover branch, where an
+    // opaque contract-scheme signature can never verify — valid ERC-1271 orders become
+    // unfillable through this tool.
+    id: "ladder-code-detection-lost",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'if (makerCode !== undefined && makerCode !== "0x") {',
+    replace: "if (false) {",
+    tests: [T.inlineFill],
+  },
+  {
+    // The acquisition warnings stop riding the artifact: the inline path's code-unknown
+    // disclosure (and the venue path's in-band notices) silently vanish.
+    id: "inline-fill-acquisition-warnings-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: ", ...a.acquisitionWarnings],",
+    replace: "],",
+    tests: [T.inlineFill],
   },
   {
     // The wire translation regresses to passthrough: ERC1271 posts verbatim, which the venue's
