@@ -49,9 +49,10 @@ venue retires it.
   upgrade. Code that is not on the list warns `implementation_not_approved`. The guard builds
   and warns; approved and unreadable code stay silent. An implementation joins the list only
   after the behavioral suite passes against it. We proposed the same schema for the
-  distribution repo (notes/distribution-interface-manifest-proposal.md), with `byteParams` —
-  the interface revisions that ABIs cannot express. Until the repo adopts it, the guard runs
-  entirely from our config.
+  distribution repo (teased in
+  [distribution#1](https://github.com/Cork-Technology/distribution/issues/1)), with
+  `byteParams` — the interface revisions that ABIs cannot express. Until the repo adopts it,
+  the guard runs entirely from our config.
 - **Venue spec-hash tripwire.** A live-gated test (CORK_RPC_LIVE=1) canonicalizes the venue's
   published openapi and compares it against a committed capture. A venue contract change now
   arrives as a named alert with a reviewable fixture diff, not as unexplained 400s. Re-capture
