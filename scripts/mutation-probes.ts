@@ -1710,7 +1710,7 @@ const CATALOG: Mutant[] = [
     // float noise at premium 100 reads as disagreement the venue would accept.
     id: "premium-agreement-scale-absolute",
     file: "packages/core/src/handlers/submit.ts",
-    find: "const scale = Math.max(1, action.premium, annualizedPct);",
+    find: "const scale = Math.max(1, premium, annualizedPct);",
     replace: "const scale = 1;",
     tests: [T.venuePremium],
   },
@@ -1719,7 +1719,7 @@ const CATALOG: Mutant[] = [
     // float noise becomes a refusal the venue would not issue.
     id: "premium-agreement-tolerance-tightened",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (Math.abs(action.premium - annualizedPct) > 1e-9 * scale) {",
+    find: "if (Math.abs(premium - annualizedPct) > 1e-9 * scale) {",
     replace: "if (Math.abs(action.premium - annualizedPct) > 1e-16 * scale) {",
     tests: [T.venuePremium],
   },
@@ -1728,8 +1728,8 @@ const CATALOG: Mutant[] = [
     // only as an opaque venue 400 instead of local teaching.
     id: "premium-at-least-one-unreachable",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (action.premium === undefined && action.premiumAnnualized === undefined) {",
-    replace: "if (action.premium === undefined && action.premiumAnnualized === undefined && chainId === 0) {",
+    find: "if (premium === undefined && premiumAnnualized === undefined) {",
+    replace: "if (premium === undefined && premiumAnnualized === undefined && premium !== undefined) {",
     tests: [T.venuePremium],
   },
   {
@@ -1749,6 +1749,15 @@ const CATALOG: Mutant[] = [
     find: 'kind === "ERC1271" || kind === "EIP1271" || kind === "CONTRACT"',
     replace: 'kind === "ERC1271" || kind === "EIP1271"',
     tests: [T.venuePremium],
+  },
+  {
+    // The /readyz normalization trace regresses to matching nothing: the base-rewrite becomes
+    // fully unobservable and a mis-normalized proxy setup is undebuggable.
+    id: "venue-diagnostics-suffix-trace-inert",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "const suffix = /\\/v\\d+$/u.exec(configured)?.[0];",
+    replace: "const suffix = /\\/v99\\d+$/u.exec(configured)?.[0];",
+    tests: [T.venueTransport],
   },
 ];
 

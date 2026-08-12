@@ -46,6 +46,53 @@ export function bookPremiumAnnualizedViolation(p: unknown): string | null {
   return null;
 }
 
+/** A refused listing premium, mapped by the caller onto its envelope vocabulary: `missing` and
+ *  `fraction` are caller mistakes (unavailable/invalid_order_terms), `disagree` is the two
+ *  spellings contradicting each other (conflict/premium_fields_disagree). */
+export type ListingPremiumResolution =
+  | { ok: true; premiumPct: number }
+  | { ok: false; problem: "missing" | "fraction"; message: string }
+  | { ok: false; problem: "disagree"; message: string; data: { premiumPercent: number; premiumAnnualized: string; annualizedPercentEquivalent: number } };
+
+/**
+ * The venue's listing-premium RESOLUTION (cork-api 0.3.3 post-order.ts), replicated
+ * operation-for-operation: at least one spelling; the fraction canonicalized by
+ * `Number.parseFloat × 100`; both-sent agreement decided by the venue's exact 1e-9-RELATIVE
+ * comparison (`Math.abs(pct − frac×100) > 1e-9 × Math.max(1, pct, frac×100)`); the fraction
+ * takes precedence. ONE function for both call sites — cork_submit lop-order (the relay) and
+ * finalize-maker-order (which emits a relayable submitInput and must therefore refuse the same
+ * listings the relay would, BEFORE the caller's policy gate admits the artifact) — so the two
+ * gates cannot drift apart and teach differently.
+ */
+export function resolveListingPremium(premium: number | undefined, premiumAnnualized: string | undefined): ListingPremiumResolution {
+  if (premium === undefined && premiumAnnualized === undefined) {
+    return { ok: false, problem: "missing", message: `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field is deprecated and the venue removes it 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
+  }
+  if (premiumAnnualized !== undefined) {
+    const violation = bookPremiumAnnualizedViolation(premiumAnnualized);
+    if (violation) {
+      return { ok: false, problem: "fraction", message: `premiumAnnualized ${JSON.stringify(premiumAnnualized)} ${violation}; percent numbers (4.1) belong only in the deprecated premium field, and the RFQ's < 0.5 cap does not apply to the book. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
+    }
+  }
+  const annualizedPct = premiumAnnualized !== undefined ? Number.parseFloat(premiumAnnualized) * 100 : undefined;
+  if (premium !== undefined && annualizedPct !== undefined) {
+    const scale = Math.max(1, premium, annualizedPct);
+    if (Math.abs(premium - annualizedPct) > 1e-9 * scale) {
+      return {
+        ok: false,
+        problem: "disagree",
+        message: `premium (${premium}%) and premiumAnnualized (= ${annualizedPct}%) disagree — the classic percent-vs-fraction mistake, and the venue hard-rejects it (its exact 1e-9-relative comparison, replicated here). Send only premiumAnnualized, or make them agree; NOT relayed. Full scale table: ${UNITS_TOPIC_REFERENCE}`,
+        data: { premiumPercent: premium, premiumAnnualized: premiumAnnualized!, annualizedPercentEquivalent: annualizedPct },
+      };
+    }
+  }
+  return { ok: true, premiumPct: annualizedPct ?? premium! };
+}
+
+/** The dated migration warning a listing still using the percent spelling carries, everywhere
+ *  such a listing is accepted (submit AND finalize — one string, no drift). */
+export const PREMIUM_DEPRECATION_NOTICE = `the percent-number premium listing field is DEPRECATED — the venue removes it 2026-08-17 (the date rides in-band in warnings[] on every limit-orders response); send premiumAnnualized instead: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface`;
+
 /**
  * Resolve a cited option inside a fetched RFQ record. The venue validates citations against
  * its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get embed
@@ -339,38 +386,20 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           });
         }
       }
-      // ── The listing premium, resolved the venue's way (cork-api 0.3.3 post-order.ts,
-      // operation-for-operation): at least one of premium/premiumAnnualized; the fraction is
-      // canonicalized by parseFloat × 100; when both are sent they must agree within the
-      // venue's exact 1e-9-relative comparison, and the fraction takes precedence. Replicating
-      // the resolution — not just the gates — is what lets every check below (suspect
-      // tripwires, the quote_ref band) compare exactly what the venue will compare.
-      if (action.premium === undefined && action.premiumAnnualized === undefined) {
-        return unavailable(chainId, "invalid_order_terms", `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field is deprecated and the venue removes it 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
-      }
-      if (action.premiumAnnualized !== undefined) {
-        const problem = bookPremiumAnnualizedViolation(action.premiumAnnualized);
-        if (problem) {
-          return unavailable(chainId, "invalid_order_terms", `premiumAnnualized ${JSON.stringify(action.premiumAnnualized)} ${problem}; percent numbers (4.1) belong only in the deprecated premium field, and the RFQ's < 0.5 cap does not apply to the book. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
+      // ── The listing premium, resolved the venue's way (see resolveListingPremium — shared
+      // with finalize-maker-order so both gates refuse identical listings with identical
+      // teaching). Replicating the RESOLUTION — not just the gates — is what lets every check
+      // below (suspect tripwires, the quote_ref band) compare exactly what the venue compares.
+      const resolved = resolveListingPremium(action.premium, action.premiumAnnualized);
+      if (!resolved.ok) {
+        if (resolved.problem === "disagree") {
+          return envelope({ state: "conflict", data: resolved.data, chainId, source: "config", warnings: [{ code: "premium_fields_disagree", message: resolved.message }], ctx });
         }
+        return unavailable(chainId, "invalid_order_terms", resolved.message, ctx);
       }
-      const annualizedPct = action.premiumAnnualized !== undefined ? Number.parseFloat(action.premiumAnnualized) * 100 : undefined;
-      if (action.premium !== undefined && annualizedPct !== undefined) {
-        const scale = Math.max(1, action.premium, annualizedPct);
-        if (Math.abs(action.premium - annualizedPct) > 1e-9 * scale) {
-          return envelope({
-            state: "conflict",
-            data: { premiumPercent: action.premium, premiumAnnualized: action.premiumAnnualized, annualizedPercentEquivalent: annualizedPct },
-            chainId,
-            source: "config",
-            warnings: [{ code: "premium_fields_disagree", message: `premium (${action.premium}%) and premiumAnnualized (= ${annualizedPct}%) disagree — the classic percent-vs-fraction mistake, and the venue hard-rejects it (its exact 1e-9-relative comparison, replicated here). Send only premiumAnnualized, or make them agree; NOT relayed. Full scale table: ${UNITS_TOPIC_REFERENCE}` }],
-            ctx,
-          });
-        }
-      }
-      const premiumPct = annualizedPct ?? action.premium!;
+      const premiumPct = resolved.premiumPct;
       if (action.premium !== undefined) {
-        lopWarnings.push({ code: "deprecation_notice", message: `the percent-number premium listing field is DEPRECATED — the venue removes it 2026-08-17 (the date rides in-band in warnings[] on every limit-orders response); send premiumAnnualized instead: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface` });
+        lopWarnings.push({ code: "deprecation_notice", message: PREMIUM_DEPRECATION_NOTICE });
       }
       // Numbers-contract tripwires, on the venue's CANONICAL percent: a sub-0.1% premium is the
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT

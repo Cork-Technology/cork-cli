@@ -79,13 +79,22 @@ export function venueDiagnostics(now: number = Date.now()): {
   host: string;
   breaker: { failures: number; open: boolean; remainingCooldownMs: number } | null;
   lastOutcome: { ok: boolean; ageMs: number } | null;
+  /** Present when the configured base carried a trailing version segment that venueBaseUrl
+   *  normalized away — the ONE observable trace of that config rewrite (per-call disclosure
+   *  would be noise; zero disclosure would make a mis-normalized proxy setup undebuggable).
+   *  Only the stripped suffix is exposed, never the configured URL: /readyz discloses hosts
+   *  only, and a user override may embed credentials in its path. */
+  normalizedVersionSuffix?: string;
 } {
   const host = hostOf(venueBaseUrl());
   const entry = moduleBreaker.byHost[host];
+  const configured = (process.env.CORK_VENUE_URL ?? DEFAULT_VENUE_URL).replace(/\/+$/u, "");
+  const suffix = /\/v\d+$/u.exec(configured)?.[0];
   return {
     host,
     breaker: entry ? { failures: entry.failures, open: breakerOpen(entry, now, VENUE_BREAKER_POLICY), remainingCooldownMs: breakerRemainingMs(entry, now, VENUE_BREAKER_POLICY) } : null,
     lastOutcome: lastOutcome && lastOutcome.host === host ? { ok: lastOutcome.ok, ageMs: Math.max(0, now - lastOutcome.atMs) } : null,
+    ...(suffix !== undefined ? { normalizedVersionSuffix: suffix } : {}),
   };
 }
 

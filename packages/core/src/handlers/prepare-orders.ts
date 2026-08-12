@@ -11,6 +11,7 @@ import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type Dec
 import { getLopOrderbook, parseSignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
+import { PREMIUM_DEPRECATION_NOTICE, resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -49,11 +50,17 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "finalize-maker-order") {
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
-    // The listing must carry a premium in at least one spelling (the venue's own at-least-one
-    // rule) — checked HERE, not just at submit, so the emitted submitInput is relayable as-is
-    // and the failure lands before a signature ceremony, not after it.
-    if (action.listing.premium === undefined && action.listing.premiumAnnualized === undefined) {
-      return unavailable(chainId, "invalid_order_terms", `the listing needs a premium: send listing.premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface (the percent-number listing.premium is deprecated; the venue removes it 2026-08-17)`, ctx);
+    // The full listing-premium resolution runs HERE, not just at submit — finalize's whole
+    // contract is that submitInput relays as-is after the caller's policy gate admits the
+    // artifact, so a listing the relay would refuse (missing premium, malformed fraction, the
+    // two spellings disagreeing) must fail before that gate ever sees it. Same function, same
+    // messages, same refusal vocabulary as the relay (resolveListingPremium in submit.ts).
+    const listingPremium = resolveListingPremium(action.listing.premium, action.listing.premiumAnnualized);
+    if (!listingPremium.ok) {
+      if (listingPremium.problem === "disagree") {
+        return envelope({ state: "conflict", data: listingPremium.data, chainId, source: "config", warnings: [{ code: "premium_fields_disagree", message: listingPremium.message }], ctx });
+      }
+      return unavailable(chainId, "invalid_order_terms", listingPremium.message, ctx);
     }
     const p = action.prepared;
     if (p.clientRequestId !== input.clientRequestId || p.typedData.domain.chainId !== chainId || !isAddressEqual(p.lop, lop) || !isAddressEqual(p.typedData.domain.verifyingContract, lop)) {
@@ -81,6 +88,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // contract maker's finalization fails honestly in the ecrecover branch below.
       const { orderHash: reconstructedHash } = reconstructMakerOrder(orderArgs);
       const finalizeWarnings: Array<{ code: string; message: string }> = [];
+      if (action.listing.premium !== undefined) {
+        finalizeWarnings.push({ code: "deprecation_notice", message: PREMIUM_DEPRECATION_NOTICE });
+      }
       let makerAccountType: "EOA" | "ERC1271" = "EOA";
       let recoveredSigner: `0x${string}` | null = null;
       const resolved = await getRpc(ctx, chainId);

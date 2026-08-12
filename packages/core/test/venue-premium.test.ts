@@ -207,5 +207,20 @@ describe("premium_annualized migration — the venue's resolution, op-for-op", (
     const submitAction = (fin.data as { submitInput: { action: Record<string, unknown> } }).submitInput.action;
     expect(submitAction.premiumAnnualized).toBe("0.041");
     expect("premium" in submitAction).toBe(false);
+    // finalize runs the FULL relay resolution, not just at-least-one: a submitInput that would
+    // be refused at submit must never be emitted for a policy gate to admit.
+    const disagree = { ...base, action: { ...base.action, listing: { ...listing, premium: 4.1, premiumAnnualized: "0.41" } } };
+    const conflicted = await runTool("cork_prepare_orders", disagree, { nowSeconds: NOW, resolveRpc: async () => null });
+    expect(conflicted.state).toBe("conflict");
+    expect(conflicted.warnings[0]!.code).toBe("premium_fields_disagree");
+    const badShape = { ...base, action: { ...base.action, listing: { ...listing, premiumAnnualized: "4.1%" } } };
+    const refused = await runTool("cork_prepare_orders", badShape, { nowSeconds: NOW, resolveRpc: async () => null });
+    expect(refused.state).toBe("unavailable");
+    expect(refused.warnings[0]!.message).toContain("STRUCTURE");
+    // and a percent-spelling listing carries the SAME dated deprecation notice the relay emits.
+    const pct = { ...base, action: { ...base.action, listing: { ...listing, premium: 4.1 } } };
+    const finPct = await runTool("cork_prepare_orders", pct, { nowSeconds: NOW, resolveRpc: async () => null });
+    expect(finPct.state).toBe("ok");
+    expect(finPct.warnings.some((w) => w.code === "deprecation_notice" && w.message.includes("2026-08-17"))).toBe(true);
   });
 });

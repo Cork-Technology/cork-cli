@@ -269,3 +269,20 @@ describe("shim telemetry (Deprecation: true) + in-band venue warnings[]", () => 
     expect(noticeWarning.message).toContain("removed 2026-08-17");
   });
 });
+
+describe("normalization observability on /readyz diagnostics", () => {
+  it("a version-suffixed override is visible as the stripped suffix only — never the URL itself", () => {
+    const prior = process.env.CORK_VENUE_URL;
+    try {
+      process.env.CORK_VENUE_URL = "https://gateway.example/private-mount/v1";
+      const d = venueDiagnostics(0);
+      expect(d.normalizedVersionSuffix).toBe("/v1");
+      expect(JSON.stringify(d)).not.toContain("private-mount"); // host only, no path echo
+      process.env.CORK_VENUE_URL = "https://api-phoenix.cork.tech";
+      expect(venueDiagnostics(0).normalizedVersionSuffix).toBeUndefined();
+    } finally {
+      if (prior === undefined) delete process.env.CORK_VENUE_URL;
+      else process.env.CORK_VENUE_URL = prior;
+    }
+  });
+});
