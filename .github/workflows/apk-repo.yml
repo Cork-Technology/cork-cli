@@ -10,18 +10,31 @@
 #      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
 #
 # One-time setup this expects:
-#   - `melange keygen` pair: private key in the MELANGE_SIGNING_KEY secret, public half committed
-#     as packaging/melange.rsa.pub (also served at the Pages root for consumers).
+#   - `melange keygen` pair: private key stored as MELANGE_SIGNING_KEY in the `release`
+#     ENVIRONMENT (not a repo secret), public half committed as packaging/melange.rsa.pub (also
+#     served at the Pages root for consumers).
 #   - Pages enabled from the gh-pages branch.
+#   - The `release` environment: deployment rule restricted to v* tags, required reviewers set.
+#     Every secret-reading job below declares `environment: release`, so the secrets resolve
+#     from the environment directly — a run from any other ref cannot read them at all, and each
+#     job wave waits for a reviewer click that shows which workflow and ref asked. A production
+#     release gates up to four times (melange-build → publish-pages → apko-publish →
+#     phala-deploy), a candidate twice; `plan` is deliberately ungated so tag parsing fails fast
+#     before anyone is asked to approve.
 #
 # Three triggers, one gate:
 #   - workflow_call from release.yml (the NORMAL path): a release published by the pipeline's own
 #     GITHUB_TOKEN cannot fire `release: published` here (Actions suppresses token-created event
 #     cascades), so the release workflow CALLS this one directly — no PAT/app token exists to
-#     leak, the chain is an explicit `needs:` edge, and secrets arrive by name.
-#   - release: published — still fires for a release a human publishes by hand.
+#     leak, and the chain is an explicit `needs:` edge. The caller forwards NO secrets: a caller
+#     job using `uses:` cannot declare `environment:`, and `secrets: inherit` forwards repo/org
+#     secrets only — so the jobs here resolve them from the `release` environment themselves,
+#     and the secrets never transit the caller.
+#   - release: published — still fires for a release a human publishes by hand (the run's ref is
+#     the tag, so the environment's v* rule passes).
 #   - workflow_dispatch — operator backfill/retry (safe: the publish step refuses to overwrite
-#     any already-published apk).
+#     any already-published apk). Dispatch FROM THE TAG REF: the `release` environment rejects a
+#     run whose ref is a branch, so "Run workflow" must select the vX.Y.Z tag, not main.
 #   The candidate split (one discriminator everywhere: a `-` in the tag marks the candidate
 #   space, the same rule release.yml uses for the prerelease flag):
 #     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
@@ -42,11 +55,6 @@ on:
         description: "release tag to package (vX.Y.Z or vX.Y.Z-rc.N — candidates build the OCI image only)"
         required: true
         type: string
-    secrets:
-      MELANGE_SIGNING_KEY:
-        required: true
-      PHALA_CLOUD_API_KEY:
-        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -86,6 +94,7 @@ jobs:
 
   melange-build:
     needs: plan
+    environment: release # resolves MELANGE_SIGNING_KEY; v*-only + reviewer gate
     strategy:
       matrix:
         include:
@@ -124,11 +133,11 @@ jobs:
         env:
           MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
         run: |
-          # `required: true` on a workflow_call secret only checks the MAPPING exists — a caller
-          # forwarding an UNSET repo secret passes an empty string, and melange then dies on a
-          # 0-byte key file (observed: v0.1.0-rc.3, the first tag through this channel). Teach.
+          # An unset secret reaches the shell as an empty string, and melange then dies on a
+          # 0-byte key file (observed: v0.1.0-rc.3, the first tag through this channel — then a
+          # forwarded repo secret, now the `release` environment secret). Teach either way.
           if [ -z "$MELANGE_SIGNING_KEY" ]; then
-            echo "::error::MELANGE_SIGNING_KEY repo secret is not set — one-time setup: 'melange keygen', store melange.rsa as the secret, commit melange.rsa.pub as packaging/melange.rsa.pub (header of this file)"
+            echo "::error::MELANGE_SIGNING_KEY is not set in the 'release' environment — one-time setup: 'melange keygen', store melange.rsa as an environment secret there, commit melange.rsa.pub as packaging/melange.rsa.pub (header of this file)"
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
@@ -152,6 +161,7 @@ jobs:
     # enter it (their OCI images compose from the local build instead).
     needs: [plan, melange-build]
     if: ${{ needs.plan.outputs.candidate == 'false' }}
+    environment: release # resolves MELANGE_SIGNING_KEY (index re-sign)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -217,6 +227,7 @@ jobs:
     # is a downstream consumer of the exact channel users `apk add` from.
     needs: [plan, melange-build, publish-pages]
     if: ${{ !cancelled() && needs.melange-build.result == 'success' && (needs.publish-pages.result == 'success' || needs.plan.outputs.candidate == 'true') }}
+    environment: release # resolves MELANGE_SIGNING_KEY (candidate index signing)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -318,13 +329,14 @@ jobs:
   # Phala dashboard — never in the compose or this workflow. Third-party verification:
   # packaging/VERIFY.md + scripts/verify-deployment.ts (six checks: quote signature, RTMR3
   # replay, compose-hash, digest pinning, gh attestation link to source).
-  # Requires the PHALA_CLOUD_API_KEY secret; the determinism gate already ran before this
+  # Requires PHALA_CLOUD_API_KEY in the `release` environment; the determinism gate already ran before this
   # workflow's trigger (release.yml publishes only byte-identical, attested builds).
   phala-deploy:
     # Actual releases only — a candidate image never reaches the CVM; the attested production
     # digest is what packaging/VERIFY.md's six checks bind to.
     needs: [plan, apko-publish]
     if: ${{ !cancelled() && needs.plan.outputs.candidate == 'false' && needs.apko-publish.result == 'success' }}
+    environment: release # resolves PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -346,7 +358,7 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY secret is not set — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
+          test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY is not set in the 'release' environment — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
           # Exact-pinned + scripts disabled: this job holds PHALA_CLOUD_API_KEY, so a floating
           # `latest` here would hand deploy credentials to whoever ships the next phala release.
           # Bump deliberately, next to the lockfile pins.

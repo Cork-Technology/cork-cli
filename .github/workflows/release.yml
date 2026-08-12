@@ -159,10 +159,15 @@ jobs:
   # relying on `release: published`: a release created with the run's own GITHUB_TOKEN never
   # fires other workflows (Actions suppresses token-created event cascades), and the alternative
   # — a PAT or app token whose only job is to re-fire an event — is a standing credential with a
-  # blast radius. A workflow_call needs no credential at all, makes the ordering an explicit
-  # `needs:` edge on the same commit, and passes secrets by name (least privilege). The candidate
-  # split lives INSIDE apk-repo: candidates publish a docker/podman-pullable ghcr image
-  # (:vX.Y.Z-rc.N, never :latest); the apk Pages repo and the Phala CVM deploy are
+  # blast radius. A workflow_call needs no credential at all and makes the ordering an explicit
+  # `needs:` edge on the same commit. This job forwards NO secrets: MELANGE_SIGNING_KEY and
+  # PHALA_CLOUD_API_KEY live in the `release` environment (v*-only deployment rule + required
+  # reviewers), and apk-repo's jobs declare `environment: release` to resolve them directly —
+  # they never transit this caller, and a run from any non-tag ref cannot read them at all.
+  # (A `uses:` job cannot declare `environment:`, and `secrets: inherit` forwards repo/org
+  # secrets only, never environment secrets — hence the declaration lives on the called jobs.)
+  # The candidate split lives INSIDE apk-repo: candidates publish a docker/podman-pullable ghcr
+  # image (:vX.Y.Z-rc.N, never :latest); the apk Pages repo and the Phala CVM deploy are
   # production-only.
   apk-repo:
     needs: publish
@@ -174,6 +179,3 @@ jobs:
       attestations: write
     with:
       tag: ${{ github.ref_name }}
-    secrets:
-      MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
-      PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}

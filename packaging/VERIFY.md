@@ -90,10 +90,13 @@ tag. Before that can happen the owner must:
 
 1. Enable **immutable releases** on the GitHub repo.
 2. Enable **GitHub Pages** (deploy from branch `gh-pages`, root).
-3. Create the melange keypair: `MELANGE_SIGNING_KEY` secret + commit `packaging/melange.rsa.pub`.
+3. Create the melange keypair: store `MELANGE_SIGNING_KEY` as a secret in the `release`
+   environment (v*-tag deployment rule + required reviewers) + commit `packaging/melange.rsa.pub`.
+   DONE 2026-08-12 for the secret; the committed public half is still missing — without it,
+   `publish-pages` cannot serve the key and the candidate `apko-publish` keyring swap fails.
 4. Sign off the **LICENSE** (Apache-2.0).
-5. Create a **Phala Cloud account** and set the `PHALA_CLOUD_API_KEY` repo secret; set the CVM's
-   encrypted secrets in the dashboard.
+5. Create a **Phala Cloud account** and set `PHALA_CLOUD_API_KEY` in the same `release`
+   environment; set the CVM's encrypted secrets in the dashboard.
 
 ## Optional later hardening (not built)
 
