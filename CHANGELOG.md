@@ -6,7 +6,7 @@ plain SemVer per repo; below `1.0.0`, a breaking change on covered surface bumps
 (policy R10). Covered surface for this component (policy R11): JSON output, tool names and input
 schemas, and exit codes — human-readable text and log formats are not covered.
 
-## [0.2.0-rc.1] — unreleased
+## [0.2.0-rc.1] — 2026-08-12
 
 **New line (0.1 → 0.2), declared by the integrability owner under policy R5/R14** (2026-08-11):
 this cut carries three behavior changes in R14's class — visible to no schema diff, judged (by a
