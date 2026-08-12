@@ -34,6 +34,23 @@ build stops instead of silently absorbing changed behavior. Details under Change
   `evals/.last-run.jsonl`; eval fixtures read deployment addresses from `cork-defaults.json`
   (a pinned 0.3.2 registry address had silently turned two tasks red after the 0.3.3 redeploy).
 - apk release channel fails fast with teaching when `MELANGE_SIGNING_KEY` is unset.
+- **Taker-side `jitMarket` fee fields carry `x-units`** (covered-surface addition): the maker
+  copy had the markers, the taker copy had silently lost them — an omission the three-axis
+  parity test cannot see (it checks that emitted values agree; a site emitting nothing is
+  invisible). Both paths now share one schema constant per fee field, so the omission class is
+  structurally closed. Same batch: `cork_submit` rollover pool ids teach via `MarketId` and
+  `permits[].value` via `TokenAmount` (wire-compatible `$ref` upgrades — identical patterns).
+- **Taker JIT pre-flights disclose what the maker path already did**: a failed `recipe.verify`
+  read (`chain_read_failed`) and an undeployed oracle (`oracle_not_deployed`) now warn on fills
+  too — the shared pre-flight ladder made the asymmetry visible and impossible to reintroduce.
+- **`cork_submit` rollover-order settler disclosures** (F14 parity with prepare): an
+  unrecognized settler, or a chain with no rollover config, now relays WITH
+  `settler_not_recognized` instead of silently skipping the check a prepare-path caller gets.
+- **Offline drift gates for hand-maintained address tables** (dev-infra): `RECIPE_CATALOG` and
+  the worked examples' recipe addresses are now parity-tested against `cork-defaults.json`
+  offline — the 0.3.3-redeploy hand-edit class fails in CI, not in a live run someone happens
+  to start. The mutation-probe runner also hardened: an ambiguous anchor is rot (a
+  first-occurrence replace could mutate the wrong site and still report "caught").
 
 ### Changed
 
@@ -60,6 +77,26 @@ build stops instead of silently absorbing changed behavior. Details under Change
   inputs to integer fields, add `invalid_amount` to that branch.
 - `ch query --json pools` (a bare `--json` swallowing a positional) now teaches the exact
   corrected spelling instead of a bare parse error.
+- **[R14 prose] The auction `phase` label agrees with the price at the start boundary**: at
+  exactly `t == startTime` all three reporting surfaces now say `"pre-start"` (two of them said
+  `"decaying"` while the price beside them was still the full-bump ceiling — the settlement
+  port charges `initialRateBump` AT startTime, `<=`). **What to do:** if you branched on
+  `phase == "decaying"` to mean "the order is live", include `"pre-start"` — the order was
+  always fillable in that state, at the ceiling price.
+- **[R14 prose] Failure attribution corrected on two JIT/oracle paths**: a missing
+  `poolManager` deployment during cST prediction now reports `share_prediction_unavailable`
+  (was a misattributed `chain_read_failed` TypeError), and a `lookupWrapper` TRANSPORT failure
+  in `cork_prepare_market` now reports `chain_read_failed` (was `oracle_not_deployable` — a
+  deployability verdict an indeterminate read cannot support). **What to do:** branch on the
+  new codes if you pinned the old ones for these situations; the situations themselves are
+  unchanged.
+- **[R14 prose] `CORK_EXPLAIN_JSON` speaks the strict CORK_* dialect** (`"1"`/`"true"` only):
+  it alone accepted any non-`"0"`/`"false"` value. Loose spellings like `yes` now render prose.
+- Teaching-error remediation says "all enums are closed" only when some issue actually carries
+  a closed value set — it used to ride every remediation, misleading checksum/timestamp/missing-
+  field failures into hunting for a nonexistent enum.
+- `--enable-deprecated` no longer leaks `CORK_ENABLE_DEPRECATED` into later `runCli` calls in
+  the same process (tests, embedding); the flagged call itself is unchanged.
 - The "(formerly digest_mismatch)" message suffixes from rc.3 remain through this release; the
   one-release notice window closes with the next cut.
 
@@ -69,6 +106,21 @@ build stops instead of silently absorbing changed behavior. Details under Change
   `rollover-orders`, and `rfqs` is listed) and carried an "an trading-pair" typo; `ch mcp`
   entrypoint help and the commander stub documented different option sets and both still said
   `/docs/signing` though the route serves every topic.
+- Advertised `cork_prepare_market` description stated the 2-arg `deploy(ca, ref)` (it takes
+  `mode`) and named only Arbitrum (live on 42161 + 8453); registry-view maturity reasons still
+  cited the superseded 2026-08-03 deployment.
+- **Two audit passes over the whole tree** (2026-08-11/12), verified byte-equivalent on a
+  12-call offline behavioral battery against rc.3 (unsigned bundle bytes, maker typed-data,
+  decode outputs, and math identical; only the deliberate teaching deltas differ): the
+  maker/taker JIT pre-flight ladder single-sourced (`runJitPreflightLadder` — the copies had
+  already drifted); `cork_submit` now derives the LOP order hash and makerTraits fields from
+  the same `orders.ts` code the maker path signs (its private re-implementations deleted); ONE
+  salt↔extension comparator, oracle-status probe, deprecated-mode resolver, permit-wire
+  parser, fetch-timeout, and first-line-error helper replace 3–6 private copies each;
+  HyperSync topic selectors derive from the parsed event declarations (each signature was
+  maintained twice in that file); dead exports and a dead config resolution path
+  (`deploymentFor` — bundled-only, contradicting remote-first) removed. 13 new tests; probe
+  catalog grew 172 → 176, all caught, zero rot.
 
 ## [0.1.0-rc.3] — 2026-08-10
 
