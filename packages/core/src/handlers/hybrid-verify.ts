@@ -56,6 +56,22 @@ export async function configuredPoolManagers(chainId: number): Promise<`0x${stri
 
 const label = (row: Row, verification: "confirmed" | "unverified"): Row => ({ ...row, verification });
 
+/** Every row served venue-claimed under one warning — the no-RPC / no-LOP degradations. */
+const allUnverified = (rows: Row[], warning: Warning | undefined): HybridVerification => ({
+  items: rows.map((r) => label(r, "unverified")),
+  warnings: warning !== undefined && rows.length > 0 ? [warning] : [],
+  confirmed: 0,
+  unverified: rows.length,
+  dropped: 0,
+});
+
+/** The one non-readContract call the fills leg needs — a structural subset of viem's
+ *  PublicClient (same shape the live-tail uses), so the resolved client satisfies it without
+ *  cast chains. */
+interface EthGetLogsClient {
+  request(args: { method: "eth_getLogs"; params: [Record<string, unknown>] }): Promise<Array<{ transactionHash: string | null; data: string }>>;
+}
+
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 
 /** Verify one page of venue rows against the chain. Returns null for resources with no
@@ -77,13 +93,7 @@ export async function verifyVenueRows(a: {
   if (!resolved) {
     // The pre-rename centralized behavior, demoted to a labeled fallback: venue rows serve,
     // but every one says it is venue-claimed only.
-    return {
-      items: rows.map((r) => label(r, "unverified")),
-      warnings: rows.length > 0 ? [{ code: "chain_read_failed", message: "no RPC resolved — hybrid verification did not run; every row is venue-claimed only (verification:'unverified')" }] : [],
-      confirmed: 0,
-      unverified: rows.length,
-      dropped: 0,
-    };
+    return allUnverified(rows, { code: "chain_read_failed", message: "no RPC resolved — hybrid verification did not run; every row is venue-claimed only (verification:'unverified')" });
   }
   const client = resolved.client;
 
@@ -111,72 +121,82 @@ export async function verifyVenueRows(a: {
 
   if (resource === "orderbook") {
     const lop = LOP_ADDRESSES[chainId];
-    if (!lop) return { items: rows.map((r) => label(r, "unverified")), warnings: [{ code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` }], confirmed: 0, unverified: rows.length, dropped: 0 };
-    // One invalidator word covers 256 orders of the same (maker, slot) — cache within the call.
-    const bitWords = new Map<string, bigint>();
-    for (const row of inBudget) {
+    if (!lop) return allUnverified(rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` });
+    // Phase 1 — parse every row and collect the UNIQUE invalidator reads it needs. One bit
+    // word covers 256 orders of the same (maker, slot), so rows dedupe onto shared reads.
+    type BookRef = { row: Row; verdict?: "unparseable" | "hash-lie"; readKey?: string; classify?: (word: bigint) => { status: string } };
+    const refs: BookRef[] = inBudget.map((row) => {
       const parsed = parseSignedLopOrder(row);
-      if (!parsed.ok) {
-        keep(row, "unverified");
-        continue;
-      }
+      if (!parsed.ok) return { row, verdict: "unparseable" as const };
       const order = parsed.value.order;
       const localHash = hashLopOrder(chainId, lop, order);
       if (parsed.value.venueOrderHash !== undefined && parsed.value.venueOrderHash.toLowerCase() !== localHash.toLowerCase()) {
         // The row misrepresents its own order [K3] — a definitive self-contradiction.
-        drop("row does not hash to its claimed orderHash");
-        continue;
+        return { row, verdict: "hash-lie" as const };
       }
-      try {
-        const plan = lopInvalidatorPlan(order.makerTraits);
-        let status: { status: string };
-        if (plan.mode === "bit") {
-          const key = `${order.maker.toLowerCase()}:${plan.slot.toString()}`;
-          let word = bitWords.get(key);
-          if (word === undefined) {
-            word = (await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [order.maker, plan.slot] })) as bigint;
-            bitWords.set(key, word);
-          }
-          status = classifyBitInvalidator(word, plan.mask);
-        } else {
-          status = classifyRemainingRaw((await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [order.maker, localHash] })) as bigint);
+      const plan = lopInvalidatorPlan(order.makerTraits);
+      return plan.mode === "bit"
+        ? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}`, classify: (word: bigint) => classifyBitInvalidator(word, plan.mask) }
+        : { row, readKey: `raw:${order.maker.toLowerCase()}:${localHash.toLowerCase()}`, classify: classifyRemainingRaw };
+    });
+    // Phase 2 — the deduped reads run CONCURRENTLY (the default mode's latency is this leg).
+    const words = new Map<string, bigint | "error">();
+    await Promise.all(
+      [...new Set(refs.flatMap((r) => (r.readKey !== undefined ? [r.readKey] : [])))].map(async (key) => {
+        const [mode, maker, slotOrHash] = key.split(":") as [string, `0x${string}`, string];
+        try {
+          const word = (await client.readContract(
+            mode === "bit"
+              ? { address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, BigInt(slotOrHash)] }
+              : { address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, slotOrHash as `0x${string}`] },
+          )) as bigint;
+          words.set(key, word);
+        } catch {
+          words.set(key, "error");
         }
-        if (status.status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
-        else keep(row, "confirmed");
-      } catch {
-        keep(row, "unverified", true);
+      }),
+    );
+    // Phase 3 — verdicts applied in the venue's own row order.
+    for (const ref of refs) {
+      if (ref.verdict === "unparseable") keep(ref.row, "unverified");
+      else if (ref.verdict === "hash-lie") drop("row does not hash to its claimed orderHash");
+      else {
+        const word = words.get(ref.readKey!);
+        if (word === undefined || word === "error") keep(ref.row, "unverified", true);
+        else if (ref.classify!(word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
+        else keep(ref.row, "confirmed");
       }
     }
   } else if (resource === "cork-pools" || resource === "trading-pairs") {
     const pms = await configuredPoolManagers(chainId);
-    const existsCache = new Map<string, boolean | null>(); // poolId → exists (null = indeterminate)
-    const poolExists = async (poolId: `0x${string}`): Promise<boolean | null> => {
-      const hit = existsCache.get(poolId.toLowerCase());
-      if (hit !== undefined) return hit;
+    const poolIdOf = (row: Row) => str(row.poolId) ?? str((row as { pool_id?: unknown }).pool_id);
+    // Per pool: probe the PM generations primary-first, SEQUENTIALLY (most pools live on the
+    // primary); across pools: concurrent, deduped on poolId.
+    const probeExists = async (poolId: `0x${string}`): Promise<boolean | null> => {
       let sawError = false;
-      let exists = false;
       for (const pm of pms) {
         try {
           const market = (await client.readContract({ address: pm, abi: poolManagerAbi, functionName: "market", args: [poolId] })) as { collateralAsset: `0x${string}` };
-          if (market.collateralAsset !== zeroAddress) {
-            exists = true;
-            break;
-          }
+          if (market.collateralAsset !== zeroAddress) return true;
         } catch {
           sawError = true;
         }
       }
-      const verdict = exists ? true : sawError ? null : false;
-      existsCache.set(poolId.toLowerCase(), verdict);
-      return verdict;
+      return sawError ? null : false;
     };
+    const existsById = new Map<string, boolean | null>();
+    await Promise.all(
+      [...new Set(inBudget.flatMap((row) => (poolIdOf(row) !== undefined && pms.length > 0 ? [poolIdOf(row)!.toLowerCase()] : [])))].map(async (id) => {
+        existsById.set(id, await probeExists(id as `0x${string}`));
+      }),
+    );
     for (const row of inBudget) {
-      const poolId = str(row.poolId) ?? str((row as { pool_id?: unknown }).pool_id);
+      const poolId = poolIdOf(row);
       if (poolId === undefined || pms.length === 0) {
         keep(row, "unverified");
         continue;
       }
-      const exists = await poolExists(poolId as `0x${string}`);
+      const exists = existsById.get(poolId.toLowerCase()) ?? null;
       if (resource === "trading-pairs") {
         // Listing authority stays with the venue: existence is an annotation, never a drop —
         // a JIT order legitimately lists a pair whose pool is created at fill time.
@@ -192,19 +212,20 @@ export async function verifyVenueRows(a: {
     }
   } else if (resource === "fills") {
     const lop = LOP_ADDRESSES[chainId];
-    if (!lop) return { items: rows.map((r) => label(r, "unverified")), warnings: [{ code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — fill rows are venue-claimed only` }], confirmed: 0, unverified: rows.length, dropped: 0 };
-    type FillRef = { row: Row; block: number; txHash: string; orderHash: string };
-    const refs: FillRef[] = [];
+    if (!lop) return allUnverified(rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — fill rows are venue-claimed only` });
+    type FillRef = { row: Row; block: number; txHash: string; orderHash: string; verdict?: "confirmed" | "refuted" | "transport" };
+    const refByRow = new Map<Row, FillRef>();
     for (const row of inBudget) {
       const block = Number(str(row.blockNumber) ?? Number.NaN);
       const txHash = str(row.txHash)?.toLowerCase();
       const orderHash = str(row.orderHash)?.toLowerCase();
-      if (!Number.isFinite(block) || txHash === undefined || orderHash === undefined) keep(row, "unverified");
-      else refs.push({ row, block, txHash, orderHash });
+      if (Number.isFinite(block) && txHash !== undefined && orderHash !== undefined) refByRow.set(row, { row, block, txHash, orderHash });
     }
     // Cluster claimed blocks into bounded ranges so verification is a few getLogs, not N point
-    // reads — the ranges are narrow and recent-ish, which ordinary public RPCs serve.
-    const sorted = [...refs].sort((x, y) => x.block - y.block);
+    // reads — the ranges are narrow and recent-ish, which ordinary public RPCs serve. Clusters
+    // scan concurrently; verdicts land back on the refs, and the emit loop below walks the
+    // VENUE's row order (the sort here is for clustering only, never for output).
+    const sorted = [...refByRow.values()].sort((x, y) => x.block - y.block);
     const clusters: Array<{ from: number; to: number; refs: FillRef[] }> = [];
     for (const ref of sorted) {
       const last = clusters[clusters.length - 1];
@@ -214,46 +235,64 @@ export async function verifyVenueRows(a: {
       } else clusters.push({ from: ref.block, to: ref.block, refs: [ref] });
     }
     const toHex = (n: number): `0x${string}` => `0x${n.toString(16)}`;
-    for (const cluster of clusters) {
-      try {
-        const logs = (await (client as { request: (a: unknown) => Promise<Array<{ transactionHash: string | null; data: string }>> }).request({
-          method: "eth_getLogs",
-          params: [{ fromBlock: toHex(cluster.from), toBlock: toHex(cluster.to), address: [lop], topics: [[LOP_FILLED_TOPIC]] }],
-        })) as Array<{ transactionHash: string | null; data: string }>;
-        // OrderFilled(bytes32 orderHash, uint256 remaining): the orderHash is the first data word.
-        const seen = new Set(logs.filter((l) => l.transactionHash !== null).map((l) => `${l.transactionHash!.toLowerCase()}:0x${l.data.slice(2, 66).toLowerCase()}`));
-        for (const ref of cluster.refs) {
-          if (seen.has(`${ref.txHash}:${ref.orderHash}`)) keep(ref.row, "confirmed");
-          else drop("no OrderFilled log at the claimed block for this txHash+orderHash");
+    await Promise.all(
+      clusters.map(async (cluster) => {
+        try {
+          const logs = await (client as EthGetLogsClient).request({
+            method: "eth_getLogs",
+            params: [{ fromBlock: toHex(cluster.from), toBlock: toHex(cluster.to), address: [lop], topics: [[LOP_FILLED_TOPIC]] }],
+          });
+          // OrderFilled(bytes32 orderHash, uint256 remaining): the orderHash is the first data word.
+          const seen = new Set(logs.filter((l) => l.transactionHash !== null).map((l) => `${l.transactionHash!.toLowerCase()}:0x${l.data.slice(2, 66).toLowerCase()}`));
+          for (const ref of cluster.refs) ref.verdict = seen.has(`${ref.txHash}:${ref.orderHash}`) ? "confirmed" : "refuted";
+        } catch {
+          for (const ref of cluster.refs) ref.verdict = "transport";
         }
-      } catch {
-        for (const ref of cluster.refs) keep(ref.row, "unverified", true);
-      }
+      }),
+    );
+    for (const row of inBudget) {
+      const ref = refByRow.get(row);
+      if (ref === undefined) keep(row, "unverified");
+      else if (ref.verdict === "confirmed") keep(row, "confirmed");
+      else if (ref.verdict === "refuted") drop("no OrderFilled log at the claimed block for this txHash+orderHash");
+      else keep(row, "unverified", true);
     }
   } else {
     // rollover-orders kind=orders: the settler's own orderStatus view arbitrates each row's
     // claimed lifecycle — the same read cork_track reconcile performs.
-    for (const row of inBudget) {
+    const readKeyOf = (row: Row): { key: string; settler: `0x${string}`; digest: `0x${string}` } | undefined => {
       const digest = str(row.orderDigest) ?? str((row as { order_digest?: unknown }).order_digest);
       const settler = str(row.settler);
+      if (digest === undefined || settler === undefined) return undefined;
+      return { key: `${settler.toLowerCase()}:${digest.toLowerCase()}`, settler: settler as `0x${string}`, digest: digest as `0x${string}` };
+    };
+    const statuses = new Map<string, string | "error">();
+    await Promise.all(
+      [...new Map(inBudget.flatMap((row) => { const k = readKeyOf(row); return k ? [[k.key, k] as const] : []; })).values()].map(async (k) => {
+        try {
+          const raw = (await client.readContract({ address: k.settler, abi: settlerStatusAbi, functionName: "orderStatus", args: [k.digest] })) as bigint | number;
+          statuses.set(k.key, chainStatusName(raw));
+        } catch {
+          statuses.set(k.key, "error");
+        }
+      }),
+    );
+    for (const row of inBudget) {
+      const k = readKeyOf(row);
       const venueStatus = str(row.status);
-      if (digest === undefined || settler === undefined || venueStatus === undefined) {
+      if (k === undefined || venueStatus === undefined) {
         keep(row, "unverified");
         continue;
       }
-      try {
-        const raw = (await client.readContract({ address: settler as `0x${string}`, abi: settlerStatusAbi, functionName: "orderStatus", args: [digest as `0x${string}`] })) as bigint | number;
-        const chain = chainStatusName(raw);
-        if (venueChainConsistent(venueStatus, chain)) keep(row, "confirmed");
-        else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {
-          // Vocabulary neither side of the table knows is INDETERMINATE, never a refutation —
-          // the venue grows status words (observed on the 0.3.3 migration) and a newer settler
-          // grows enum members; dropping on either would delete valid rows.
-          keep(row, "unverified");
-        } else drop(`settler orderStatus says ${chain}, contradicting the venue's ${venueStatus}`);
-      } catch {
-        keep(row, "unverified", true);
-      }
+      const chain = statuses.get(k.key);
+      if (chain === undefined || chain === "error") keep(row, "unverified", true);
+      else if (venueChainConsistent(venueStatus, chain)) keep(row, "confirmed");
+      else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {
+        // Vocabulary neither side of the table knows is INDETERMINATE, never a refutation —
+        // the venue grows status words (observed on the 0.3.3 migration) and a newer settler
+        // grows enum members; dropping on either would delete valid rows.
+        keep(row, "unverified");
+      } else drop(`settler orderStatus says ${chain}, contradicting the venue's ${venueStatus}`);
     }
   }
 

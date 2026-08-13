@@ -69,6 +69,11 @@ export function readScanCache(id: string): ScanCacheEntry | undefined {
 
 export function writeScanCache(id: string, entry: ScanCacheEntry): void {
   if (entry.rows.length > SCAN_CACHE_MAX_ROWS) return; // too big to be worth persisting — see header
+  // Merge from DISK, not from the in-process memo: the long-lived MCP server and any number of
+  // CLI runs share this file, and a memo-based read-modify-write would clobber every entry a
+  // sibling process wrote since our last read (last-writer-wins on the WHOLE file). Re-reading
+  // narrows the race to concurrent same-entry writers, where either value is a valid cursor.
+  memo = undefined;
   const file = loadFile();
   file.entries[id] = entry;
   try {

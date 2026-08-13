@@ -54,6 +54,7 @@ const T = {
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
   hybridVerify: "packages/core/test/hybrid-verify.test.ts",
+  scanCache: "packages/core/test/scan-cache.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
@@ -436,6 +437,24 @@ const CATALOG: Mutant[] = [
     tests: [T.hypersync],
   },
   {
+    // Merge-on-write is lost: our stale in-process view clobbers every entry a sibling process
+    // wrote since our last read (the MCP server vs CLI runs sharing one file).
+    id: "scan-cache-sibling-clobber",
+    file: "packages/core/src/scan-cache.ts",
+    find: "  memo = undefined;\n  const file = loadFile();",
+    replace: "  const file = loadFile();",
+    tests: [T.scanCache],
+  },
+  {
+    // The size cap is lost: a whole-LOP fill history serializes into the cache file on every
+    // call.
+    id: "scan-cache-size-cap-lost",
+    file: "packages/core/src/scan-cache.ts",
+    find: "if (entry.rows.length > SCAN_CACHE_MAX_ROWS) return; // too big to be worth persisting — see header",
+    replace: "",
+    tests: [T.scanCache],
+  },
+  {
     // The windowed walk stops disclosing its bound: a capped walk claims completeness.
     id: "windowed-partial-honesty-lost",
     file: "packages/core/src/datasources/hypersync.ts",
@@ -448,8 +467,8 @@ const CATALOG: Mutant[] = [
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.
     id: "hybrid-dead-row-drop-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'if (status.status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
-    replace: 'if (false) drop("on-chain invalidator says filled-or-cancelled");',
+    find: 'else if (ref.classify!(word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
+    replace: 'else if (false) drop("on-chain invalidator says filled-or-cancelled");',
     tests: [T.hybridVerify],
   },
   {
@@ -500,8 +519,26 @@ const CATALOG: Mutant[] = [
     // the silent-trust regression the rename exists to prevent.
     id: "hybrid-norpc-label-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'items: rows.map((r) => label(r, "unverified")),\n      warnings: rows.length > 0',
-    replace: "items: rows,\n      warnings: rows.length > 0",
+    find: '  items: rows.map((r) => label(r, "unverified")),',
+    replace: "  items: rows,",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The bit-word dedup is lost: every book row of the same (maker, slot) burns its own
+    // invalidator read — the default mode's RPC cost multiplies silently.
+    id: "hybrid-bit-read-dedup-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}`, classify:",
+    replace: "? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}:${localHash}`, classify:",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The fills emit loop walks the clustering sort instead of the venue's row order — the
+    // order-instability regression the rework fixed.
+    id: "hybrid-fills-order-instability",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "for (const row of inBudget) {\n      const ref = refByRow.get(row);",
+    replace: "for (const { row } of sorted) {\n      const ref = refByRow.get(row);",
     tests: [T.hybridVerify],
   },
   {

@@ -6,13 +6,13 @@ import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
-import { resolveConfig, resolveRollover } from "../config-remote.ts";
+import { resolveRollover } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { parseQueryFilters, type QueryFilters } from "./filters.ts";
-import { HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
+import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 
@@ -148,16 +148,12 @@ async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperS
  *  deployment + named profiles) — shared by cork-pools, the event-derived trading-pairs view,
  *  and the fills join's pool discovery. */
 async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promise<{ spec: HsScanSpec } | { unknownDeployment: true }> {
-  const cfg = await resolveConfig();
-  const pms = new Set<`0x${string}`>();
-  const primary = cfg.defaults.deployments[String(chainId)];
-  if (primary) pms.add(primary.poolManager);
-  for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
-  if (pms.size === 0) return { unknownDeployment: true };
+  const pms = await configuredPoolManagers(chainId);
+  if (pms.length === 0) return { unknownDeployment: true };
   return {
     spec: {
       fromBlock: 0,
-      address: [...pms],
+      address: pms,
       topics: [[MARKET_CREATED_TOPIC]],
       decode: decodeMarketRows,
       postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
@@ -374,7 +370,9 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       ctx,
     });
   } catch (err) {
-    return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${firstLine(err)}`, ctx);
+    // Attribution follows the source that actually served: blaming HyperSync for a windowed-
+    // fallback failure would send the operator debugging the wrong system.
+    return unavailable(chainId, "hypersync_unavailable", `${windowedFallback ? "the windowed eth_getLogs fallback" : "HyperSync"} query failed: ${firstLine(err)}`, ctx);
   }
 }
 

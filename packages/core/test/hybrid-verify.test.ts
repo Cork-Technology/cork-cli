@@ -111,6 +111,50 @@ describe("hybrid verification — orderbook liveness", () => {
   });
 });
 
+describe("hybrid verification — read dedup + order stability (the parallel rework's properties)", () => {
+  it("book rows sharing a (maker, slot) dedupe onto ONE invalidator read", async () => {
+    // Both rows: same maker, makerTraits 0 → same bit slot. The word covers 256 orders.
+    const a = await bookRow(1n);
+    const b = await bookRow(2n);
+    let reads = 0;
+    const chain = stubRpc((c) => {
+      if (c.functionName === "bitInvalidatorForOrder") {
+        reads += 1;
+        return 0n;
+      }
+      throw new Error(`no stub for ${c.functionName}`);
+    });
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [a, b]), resolveRpc: chain });
+    expect((env.data as VerifiedData).verification.confirmed).toBe(2);
+    expect(reads).toBe(1);
+  });
+
+  it("fills come back in the VENUE's row order, not cluster order", async () => {
+    // Venue order: newest (high block) first; clustering sorts ascending — output must not.
+    const hiTx = `0x${"a1".repeat(32)}`;
+    const loTx = `0x${"b2".repeat(32)}`;
+    const oh = `0x${"0d".repeat(32)}`;
+    const rows = [
+      { blockNumber: "900000", txHash: hiTx, orderHash: oh },
+      { blockNumber: "1000", txHash: loTx, orderHash: oh },
+    ];
+    const resolveRpc = async () => {
+      const base = await stubRpc(() => {
+        throw new Error("no readContract expected");
+      })(1 as never, undefined as never);
+      const client = base!.client as Record<string, unknown>;
+      client.request = async (args: { params: [{ fromBlock: string }] }) =>
+        // Both clusters find their log — everything confirms; only ORDER is under test.
+        [{ transactionHash: Number.parseInt(args.params[0].fromBlock, 16) > 500_000 ? hiTx : loTx, data: `${oh}${"0".repeat(64)}` }];
+      return base;
+    };
+    const env = await query("fills", { venueFetch: venueWith("fills", rows), resolveRpc });
+    const d = env.data as VerifiedData;
+    expect(d.count).toBe(2);
+    expect(d.items.map((i) => i.txHash)).toEqual([hiTx, loTx]);
+  });
+});
+
 describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
   const marketAnswer = (exists: boolean) => ({ collateralAsset: exists ? "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" : "0x0000000000000000000000000000000000000000" });
 
