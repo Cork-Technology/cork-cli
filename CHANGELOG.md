@@ -6,9 +6,47 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
-## [Unreleased]
+## [0.3.0-rc.1] — unreleased (staged; the line break is the mode rename below)
+
+**New line (0.2 → 0.3), declared by the integrability owner 2026-08-13 under policy R10/R11:**
+the data-mode value `centralized` is RENAMED to `hybrid` — a covered-surface break (mode is an
+input enum and a provenance value). The old value answers with a "was renamed to hybrid"
+teaching error; nothing old silently works, and nothing old silently breaks.
+
+### Changed (breaking)
+
+- **`centralized` → `hybrid`, and the mode earns the new name.** Venue-backed list reads now
+  run a chain-verification leg over the same readers the lite-decentralized paths use (one
+  implementation, two consumers): the book against the LOP invalidator, pools against
+  `market()` on every configured pool-manager generation, fills against their `OrderFilled`
+  logs, rollover orders against the settler's `orderStatus`. Rows carry
+  `verification: 'confirmed' | 'unverified'`; rows the chain definitively refutes are DROPPED
+  and counted (`status_mismatch` [K7]); indeterminate rows — transport failures, rows beyond
+  the 50-row `verification_budget`, unknown status vocabulary — stay, labeled. trading-pairs
+  rows are never dropped: the venue is the authority on what is LISTED, and chain existence
+  rides as an `exists` annotation (a JIT order legitimately lists a pre-pool pair). With no
+  RPC, every row serves labeled unverified — the old behavior, demoted and disclosed. rfqs are
+  hybrid's one unverifiable family, said in `data.note`. `provenance.mode` says `hybrid`.
 
 ### Added
+
+- **`modes` doc topic** (aliases `data-modes`, `backends`): the side-by-side of the three data
+  modes as connectivity pledges — hybrid (venue + your RPC), lite-decentralized (your RPC
+  only), full-decentralized (RPC + HyperSync, never the venue) — with hybrid's per-resource
+  verification matrix and the choosing rule.
+- **Incremental scan cursors for full-decentralized reads.** Each scan persists its decoded
+  pre-filter rows and an archive watermark (`~/.cache/cork-helper-cli/scan-cache.json`,
+  override `CORK_SCAN_CACHE_FILE`); the next call re-scans only a 200-block reorg overlap plus
+  the new range. Partial backfills are never written back and oversized row sets are never
+  cached — the cache may only make a read cheaper, never change it.
+- **Tokenless windowed-getLogs fallback.** Without an Envio token, full-decentralized serves
+  via bounded `eth_getLogs` windows over the resolved RPC (disclosed as
+  `logs_windowed_fallback`; a capped walk discloses `pagination_incomplete`) instead of
+  refusing. A set-but-broken token still fails honestly, and the whitelist replay never uses
+  the fallback — membership needs full history.
+- The `contracts_version` label-parity check returns to the live suite as a best-effort venue
+  cross-check: the label is venue vocabulary, so the venue's registry module is its legitimate
+  arbiter (unreachable → skip).
 
 - **`taker-fill` accepts an inline `signedOrder` — the venue-free fill path.** The caller
   supplies the order, signature, and extension (the exact shape `finalize-maker-order`'s
@@ -42,9 +80,9 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   existence probe cross-checking our deploy simulation, a raw `recipe.resolve` staticcall
   compared wei-for-wei, an independent Market-tuple re-encode of the poolId, and label→labelHash
   re-hashing. All fifteen live tests pass against Arbitrum with zero requests to the service.
-  One check retired with the dependency, honestly: the API's free-form `contracts_version` label
-  has no on-chain getter, so config still declares the label but nothing external arbitrates a
-  relabel anymore.
+  One check retired with the dependency: the API's free-form `contracts_version` label lost its
+  external arbiter for a day — this release restores it as the deliberate best-effort venue
+  cross-check described under Added.
 
 ## [0.2.0-rc.2] — 2026-08-12
 

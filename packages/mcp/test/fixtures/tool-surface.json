@@ -3,8 +3,8 @@
   "tools": [
     {
       "name": "cork_query",
-      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
-      "descriptionTokensApprox": 184,
+      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped [K7]. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
+      "descriptionTokensApprox": 215,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -29,7 +29,7 @@
               "derive-cork-pool",
               "rfqs"
             ],
-            "description": "Taxonomy: a CORK-POOL is one expiry of a MARKET (the family of pools over one (collateralAsset, referenceAsset) pair); a TRADING-PAIR is a tradable pair listing on the LOP venue book. cork-pools=list all pools; cork-pool=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); rollover-orders=rollover orders/fills/contracts — pool migrations to a successor expiry (filters.kind); trading-pairs=tradable LOP pairs (centralized = the venue's listed view; mode 'full-decentralized' = the pairs that CAN trade, derived from pool-creation events); orderbook=resting limit orders; fills=executed trades (mode 'full-decentralized' = Cork-scoped by a same-transaction share-token join, each row annotated with the poolIds its transaction touched); account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); derive-cork-pool=derive ONE pool (expiry included) BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed; rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers; filters.view 'current' for the negotiation frontier). RFQ rows carry `version`, a monotonic change counter bumped by every stored answer/counter — poll the list and re-read only RFQs whose version moved; embedded-answers reads also carry `counter`, the requester's current counter-bid (null when none). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a pool's on-chain Market struct (the struct keeps its on-chain name) is the same contract that registry-oracle/derive-cork-pool report under oracle{address}"
+            "description": "Taxonomy: a CORK-POOL is one expiry of a MARKET (the family of pools over one (collateralAsset, referenceAsset) pair); a TRADING-PAIR is a tradable pair listing on the LOP venue book. cork-pools=list all pools; cork-pool=one pool's full live state (needs filters.poolId); pool-whitelist=is a pool access-gated; whitelisted-addresses=enumerate CURRENT whitelist membership replayed from WhitelistManager events (HyperSync, needs ENVIO token; live-view verified when an RPC resolves; filters.poolId scopes to one pool, global rows ride along); rollover-orders=rollover orders/fills/contracts — pool migrations to a successor expiry (filters.kind); trading-pairs=tradable LOP pairs (hybrid = the venue's listed view, the authority on what is LISTED, each row chain-annotated with `exists`; mode 'full-decentralized' = the pairs that CAN trade, derived from pool-creation events); orderbook=resting limit orders; fills=executed trades (mode 'full-decentralized' = Cork-scoped by a same-transaction share-token join, each row annotated with the poolIds its transaction touched); account-state=balances+funding allowances (needs filters.poolId+account); protocol-config=deployed addresses (no RPC); registry-assets=MarketRegistry-approved assets, each with TWO NAMED SOURCE SLOTS (priceSource/navSource, either may be null) + token self-description; registry-oracle=rate-oracle status — a pair's MODE-KEYED wrapper (filters.collateralAsset+referenceAsset [+filters.mode 'price'|'nav'; one pair can hold both at different addresses]) OR a fixed-rate oracle keyed on the RATE (filters.rate, no pair); returns oracle{address,deployed,deployable} — address is the wrapper when deployed, the predicted wrapper when only deployable, null when the pair can't get one; registry-recipes=the approved recipe CONTRACTS (2.1.0: a recipe is an ADDRESS that self-reports source/description/constants — no modes, no stored bands; constants ending _PERCENTAGE are 1e18=1%, everything else 1e18=1.0); registry-denominations=label→unit map (labels are EXACT BYTES, case-sensitive; labelHash is the identity, label is display); registry-feeds=the Chainlink conversion feeds with live answers (one DIRECTED edge each — base→quote ≠ quote→base); derive-cork-pool=derive ONE pool (expiry included) BEFORE it exists (needs filters.collateralAsset+referenceAsset+expiry+recipe [filters.mode = deprecated sugar; optional args/rate/rateOracle]): recipe+source, oracle{address,deployed,deployable,rate}, the OFF-CHAIN-resolved constraint, pool id, shares{corkSwapToken,corkPrincipalToken}, and whether the pool exists — the same derivation a JIT LOP fill runs; identity is PINNED once an order carrying the constraint is signed; rfqs=venue RFQ feed — open requests-for-quote awaiting underwriter answers (default state=open; filters.rfqId for one record with all answers; filters.view 'current' for the negotiation frontier). RFQ rows carry `version`, a monotonic change counter bumped by every stored answer/counter — poll the list and re-read only RFQs whose version moved; embedded-answers reads also carry `counter`, the requester's current counter-bid (null when none). Shared vocabulary across every read: the two share tokens are ALWAYS corkSwapToken (the cST) and corkPrincipalToken (the cPT); rateOracle inside a pool's on-chain Market struct (the struct keeps its on-chain name) is the same contract that registry-oracle/derive-cork-pool report under oracle{address}"
           },
           "chainId": {
             "type": "number",
@@ -45,11 +45,11 @@
           "mode": {
             "type": "string",
             "enum": [
-              "centralized",
+              "hybrid",
               "lite-decentralized",
               "full-decentralized"
             ],
-            "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+            "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
           },
           "filters": {
             "type": "object",
@@ -137,11 +137,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -570,11 +570,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -771,11 +771,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -921,11 +921,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -1649,11 +1649,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -2724,11 +2724,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -2966,11 +2966,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -3261,11 +3261,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -4177,11 +4177,11 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "centralized",
+                  "hybrid",
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode"
+                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
