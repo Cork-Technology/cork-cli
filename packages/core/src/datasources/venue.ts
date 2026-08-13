@@ -141,13 +141,6 @@ export interface PageParams {
   limit?: number;
 }
 
-/** Offset + page-size passthrough for the /rollover/v1 lists — the one venue family that pages
- *  by row offset (its openapi defines no cursor param, and the routes silently ignore an
- *  unknown one, serving page 1 forever — verified live on 0.3.4). */
-export interface OffsetPageParams {
-  offset?: number;
-  limit?: number;
-}
 
 export interface VenuePostResult {
   httpStatus: number;
@@ -305,7 +298,7 @@ export async function getLopMarkets(deps: VenueDeps, chainId: number, page: Page
   return asList(await getJson(deps, `/limit-orders/v1/markets${qs({ chainId, cursor: page.cursor, limit: page.limit })}`), "trading-pairs");
 }
 
-export interface RolloverOrdersParams extends OffsetPageParams {
+export interface RolloverOrdersParams extends PageParams {
   chainId: number;
   user?: string;
   poolId?: string;
@@ -317,7 +310,7 @@ export interface RolloverOrdersParams extends OffsetPageParams {
 
 /** GET /rollover/v1/orders — the rollover order feed (solver feed with fillable=true). */
 export async function getRolloverOrders(deps: VenueDeps, p: RolloverOrdersParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/v1/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, offset: p.offset, limit: p.limit })}`), "rollover orders");
+  return asList(await getJson(deps, `/rollover/v1/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
 }
 
 /** GET /rollover/v1/orders/{orderDigest} — one order fully resolved ({order, fills, slots}).
@@ -336,13 +329,13 @@ export async function getRolloverOrder(deps: VenueDeps, orderDigest: string): Pr
 }
 
 /** GET /rollover/v1/fills — indexed rollover fill legs (ROLLOVER/PREMIUM/RECLAIM/REFUND). */
-export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; orderDigest?: string; filler?: string } & OffsetPageParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/v1/fills${qs({ chainId: p.chainId, orderDigest: p.orderDigest, filler: p.filler, offset: p.offset, limit: p.limit })}`), "rollover fills");
+export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; orderDigest?: string; filler?: string } & PageParams): Promise<VenueList> {
+  return asList(await getJson(deps, `/rollover/v1/fills${qs({ chainId: p.chainId, orderDigest: p.orderDigest, filler: p.filler, cursor: p.cursor, limit: p.limit })}`), "rollover fills");
 }
 
 /** GET /rollover/v1/contracts — per-user rollover clones (setup gate: "does my clone exist?"). */
-export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string } & OffsetPageParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/v1/contracts${qs({ chainId: p.chainId, owner: p.owner, address: p.address, offset: p.offset, limit: p.limit })}`), "rollover contracts");
+export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string } & PageParams): Promise<VenueList> {
+  return asList(await getJson(deps, `/rollover/v1/contracts${qs({ chainId: p.chainId, owner: p.owner, address: p.address, cursor: p.cursor, limit: p.limit })}`), "rollover contracts");
 }
 
 export interface RfqListParams extends PageParams {

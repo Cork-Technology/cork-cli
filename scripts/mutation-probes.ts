@@ -462,40 +462,14 @@ const CATALOG: Mutant[] = [
     replace: "return { logs, archiveHeight: head };",
     tests: [T.hypersync],
   },
-  // ── rollover offset pagination (2026-08-13): the venue's one non-cursor list family ───────
+  // ── rollover cursor pagination (venue 0.3.5, 2026-08-13): one vocabulary everywhere ───────
   {
-    // The synthesized offset stops accumulating: page 2 re-derives the same offset forever —
-    // the exact page-1 loop the venue's silent cursor-strip caused, recreated on our side.
-    id: "rollover-offset-accumulation-lost",
-    file: "packages/core/src/handlers/query.ts",
-    find: "return { ...res, nextCursor: String(offset + res.items.length) };",
-    replace: "return { ...res, nextCursor: String(res.items.length) };",
-    tests: [T.venue],
-  },
-  {
-    // The offset param is dropped from the wire: every page silently serves row 0 again.
-    id: "rollover-offset-param-lost",
+    // The cursor param is dropped from the rollover wire: every page silently serves page 1
+    // again — the venue's old silent-strip trap, recreated on our side.
+    id: "rollover-cursor-param-lost",
     file: "packages/core/src/datasources/venue.ts",
-    find: "source: p.source, offset: p.offset, limit: p.limit",
-    replace: "source: p.source, offset: undefined, limit: p.limit",
-    tests: [T.venue],
-  },
-  {
-    // The resume-cursor shape guard is lost: an opaque cursor pasted from another resource
-    // coerces to NaN and silently restarts the walk at page 1 instead of teaching.
-    id: "rollover-cursor-guard-lost",
-    file: "packages/core/src/handlers/query.ts",
-    find: "if (input.cursor !== undefined && !DECIMAL_OFFSET.test(input.cursor)) {",
-    replace: "if (false) {",
-    tests: [T.venue],
-  },
-  {
-    // The decimal guard on a VENUE-supplied cursor is lost (the pre-retro bug, recreated): an
-    // opaque venue cursor passes through, and page 2 requests offset=NaN.
-    id: "rollover-venue-cursor-decimal-guard-lost",
-    file: "packages/core/src/handlers/query.ts",
-    find: 'const venueCursor = typeof res.nextCursor === "string" && DECIMAL_OFFSET.test(res.nextCursor);',
-    replace: 'const venueCursor = typeof res.nextCursor === "string" && res.nextCursor.length > 0;',
+    find: "fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit",
+    replace: "fillable: p.fillable, source: p.source, limit: p.limit",
     tests: [T.venue],
   },
   // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────

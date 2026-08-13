@@ -77,18 +77,19 @@ silently.
 
 ### Fixed
 
-- **Rollover lists paginate by row offset now, so multi-page walks work.** The three
-  `/rollover/v1` lists are the venue's one offset-paged family (their contract defines no
-  cursor param, verified against venue 0.3.4). We used to send a `cursor` param the routes
-  silently ignore, so a walk could never pass page 1 — latent, because no rollover list has
-  crossed one page yet. The traversal now sends `offset` and synthesizes the next one from
-  rows served. The resume `cursor` for these resources is the decimal offset a previous result
-  returned; any other string gets a teaching error instead of a silent restart at page 1. A
-  stalled feed (more rows promised, none served) trips the repeat detector and reads as
-  `conflict`. One property of offset paging to know: rows that arrive mid-walk shift the pages,
-  so a long walk can skip or repeat a row — the venue's cursor-paged routes do not have this
-  property. The `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same
-  trap sprung venue-side; venue 0.3.4 fixed it by accepting `cursor` on its five cursor-paged
+- **Multi-page rollover walks work now, on the venue-standard cursor.** Our transport sent a
+  `cursor` param the pre-0.3.4 rollover routes silently ignored, so a walk could never pass
+  page 1 — latent, because no rollover list has crossed one page yet. We briefly moved those
+  three routes to `limit`+`offset` (the only pagination their 0.3.4 contract defined); hours
+  later venue 0.3.5 standardized opaque keyset cursors on every list route, so we returned to
+  `cursor` everywhere — one pagination vocabulary, no offset special case to maintain, and no
+  deprecation debt (0.3.5 deprecates `offset` and flags every rollover response with a
+  `warnings[]` notice our `venue_notice` relay surfaces). Verified against 0.3.5 live: an
+  opaque cursor advances, a malformed cursor is the venue's loud 400, and a numeric cursor
+  from an offset-era response is accepted for one request and upgraded. A venue that promises
+  more rows without a cursor reads as an honest partial (`cursor_absent`), never a loop. The
+  `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same silent-strip trap
+  sprung venue-side; venue 0.3.4 fixed it by accepting `cursor` on its five cursor-paged
   routes, and we verified the full walk live (358 rows, clean termination).
 
 ### Changed

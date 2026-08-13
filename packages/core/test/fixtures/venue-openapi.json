@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.3.4"
+  "version": "0.3.5"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -1174,7 +1174,7 @@
       }
      },
      {
-      "description": "Optional. Number of items to skip",
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -1518,7 +1518,7 @@
       }
      },
      {
-      "description": "Optional. Number of items to skip",
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -1864,7 +1864,7 @@
       }
      },
      {
-      "description": "Optional. Number of items to skip.",
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -11337,6 +11337,7 @@
       }
      },
      {
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -11345,6 +11346,28 @@
        "maximum": 10000,
        "minimum": 0,
        "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy numeric offset cursors are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
+      "in": "query",
+      "name": "nextCursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
       }
      }
     ],
@@ -11607,6 +11630,7 @@
       }
      },
      {
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -11615,6 +11639,28 @@
        "maximum": 10000,
        "minimum": 0,
        "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy numeric offset cursors are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
+      "in": "query",
+      "name": "nextCursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
       }
      }
     ],
@@ -11951,6 +11997,7 @@
       }
      },
      {
+      "description": "Deprecated. Number of items to skip. Use `cursor` instead.",
       "in": "query",
       "name": "offset",
       "required": false,
@@ -11959,6 +12006,28 @@
        "maximum": 10000,
        "minimum": 0,
        "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy numeric offset cursors are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
+      "in": "query",
+      "name": "nextCursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
       }
      }
     ],

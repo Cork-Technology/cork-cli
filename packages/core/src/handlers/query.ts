@@ -10,7 +10,7 @@ import { resolveRollover } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
@@ -432,30 +432,6 @@ export async function collectVenuePages(
   return { complete: false, items, pagesFetched: opts.maxPages, reason: "max_pages", ...(cursor !== undefined ? { nextCursor: cursor } : {}), ...notice };
 }
 
-/** The only cursor shape the offset-paged rollover family can carry on its wire: a decimal row
- *  offset. Shared by the resume-input guard and offsetBridge so both judge by one rule. */
-const DECIMAL_OFFSET = /^\d{1,12}$/;
-
-/** Bridge the opaque-cursor traversal onto the venue's offset-paged rollover lists (the one
- *  family whose openapi defines no cursor param — limit+offset only; an unknown cursor is
- *  silently ignored there, i.e. page 1 forever, verified live on 0.3.4). The cursor IS the
- *  decimal row offset: the venue answers hasMore with a null nextCursor, so the next offset is
- *  synthesized from the rows served. A venue-supplied cursor passes through only when it is
- *  itself a decimal offset — anything else cannot ride this family's wire (Number() of it is
- *  NaN) and is replaced by the synthesized offset; if the family ever moves to opaque cursors,
- *  the stalled walk trips the repeat detector loudly instead of sending garbage. A zero-row
- *  page with hasMore re-synthesizes the same offset the same way — a stalled feed reads as
- *  `cursor_repeated`, never a loop. */
-function offsetBridge(fetchAt: (offset: number) => Promise<VenueList>): (cursor: string | undefined) => Promise<VenueList> {
-  return async (cursor) => {
-    const offset = cursor === undefined ? 0 : Number(cursor);
-    const res = await fetchAt(offset);
-    const venueCursor = typeof res.nextCursor === "string" && DECIMAL_OFFSET.test(res.nextCursor);
-    if ((res.hasMore ?? false) && !venueCursor) return { ...res, nextCursor: String(offset + res.items.length) };
-    return res;
-  };
-}
-
 /** Render venue-side notices as envelope warnings: one `venue_notice` per in-band venue warning
  *  (code + message relayed verbatim under the venue label, length-capped — untrusted text is
  *  data to display, never instructions), plus one `venue_deprecated_path` when the shim served
@@ -531,11 +507,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         }
       } else {
         // flows = the rollover venue; filters.kind picks the feed (orders default). These lists
-        // page by ROW OFFSET (see offsetBridge), so a resume cursor must be the decimal offset
-        // a previous result returned — anything else would silently restart the walk at page 1.
-        if (input.cursor !== undefined && !DECIMAL_OFFSET.test(input.cursor)) {
-          throw new ToolInputError("cork_query", [{ path: ["cursor"], message: `rollover lists page by row offset — pass the decimal offset a previous rollover-orders result returned as nextCursor, not an opaque cursor from another resource (got ${JSON.stringify(input.cursor.slice(0, 40))})` }]);
-        }
+        // paginate on the venue-standard opaque keyset cursor since venue 0.3.5 (a decimal
+        // cursor from an offset-era response is accepted for one request and upgraded; a
+        // malformed cursor is the venue's own loud 400).
         const kind = filters.kind ?? "orders";
         if (kind === "orders") {
           if (filters.orderDigest) {
@@ -543,12 +517,12 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
             traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
           } else {
-            traversal = await collectVenuePages(paging, offsetBridge((offset) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), offset, limit: input.pageSize })));
+            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
           }
         } else if (kind === "fills") {
-          traversal = await collectVenuePages(paging, offsetBridge((offset) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), offset, limit: input.pageSize })));
+          traversal = await collectVenuePages(paging, (cursor) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         } else {
-          traversal = await collectVenuePages(paging, offsetBridge((offset) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), offset, limit: input.pageSize })));
+          traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         }
       }
       // Hybrid's verification leg [K7]: the venue DISCOVERED these rows; the chain now CONFIRMS
