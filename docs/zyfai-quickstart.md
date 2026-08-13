@@ -856,8 +856,12 @@ feed. Details on the read backends, if you want them:
 <details>
 <summary>Read backends and how to force one (expand)</summary>
 
-The venue-backed reads (`orderbook`, `rfqs`, `fills`, `rollover-orders`, `cork-pools`) are served by
-api-phoenix, Cork's indexer. The decentralized paths are `lite-decentralized` (direct RPC chain
+The venue-backed reads (`orderbook`, `rfqs`, `fills`, `rollover-orders`, `cork-pools`,
+`trading-pairs`) are served in `hybrid` mode (renamed from `centralized` 2026-08-13): api-phoenix,
+Cork's indexer, DISCOVERS the rows and the chain CONFIRMS them best-effort — rows carry
+`verification: 'confirmed' | 'unverified'`, rows the chain definitively refutes are dropped with a
+`status_mismatch` warning, and with no RPC every row serves labeled unverified. `ch capabilities
+--topic modes` has the side-by-side. The decentralized paths are `lite-decentralized` (direct RPC chain
 reads — already the default for `cork-pool` / `account-state` / `derive-cork-pool`) and
 `full-decentralized` (HyperSync event scans; needs `ENVIO_API_TOKEN`). Where a resource supports
 more than one backend you can force it with `mode` on `ch query`, and every result's

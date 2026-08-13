@@ -53,6 +53,7 @@ const T = {
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
+  hybridVerify: "packages/core/test/hybrid-verify.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
@@ -396,6 +397,75 @@ const CATALOG: Mutant[] = [
     find: "l.blockNumber !== null && l.transactionHash !== null",
     replace: "l.blockNumber === null && l.transactionHash === null",
     tests: [T.hypersync],
+  },
+  // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────
+  {
+    // The definitive half of the split rule is lost: dead book rows serve as confirmed.
+    id: "hybrid-dead-row-drop-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'if (status.status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
+    replace: 'if (false) drop("on-chain invalidator says filled-or-cancelled");',
+    tests: [T.hybridVerify],
+  },
+  {
+    // The verification budget is lost: every row verifies AND the over-budget slice still
+    // appends — duplicated rows, unbounded RPC cost.
+    id: "hybrid-budget-slice-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "const inBudget = rows.slice(0, HYBRID_VERIFY_BUDGET);",
+    replace: "const inBudget = rows;",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The vocabulary guard is lost: an unknown venue status word reads as a refutation and the
+    // next venue migration deletes valid rollover rows.
+    id: "hybrid-vocabulary-guard-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {',
+    replace: "else if (false) {",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The pools drop gate regresses to keep: a pool no configured PM knows serves as confirmed.
+    id: "hybrid-unknown-pool-drop-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'else drop("no configured pool manager knows this poolId");',
+    replace: 'else keep(row, "confirmed");',
+    tests: [T.hybridVerify],
+  },
+  {
+    // The trading-pairs exists annotation vanishes while the row still claims confirmed.
+    id: "hybrid-pairs-exists-annotation-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'kept.push({ ...row, verification: "confirmed", exists });',
+    replace: 'kept.push({ ...row, verification: "confirmed" });',
+    tests: [T.hybridVerify],
+  },
+  {
+    // The fills match key misaligns: every venue fill fails to match its own log and the whole
+    // feed drops — the comparator must slice the exact 32-byte orderHash word.
+    id: "hybrid-fills-match-key-misaligned",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "0x${l.data.slice(2, 66).toLowerCase()}",
+    replace: "0x${l.data.slice(2, 64).toLowerCase()}",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The no-RPC degradation stops labeling: venue rows serve WITHOUT the unverified marker —
+    // the silent-trust regression the rename exists to prevent.
+    id: "hybrid-norpc-label-lost",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'items: rows.map((r) => label(r, "unverified")),\n      warnings: rows.length > 0',
+    replace: "items: rows,\n      warnings: rows.length > 0",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The rename teaching vanishes: "centralized" becomes a bare enum error with no pointer.
+    id: "hybrid-rename-teaching-lost",
+    file: "packages/schemas/src/teaching.ts",
+    find: 'centralized: "hybrid",',
+    replace: "",
+    tests: [T.venue],
   },
   // ── full-decentralized fills join + trading-pairs derivation (2026-08-12) ─────────────────
   {
