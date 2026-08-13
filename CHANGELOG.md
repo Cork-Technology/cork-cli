@@ -85,7 +85,9 @@ silently.
   rows served. The resume `cursor` for these resources is the decimal offset a previous result
   returned; any other string gets a teaching error instead of a silent restart at page 1. A
   stalled feed (more rows promised, none served) trips the repeat detector and reads as
-  `conflict`. The `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same
+  `conflict`. One property of offset paging to know: rows that arrive mid-walk shift the pages,
+  so a long walk can skip or repeat a row — the venue's cursor-paged routes do not have this
+  property. The `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same
   trap sprung venue-side; venue 0.3.4 fixed it by accepting `cursor` on its five cursor-paged
   routes, and we verified the full walk live (358 rows, clean termination).
 

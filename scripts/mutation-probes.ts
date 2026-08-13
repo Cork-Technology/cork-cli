@@ -485,8 +485,17 @@ const CATALOG: Mutant[] = [
     // coerces to NaN and silently restarts the walk at page 1 instead of teaching.
     id: "rollover-cursor-guard-lost",
     file: "packages/core/src/handlers/query.ts",
-    find: 'if (input.cursor !== undefined && !/^\\d{1,12}$/.test(input.cursor)) {',
+    find: "if (input.cursor !== undefined && !DECIMAL_OFFSET.test(input.cursor)) {",
     replace: "if (false) {",
+    tests: [T.venue],
+  },
+  {
+    // The decimal guard on a VENUE-supplied cursor is lost (the pre-retro bug, recreated): an
+    // opaque venue cursor passes through, and page 2 requests offset=NaN.
+    id: "rollover-venue-cursor-decimal-guard-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'const venueCursor = typeof res.nextCursor === "string" && DECIMAL_OFFSET.test(res.nextCursor);',
+    replace: 'const venueCursor = typeof res.nextCursor === "string" && res.nextCursor.length > 0;',
     tests: [T.venue],
   },
   // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────

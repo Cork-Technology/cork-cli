@@ -398,7 +398,7 @@ type PageTraversal =
 
 /** Walk an opaque venue cursor to exhaustion under a hard page bound — never silently truncating. */
 export async function collectVenuePages(
-  opts: { cursor?: string; pageSize: number; maxPages: number },
+  opts: { cursor?: string; maxPages: number },
   fetchPage: (cursor: string | undefined) => Promise<VenueList>,
 ): Promise<PageTraversal> {
   const items: Array<Record<string, unknown>> = [];
@@ -432,18 +432,25 @@ export async function collectVenuePages(
   return { complete: false, items, pagesFetched: opts.maxPages, reason: "max_pages", ...(cursor !== undefined ? { nextCursor: cursor } : {}), ...notice };
 }
 
+/** The only cursor shape the offset-paged rollover family can carry on its wire: a decimal row
+ *  offset. Shared by the resume-input guard and offsetBridge so both judge by one rule. */
+const DECIMAL_OFFSET = /^\d{1,12}$/;
+
 /** Bridge the opaque-cursor traversal onto the venue's offset-paged rollover lists (the one
  *  family whose openapi defines no cursor param — limit+offset only; an unknown cursor is
  *  silently ignored there, i.e. page 1 forever, verified live on 0.3.4). The cursor IS the
  *  decimal row offset: the venue answers hasMore with a null nextCursor, so the next offset is
- *  synthesized from the rows served; a real venue cursor, if the family ever grows one, wins.
- *  A zero-row page with hasMore re-synthesizes the same offset and trips the traversal's
- *  repeat detector — a stalled feed reads as `cursor_repeated`, never a loop. */
+ *  synthesized from the rows served. A venue-supplied cursor passes through only when it is
+ *  itself a decimal offset — anything else cannot ride this family's wire (Number() of it is
+ *  NaN) and is replaced by the synthesized offset; if the family ever moves to opaque cursors,
+ *  the stalled walk trips the repeat detector loudly instead of sending garbage. A zero-row
+ *  page with hasMore re-synthesizes the same offset the same way — a stalled feed reads as
+ *  `cursor_repeated`, never a loop. */
 function offsetBridge(fetchAt: (offset: number) => Promise<VenueList>): (cursor: string | undefined) => Promise<VenueList> {
   return async (cursor) => {
     const offset = cursor === undefined ? 0 : Number(cursor);
     const res = await fetchAt(offset);
-    const venueCursor = typeof res.nextCursor === "string" && res.nextCursor.length > 0;
+    const venueCursor = typeof res.nextCursor === "string" && DECIMAL_OFFSET.test(res.nextCursor);
     if ((res.hasMore ?? false) && !venueCursor) return { ...res, nextCursor: String(offset + res.items.length) };
     return res;
   };
@@ -481,7 +488,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'hybrid' (venue rows, chain-verified), or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
-    const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), pageSize: input.pageSize, maxPages: input.maxPages };
+    // Page size is NOT the traversal's concern — each fetchPage closure carries its own `limit`;
+    // the traversal only bounds pages and walks cursors.
+    const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), maxPages: input.maxPages };
     try {
       let traversal: PageTraversal;
       if (input.resource === "cork-pools") {
@@ -524,8 +533,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         // flows = the rollover venue; filters.kind picks the feed (orders default). These lists
         // page by ROW OFFSET (see offsetBridge), so a resume cursor must be the decimal offset
         // a previous result returned — anything else would silently restart the walk at page 1.
-        if (input.cursor !== undefined && !/^\d{1,12}$/.test(input.cursor)) {
-          throw new ToolInputError("query", [{ path: ["cursor"], message: `rollover lists page by row offset — pass the decimal offset a previous rollover-orders result returned as nextCursor, not an opaque cursor from another resource (got ${JSON.stringify(input.cursor.slice(0, 40))})` }]);
+        if (input.cursor !== undefined && !DECIMAL_OFFSET.test(input.cursor)) {
+          throw new ToolInputError("cork_query", [{ path: ["cursor"], message: `rollover lists page by row offset — pass the decimal offset a previous rollover-orders result returned as nextCursor, not an opaque cursor from another resource (got ${JSON.stringify(input.cursor.slice(0, 40))})` }]);
         }
         const kind = filters.kind ?? "orders";
         if (kind === "orders") {

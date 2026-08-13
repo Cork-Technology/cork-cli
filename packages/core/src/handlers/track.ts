@@ -283,14 +283,14 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         const hash = ref.toLowerCase();
         // Bounded traversals (F19): a single-page scan could falsely report "no fills" /
         // "not resting" / "not found" for anything beyond page 1.
-        const fillsScan = await collectVenuePages({ pageSize: 100, maxPages: 10 }, (cursor) => getLopFills(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
+        const fillsScan = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopFills(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
         const fills = { items: fillsScan.items };
         // The orderbook endpoint has no orderHash filter — walk the book client-side to
         // recover the maker/makerTraits the invalidator views need.
         let bookRow: Record<string, unknown> | undefined;
         let bookComplete = true;
         try {
-          const book = await collectVenuePages({ pageSize: 100, maxPages: 10 }, (cursor) => getLopOrderbook(deps, { chainId, ...(cursor ? { cursor } : {}), limit: 100 }));
+          const book = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopOrderbook(deps, { chainId, ...(cursor ? { cursor } : {}), limit: 100 }));
           bookComplete = book.complete;
           bookRow = book.items.find((r) => {
             const o = r as Record<string, unknown>;

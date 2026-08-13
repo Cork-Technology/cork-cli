@@ -208,6 +208,36 @@ describe("cork_query venue-backed resources", () => {
       expect(seen.map((s) => new URL(s.url).searchParams.get("offset"))).toEqual(["4"]);
     });
 
+    it("a venue-supplied DECIMAL cursor is honored as the next offset", async () => {
+      // If the venue ever starts echoing a real next offset, it wins over our synthesis.
+      const seen: Seen[] = [];
+      const venueFetch = async (url: string): Promise<Response> => {
+        seen.push({ url, method: "GET" });
+        const offset = Number(new URL(url).searchParams.get("offset") ?? "0");
+        if (offset === 0) return new Response(JSON.stringify({ items: [{ orderDigest: "0xa" }], nextCursor: "3", hasMore: true }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ orderDigest: "0xb" }], nextCursor: null, hasMore: false }), { status: 200 });
+      };
+      const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch });
+      expect(env.state).toBe("ok");
+      expect(seen.map((s) => new URL(s.url).searchParams.get("offset"))).toEqual(["0", "3"]);
+    });
+
+    it("a venue-supplied NON-decimal cursor never reaches the wire — the synthesized offset replaces it", async () => {
+      // An opaque cursor cannot ride an offset wire: Number() of it is NaN. Without the decimal
+      // guard, page 2 would request offset=NaN.
+      const seen: Seen[] = [];
+      const venueFetch = async (url: string): Promise<Response> => {
+        seen.push({ url, method: "GET" });
+        const offset = Number(new URL(url).searchParams.get("offset") ?? "0");
+        if (offset === 0) return new Response(JSON.stringify({ items: [{ orderDigest: "0xa" }, { orderDigest: "0xb" }], nextCursor: "djJ8b3BhcXVl", hasMore: true }), { status: 200 });
+        return new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 });
+      };
+      const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch });
+      expect(env.state).toBe("ok");
+      expect(seen.map((s) => new URL(s.url).searchParams.get("offset"))).toEqual(["0", "2"]);
+      for (const s of seen) expect(s.url).not.toContain("NaN");
+    });
+
     it("a stalled feed (hasMore with zero rows) trips the repeat detector, never loops", async () => {
       const venueFetch = async (): Promise<Response> => new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: true }), { status: 200 });
       const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, pageSize: 2, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch });

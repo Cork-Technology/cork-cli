@@ -588,7 +588,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // Locate the resting order in the venue book under a hard page bound; an exhausted bound
       // fails closed (no false "not found") rather than truncating silently.
       const book = await collectVenuePages(
-        { pageSize: 100, maxPages: action.maxPages },
+        { maxPages: action.maxPages },
         (cursor) => getLopOrderbook(deps, { chainId, limit: 100, ...(cursor ? { cursor } : {}) }),
       );
       const row = book.items.find((item) => {
