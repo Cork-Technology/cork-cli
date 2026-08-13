@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.3.3"
+  "version": "0.3.4"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -136,7 +136,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -1175,7 +1186,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -1508,7 +1530,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -1799,7 +1832,7 @@
       }
      },
      {
-      "description": "Optional. Order status filter \u2014 single value (?status=OPEN) or repeated (?status=OPEN&status=PARTIALLY_FILLED). Filtering by OPEN also returns PARTIALLY_FILLED orders (both are fillable). When omitted, defaults to the fillable book (OPEN + PARTIALLY_FILLED); pass explicit statuses to read terminal rows.",
+      "description": "Optional. Order status filter — single value (?status=OPEN) or repeated (?status=OPEN&status=PARTIALLY_FILLED). Filtering by OPEN also returns PARTIALLY_FILLED orders (both are fillable). When omitted, defaults to the fillable book (OPEN + PARTIALLY_FILLED); pass explicit statuses to read terminal rows.",
       "in": "query",
       "name": "status",
       "required": false,
@@ -1843,7 +1876,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -2433,7 +2477,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -3699,7 +3754,7 @@
   },
   "/registry/v1/{chain_id}/assets": {
    "get": {
-    "description": "Every asset the registry holds. An asset has two NAMED source slots \u2014 a price source and a net-asset-value source \u2014 rather than a list; either may be null. `denomination` is carried on the source itself and returned verbatim.",
+    "description": "Every asset the registry holds. An asset has two NAMED source slots — a price source and a net-asset-value source — rather than a list; either may be null. `denomination` is carried on the source itself and returned verbatim.",
     "parameters": [
      {
       "description": "Page size; values above 500 are clamped to 500.",
@@ -3726,7 +3781,7 @@
       }
      },
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -3754,7 +3809,7 @@
               "type": "string"
              },
              "kind": {
-              "description": "Descriptive only \u2014 value derivation probes `asset()` live rather than trusting this.",
+              "description": "Descriptive only — value derivation probes `asset()` live rather than trusting this.",
               "enum": [
                "ERC20",
                "ERC4626"
@@ -3775,7 +3830,7 @@
                 "type": "string"
                },
                "denomination": {
-                "description": "The registered denomination label this source quotes in, returned verbatim from the chain \u2014 it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
+                "description": "The registered denomination label this source quotes in, returned verbatim from the chain — it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
                 "type": "string"
                },
                "source_interface": {
@@ -3813,7 +3868,7 @@
                 "type": "string"
                },
                "denomination": {
-                "description": "The registered denomination label this source quotes in, returned verbatim from the chain \u2014 it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
+                "description": "The registered denomination label this source quotes in, returned verbatim from the chain — it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
                 "type": "string"
                },
                "source_interface": {
@@ -4141,10 +4196,10 @@
   },
   "/registry/v1/{chain_id}/assets/{address}": {
    "get": {
-    "description": "Get one asset by address. The address alone is the key within a chain \u2014 a registry only holds its own chain's assets.",
+    "description": "Get one asset by address. The address alone is the key within a chain — a registry only holds its own chain's assets.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -4176,7 +4231,7 @@
            "type": "string"
           },
           "kind": {
-           "description": "Descriptive only \u2014 value derivation probes `asset()` live rather than trusting this.",
+           "description": "Descriptive only — value derivation probes `asset()` live rather than trusting this.",
            "enum": [
             "ERC20",
             "ERC4626"
@@ -4245,7 +4300,7 @@
              "type": "string"
             },
             "denomination": {
-             "description": "The registered denomination label this source quotes in, returned verbatim from the chain \u2014 it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
+             "description": "The registered denomination label this source quotes in, returned verbatim from the chain — it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
              "type": "string"
             },
             "source_interface": {
@@ -4283,7 +4338,7 @@
              "type": "string"
             },
             "denomination": {
-             "description": "The registered denomination label this source quotes in, returned verbatim from the chain \u2014 it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
+             "description": "The registered denomination label this source quotes in, returned verbatim from the chain — it is carried on the source itself, so no extra lookup is involved. Resolve it to a unit address through GET /registry/v1/{chain_id}/denominations/{label}.",
              "type": "string"
             },
             "source_interface": {
@@ -4607,7 +4662,7 @@
   },
   "/registry/v1/{chain_id}/denominations": {
    "get": {
-    "description": "What joins the two halves of the registry together: an asset's source names a LABEL, a feed's endpoints are ADDRESSES. `label` is never null \u2014 the registry stores only the hash, so the text is read from the unit's own `symbol()`, with the two seed denominations (USD, ETH) coming from a fixed table because their units are code-less Chainlink pseudo-addresses. The symbol is taken at its word and NOT checked against `label_hash` \u2014 use `label_hash` as the identity. A unit that will not report a symbol returns 503.",
+    "description": "What joins the two halves of the registry together: an asset's source names a LABEL, a feed's endpoints are ADDRESSES. `label` is never null — the registry stores only the hash, so the text is read from the unit's own `symbol()`, with the two seed denominations (USD, ETH) coming from a fixed table because their units are code-less Chainlink pseudo-addresses. The symbol is taken at its word and NOT checked against `label_hash` — use `label_hash` as the identity. A unit that will not report a symbol returns 503.",
     "parameters": [
      {
       "description": "Page size; values above 500 are clamped to 500.",
@@ -4634,7 +4689,7 @@
       }
      },
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -4658,15 +4713,15 @@
             "additionalProperties": false,
             "properties": {
              "label": {
-              "description": "The label as a display name, taken from the unit's symbol() and never null. On the list route this is not verified against label_hash \u2014 prefer label_hash as the identity.",
+              "description": "The label as a display name, taken from the unit's symbol() and never null. On the list route this is not verified against label_hash — prefer label_hash as the identity.",
               "type": "string"
              },
              "label_hash": {
-              "description": "keccak256 of the label bytes \u2014 what the registry actually stores.",
+              "description": "keccak256 of the label bytes — what the registry actually stores.",
               "type": "string"
              },
              "unit": {
-              "description": "The unit address this label names: a token, or a Chainlink pseudo-address such as 0x\u20260348 for US dollars. Lowercased.",
+              "description": "The unit address this label names: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
               "type": "string"
              }
             },
@@ -4941,10 +4996,10 @@
   },
   "/registry/v1/{chain_id}/denominations/{label}": {
    "get": {
-    "description": "Resolve one denomination label to its unit address. Exact bytes, case-sensitive \u2014 the label is never normalised. Unlike the list route this answers from the label itself, so what it returns is always the registry's own truth.",
+    "description": "Resolve one denomination label to its unit address. Exact bytes, case-sensitive — the label is never normalised. Unlike the list route this answers from the label itself, so what it returns is always the registry's own truth.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -4973,11 +5028,11 @@
          "additionalProperties": false,
          "properties": {
           "label": {
-           "description": "The label as a display name, taken from the unit's symbol() and never null. On the list route this is not verified against label_hash \u2014 prefer label_hash as the identity.",
+           "description": "The label as a display name, taken from the unit's symbol() and never null. On the list route this is not verified against label_hash — prefer label_hash as the identity.",
            "type": "string"
           },
           "label_hash": {
-           "description": "keccak256 of the label bytes \u2014 what the registry actually stores.",
+           "description": "keccak256 of the label bytes — what the registry actually stores.",
            "type": "string"
           },
           "meta": {
@@ -5029,7 +5084,7 @@
            "type": "object"
           },
           "unit": {
-           "description": "The unit address this label names: a token, or a Chainlink pseudo-address such as 0x\u20260348 for US dollars. Lowercased.",
+           "description": "The unit address this label names: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
            "type": "string"
           },
           "warnings": {
@@ -5327,7 +5382,7 @@
       }
      },
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -5355,7 +5410,7 @@
               "type": "string"
              },
              "base": {
-              "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x\u20260348 for US dollars. Lowercased.",
+              "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
               "type": "string"
              },
              "feed_decimals": {
@@ -5371,7 +5426,7 @@
               "properties": {
                "answer": {
                 "additionalProperties": false,
-                "description": "The aggregator's latest answer. Its `decimals` is the aggregator's own CURRENT decimals(), which is not necessarily the `feed_decimals` the registry recorded \u2014 comparing the two shows drift.",
+                "description": "The aggregator's latest answer. Its `decimals` is the aggregator's own CURRENT decimals(), which is not necessarily the `feed_decimals` the registry recorded — comparing the two shows drift.",
                 "properties": {
                  "decimals": {
                   "description": "How many decimal places `raw` is scaled by. Always present.",
@@ -5687,7 +5742,7 @@
     "description": "Get one conversion feed by its ordered pair. Direction matters: base to quote and quote to base are different records.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -5728,7 +5783,7 @@
            "type": "string"
           },
           "base": {
-           "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x\u20260348 for US dollars. Lowercased.",
+           "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
            "type": "string"
           },
           "feed_decimals": {
@@ -5744,7 +5799,7 @@
            "properties": {
             "answer": {
              "additionalProperties": false,
-             "description": "The aggregator's latest answer. Its `decimals` is the aggregator's own CURRENT decimals(), which is not necessarily the `feed_decimals` the registry recorded \u2014 comparing the two shows drift.",
+             "description": "The aggregator's latest answer. Its `decimals` is the aggregator's own CURRENT decimals(), which is not necessarily the `feed_decimals` the registry recorded — comparing the two shows drift.",
              "properties": {
               "decimals": {
                "description": "How many decimal places `raw` is scaled by. Always present.",
@@ -6104,7 +6159,7 @@
     "description": "Predict a market's oracle, pool id, and share tokens without deploying. Deploys nothing, signs nothing, and moves no funds. The rate constraint comes from a recipe contract, so the request takes a recipe address and its payload. CAVEAT: while market.exists is false, the pool id and predicted share tokens are conditioned on the oracle's live rate at the returned block and can change block to block until the pool is created; once exists is true they are pinned.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -6126,7 +6181,7 @@
           "type": "string"
          },
          "collateral_asset": {
-          "description": "The collateral asset \u2014 the quote slot of the pair.",
+          "description": "The collateral asset — the quote slot of the pair.",
           "pattern": "^0x[0-9a-fA-F]{40}$",
           "type": "string"
          },
@@ -6141,7 +6196,7 @@
           "type": "string"
          },
          "reference_asset": {
-          "description": "The reference asset \u2014 the base slot of the pair. Must differ from `collateral_asset`.",
+          "description": "The reference asset — the base slot of the pair. Must differ from `collateral_asset`.",
           "pattern": "^0x[0-9a-fA-F]{40}$",
           "type": "string"
          }
@@ -6793,7 +6848,7 @@
     "description": "Get the fixed-rate oracle for a rate. Keyed on a rate rather than on a pair, because a fixed rate is not a fact about any pair. predictFixedRateOracle is a plain view, so this answers before anything is deployed.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -7102,10 +7157,10 @@
   },
   "/registry/v1/{chain_id}/oracles/{mode}/{ca}/{ref}": {
    "get": {
-    "description": "Get the rate oracle for a pair in one mode. Takes a MODE because one pair can hold a price wrapper and a net-asset-value wrapper simultaneously. PREDICTS when the oracle is not deployed, because on the limit-order path the adapter deploys it inside the fill \u2014 so at the moment a caller most wants the address, looking it up returns zero. Prediction simulates deploy rather than re-deriving the address off-chain, so it cannot drift from what the adapter will actually do.",
+    "description": "Get the rate oracle for a pair in one mode. Takes a MODE because one pair can hold a price wrapper and a net-asset-value wrapper simultaneously. PREDICTS when the oracle is not deployed, because on the limit-order path the adapter deploys it inside the fill — so at the moment a caller most wants the address, looking it up returns zero. Prediction simulates deploy rather than re-deriving the address off-chain, so it cannot drift from what the adapter will actually do.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -7159,7 +7214,7 @@
           },
           "legs": {
            "additionalProperties": false,
-           "description": "Which source each side actually resolved to. DERIVED BY THIS SERVICE, not read from the chain \u2014 no view returns it. It is informational only \u2014 the oracle address itself always comes from simulation.",
+           "description": "Which source each side actually resolved to. DERIVED BY THIS SERVICE, not read from the chain — no view returns it. It is informational only — the oracle address itself always comes from simulation.",
            "properties": {
             "collateral": {
              "additionalProperties": false,
@@ -7589,7 +7644,7 @@
   },
   "/registry/v1/{chain_id}/recipes": {
    "get": {
-    "description": "A recipe is an approved CONTRACT ADDRESS implementing IMarketRecipe, not a record keyed by a mode string. Everything except `args` is read live from the recipe, so one registered after this service shipped still appears here and still describes itself \u2014 with args_known false. Note that getRecipes returns nothing until the owner Safe calls addRecipes, so an empty list is a correct answer, not a fault.",
+    "description": "A recipe is an approved CONTRACT ADDRESS implementing IMarketRecipe, not a record keyed by a mode string. Everything except `args` is read live from the recipe, so one registered after this service shipped still appears here and still describes itself — with args_known false. Note that getRecipes returns nothing until the owner Safe calls addRecipes, so an empty list is a correct answer, not a fault.",
     "parameters": [
      {
       "description": "Page size; values above 500 are clamped to 500.",
@@ -7616,7 +7671,7 @@
       }
      },
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -7684,7 +7739,7 @@
                 "type": "array"
                },
                "type": {
-                "description": "The full argument list in standard ABI tuple notation \u2014 the exact string to hand an encoder. `()` means the recipe takes no payload.",
+                "description": "The full argument list in standard ABI tuple notation — the exact string to hand an encoder. `()` means the recipe takes no payload.",
                 "type": "string"
                }
               },
@@ -7696,7 +7751,7 @@
               "type": "object"
              },
              "args_known": {
-              "description": "Whether this service knows what the recipe's payload decodes to. False for a recipe registered after this service shipped \u2014 it is still listed and still resolvable, only its argument names are missing.",
+              "description": "Whether this service knows what the recipe's payload decodes to. False for a recipe registered after this service shipped — it is still listed and still resolvable, only its argument names are missing.",
               "type": "boolean"
              },
              "constants": {
@@ -7741,7 +7796,7 @@
               "type": "boolean"
              },
              "source": {
-              "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode \u2014 a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
+              "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode — a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
               "enum": [
                "price",
                "nav",
@@ -8029,7 +8084,7 @@
     "description": "Get one recipe by address, with its live registration status.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -8101,7 +8156,7 @@
              "type": "array"
             },
             "type": {
-             "description": "The full argument list in standard ABI tuple notation \u2014 the exact string to hand an encoder. `()` means the recipe takes no payload.",
+             "description": "The full argument list in standard ABI tuple notation — the exact string to hand an encoder. `()` means the recipe takes no payload.",
              "type": "string"
             }
            },
@@ -8113,7 +8168,7 @@
            "type": "object"
           },
           "args_known": {
-           "description": "Whether this service knows what the recipe's payload decodes to. False for a recipe registered after this service shipped \u2014 it is still listed and still resolvable, only its argument names are missing.",
+           "description": "Whether this service knows what the recipe's payload decodes to. False for a recipe registered after this service shipped — it is still listed and still resolvable, only its argument names are missing.",
            "type": "boolean"
           },
           "constants": {
@@ -8150,7 +8205,7 @@
            "type": "string"
           },
           "is_registered": {
-           "description": "Read live from isRecipe \u2014 the only membership gate there is.",
+           "description": "Read live from isRecipe — the only membership gate there is.",
            "type": "boolean"
           },
           "meta": {
@@ -8210,7 +8265,7 @@
            "type": "boolean"
           },
           "source": {
-           "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode \u2014 a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
+           "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode — a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
            "enum": [
             "price",
             "nav",
@@ -8492,10 +8547,10 @@
   },
   "/registry/v1/{chain_id}/resolve": {
    "post": {
-    "description": "Ask a recipe what rate limits it would impose on a pair \u2014 a staticcall to recipe.resolve(...), and what a caller uses at order-signing time, because a pool's identity includes its rate constraint. RECIPE-AGNOSTIC: `args` is raw hex passed verbatim, so this works for every recipe that will ever be registered. A POST because the payload is arbitrary bytes.",
+    "description": "Ask a recipe what rate limits it would impose on a pair — a staticcall to recipe.resolve(...), and what a caller uses at order-signing time, because a pool's identity includes its rate constraint. RECIPE-AGNOSTIC: `args` is raw hex passed verbatim, so this works for every recipe that will ever be registered. A POST because the payload is arbitrary bytes.",
     "parameters": [
      {
-      "description": "The chain whose registry to read. Must be one of this deployment's served chains \u2014 see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v1/registries. An unserved chain is a 400 `unknown-chain`.",
       "in": "path",
       "name": "chain_id",
       "required": true,
@@ -8512,12 +8567,12 @@
        "schema": {
         "properties": {
          "args": {
-          "description": "The recipe's payload, raw hex, passed verbatim as additionalData. Build it from GET /registry/v1/{chain_id}/recipes. Omitting it is VALID \u2014 some recipes require an empty payload, and FixedRateRecipe rejects any payload at all.",
+          "description": "The recipe's payload, raw hex, passed verbatim as additionalData. Build it from GET /registry/v1/{chain_id}/recipes. Omitting it is VALID — some recipes require an empty payload, and FixedRateRecipe rejects any payload at all.",
           "pattern": "^0x([0-9a-fA-F]{2})*$",
           "type": "string"
          },
          "collateral_asset": {
-          "description": "The collateral asset \u2014 the quote slot of the pair.",
+          "description": "The collateral asset — the quote slot of the pair.",
           "pattern": "^0x[0-9a-fA-F]{40}$",
           "type": "string"
          },
@@ -8527,12 +8582,12 @@
           "type": "string"
          },
          "recipe": {
-          "description": "The recipe contract. Must pass isRecipe on chain \u2014 that is the only membership gate.",
+          "description": "The recipe contract. Must pass isRecipe on chain — that is the only membership gate.",
           "pattern": "^0x[0-9a-fA-F]{40}$",
           "type": "string"
          },
          "reference_asset": {
-          "description": "The reference asset \u2014 the base slot of the pair.",
+          "description": "The reference asset — the base slot of the pair.",
           "pattern": "^0x[0-9a-fA-F]{40}$",
           "type": "string"
          }
@@ -8760,7 +8815,7 @@
              "type": "object"
             },
             "status": {
-             "description": "`live` when the oracle is already deployed and its rate was read. `predicted` when the address was derived but no contract exists there yet \u2014 the recipe was then handed the zero address, so a recipe with an anchor in its payload falls back to that. `none` when no oracle applies to this recipe.",
+             "description": "`live` when the oracle is already deployed and its rate was read. `predicted` when the address was derived but no contract exists there yet — the recipe was then handed the zero address, so a recipe with an anchor in its payload falls back to that. `none` when no oracle applies to this recipe.",
              "enum": [
               "live",
               "predicted",

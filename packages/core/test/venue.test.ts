@@ -168,6 +168,60 @@ describe("cork_query venue-backed resources", () => {
     expect(seen[1]!.url).toContain("owner=0xc0ffee0000000000000000000000000000000001");
   });
 
+  // The /rollover/v1 lists page by limit+offset — the venue's one non-cursor family (openapi
+  // 0.3.4 defines no cursor param there, and the routes silently ignore an unknown one, serving
+  // page 1 forever — verified live 2026-08-13). offsetBridge makes the opaque-cursor traversal
+  // walk them: the cursor IS the decimal row offset, synthesized because the venue answers
+  // hasMore with a null nextCursor.
+  describe("rollover offset pagination", () => {
+    /** Offset-honoring stub: 5 rows served by limit+offset; nextCursor ALWAYS null (the live shape). */
+    function offsetVenue(seen: Seen[]): HandlerContext {
+      const rows = Array.from({ length: 5 }, (_, i) => ({ orderDigest: `0x${i}`, status: "PENDING" }));
+      const venueFetch = async (url: string): Promise<Response> => {
+        seen.push({ url, method: "GET" });
+        const u = new URL(url);
+        const offset = Number(u.searchParams.get("offset") ?? "0");
+        const limit = Number(u.searchParams.get("limit") ?? "25");
+        const items = rows.slice(offset, offset + limit);
+        return new Response(JSON.stringify({ items, nextCursor: null, hasMore: offset + items.length < rows.length }), { status: 200 });
+      };
+      return { nowSeconds: NOW, resolveRpc: async () => null, venueFetch };
+    }
+
+    it("walks a multi-page rollover list to completion by synthesized offsets, never sending cursor=", async () => {
+      const seen: Seen[] = [];
+      const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, pageSize: 2, format: "concise" }, offsetVenue(seen));
+      expect(env.state).toBe("ok");
+      const data = env.data as { count: number; pagination: { complete: boolean; pagesFetched: number } };
+      expect(data.count).toBe(5);
+      expect(data.pagination.complete).toBe(true);
+      expect(data.pagination.pagesFetched).toBe(3);
+      expect(seen.map((s) => new URL(s.url).searchParams.get("offset"))).toEqual(["0", "2", "4"]);
+      for (const s of seen) expect(new URL(s.url).searchParams.has("cursor")).toBe(false);
+    });
+
+    it("resumes from a decimal offset cursor", async () => {
+      const seen: Seen[] = [];
+      const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, cursor: "4", pageSize: 2, format: "concise" }, offsetVenue(seen));
+      expect(env.state).toBe("ok");
+      expect((env.data as { count: number }).count).toBe(1);
+      expect(seen.map((s) => new URL(s.url).searchParams.get("offset"))).toEqual(["4"]);
+    });
+
+    it("a stalled feed (hasMore with zero rows) trips the repeat detector, never loops", async () => {
+      const venueFetch = async (): Promise<Response> => new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: true }), { status: 200 });
+      const env = await runTool("cork_query", { resource: "rollover-orders", chainId: 42161, pageSize: 2, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch });
+      expect(env.state).toBe("conflict"); // a self-contradicting feed, same as a repeated venue cursor
+      expect(env.warnings.some((w) => w.code === "pagination_incomplete" && w.message.includes("cursor_repeated"))).toBe(true);
+    });
+
+    it("a non-offset resume cursor is refused as invalid input (it would silently restart at page 1)", async () => {
+      await expect(
+        runTool("cork_query", { resource: "rollover-orders", chainId: 42161, cursor: "djJ8b3BhcXVl", pageSize: 25, format: "concise" }, ctxWith([{ match: "/rollover/v1/orders", body: { items: [] } }])),
+      ).rejects.toMatchObject({ name: "ToolInputError" });
+    });
+  });
+
   it("rejects decentralized modes for venue-only resources (explicit, never silent)", async () => {
     const env = await runTool(
       "cork_query",

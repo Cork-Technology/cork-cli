@@ -75,6 +75,20 @@ silently.
   it derives from `MELANGE_SIGNING_KEY` against this file and stops on a mismatch, so the
   trust root can never self-certify.
 
+### Fixed
+
+- **Rollover lists paginate by row offset now, so multi-page walks work.** The three
+  `/rollover/v1` lists are the venue's one offset-paged family (their contract defines no
+  cursor param, verified against venue 0.3.4). We used to send a `cursor` param the routes
+  silently ignore, so a walk could never pass page 1 — latent, because no rollover list has
+  crossed one page yet. The traversal now sends `offset` and synthesizes the next one from
+  rows served. The resume `cursor` for these resources is the decimal offset a previous result
+  returned; any other string gets a teaching error instead of a silent restart at page 1. A
+  stalled feed (more rows promised, none served) trips the repeat detector and reads as
+  `conflict`. The `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same
+  trap sprung venue-side; venue 0.3.4 fixed it by accepting `cursor` on its five cursor-paged
+  routes, and we verified the full walk live (358 rows, clean termination).
+
 ### Changed
 
 - **The registry read-API dependency is removed** (`api-phoenix.cork.tech/registry`, and the

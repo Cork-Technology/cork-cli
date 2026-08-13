@@ -462,6 +462,33 @@ const CATALOG: Mutant[] = [
     replace: "return { logs, archiveHeight: head };",
     tests: [T.hypersync],
   },
+  // ── rollover offset pagination (2026-08-13): the venue's one non-cursor list family ───────
+  {
+    // The synthesized offset stops accumulating: page 2 re-derives the same offset forever —
+    // the exact page-1 loop the venue's silent cursor-strip caused, recreated on our side.
+    id: "rollover-offset-accumulation-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: "return { ...res, nextCursor: String(offset + res.items.length) };",
+    replace: "return { ...res, nextCursor: String(res.items.length) };",
+    tests: [T.venue],
+  },
+  {
+    // The offset param is dropped from the wire: every page silently serves row 0 again.
+    id: "rollover-offset-param-lost",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "source: p.source, offset: p.offset, limit: p.limit",
+    replace: "source: p.source, offset: undefined, limit: p.limit",
+    tests: [T.venue],
+  },
+  {
+    // The resume-cursor shape guard is lost: an opaque cursor pasted from another resource
+    // coerces to NaN and silently restarts the walk at page 1 instead of teaching.
+    id: "rollover-cursor-guard-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'if (input.cursor !== undefined && !/^\\d{1,12}$/.test(input.cursor)) {',
+    replace: "if (false) {",
+    tests: [T.venue],
+  },
   // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────
   {
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.
