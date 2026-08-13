@@ -319,6 +319,9 @@ jobs:
             git -C site rm -rf --quiet . 2>/dev/null || true
           }
           mkdir -p site/apk/x86_64 site/apk/aarch64
+          # Pages serves this branch raw. Without .nojekyll, Pages runs Jekyll over the tree,
+          # and Jekyll's Liquid pass rejects literal {% sequences in any markdown it finds.
+          touch site/.nojekyll
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
