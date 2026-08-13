@@ -6,83 +6,88 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
-## [0.3.0-rc.1] — unreleased (staged; the line break is the mode rename below)
+## [0.3.0-rc.1] — 2026-08-13
 
-**New line (0.2 → 0.3), declared by the integrability owner 2026-08-13 under policy R10/R11:**
-the data-mode value `centralized` is RENAMED to `hybrid` — a covered-surface break (mode is an
-input enum and a provenance value). The old value answers with a "was renamed to hybrid"
-teaching error; nothing old silently works, and nothing old silently breaks.
+**New line (0.2 → 0.3), declared by the integrability owner 2026-08-13 under policy R10/R11.**
+We renamed the data-mode value `centralized` to `hybrid`. Mode is an input enum and a provenance
+value, so the rename breaks covered surface and starts a new minor line. The old value gets a
+teaching error that names the new value. Nothing old works silently, and nothing old breaks
+silently.
 
 ### Changed (breaking)
 
-- **`centralized` → `hybrid`, and the mode earns the new name.** Venue-backed list reads now
-  run a chain-verification leg over the same readers the lite-decentralized paths use (one
-  implementation, two consumers): the book against the LOP invalidator, pools against
-  `market()` on every configured pool-manager generation, fills against their `OrderFilled`
-  logs, rollover orders against the settler's `orderStatus`. Rows carry
-  `verification: 'confirmed' | 'unverified'`; rows the chain definitively refutes are DROPPED
-  and counted (`status_mismatch` [K7]); indeterminate rows — transport failures, rows beyond
-  the 50-row `verification_budget`, unknown status vocabulary — stay, labeled. trading-pairs
-  rows are never dropped: the venue is the authority on what is LISTED, and chain existence
-  rides as an `exists` annotation (a JIT order legitimately lists a pre-pool pair). With no
-  RPC, every row serves labeled unverified — the old behavior, demoted and disclosed. rfqs are
-  hybrid's one unverifiable family, said in `data.note`. `provenance.mode` says `hybrid`.
+- **`centralized` is now `hybrid`, and the mode earns the name.** Venue-backed list reads now
+  run a chain-verification leg. The leg calls the same chain readers that lite-decentralized
+  mode uses — one implementation, two consumers. The book verifies against the LOP invalidator.
+  Pools verify against `market()` on every configured pool-manager generation. Fills verify
+  against their `OrderFilled` logs. Rollover orders verify against the settler's `orderStatus`.
+  Each row carries `verification: 'confirmed' | 'unverified'`. A row the chain refutes drops
+  and is counted (`status_mismatch` [K7]). An indeterminate row stays, labeled: transport
+  failures, rows past the 50-row `verification_budget`, and unknown status vocabulary are
+  indeterminate, never refutations. trading-pairs rows never drop — the venue is the authority
+  on what is listed, and chain existence rides as an `exists` annotation, because a JIT order
+  can list a pair before its pool exists. With no RPC, every row serves labeled unverified: the
+  old behavior, now disclosed. rfqs stay unverifiable, and `data.note` says so.
+  `provenance.mode` reports `hybrid`.
 
 ### Added
 
-- **`modes` doc topic** (aliases `data-modes`, `backends`): the side-by-side of the three data
-  modes as connectivity pledges — hybrid (venue + your RPC), lite-decentralized (your RPC
-  only), full-decentralized (RPC + HyperSync, never the venue) — with hybrid's per-resource
-  verification matrix and the choosing rule.
+- **`modes` doc topic** (aliases `data-modes`, `backends`). It shows the three data modes side
+  by side as connectivity pledges: hybrid contacts the venue and your RPC; lite-decentralized
+  contacts your RPC only; full-decentralized contacts your RPC and HyperSync, never the venue.
+  It carries hybrid's per-resource verification matrix and the choosing rule.
 - **Incremental scan cursors for full-decentralized reads.** Each scan persists its decoded
   pre-filter rows and an archive watermark (`~/.cache/cork-helper-cli/scan-cache.json`,
-  override `CORK_SCAN_CACHE_FILE`); the next call re-scans only a 200-block reorg overlap plus
-  the new range. Partial backfills are never written back and oversized row sets are never
-  cached — the cache may only make a read cheaper, never change it.
-- **Tokenless windowed-getLogs fallback.** Without an Envio token, full-decentralized serves
-  via bounded `eth_getLogs` windows over the resolved RPC (disclosed as
-  `logs_windowed_fallback`; a capped walk discloses `pagination_incomplete`) instead of
-  refusing. A set-but-broken token still fails honestly, and the whitelist replay never uses
-  the fallback — membership needs full history.
-- The `contracts_version` label-parity check returns to the live suite as a best-effort venue
-  cross-check: the label is venue vocabulary, so the venue's registry module is its legitimate
-  arbiter (unreachable → skip).
-
-- **`taker-fill` accepts an inline `signedOrder` — the venue-free fill path.** The caller
-  supplies the order, signature, and extension (the exact shape `finalize-maker-order`'s
-  submitInput carries, or bytes the maker handed over), and the venue is not contacted at all:
-  a flaky book or a dropped row can no longer block a fill of bytes in hand. Verification
-  meets the venue path's bar and adds what the venue used to check at post time: a local
-  re-hash against the claimed `orderHash`, the salt↔extension binding OrderLib enforces at
-  fill, and the maker signature verified the way the fill verifies it — EOA by ecrecover,
-  contract makers by the same ERC-1271 staticcall. The on-chain liveness pre-flight still
-  runs. Both acquisition paths share one tail, pinned byte-identical by a parity test.
-- **`trading-pairs` serves `full-decentralized`**: one pair row per created pool, derived from
-  pool-creation events (every Cork order carries the pool's cST on one side by construction).
+  override `CORK_SCAN_CACHE_FILE`). The next call re-scans a 200-block reorg overlap plus the
+  new range only. Partial backfills are never written back. Oversized row sets are never
+  cached. The cache may only make a read cheaper, never change it.
+- **Tokenless windowed-getLogs fallback.** Without an Envio token, full-decentralized now
+  serves through bounded `eth_getLogs` windows over the resolved RPC instead of refusing. The
+  result discloses `logs_windowed_fallback`; a capped walk discloses `pagination_incomplete`.
+  A set-but-broken token still fails honestly. The whitelist replay never uses the fallback —
+  membership needs the full history.
+- **The `contracts_version` label-parity check returns to the live suite.** The label is venue
+  vocabulary, so the venue's registry module is its legitimate arbiter. The check is
+  best-effort: when the venue is unreachable, the test skips.
+- **`taker-fill` accepts an inline `signedOrder` — the venue-free fill path.** You supply the
+  order, signature, and extension: the exact shape that `finalize-maker-order`'s submitInput
+  carries, or bytes the maker handed over. The venue is not contacted. A flaky book or a
+  dropped row can no longer block a fill of bytes in hand. Verification meets the venue path's
+  bar and adds what the venue used to check at post time: a local re-hash against the claimed
+  `orderHash`, the salt↔extension binding that OrderLib enforces at fill, and the maker
+  signature verified the way the fill verifies it — EOA by ecrecover, contract makers by the
+  same ERC-1271 staticcall. The on-chain liveness pre-flight still runs. Both acquisition
+  paths share one tail, and a parity test pins them byte-identical.
+- **`trading-pairs` serves `full-decentralized`.** One pair row per created pool, derived from
+  pool-creation events; every Cork order carries the pool's cST on one side by construction.
   The honest-subset note names what is absent: the venue's listing metadata is off-chain.
 - **The `full-decentralized` fills feed is now Cork-scoped.** Without an `orderHash` filter it
   used to return the whole 1inch LOP with a "NOT Cork-scoped" warning. It now joins fills to
-  Cork by same-transaction share-token movement (JIT creations included — the mint is a
-  Transfer from the zero address in that transaction): rows carry the `poolIds` their
-  transaction touched, `filters.poolId` scopes the join, the scan starts at the first pool's
-  creation block instead of genesis, and a chain with no pools answers an honestly empty feed.
-  Cost disclosed: the join runs three scans (pools, share-token transfers, fills) instead of
-  one. A transaction that fills an unrelated 1inch order AND moves a Cork share token would
-  also match — the note says so.
+  Cork by same-transaction share-token movement. JIT creations are included — the mint is a
+  Transfer from the zero address in the same transaction. Rows carry the `poolIds` their
+  transaction touched. `filters.poolId` scopes the join. The scan starts at the first pool's
+  creation block, not genesis. A chain with no pools answers an honestly empty feed. The cost
+  is disclosed: the join runs three scans (pools, share-token transfers, fills) instead of
+  one. A transaction that fills an unrelated 1inch order AND moves a Cork share token also
+  matches — the note says so.
+- **The apk signing public key is committed** (`packaging/melange.rsa.pub`). You can now verify
+  apk and APKINDEX signatures against a key in the tree. The release pipeline compares the key
+  it derives from `MELANGE_SIGNING_KEY` against this file and stops on a mismatch, so the
+  trust root can never self-certify.
 
 ### Changed
 
-- **The registry read-API dependency is removed** (`api-phoenix.cork.tech/registry`; the
+- **The registry read-API dependency is removed** (`api-phoenix.cork.tech/registry`, and the
   `CORK_MARKET_API` override with it). Its only consumer was the live parity suite, which used
   it as the external reference for our chain-native registry reads. The suite now carries an
-  independent raw-read reference instead: its own minimal ABI declarations, one-shot enumeration
-  reads cross-checking our pagination, the registry's `predictFixedRateOracle` view plus a code
-  existence probe cross-checking our deploy simulation, a raw `recipe.resolve` staticcall
-  compared wei-for-wei, an independent Market-tuple re-encode of the poolId, and label→labelHash
-  re-hashing. All fifteen live tests pass against Arbitrum with zero requests to the service.
-  One check retired with the dependency: the API's free-form `contracts_version` label lost its
-  external arbiter for a day — this release restores it as the deliberate best-effort venue
-  cross-check described under Added.
+  independent raw-read reference: its own minimal ABI declarations; one-shot enumeration reads
+  that cross-check our pagination; the registry's `predictFixedRateOracle` view plus a code
+  existence probe that cross-check our deploy simulation; a raw `recipe.resolve` staticcall
+  compared wei-for-wei; an independent Market-tuple re-encode of the poolId; and
+  label→labelHash re-hashing. All fifteen live tests pass against Arbitrum with zero requests
+  to the service. One check retired with the dependency: the free-form `contracts_version`
+  label lost its external arbiter for a day. This release restores it as the best-effort venue
+  cross-check under Added.
 
 ## [0.2.0-rc.2] — 2026-08-12
 
