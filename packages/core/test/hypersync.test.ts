@@ -665,10 +665,10 @@ describe("cork_query whitelisted-addresses (event replay over HyperSync)", () =>
     expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(true);
   });
 
-  it("centralized mode is structurally rejected (the venue has no whitelist endpoint)", async () => {
+  it("hybrid mode is structurally rejected (the venue has no whitelist endpoint)", async () => {
     const env = await runTool(
       "cork_query",
-      { resource: "whitelisted-addresses", chainId: 42161, mode: "centralized", pageSize: 25, format: "concise" },
+      { resource: "whitelisted-addresses", chainId: 42161, mode: "hybrid", pageSize: 25, format: "concise" },
       { nowSeconds: NOW, hyperSync: wlSource([]) },
     );
     expect(env.state).toBe("unavailable");

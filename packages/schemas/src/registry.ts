@@ -45,7 +45,7 @@ export const REGISTRY = [
     cliPath: ["query"],
     phase: 1,
     description:
-      "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-backed (centralized): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
+      "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped [K7]. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     input: QueryInput,
     output: Envelope,

@@ -70,6 +70,13 @@ export function venueChainConsistent(venueStatus: string, chain: string): boolea
   return allowed ? (allowed as string[]).includes(chain) : false;
 }
 
+/** Whether the venue status word is one this table KNOWS. An unknown word is INDETERMINATE, not
+ *  a refutation — the venue grows vocabulary (observed: the 0.3.3 premium migration), and
+ *  treating a new word as a lie would drop valid rows. */
+export function knownVenueStatus(venueStatus: string): boolean {
+  return CONSISTENT[venueStatus.toUpperCase()] !== undefined;
+}
+
 // ── Logs endpoint resolution ─────────────────────────────────────────────────
 
 /** A logs-capable endpoint plus how to authenticate to it. `bearerToken`, when present, is sent as

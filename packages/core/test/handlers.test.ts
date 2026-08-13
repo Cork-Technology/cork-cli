@@ -424,7 +424,7 @@ describe("input hardening + format semantics", () => {
   });
 
   it("query data mode: unsupported modes fail loudly; chain results are labeled", async () => {
-    const gated = await runTool("cork_query", { resource: "cork-pool", mode: "centralized", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const gated = await runTool("cork_query", { resource: "cork-pool", mode: "hybrid", pageSize: 25, format: "concise", filters: { poolId: POOL } }, { nowSeconds: NOW, resolveRpc: async () => null });
     expect(gated.state).toBe("unavailable");
     expect(gated.warnings[0]?.code).toBe("mode_unavailable");
 

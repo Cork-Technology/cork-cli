@@ -120,6 +120,65 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
     searchText:
       "sign signing execute broadcast send raw transaction eth_sendRawTransaction eth_signTransaction eth_signTypedData_v4 wallet client-side signature unsigned artifact next steps complete finish submit on-chain typed data how do i execute this prepared bundle",
   },
+  modes: {
+    name: "modes",
+    aliases: ["data-modes", "backends", "hybrid", "data-mode"],
+    summary:
+      "Three data modes, each a CONNECTIVITY PLEDGE about which external parties a call may contact, forming a trust ladder. hybrid (the default for list resources; renamed from 'centralized' 2026-08-13): the venue DISCOVERS rows and the chain CONFIRMS them best-effort — rows carry verification:'confirmed'|'unverified', rows the chain definitively refutes are DROPPED with a status_mismatch warning [K7], and with no RPC every row serves labeled 'unverified'. lite-decentralized (the default for chain-state resources): direct RPC point reads, YOUR RPC only, nothing else contacted. full-decentralized: chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue — the only mode that can make completeness/absence claims. Omit mode to get each resource's natural backend; hints prove presence, never absence.",
+    body: `# Data modes — the side-by-side
+
+A mode name is a CONNECTIVITY PLEDGE: it states which external parties the call may contact.
+Merges may add trust inside a pledge; they never add parties to one. That is why verification
+merged INTO the venue mode (strictly more trust for its users) and why lite-decentralized will
+never gain a venue call (its users chose it for the venue's absence).
+
+| | hybrid (default for lists) | lite-decentralized | full-decentralized |
+|---|---|---|---|
+| Question shape | enumeration: "what exists / what happened?" | point state: "what is X, which I can name?" | enumeration WITHOUT the venue (audit, absence claims) |
+| Discovery | the venue (api-phoenix) | none — caller names the identifier | chain events (HyperSync archive + live RPC tail) |
+| Truth | chain point-reads confirm each consequential row | the chain directly | the chain directly |
+| Parties contacted | venue + your RPC | your RPC only | your RPC + HyperSync, never the venue |
+| Needs | nothing (committed default RPCs) | nothing | ENVIO_HYPERSYNC_TOKEN (or ENVIO_API_TOKEN) |
+| Venue down | lists unavailable | unaffected | unaffected |
+| RPC down | venue rows serve, every one labeled verification:'unverified' | unavailable | HyperSync backfill only (no live tail) |
+| Can claim absence? | NO — hints prove presence, never absence | n/a | YES (complete scans; partial scans disclose pagination_incomplete) |
+
+## hybrid's per-resource verification matrix
+
+Every verification leg calls the SAME chain-read code lite-decentralized serves — one
+implementation, two consumers. The split rule: a row the chain DEFINITIVELY refutes is DROPPED
+(counted in data.verification.dropped + a status_mismatch warning); an INDETERMINATE row
+(transport failure, page beyond the verification budget, unparseable row, vocabulary neither
+side knows) is KEPT, labeled verification:'unverified'.
+
+- orderbook — each row's order is re-hashed locally [K3] and its 1inch invalidator read: a
+  filled-or-cancelled order is dropped (the venue has listed dead rows before — observed live
+  2026-08-06); a row that does not hash to its own claimed orderHash is dropped.
+- cork-pools — market(poolId) across EVERY configured pool-manager generation: a pool no PM
+  knows is dropped.
+- trading-pairs — NEVER dropped: the venue is the authority on what is LISTED, and a JIT order
+  legitimately lists a pair whose pool is created at fill time; chain existence rides as an
+  exists annotation instead.
+- fills — the OrderFilled log is confirmed at the row's claimed block (clustered getLogs, a few
+  bounded range reads per page): a missing log drops the row.
+- rollover-orders kind=orders — the settler's own orderStatus view arbitrates the claimed
+  lifecycle; a contradiction drops the row; unknown status vocabulary (either side) is
+  indeterminate, kept as 'unverified'.
+- rfqs (and rollover fills/contracts rows) — no per-row on-chain footprint here: rows serve
+  venue-claimed with a note; reconcile a specific rollover digest with cork_track.
+
+Budget: pages up to 50 rows verify fully; larger pages verify the newest 50 and label the rest
+'unverified' with a verification_budget warning — lower pageSize for full coverage.
+
+## Choosing
+
+Default (omit mode): state resources answer over your RPC alone; list resources answer hybrid.
+Reach for lite-decentralized as an explicit RPC-only pledge; reach for full-decentralized when
+you must NOT trust the venue's selection of rows (auditing what it omitted) or need absence
+claims. When indexer and chain disagree, chain wins — everywhere [K7].`,
+    searchText:
+      "data mode modes backend backends hybrid centralized lite-decentralized full-decentralized venue verified verification trust pledge which mode should i use rpc only hypersync envio token offline degradation unverified confirmed dropped rows chain outranks venue absence completeness",
+  },
   units: {
     name: "units",
     aliases: ["scales", "decimals", "wad", "fixed-point"],

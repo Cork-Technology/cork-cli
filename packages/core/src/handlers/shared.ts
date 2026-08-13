@@ -200,7 +200,7 @@ export function envelope(args: {
   warnings?: Array<{ code: string; message: string }>;
   rpc?: { source: "explicit" | "default" | "chainlist"; host: string };
   /** Explicit data-mode override (e.g. HyperSync-served raw logs = full-decentralized). */
-  mode?: "lite-decentralized" | "centralized" | "full-decentralized";
+  mode?: "lite-decentralized" | "hybrid" | "full-decentralized";
   ctx: HandlerContext;
 }): Envelope {
   const data = jsonSafe(args.data);
@@ -214,13 +214,14 @@ export function envelope(args: {
     provenance: {
       source: args.source,
       // Every backed result states its data mode [R1/§7]: chain reads go over RPC =
-      // lite-decentralized; venue-backed reads/writes (api-phoenix) = centralized.
-      // full-decentralized (HyperSync) is rejected explicitly at the handler gate.
+      // lite-decentralized; venue-backed reads/writes (api-phoenix) = hybrid (venue-discovered,
+      // chain-verified best-effort; renamed from "centralized" 2026-08-13).
+      // full-decentralized (HyperSync) is passed explicitly by its handler.
       ...(args.mode
         ? { mode: args.mode }
         : {
             ...(args.source === "chain" ? { mode: "lite-decentralized" as const } : {}),
-            ...(args.source === "indexer" || args.source === "service" ? { mode: "centralized" as const } : {}),
+            ...(args.source === "indexer" || args.source === "service" ? { mode: "hybrid" as const } : {}),
           }),
       chainId: args.chainId,
       fetchedAt: nowIso(args.ctx),

@@ -107,9 +107,9 @@ export const ChainId = z
 export type ChainId = z.infer<typeof ChainId>;
 
 export const DataMode = z
-  .enum(["centralized", "lite-decentralized", "full-decentralized"])
+  .enum(["hybrid", "lite-decentralized", "full-decentralized"])
   .describe(
-    "explicit data mode; never silent-fallback [RFC §7]. centralized=venue API (api-phoenix); lite-decentralized=direct RPC chain reads (default for chain resources); full-decentralized=HyperSync event scans (needs ENVIO_API_TOKEN). Omit to let the resource pick its natural mode",
+    "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side",
   );
 export type DataMode = z.infer<typeof DataMode>;
 

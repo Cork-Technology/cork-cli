@@ -12,9 +12,10 @@ import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { parseQueryFilters, type QueryFilters } from "./filters.ts";
+import { HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 
-/** Venue-backed resources (centralized mode) vs live-chain resources (lite-decentralized). */
+/** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
 
 /** One event-derived resource's scan, shared by the HyperSync backfill AND the live-tail RPC merge
@@ -157,9 +158,9 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
     input.resource === "orderbook"
       ? "'orderbook' cannot be served in full-decentralized mode: resting orders live only at the venue (signed-but-unfilled orders emit no events, by design)"
       : input.resource === "rfqs"
-        ? "'rfqs' cannot be served in full-decentralized mode: RFQ requests and answers are off-chain venue JSON that never binds and emits no events, by design — omit mode or use 'centralized'"
+        ? "'rfqs' cannot be served in full-decentralized mode: RFQ requests and answers are off-chain venue JSON that never binds and emits no events, by design — omit mode or use 'hybrid'"
         : input.resource === "rollover-orders" && kind === "orders"
-        ? "flows kind='orders' cannot be served in full-decentralized mode: pre-commitment rollover orders emit no events; use kind='fills' or kind='contracts', or centralized mode for the order feed"
+        ? "flows kind='orders' cannot be served in full-decentralized mode: pre-commitment rollover orders emit no events; use kind='fills' or kind='contracts', or hybrid mode for the order feed"
         : null;
   if (structural) return unavailable(chainId, "mode_unavailable", structural, ctx);
 
@@ -187,7 +188,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),
           key: (row) => `pair:${String(row.poolId).toLowerCase()}`,
         };
-        note = "derived from pool-creation events: the pairs that CAN trade (each pool's corkSwapToken against its collateralAsset). The venue's listing metadata (resting depth, premium annotations) is off-chain and not represented — use centralized mode for the listed view";
+        note = "derived from pool-creation events: the pairs that CAN trade (each pool's corkSwapToken against its collateralAsset). The venue's listing metadata (resting depth, premium annotations) is off-chain and not represented — use hybrid mode for the listed view";
       }
     } else if (input.resource === "fills") {
       const lop = LOP_ADDRESSES[chainId];
@@ -273,7 +274,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
             }),
           key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
         };
-        note = `Cork-scoped by same-transaction share-token movement across ${String(poolCount)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or centralized mode for the venue's own feed`;
+        note = `Cork-scoped by same-transaction share-token movement across ${String(poolCount)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or hybrid mode for the venue's own feed`;
       }
     } else {
       // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
@@ -419,10 +420,10 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     if (input.mode === "full-decentralized") {
       return handleQueryHyperSync(input, filters, chainId, ctx);
     }
-    // Default/centralized: the as-built venue (api-phoenix). Mode is explicit, never a silent
-    // substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
-    if (input.mode !== undefined && input.mode !== "centralized") {
-      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'centralized', or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
+    // Default/hybrid: venue-DISCOVERED rows, chain-VERIFIED best-effort. Mode is explicit,
+    // never a silent substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
+    if (input.mode !== undefined && input.mode !== "hybrid") {
+      return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'hybrid' (venue rows, chain-verified), or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
     const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), pageSize: input.pageSize, maxPages: input.maxPages };
@@ -481,6 +482,12 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         }
       }
+      // Hybrid's verification leg [K7]: the venue DISCOVERED these rows; the chain now CONFIRMS
+      // them through the same readers lite-decentralized serves (one implementation, two
+      // consumers). null = a resource with no on-chain footprint (rfqs; rollover fills/contracts
+      // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
+      const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items });
+      const items = verification ? verification.items : traversal.items;
       return envelope({
         // A merely-partial read is honest evidence (state ok + warning); only a self-contradicting
         // venue cursor (repeated) is a conflict.
@@ -488,8 +495,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         data: {
           resource: input.resource,
           ...(input.resource === "rollover-orders" ? { kind: filters.kind ?? "orders" } : {}),
-          count: traversal.items.length,
-          items: traversal.items,
+          count: items.length,
+          items,
+          ...(verification
+            ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
+            : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),
           pagination: {
             complete: traversal.complete,
             pagesFetched: traversal.pagesFetched,
@@ -506,6 +516,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           ...(traversal.complete
             ? []
             : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }]),
+          ...(verification ? verification.warnings : []),
           ...venueNoticeWarnings(traversal),
         ],
         ctx,
@@ -707,7 +718,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
  * isMarketWhitelisted views [K7: chain outranks any derivation, including our own].
  */
 async function handleQueryWhitelistedAddresses(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
-  if (input.mode === "centralized") {
+  if (input.mode === "hybrid") {
     return unavailable(chainId, "mode_unavailable", "'whitelisted-addresses' is chain-event-derived; the venue has no whitelist endpoint — omit mode or use 'full-decentralized'", ctx);
   }
   if (input.mode === "lite-decentralized") {

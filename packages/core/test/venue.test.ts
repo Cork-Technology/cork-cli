@@ -92,7 +92,7 @@ function ctxWith(routes: Array<{ match: string; status?: number; body: unknown }
 }
 
 describe("cork_query venue-backed resources", () => {
-  it("markets routes to /pools and labels provenance.mode centralized", async () => {
+  it("markets routes to /pools and labels provenance.mode hybrid", async () => {
     const seen: Seen[] = [];
     const env = await runTool(
       "cork_query",
@@ -100,7 +100,7 @@ describe("cork_query venue-backed resources", () => {
       ctxWith([{ match: "/pools/v1", body: { items: [{ poolId: "0xabc", chainId: 42161 }] } }], seen),
     );
     expect(env.state).toBe("ok");
-    expect(env.provenance.mode).toBe("centralized");
+    expect(env.provenance.mode).toBe("hybrid");
     expect(env.provenance.source).toBe("indexer");
     expect((env.data as { count: number }).count).toBe(1);
     expect(seen[0]!.url).toContain("/pools/v1?chainId=42161");
@@ -178,10 +178,15 @@ describe("cork_query venue-backed resources", () => {
     expect(env.warnings[0]?.code).toBe("mode_unavailable");
   });
 
-  it("still rejects centralized mode for live chain reads", async () => {
+  it("still rejects hybrid mode for live chain reads; 'centralized' teaches its rename", async () => {
+    const renamed = await runTool("cork_query", { resource: "cork-pool", chainId: 1, mode: "centralized", filters: { poolId: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" }, { nowSeconds: NOW }).then(
+      () => undefined,
+      (err: unknown) => err as { teaching?: { issues: Array<{ suggestion?: string }> } },
+    );
+    expect(renamed?.teaching?.issues.map((i) => i.suggestion)).toContain('"centralized" was renamed to "hybrid"');
     const env = await runTool(
       "cork_query",
-      { resource: "cork-pool", chainId: 1, mode: "centralized", filters: { poolId: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
+      { resource: "cork-pool", chainId: 1, mode: "hybrid", filters: { poolId: `0x${"ab".repeat(32)}` }, pageSize: 25, format: "concise" },
       ctxWith([]),
     );
     expect(env.state).toBe("unavailable");
@@ -260,7 +265,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     expect(d.accepted).toBe(true);
     expect(d.replay).toBe(false);
     expect(d.orderDigest).toBe(captured);
-    expect(env.provenance.mode).toBe("centralized");
+    expect(env.provenance.mode).toBe("hybrid");
   });
 
   it("rollover-order: TAMPERED intent (nonce changed) → conflict, NOT relayed", async () => {
@@ -529,7 +534,7 @@ describe("cork_track reconcile via venue lifecycle", () => {
     expect(d.kind).toBe("rollover-order");
     expect(d.lifecycle).toBe("PARTIALLY_FILLED");
     expect(env.warnings[0]?.code).toBe("venue_reported");
-    expect(env.provenance.mode).toBe("centralized");
+    expect(env.provenance.mode).toBe("hybrid");
   });
 
   it("unknown to rollover venue → falls through to LOP fills; nothing anywhere → order_not_found", async () => {
@@ -856,7 +861,7 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
       ctxWith([{ match: "/rfqs/v1?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
     );
     expect(env.state).toBe("ok");
-    expect(env.provenance.mode).toBe("centralized");
+    expect(env.provenance.mode).toBe("hybrid");
     expect((env.data as { count: number }).count).toBe(1);
     const url = seen[0]!.url;
     expect(url).toContain("chain_id=42161");
@@ -1001,7 +1006,9 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     );
     expect(env.state).toBe("ok");
     expect(pgOf(env).complete).toBe(true);
-    expect(env.warnings).toEqual([]);
+    // The only warning is hybrid's no-RPC verification label (this ctx has no chain stub) —
+    // no pagination warning may appear on a complete one-page read.
+    expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(false);
   });
 
   it("hasMore:true but no cursor to continue → incomplete (cursor_absent), disclosed not hidden", async () => {

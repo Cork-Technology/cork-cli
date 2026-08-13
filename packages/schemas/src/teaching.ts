@@ -63,6 +63,7 @@ export const RENAMED_VALUES: Record<string, string> = {
   "markets": "cork-pools", // cork_query resource (taxonomy rename 2026-08-09)
   "derive-market": "derive-cork-pool", // cork_query resource (taxonomy rename 2026-08-09)
   "limit-order-markets": "trading-pairs", // cork_query resource (taxonomy rename 2026-08-09: LOP pair listings)
+  centralized: "hybrid", // data mode (renamed 2026-08-13: venue-discovered rows are now chain-verified best-effort — the mode stopped being purely centralized the day verification landed)
 };
 
 /** Suggest the closest member of a closed value set for a likely typo (≤40% edit distance). */
