@@ -104,12 +104,25 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
 
   it("the configured registry address answers registry views on-chain (identity check)", async () => {
     const { registry, contractsVersion, client } = await ref42161();
-    // The contracts-release label is config-declared and free-form; the retired API was its
-    // only external arbiter (relabels "2.1.0"→"0.3.0"→"0.3.2"→"0.3.3" all happened there).
-    // What remains checkable is presence + that the ADDRESS behaves as a populated registry.
+    // The contracts-release label is free-form VENUE vocabulary (relabels "2.1.0"→"0.3.0"→
+    // "0.3.2"→"0.3.3" all happened there), so the venue's registry module is its LEGITIMATE
+    // arbiter — re-added 2026-08-13 as the one deliberate best-effort venue check in this
+    // suite: unreachable → skip, never fail (the SUBSTANCE of registry identity is guarded
+    // harder by the approvedImplementations codehash allowlist).
     expect(contractsVersion).toBeDefined();
     const [, total] = await client.readContract({ address: registry, abi: refAbi, functionName: "getAssets", args: [0n, 1n] });
     expect(total).toBeGreaterThan(0n);
+    try {
+      const res = await fetch("https://api-phoenix.cork.tech/registry/v1/registries");
+      if (res.ok) {
+        const api = (await res.json()) as { registries: Array<{ chain_id: number; registry: string; contracts_version: string }> };
+        const row = api.registries.find((r) => r.chain_id === 42161);
+        expect(row?.registry.toLowerCase()).toBe(registry.toLowerCase());
+        expect(row?.contracts_version).toBe(contractsVersion);
+      }
+    } catch {
+      /* venue unreachable — the label stays config-declared for this run */
+    }
   }, 30_000);
 
   it("registry-assets matches a raw one-shot getAssets read (same address set)", async () => {

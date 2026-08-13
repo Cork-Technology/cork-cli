@@ -7,12 +7,13 @@ import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abi
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS } from "../datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
+import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
@@ -28,6 +29,10 @@ interface HsScanSpec {
   decode: (logs: HyperSyncLog[]) => Array<Record<string, unknown>>;
   postFilter: (rows: Array<Record<string, unknown>>) => Array<Record<string, unknown>>;
   key: (row: Record<string, unknown>) => string;
+  /** Opt-in incremental cursor: a stable scan NAME (the full identity also hashes the address
+   *  set, topics, and floor — see scanCacheId). Cached rows are PRE-postFilter, so per-call
+   *  filters and join closures still apply fresh. */
+  cache?: string;
 }
 
 /** The two JSON-RPC calls the live-tail needs — a structural subset of viem's PublicClient, so the
@@ -104,8 +109,22 @@ type ScanRun = {
 };
 
 async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperSyncSource, spec: HsScanSpec): Promise<ScanRun> {
-  const r = await hs.queryLogs({ fromBlock: spec.fromBlock, address: spec.address, topics: spec.topics });
-  let rows = spec.postFilter(spec.decode(r.logs));
+  // Incremental cursor (opt-in): resume from the last completed watermark minus a reorg
+  // overlap; cached rows strictly BELOW the resume point survive, the overlap is re-scanned so
+  // a boundary reorg's orphans age out. The cache may only make the read cheaper, never change
+  // it: partial backfills are not written back, and oversized row sets skip caching entirely.
+  const cacheId = spec.cache !== undefined ? scanCacheId({ chainId, name: spec.cache, fromBlock: spec.fromBlock, address: spec.address, topics: spec.topics }) : undefined;
+  const cached = cacheId !== undefined ? readScanCache(cacheId) : undefined;
+  const resumeFrom = cached !== undefined ? Math.max(spec.fromBlock, cached.watermark - SCAN_REORG_OVERLAP + 1) : spec.fromBlock;
+  const r = await hs.queryLogs({ fromBlock: resumeFrom, address: spec.address, topics: spec.topics });
+  let decoded = spec.decode(r.logs);
+  if (cached !== undefined) {
+    decoded = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom).concat(decoded);
+  }
+  if (cacheId !== undefined && r.complete !== false && r.archiveHeight !== undefined) {
+    writeScanCache(cacheId, { watermark: r.archiveHeight, rows: decoded });
+  }
+  let rows = spec.postFilter(decoded);
   // Live-tail merge [freshness]: cover blocks the archive index hasn't ingested yet by scanning
   // (archiveHeight, chain head] over the regular RPC — ONLY when the backfill actually reached
   // its archive head. A page-capped partial already left an interior gap; a disjoint tail atop
@@ -143,6 +162,7 @@ async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promi
       decode: decodeMarketRows,
       postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
       key: (m) => `market:${String(m.poolId).toLowerCase()}`,
+      cache: "markets",
     },
   };
 }
@@ -166,12 +186,26 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
 
   // HyperSync and HyperRPC are different Envio products with DIFFERENT tokens; the dedicated
   // var wins, ENVIO_API_TOKEN remains a shared fallback.
-  const load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, envioToken("hypersync"));
+  const token = envioToken("hypersync");
+  let load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, token);
+  let windowedFallback: { code: string; message: string } | undefined;
+  if ("error" in load && !token && !ctx.hyperSync) {
+    // Tokenless fallback (owner scope 2026-08-13): windowed eth_getLogs over the resolved RPC —
+    // slow-but-free, honestly bounded (a capped walk surfaces as pagination_incomplete). The
+    // connectivity pledge holds: still RPC-only, never the venue. Only the MISSING-token case
+    // falls back; a set-but-broken token or napi failure stays an honest hypersync_unavailable.
+    const rpc = await getRpc(ctx, chainId);
+    if (rpc) {
+      load = { source: windowedRpcSource(rpc.client) };
+      windowedFallback = { code: "logs_windowed_fallback", message: `no Envio token — serving via windowed eth_getLogs over ${hostOf(rpc.url)} (up to ${String(WINDOWED_RPC_MAX_WINDOWS)} ranges per call; a partial walk discloses pagination_incomplete). Set ENVIO_HYPERSYNC_TOKEN for the archive index` };
+    }
+  }
   if ("error" in load) return unavailable(chainId, "hypersync_unavailable", load.error, ctx);
   const hs = load.source;
 
   try {
     const hsWarnings: Array<{ code: string; message: string }> = [];
+    if (windowedFallback) hsWarnings.push(windowedFallback);
     // Build the per-resource scan ONCE (address/topics/decoder/filter); both the HyperSync backfill
     // and the live-tail RPC merge below run it, so they can never diverge.
     let spec: HsScanSpec;
@@ -187,6 +221,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           ...ms.spec,
           decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),
           key: (row) => `pair:${String(row.poolId).toLowerCase()}`,
+          cache: "pairs", // NOT "markets": same scan, different decode — a shared entry would serve unprojected rows
         };
         note = "derived from pool-creation events: the pairs that CAN trade (each pool's corkSwapToken against its collateralAsset). The venue's listing metadata (resting depth, premium annotations) is off-chain and not represented — use hybrid mode for the listed view";
       }
@@ -203,6 +238,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           decode: decodeLopFillRows,
           postFilter: (rows) => rows.filter((f) => String(f.orderHash).toLowerCase() === filters.orderHash!.toLowerCase()),
           key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
+          cache: "lop-fills", // real chains exceed the row cap and skip persisting — harmless
         };
       } else {
         // ── Cork-scoping join (closes the old "rows are NOT Cork-scoped" gap): pools → share
@@ -247,6 +283,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           decode: decodeShareTransferRows,
           postFilter: (rows) => rows,
           key: (t) => `xfer:${String(t.txHash)}:${String(t.token)}:${String(t.from)}:${String(t.to)}:${String(t.value)}`,
+          cache: "share-xfers",
         };
         const transfers = await runScanWithTail(ctx, chainId, hs, transferSpec);
         if (!transfers.complete) {
@@ -273,6 +310,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
               return pools ? [{ ...f, poolIds: [...pools].sort() }] : [];
             }),
           key: (f) => `fill:${String(f.txHash)}:${String(f.orderHash)}:${String(f.remainingAmount)}`,
+          cache: "lop-fills",
         };
         note = `Cork-scoped by same-transaction share-token movement across ${String(poolCount)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or hybrid mode for the venue's own feed`;
       }
@@ -290,6 +328,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           decode: decodeRolloverFillRows,
           postFilter: (rows) => (filters.filler ? rows.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase()) : rows),
           key: (f) => `rfill:${String(f.txHash)}:${String(f.leg)}:${String(f.orderDigest)}`,
+          cache: "rollover-fills",
         };
       } else {
         spec = {
@@ -299,6 +338,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           decode: decodeCloneRows,
           postFilter: (rows) => (filters.account ? rows.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase()) : rows),
           key: (c) => `clone:${String(c.rolloverContract).toLowerCase()}`,
+          cache: "rollover-clones",
         };
       }
     }

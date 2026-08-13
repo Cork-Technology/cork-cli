@@ -161,6 +161,7 @@ Warning codes:
 | `invalid_pair` | unavailable (derive-cork-pool): collateralAsset == referenceAsset (domain-rule envelope, exit 3). |
 | `status_mismatch` | conflict: venue lifecycle disagrees with the chain — chain outranks indexer [K7]. Track reconcile (settler `orderStatus()`) and taker-fill's liveness pre-flight (a row the LOP invalidator says is dead yields NO fill bytes). Best-effort without an RPC. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / range refused. |
+| `logs_windowed_fallback` | Info on ok full-decentralized reads: no Envio token — served via windowed eth_getLogs over the resolved RPC (bounded ranges; a capped walk discloses `pagination_incomplete`). Set `ENVIO_HYPERSYNC_TOKEN` for the archive index. Never used for whitelisted-addresses (replay needs FULL history). |
 | `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, or the napi client can't load. `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
 | `live_tail_merged` / `live_tail_unavailable` | Info on ok full-decentralized reads: recent events merged from a live RPC tail (`data.liveTail`) / the tail scan couldn't run — archive-only results. Non-fatal. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Fraction-vs-percent tripwires ("0.041" vs 4.1), both premium spellings: suspicious canonical premium (sub-0.1%, or a fraction parsing above 1 = >100% annualized — warned, relayed) / declared premium outside the cited quote_ref's 10x band (conflict, NOT relayed) — the venue's STRICT float gate replicated op-for-op (parseFloat, fraction ×100 canonicalization, ratio >10 or <0.1, both premiums >0): the pre-flight lands exactly where the venue lands, ulps included. |
@@ -265,7 +266,10 @@ Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rp
 per-endpoint breakers) → **chainlist.org fallback** (chains 1/42161/8453/11155111:
 latency-probe, verify chainId, pick fastest; adds `rpc_fallback`). Endpoint + breaker state are
 cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`;
-temp+rename atomic). Automatic clients fail over **in-call** (a transport failure feeds the
+temp+rename atomic). Full-decentralized scans keep INCREMENTAL CURSORS in the same dir
+(`scan-cache.json`, override `CORK_SCAN_CACHE_FILE`): decoded pre-filter rows + a watermark per
+scan identity, ~200-block reorg overlap re-scanned each call, partial backfills never written
+back, oversized row sets never cached — the cache may only make a read cheaper, never change it. Automatic clients fail over **in-call** (a transport failure feeds the
 breaker, re-resolves once, retries; `provenance.rpc` discloses the endpoint that actually served);
 explicit URLs never fail over. Kill-switch: `CORK_RPC_NO_FAILOVER=1`. Concurrent resolutions are
 single-flighted. The breaker is ONE shared module (`packages/core/src/breaker.ts`,

@@ -398,6 +398,51 @@ const CATALOG: Mutant[] = [
     replace: "l.blockNumber === null && l.transactionHash === null",
     tests: [T.hypersync],
   },
+  // ── incremental scan cursors + windowed tokenless fallback (2026-08-13) ───────────────────
+  {
+    // The reorg overlap disappears: the resumed scan starts past the watermark and a boundary
+    // reorg's replacement events are never seen.
+    id: "cursor-reorg-overlap-lost",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const resumeFrom = cached !== undefined ? Math.max(spec.fromBlock, cached.watermark - SCAN_REORG_OVERLAP + 1) : spec.fromBlock;",
+    replace: "const resumeFrom = cached !== undefined ? Math.max(spec.fromBlock, cached.watermark + 1) : spec.fromBlock;",
+    tests: [T.hypersync],
+  },
+  {
+    // The boundary filter inverts: cached history is dropped instead of kept and the resumed
+    // read silently loses every old row.
+    id: "cursor-boundary-filter-inverted",
+    file: "packages/core/src/handlers/query.ts",
+    find: "decoded = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom).concat(decoded);",
+    replace: "decoded = cached.rows.filter((row) => Number(row.blockNumber) >= resumeFrom).concat(decoded);",
+    tests: [T.hypersync],
+  },
+  {
+    // A page-capped PARTIAL backfill gets written back: the next call resumes past an interior
+    // gap and the missing range becomes permanently invisible.
+    id: "cursor-partial-writeback-allowed",
+    file: "packages/core/src/handlers/query.ts",
+    find: "if (cacheId !== undefined && r.complete !== false && r.archiveHeight !== undefined) {",
+    replace: "if (cacheId !== undefined && r.archiveHeight !== undefined) {",
+    tests: [T.hypersync],
+  },
+  {
+    // Cache identity loses the scan NAME: cork-pools and trading-pairs share an entry and the
+    // pairs read serves unprojected market rows.
+    id: "cursor-cache-name-collision",
+    file: "packages/core/src/scan-cache.ts",
+    find: "return `${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;",
+    replace: "return `${String(a.chainId)}:scan:${String(a.fromBlock)}:${addr}:${topics}`;",
+    tests: [T.hypersync],
+  },
+  {
+    // The windowed walk stops disclosing its bound: a capped walk claims completeness.
+    id: "windowed-partial-honesty-lost",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "return { logs, archiveHeight: head, ...(from <= head ? { complete: false as const, nextBlock: from } : {}) };",
+    replace: "return { logs, archiveHeight: head };",
+    tests: [T.hypersync],
+  },
   // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────
   {
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.

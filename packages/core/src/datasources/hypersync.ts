@@ -82,6 +82,57 @@ export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
  * Load the real napi client for a chain. Every failure mode is a typed reason:
  * unsupported chain, missing token, or an unloadable native binding on this host.
  */
+/** Tokenless fallback: a HyperSyncSource built from windowed eth_getLogs over an ordinary RPC —
+ *  slow-but-free where HyperSync is token-gated. Bounded honestly: at most MAX_WINDOWS ranges
+ *  per call, adaptive window shrink when the endpoint refuses a range, and a partial walk
+ *  returns complete:false + nextBlock so the standard pagination_incomplete honesty applies.
+ *  NOT a substitute where correctness needs FULL history in one answer (the whitelist replay
+ *  derives membership from every event — a capped walk there would fabricate verdicts). */
+export const WINDOWED_RPC_WINDOW_BLOCKS = 50_000;
+export const WINDOWED_RPC_MAX_WINDOWS = 20;
+
+interface WindowedRpcClient {
+  getBlockNumber(): Promise<bigint>;
+  request(args: { method: "eth_getLogs"; params: [Record<string, unknown>] }): Promise<Array<{ address: string; topics: string[]; data: string; blockNumber: string | null; transactionHash: string | null }>>;
+}
+
+export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
+  return {
+    async queryLogs(q) {
+      const head = Number(await client.getBlockNumber());
+      const toHex = (n: number): `0x${string}` => `0x${n.toString(16)}`;
+      const logs: HyperSyncLog[] = [];
+      let from = q.fromBlock;
+      let window = WINDOWED_RPC_WINDOW_BLOCKS;
+      let windows = 0;
+      while (from <= head && windows < WINDOWED_RPC_MAX_WINDOWS) {
+        const to = Math.min(from + window - 1, head);
+        try {
+          const raw = await client.request({
+            method: "eth_getLogs",
+            params: [{ fromBlock: toHex(from), toBlock: toHex(to), ...(q.address ? { address: q.address } : {}), ...(q.topics ? { topics: q.topics } : {}) }],
+          });
+          for (const l of raw) {
+            if (l.blockNumber === null || l.transactionHash === null) continue;
+            logs.push({ address: l.address, topics: l.topics, data: l.data, blockNumber: Number(l.blockNumber), transactionHash: l.transactionHash });
+          }
+          from = to + 1;
+          windows += 1;
+        } catch (err) {
+          // Range refused: shrink and retry — public endpoints cap ranges differently. A window
+          // already at the floor is a real failure and propagates (the handler attributes it).
+          if (window > 2_000) {
+            window = Math.max(2_000, Math.floor(window / 5));
+            continue;
+          }
+          throw err;
+        }
+      }
+      return { logs, archiveHeight: head, ...(from <= head ? { complete: false as const, nextBlock: from } : {}) };
+    },
+  };
+}
+
 export async function loadHyperSync(chainId: number, token: string | undefined): Promise<HyperSyncLoad> {
   const url = hyperSyncUrl(chainId);
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };

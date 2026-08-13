@@ -2,7 +2,7 @@
 // event-derived resources (markets / LOP fills / rollover fills / clone discovery), the
 // structural rejections (resting orders emit no events), decode fidelity against real event
 // encodings, and honest degradation when no client/token is available.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import {
   runTool,
@@ -35,6 +35,14 @@ const STAGING_PM = "0x4d0ab6735def9fbaddbf0f2ffb92353afae623d2";
 const FACTORY = "0xbbcc54c637c26b484a8c57b5695c04e09dace13a";
 const OWNER = "0xc0ffee0000000000000000000000000000000001";
 const CLONE = "0xc10e000000000000000000000000000000000001";
+
+// The incremental scan cursor persists across calls BY DESIGN — isolate every test onto a fresh
+// cache path or one test's scan fixture would serve another's read.
+let isoCounter = 0;
+beforeEach(() => {
+  isoCounter += 1;
+  process.env["CORK_SCAN_CACHE_FILE"] = `${process.env["TMPDIR"] ?? "/tmp"}/cork-scan-cache-iso-${process.pid}-${String(isoCounter)}.json`;
+});
 
 // The live-tail freshness merge resolves the regular RPC by default; offline tests that only assert
 // the HyperSync backfill inject a null resolver so no network is touched (the merge then no-ops).
@@ -157,7 +165,7 @@ describe("loadHyperSync honesty (no injection)", () => {
   it("runTool surfaces the load failure as hypersync_unavailable", async () => {
     const prev = process.env.ENVIO_API_TOKEN;
     delete process.env.ENVIO_API_TOKEN;
-    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: noRpc });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("hypersync_unavailable");
     if (prev) process.env.ENVIO_API_TOKEN = prev;
@@ -674,4 +682,134 @@ describe("cork_query whitelisted-addresses (event replay over HyperSync)", () =>
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("mode_unavailable");
   });
+});
+
+// ── incremental scan cursors + tokenless windowed fallback (2026-08-13) ───────────────────────
+// Env manipulation below uses indexed access on purpose: these are test-only save/restore
+// helpers for PUBLIC configuration names, not secret values.
+const envGet = (k: string) => process.env[k];
+const envSet = (k: string, v: string | undefined) => {
+  if (v === undefined) delete process.env[k];
+  else process.env[k] = v;
+};
+const SCAN_CACHE_VAR = "CORK_SCAN_CACHE_FILE";
+const ENVIO_VARS = ["ENVIO_HYPERSYNC_TOKEN", "ENVIO_API_TOKEN"];
+const tmpCachePath = (tag: string) => `${envGet("TMPDIR") ?? "/tmp"}/cork-scan-cache-${tag}-${process.pid}-${Math.floor(performance.now() * 1000)}.json`;
+
+describe("incremental scan cursors", () => {
+  it("second call resumes from watermark minus the reorg overlap; cached rows survive", async () => {
+    const prev = envGet(SCAN_CACHE_VAR);
+    envSet(SCAN_CACHE_VAR, tmpCachePath("cursor"));
+    try {
+      const seen: Array<{ fromBlock: number }> = [];
+      const source: HyperSyncSource = {
+        async queryLogs(q) {
+          seen.push({ fromBlock: q.fromBlock });
+          // Only the genesis walk sees the creation event; the resumed walk starts far past it.
+          return { logs: q.fromBlock === 0 ? [marketLog()] : [], archiveHeight: 485_999_999 };
+        },
+      };
+      const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: source, resolveRpc: noRpc };
+      const first = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+      expect((first.data as { count: number }).count).toBe(1);
+      const second = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+      expect((second.data as { count: number }).count).toBe(1); // cached row served, scan skipped history
+      expect(seen.map((x) => x.fromBlock)).toEqual([0, 485_999_999 - 200 + 1]);
+    } finally {
+      envSet(SCAN_CACHE_VAR, prev);
+    }
+  });
+
+  it("cache identity includes the scan NAME: cork-pools and trading-pairs never share an entry", async () => {
+    // Same addresses, same topics, same floor — different decode. A collided entry would serve
+    // the pairs read unprojected MarketRows (rateOracle present).
+    const source: HyperSyncSource = { async queryLogs() { return { logs: [marketLog()], archiveHeight: 485_999_999 }; } };
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: source, resolveRpc: noRpc };
+    await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+    const pairs = await runTool("cork_query", { resource: "trading-pairs", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+    const rows = (pairs.data as { items: Array<Record<string, unknown>> }).items;
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.rateOracle).toBeUndefined();
+  });
+
+  it("a page-capped partial backfill is never written back (the cache may only make reads cheaper)", async () => {
+    const prev = envGet(SCAN_CACHE_VAR);
+    envSet(SCAN_CACHE_VAR, tmpCachePath("partial"));
+    try {
+      const seen: Array<{ fromBlock: number }> = [];
+      const source: HyperSyncSource = {
+        async queryLogs(q) {
+          seen.push({ fromBlock: q.fromBlock });
+          return { logs: [], archiveHeight: 485_999_999, complete: false, nextBlock: 100 };
+        },
+      };
+      const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: source, resolveRpc: noRpc };
+      await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+      await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, ctx);
+      expect(seen.map((x) => x.fromBlock)).toEqual([0, 0]); // no watermark was persisted
+    } finally {
+      envSet(SCAN_CACHE_VAR, prev);
+    }
+  });
+});
+
+describe("tokenless windowed eth_getLogs fallback", () => {
+  const withoutTokens = async (fn: () => Promise<void>) => {
+    const saved = ENVIO_VARS.map((k) => [k, envGet(k)] as const);
+    const savedCache = envGet(SCAN_CACHE_VAR);
+    for (const [k] of saved) envSet(k, undefined);
+    envSet(SCAN_CACHE_VAR, tmpCachePath("wf"));
+    try {
+      await fn();
+    } finally {
+      for (const [k, v] of saved) envSet(k, v);
+      envSet(SCAN_CACHE_VAR, savedCache);
+    }
+  };
+
+  it("no token + an RPC: windowed getLogs serves the read, disclosed as logs_windowed_fallback", async () =>
+    withoutTokens(async () => {
+      let calls = 0;
+      const resolveRpc = async () =>
+        ({
+          source: "explicit",
+          url: "https://rpc.example",
+          client: {
+            getBlockNumber: async () => 485_000_010n,
+            request: async () => {
+              calls += 1;
+              const l = marketLog();
+              return calls === 1 ? [{ address: l.address, topics: l.topics, data: l.data, blockNumber: `0x${l.blockNumber.toString(16)}`, transactionHash: l.transactionHash }] : [];
+            },
+          },
+        }) as never;
+      const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc });
+      expect(env.state).toBe("ok");
+      expect((env.data as { count: number }).count).toBe(1);
+      expect(env.warnings.some((w) => w.code === "logs_windowed_fallback")).toBe(true);
+    }));
+
+  it("a walk the window budget cannot finish is disclosed as pagination_incomplete, never truncated silently", async () =>
+    withoutTokens(async () => {
+      const resolveRpc = async () =>
+        ({
+          source: "explicit",
+          url: "https://rpc.example",
+          client: {
+            getBlockNumber: async () => 2_000_000n, // 20 windows x 50k = 1M < head
+            request: async () => [],
+          },
+        }) as never;
+      const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc });
+      expect(env.state).toBe("ok");
+      expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(true);
+      expect(env.warnings.some((w) => w.code === "logs_windowed_fallback")).toBe(true);
+    }));
+
+  it("no token + no RPC: still an honest hypersync_unavailable", async () =>
+    withoutTokens(async () => {
+      const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: noRpc });
+      expect(env.state).toBe("unavailable");
+      expect(env.warnings[0]?.code).toBe("hypersync_unavailable");
+    }));
 });
