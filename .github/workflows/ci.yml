@@ -98,14 +98,21 @@ jobs:
           CORK_RPC_LIVE: "1"
         run: bunx vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts
 
-  # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when the key is present;
+  # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when credentials resolve;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
+  # Preferred auth is Claude Platform on AWS via GitHub OIDC → SigV4 (no stored secret, nothing
+  # to expire): set the CORK_EVALS_AWS_* repo VARIABLES below. ANTHROPIC_API_KEY stays as the
+  # first-party-key alternative. Unset variables export as empty strings; the runner's auth-mode
+  # treats empty as unset.
   agent-evals:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: test
     # Only on main pushes — eval runs cost real tokens; PRs get Layer A.
     if: github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write # mint the GitHub OIDC token the AWS role trust policy verifies
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -116,8 +123,20 @@ jobs:
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Run agent evals (self-skips without ANTHROPIC_API_KEY)
+      - name: Assume the evals AWS role (OIDC; skipped until the role variable is set)
+        if: vars.CORK_EVALS_AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.CORK_EVALS_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.CORK_EVALS_AWS_REGION }}
+
+      - name: Run agent evals (self-skips without credentials)
         env:
+          # Claude Platform on AWS (preferred): the workspace id switches the runner to the
+          # AnthropicAws client; SigV4 credentials come from the assumed role above.
+          ANTHROPIC_AWS_WORKSPACE_ID: ${{ vars.CORK_EVALS_AWS_WORKSPACE_ID }}
+          AWS_REGION: ${{ vars.CORK_EVALS_AWS_REGION }}
+          # First-party alternative: a console.anthropic.com key.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_GATE: "1"
           EVAL_GATE_THRESHOLD: "0.8"

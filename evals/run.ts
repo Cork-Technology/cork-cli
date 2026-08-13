@@ -3,8 +3,10 @@
 // in-process `runTool` with a stubbed chain (evals/stub.ts) — the LLM API is the only network.
 // Grading is programmatic over the tool-call trace: tool selection, variant/parameter accuracy,
 // outcome state, call efficiency, error-recovery, token cost. Run: `bun run eval`
-// (auth is three-way, evals/auth-mode.ts: explicit key → keyed; no key but an
-// ANTHROPIC_BASE_URL gateway → keyless and failures fail LOUD; neither → self-skip green,
+// (auth is four-way, evals/auth-mode.ts: Claude Platform on AWS configured → AnthropicAws
+// client, SigV4 via the AWS credential chain (CI: GitHub OIDC → assumed role, no stored
+// secret) or ANTHROPIC_AWS_API_KEY as bearer; explicit key → keyed; no key but an
+// ANTHROPIC_BASE_URL gateway → keyless and failures fail LOUD; none of it → self-skip green,
 // the CI/fork contract).
 //
 // Env knobs: CORK_EVAL_MODEL (default claude-sonnet-5 — owner ruling 2026-07-28: evals ALWAYS run
@@ -15,6 +17,7 @@
 // CORK_EVAL_ONLY=<task-id> (single task).
 import { writeFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
+import AnthropicAws from "@anthropic-ai/aws-sdk";
 import { REGISTRY, inputJsonSchema, descriptionExample } from "@cork/schemas";
 import { runTool, ToolInputError } from "@cork/core";
 import { stubContext } from "./stub.ts";
@@ -172,19 +175,25 @@ function pct(n: number, d: number): string {
 }
 
 async function main() {
-  // Auth is a three-way decision (evals/auth-mode.ts): an explicit key runs keyed; a configured
-  // ANTHROPIC_BASE_URL gateway runs keyless and fails LOUD if its auth is broken; NOTHING
-  // configured self-skips green — the documented CI/fork contract (a missing repo secret must
-  // not paint main red; exactly that regression shipped 2026-08-10, this restores the line).
+  // Auth is a four-way decision (evals/auth-mode.ts): Claude Platform on AWS config runs the
+  // AnthropicAws client (SigV4/bearer, fails LOUD if half-configured); an explicit key runs
+  // keyed; a configured ANTHROPIC_BASE_URL gateway runs keyless and fails LOUD if its auth is
+  // broken; NOTHING configured self-skips green — the documented CI/fork contract (a missing
+  // repo secret must not paint main red; exactly that regression shipped 2026-08-10).
   const mode = evalAuthMode(process.env);
   if (mode === "skip") {
-    console.log("agent evals: skipped — no explicit key/token and no ANTHROPIC_BASE_URL gateway configured. Wire the repo secret to enable the eval gate.");
+    console.log("agent evals: skipped — no Claude-on-AWS config (ANTHROPIC_AWS_WORKSPACE_ID), no explicit key/token, and no ANTHROPIC_BASE_URL gateway. Wire OIDC + the AWS repo variables (or a key) to enable the eval gate.");
     return;
   }
   if (mode === "ambient") {
     console.log("agent evals: no explicit key — proceeding via the configured ANTHROPIC_BASE_URL gateway (auth failures fail loud). Setting a key explicitly is recommended for reproducible runs.");
   }
-  const client = new Anthropic(mode === "keyed" ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
+  if (mode === "aws") {
+    console.log("agent evals: Claude Platform on AWS configured — AnthropicAws client (SigV4 via the AWS credential chain, or ANTHROPIC_AWS_API_KEY as bearer). A half-configured setup fails loud here, never skips.");
+  }
+  // AnthropicAws extends the base client with the same messages surface — only construction
+  // differs; the agentic loop below is client-class-agnostic.
+  const client = mode === "aws" ? new AnthropicAws() : new Anthropic(mode === "keyed" ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
   const only = process.env.CORK_EVAL_ONLY;
   const onlySet = only ? new Set(only.split(",").map((s) => s.trim()).filter(Boolean)) : null;
   const tasks = TASKS.filter((t) => (onlySet ? onlySet.has(t.id) : process.env.EVAL_HELD_OUT ? true : !t.heldOut));

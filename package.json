@@ -20,7 +20,8 @@
     "eval": "bun evals/run.ts"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "0.112.3",
+    "@anthropic-ai/aws-sdk": "0.6.2",
+    "@anthropic-ai/sdk": "0.116.0",
     "@socketsecurity/bun-security-scanner": "1.1.2",
     "@types/node": "22.20.1",
     "ajv": "8.20.0",

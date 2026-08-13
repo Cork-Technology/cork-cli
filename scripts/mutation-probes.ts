@@ -650,6 +650,24 @@ const CATALOG: Mutant[] = [
     tests: [T.evalAuth],
   },
   {
+    // The aws branch is lost: Claude-on-AWS config falls through to keyed/skip — CI with OIDC
+    // configured silently runs the wrong client (or skips) instead of SigV4.
+    id: "eval-auth-aws-branch-dropped",
+    file: "evals/auth-mode.ts",
+    find: '  if (env.ANTHROPIC_AWS_WORKSPACE_ID || env.ANTHROPIC_AWS_API_KEY) return "aws";',
+    replace: "",
+    tests: [T.evalAuth],
+  },
+  {
+    // Either marker alone must select aws; demanding both makes the documented single-variable
+    // setups (workspace+OIDC role, or key alone) silently fall through.
+    id: "eval-auth-aws-both-markers-required",
+    file: "evals/auth-mode.ts",
+    find: 'if (env.ANTHROPIC_AWS_WORKSPACE_ID || env.ANTHROPIC_AWS_API_KEY) return "aws";',
+    replace: 'if (env.ANTHROPIC_AWS_WORKSPACE_ID && env.ANTHROPIC_AWS_API_KEY) return "aws";',
+    tests: [T.evalAuth],
+  },
+  {
     // The Layer-B config pin: an unpinned eval resolves config remote-first while the stub
     // answers MARKET_REGISTRY() from the local cork-defaults.json — remote/bundled skew during
     // a registry-redeploy integration re-creates the 0.3.3 adapter_binding_mismatch eval rot.
