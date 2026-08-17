@@ -37,9 +37,13 @@ const MARKET = {
   rateOracle: ORACLE,
 };
 
-function readContract(args: { address: string; functionName: string; args?: unknown[] }): unknown {
+function readContract(args: { address: string; functionName: string; args?: unknown[] }, chainId: number): unknown {
   const poolId = args.args?.[0];
-  const known = typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase();
+  // The demo pool exists ON MAINNET ONLY — like production. A chain-blind stub answered the
+  // same live pool on every chainId, which made an agent's cross-chain disambiguation probe
+  // unresolvable (observed 2026-08-17: it honestly refused to guess between three identical
+  // chains). Registry/recipe reads are functionName-keyed and stay chain-agnostic.
+  const known = (typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase()) && chainId === 1;
   switch (args.functionName) {
     case "market":
       return known ? MARKET : { ...MARKET, collateralAsset: "0x0000000000000000000000000000000000000000", referenceAsset: "0x0000000000000000000000000000000000000000", rateOracle: "0x0000000000000000000000000000000000000000", expiryTimestamp: 0n };
@@ -184,11 +188,11 @@ export function stubContext(): HandlerContext {
     venueFetch,
     hyperSync: whitelistHyperSync(),
     rpcUrl: "https://stub.vnet.example/rpc", // enables the funding path; resolver below serves it
-    resolveRpc: async (_chainId, url) => ({
+    resolveRpc: async (chainId, url) => ({
       url: url ?? "https://stub.vnet.example/rpc",
       source: "explicit" as const,
       client: {
-        readContract: async (a: never) => readContract(a),
+        readContract: async (a: never) => readContract(a, chainId),
         getCode: async () => "0x", // every fixture account is an EOA
         getBlockNumber: async () => 23_000_000n,
         getBlock: async () => ({ timestamp: NOW }),
