@@ -18,6 +18,9 @@ and the Tenderly virtual-mainnet fixture pool.
 
 ## Use as a library (TypeScript SDK)
 
+**Getting started guide: [docs/sdk.md](docs/sdk.md)** — first call, the result envelope, the
+prepare → simulate → sign → send recipe, and the stability promise.
+
 `@cork/schemas` and `@cork/core` are publish-ready library packages (ESM-only, Node ≥ 22 / Bun,
 `sideEffects: false`, types shipped). Until they land on a registry, install from a packed
 tarball: `bun pm pack` in each package directory rewrites `workspace:*` to real versions, and
