@@ -10,8 +10,10 @@
   "exports": {
     ".": {
       "types": "./dist/packages/mcp/src/index.d.ts",
-      "import": "./dist/packages/mcp/src/index.js"
-    }
+      "import": "./dist/packages/mcp/src/index.js",
+      "default": "./dist/packages/mcp/src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "bin": {
     "cork-mcp": "./dist/packages/mcp/src/bin.js"

@@ -5,13 +5,16 @@
   "license": "UNLICENSED",
   "private": false,
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/packages/schemas/src/index.js",
   "types": "./dist/packages/schemas/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/packages/schemas/src/index.d.ts",
-      "import": "./dist/packages/schemas/src/index.js"
-    }
+      "import": "./dist/packages/schemas/src/index.js",
+      "default": "./dist/packages/schemas/src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"

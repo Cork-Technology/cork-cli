@@ -3,7 +3,9 @@
 // boundaries are pinned exactly (and mutation-probed: breaker-threshold-boundary /
 // breaker-cooldown-boundary in scripts/mutation-probes.ts).
 import { describe, expect, it } from "vitest";
-import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "@cork/core";
+// breaker.ts is INTERNAL machinery — deliberately absent from the @cork/core public barrel
+// (api-surface.test.ts pins that), so this test imports the module directly.
+import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../src/breaker.ts";
 
 const P: BreakerPolicy = { openThreshold: 3, cooldownMs: 30_000 };
 const T0 = 1_000_000;

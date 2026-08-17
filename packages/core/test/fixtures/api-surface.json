@@ -1,0 +1,3360 @@
+{
+  ".": [
+    {
+      "name": "ASSET_KIND",
+      "kind": "value"
+    },
+    {
+      "name": "AuctionPriceReport",
+      "kind": "type"
+    },
+    {
+      "name": "AuthorityAction",
+      "kind": "type"
+    },
+    {
+      "name": "AuthorityTx",
+      "kind": "type"
+    },
+    {
+      "name": "BUILD_COMMIT",
+      "kind": "value"
+    },
+    {
+      "name": "BUILD_TARGET",
+      "kind": "value"
+    },
+    {
+      "name": "BUILD_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "CALL_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "CLONE_DEPLOYED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "CONFIGURATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "CORK_ACTION_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "CORK_DEFAULTS_URL",
+      "kind": "value"
+    },
+    {
+      "name": "CREATE2_ATTESTATIONS",
+      "kind": "value"
+    },
+    {
+      "name": "CREATE2_DEPLOYER",
+      "kind": "value"
+    },
+    {
+      "name": "Call",
+      "kind": "type"
+    },
+    {
+      "name": "ChainOrderStatus",
+      "kind": "type"
+    },
+    {
+      "name": "CloneRow",
+      "kind": "type"
+    },
+    {
+      "name": "CodeReader",
+      "kind": "type"
+    },
+    {
+      "name": "ConfigDeps",
+      "kind": "type"
+    },
+    {
+      "name": "ConstraintState",
+      "kind": "type"
+    },
+    {
+      "name": "CorkActionName",
+      "kind": "type"
+    },
+    {
+      "name": "CorkActionParamMap",
+      "kind": "type"
+    },
+    {
+      "name": "CorkAddresses",
+      "kind": "type"
+    },
+    {
+      "name": "CorkDefaults",
+      "kind": "type"
+    },
+    {
+      "name": "CorkDeployment",
+      "kind": "type"
+    },
+    {
+      "name": "CorkMarketRegistry",
+      "kind": "type"
+    },
+    {
+      "name": "CorkMarketRegistryLegacy",
+      "kind": "type"
+    },
+    {
+      "name": "CorkRolloverDeployment",
+      "kind": "type"
+    },
+    {
+      "name": "CorkSettlerDomain",
+      "kind": "type"
+    },
+    {
+      "name": "Create2Attestation",
+      "kind": "type"
+    },
+    {
+      "name": "Create2Verification",
+      "kind": "type"
+    },
+    {
+      "name": "DEFAULT_CONFIG",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_RPCS",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_VENUE_URL",
+      "kind": "value"
+    },
+    {
+      "name": "DENOMINATION_PSEUDO_UNITS",
+      "kind": "value"
+    },
+    {
+      "name": "DIGIT_FILTER_KEYS",
+      "kind": "value"
+    },
+    {
+      "name": "Decimals",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedFusionOrder",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedLeg",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedLogRow",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedMakerTraits",
+      "kind": "type"
+    },
+    {
+      "name": "EIP1967_IMPLEMENTATION_SLOT",
+      "kind": "value"
+    },
+    {
+      "name": "ERC1271_MAGIC",
+      "kind": "value"
+    },
+    {
+      "name": "ERC20_TRANSFER_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "EnvioProduct",
+      "kind": "type"
+    },
+    {
+      "name": "ExerciseOtherPreview",
+      "kind": "type"
+    },
+    {
+      "name": "ExercisePreview",
+      "kind": "type"
+    },
+    {
+      "name": "FALLBACK_CHAINS",
+      "kind": "value"
+    },
+    {
+      "name": "FETCH_FAILED_WARNING",
+      "kind": "value"
+    },
+    {
+      "name": "FORSELF_ACTION_MAP",
+      "kind": "value"
+    },
+    {
+      "name": "FORSELF_ALLOWANCES",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_BASE_POINTS",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_FEE_BASE",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_GAS_PRICE_BASE",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_SETTLEMENTS",
+      "kind": "value"
+    },
+    {
+      "name": "FillOrderForSelfArgs",
+      "kind": "type"
+    },
+    {
+      "name": "FinalizeMakerOrderArgs",
+      "kind": "type"
+    },
+    {
+      "name": "FinalizedMakerOrder",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfAllowance",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfCallResult",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfPoolActionType",
+      "kind": "type"
+    },
+    {
+      "name": "FundingMode",
+      "kind": "type"
+    },
+    {
+      "name": "FundingPlan",
+      "kind": "type"
+    },
+    {
+      "name": "FusionAuction",
+      "kind": "type"
+    },
+    {
+      "name": "FusionGetterFees",
+      "kind": "type"
+    },
+    {
+      "name": "FusionPostInteraction",
+      "kind": "type"
+    },
+    {
+      "name": "HYPERSYNC_MAX_PAGES",
+      "kind": "value"
+    },
+    {
+      "name": "HYPERSYNC_URLS",
+      "kind": "value"
+    },
+    {
+      "name": "HandlerContext",
+      "kind": "type"
+    },
+    {
+      "name": "Hex40",
+      "kind": "type"
+    },
+    {
+      "name": "HsAddress",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLoad",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLog",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLogsQuery",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncPage",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncSource",
+      "kind": "type"
+    },
+    {
+      "name": "ImagePinCheck",
+      "kind": "type"
+    },
+    {
+      "name": "ImpairmentFloor",
+      "kind": "type"
+    },
+    {
+      "name": "ImplementationCheck",
+      "kind": "type"
+    },
+    {
+      "name": "JITMarketParams",
+      "kind": "type"
+    },
+    {
+      "name": "JIT_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_CREATED_LEGACY_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MINTED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "KNOWN_EVENTS_ABI",
+      "kind": "value"
+    },
+    {
+      "name": "KNOWN_FILTER_KEYS",
+      "kind": "value"
+    },
+    {
+      "name": "LOP_ADDRESSES",
+      "kind": "value"
+    },
+    {
+      "name": "LOP_FILLED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "LabeledLog",
+      "kind": "type"
+    },
+    {
+      "name": "LogMeta",
+      "kind": "type"
+    },
+    {
+      "name": "LogsEndpoint",
+      "kind": "type"
+    },
+    {
+      "name": "LogsRangeLimited",
+      "kind": "value+type"
+    },
+    {
+      "name": "LopBookParams",
+      "kind": "type"
+    },
+    {
+      "name": "LopDomain",
+      "kind": "type"
+    },
+    {
+      "name": "LopExtensionFields",
+      "kind": "type"
+    },
+    {
+      "name": "LopFillRow",
+      "kind": "type"
+    },
+    {
+      "name": "LopInvalidatorPlan",
+      "kind": "type"
+    },
+    {
+      "name": "LopOnChainStatus",
+      "kind": "type"
+    },
+    {
+      "name": "LopOrder",
+      "kind": "type"
+    },
+    {
+      "name": "MAINNET_DEPLOYMENT",
+      "kind": "value"
+    },
+    {
+      "name": "MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "MULTICALL_SELECTOR",
+      "kind": "value"
+    },
+    {
+      "name": "MakerOrderArgs",
+      "kind": "type"
+    },
+    {
+      "name": "MakerOrderResult",
+      "kind": "type"
+    },
+    {
+      "name": "MakerTraitsParts",
+      "kind": "type"
+    },
+    {
+      "name": "Market",
+      "kind": "type"
+    },
+    {
+      "name": "MarketRow",
+      "kind": "type"
+    },
+    {
+      "name": "NotAFusionOrder",
+      "kind": "value+type"
+    },
+    {
+      "name": "ORACLE_MODE",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_DATA_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_DATA_TYPES",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_STATUS_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "OracleModeName",
+      "kind": "type"
+    },
+    {
+      "name": "OrderDataStruct",
+      "kind": "type"
+    },
+    {
+      "name": "PAUSE_BIT",
+      "kind": "value"
+    },
+    {
+      "name": "PCT_DENOM",
+      "kind": "value"
+    },
+    {
+      "name": "POOL_CREATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "PageParams",
+      "kind": "type"
+    },
+    {
+      "name": "ParsedTdxQuote",
+      "kind": "type"
+    },
+    {
+      "name": "PermitParams",
+      "kind": "type"
+    },
+    {
+      "name": "PoolFees",
+      "kind": "type"
+    },
+    {
+      "name": "PoolStateRead",
+      "kind": "type"
+    },
+    {
+      "name": "PoolTokens",
+      "kind": "type"
+    },
+    {
+      "name": "PoolTokensRead",
+      "kind": "type"
+    },
+    {
+      "name": "PredictSharesResult",
+      "kind": "type"
+    },
+    {
+      "name": "PreflightInput",
+      "kind": "type"
+    },
+    {
+      "name": "PreflightWarning",
+      "kind": "type"
+    },
+    {
+      "name": "ProbeResult",
+      "kind": "type"
+    },
+    {
+      "name": "RECIPE_CATALOG",
+      "kind": "value"
+    },
+    {
+      "name": "RECIPE_SOURCE",
+      "kind": "value"
+    },
+    {
+      "name": "REENTER_SELECTOR",
+      "kind": "value"
+    },
+    {
+      "name": "REGISTRY_DEPLOY_ERROR_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "ROLLOVER_FILL_TOPICS",
+      "kind": "value"
+    },
+    {
+      "name": "ROLLOVER_INTENT_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "ROLLOVER_PARAMS_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "RateBumpParts",
+      "kind": "type"
+    },
+    {
+      "name": "RateCalcParams",
+      "kind": "type"
+    },
+    {
+      "name": "RateCalcResult",
+      "kind": "type"
+    },
+    {
+      "name": "RawLog",
+      "kind": "type"
+    },
+    {
+      "name": "RawLogLike",
+      "kind": "type"
+    },
+    {
+      "name": "RecipeCatalogEntry",
+      "kind": "type"
+    },
+    {
+      "name": "RecipeSourceName",
+      "kind": "type"
+    },
+    {
+      "name": "RemoteFetchResult",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedConfig",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedConstraint",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedRpc",
+      "kind": "type"
+    },
+    {
+      "name": "RfqListParams",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverCall",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverFillRow",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentArgs",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentResult",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverOrdersParams",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverVenuePost",
+      "kind": "type"
+    },
+    {
+      "name": "Rounding",
+      "kind": "type"
+    },
+    {
+      "name": "RpcChainMismatchError",
+      "kind": "value+type"
+    },
+    {
+      "name": "RpcConfig",
+      "kind": "type"
+    },
+    {
+      "name": "RpcDeps",
+      "kind": "type"
+    },
+    {
+      "name": "RpcState",
+      "kind": "type"
+    },
+    {
+      "name": "RtmrEvent",
+      "kind": "type"
+    },
+    {
+      "name": "SECONDS_PER_DAY",
+      "kind": "value"
+    },
+    {
+      "name": "SETTLER_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "SOURCE_INTERFACE",
+      "kind": "value"
+    },
+    {
+      "name": "SOURCE_TYPE",
+      "kind": "value"
+    },
+    {
+      "name": "STALE_CACHE_WARNING",
+      "kind": "value"
+    },
+    {
+      "name": "SafeDepositParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeExerciseOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeExerciseParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeMintParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeRedeemParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeSwapParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindDepositParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindExerciseOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindExerciseParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindMintParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindSwapParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeWithdrawOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeWithdrawParams",
+      "kind": "type"
+    },
+    {
+      "name": "SettlementClass",
+      "kind": "type"
+    },
+    {
+      "name": "ShareTransferRow",
+      "kind": "type"
+    },
+    {
+      "name": "SignedLopOrder",
+      "kind": "type"
+    },
+    {
+      "name": "StoredCache",
+      "kind": "type"
+    },
+    {
+      "name": "SummaryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "SwapContext",
+      "kind": "type"
+    },
+    {
+      "name": "SwapPreview",
+      "kind": "type"
+    },
+    {
+      "name": "TARGET_DECIMALS",
+      "kind": "value"
+    },
+    {
+      "name": "TakerFillArgs",
+      "kind": "type"
+    },
+    {
+      "name": "TakerFillResult",
+      "kind": "type"
+    },
+    {
+      "name": "TokenRole",
+      "kind": "type"
+    },
+    {
+      "name": "ToolInputError",
+      "kind": "value+type"
+    },
+    {
+      "name": "TransportRequest",
+      "kind": "type"
+    },
+    {
+      "name": "U160_MAX",
+      "kind": "value"
+    },
+    {
+      "name": "U256_MAX",
+      "kind": "value"
+    },
+    {
+      "name": "UnwindContext",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindExerciseOtherPreview",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindExercisePreview",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindSwapPreview",
+      "kind": "type"
+    },
+    {
+      "name": "VENUE_BREAKER_POLICY",
+      "kind": "value"
+    },
+    {
+      "name": "VenueBreakerState",
+      "kind": "type"
+    },
+    {
+      "name": "VenueDeps",
+      "kind": "type"
+    },
+    {
+      "name": "VenueFetch",
+      "kind": "type"
+    },
+    {
+      "name": "VenueHttpError",
+      "kind": "value+type"
+    },
+    {
+      "name": "VenueList",
+      "kind": "type"
+    },
+    {
+      "name": "VenuePostResult",
+      "kind": "type"
+    },
+    {
+      "name": "VenueUnreachable",
+      "kind": "value+type"
+    },
+    {
+      "name": "WAD",
+      "kind": "value"
+    },
+    {
+      "name": "WHITELIST_TOPICS",
+      "kind": "value"
+    },
+    {
+      "name": "WINDOWED_RPC_MAX_WINDOWS",
+      "kind": "value"
+    },
+    {
+      "name": "WINDOWED_RPC_WINDOW_BLOCKS",
+      "kind": "value"
+    },
+    {
+      "name": "WhitelistEventRow",
+      "kind": "type"
+    },
+    {
+      "name": "WhitelistReplay",
+      "kind": "type"
+    },
+    {
+      "name": "ZERO_CALLBACK_HASH",
+      "kind": "value"
+    },
+    {
+      "name": "accessControlAbi",
+      "kind": "value"
+    },
+    {
+      "name": "aggregatorV3Abi",
+      "kind": "value"
+    },
+    {
+      "name": "approvedImplementationGuard",
+      "kind": "value"
+    },
+    {
+      "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "buildAuctionAmountData",
+      "kind": "value"
+    },
+    {
+      "name": "buildAuthorityTx",
+      "kind": "value"
+    },
+    {
+      "name": "buildCancelOrder",
+      "kind": "value"
+    },
+    {
+      "name": "buildCreatePoolCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildDeployFixedRateOracleCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildDeployOracleCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildFillOrderForSelfCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildJitExtension",
+      "kind": "value"
+    },
+    {
+      "name": "buildMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "buildMakerTraits",
+      "kind": "value"
+    },
+    {
+      "name": "buildPoolForSelfCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildRolloverIntent",
+      "kind": "value"
+    },
+    {
+      "name": "buildSharesCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildTakerFill",
+      "kind": "value"
+    },
+    {
+      "name": "bundler3Abi",
+      "kind": "value"
+    },
+    {
+      "name": "bundlerLegAbi",
+      "kind": "value"
+    },
+    {
+      "name": "bundlerSweepAbi",
+      "kind": "value"
+    },
+    {
+      "name": "calculateDepositAmountWithSwapRate",
+      "kind": "value"
+    },
+    {
+      "name": "calculateEqualSwapAmount",
+      "kind": "value"
+    },
+    {
+      "name": "calculateGrossAmountBeforeFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculateGrossAmountWithTimeDecayFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculatePercentageFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculateRate",
+      "kind": "value"
+    },
+    {
+      "name": "calculateTimeDecayFee",
+      "kind": "value"
+    },
+    {
+      "name": "call",
+      "kind": "value"
+    },
+    {
+      "name": "canAutoFund",
+      "kind": "value"
+    },
+    {
+      "name": "ceilDiv",
+      "kind": "value"
+    },
+    {
+      "name": "chainStatusName",
+      "kind": "value"
+    },
+    {
+      "name": "checkApprovedImplementations",
+      "kind": "value"
+    },
+    {
+      "name": "checkComposeHash",
+      "kind": "value"
+    },
+    {
+      "name": "checkImagePins",
+      "kind": "value"
+    },
+    {
+      "name": "classifyBitInvalidator",
+      "kind": "value"
+    },
+    {
+      "name": "classifyRemainingRaw",
+      "kind": "value"
+    },
+    {
+      "name": "classifySettlement",
+      "kind": "value"
+    },
+    {
+      "name": "collectPagedLogs",
+      "kind": "value"
+    },
+    {
+      "name": "compareVersions",
+      "kind": "value"
+    },
+    {
+      "name": "composeHashFromEvents",
+      "kind": "value"
+    },
+    {
+      "name": "computeMarketId",
+      "kind": "value"
+    },
+    {
+      "name": "computeOrderDigest",
+      "kind": "value"
+    },
+    {
+      "name": "computeT",
+      "kind": "value"
+    },
+    {
+      "name": "configDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "constantGetterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "constraintAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "controllerCreatePoolAbi",
+      "kind": "value"
+    },
+    {
+      "name": "controllerViewsAbi",
+      "kind": "value"
+    },
+    {
+      "name": "corkActionCall",
+      "kind": "value"
+    },
+    {
+      "name": "corkAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "corkSettlerDomain",
+      "kind": "value"
+    },
+    {
+      "name": "corkSettlerDomainSeparator",
+      "kind": "value"
+    },
+    {
+      "name": "create2FromInitCode",
+      "kind": "value"
+    },
+    {
+      "name": "create2FromInitCodeHash",
+      "kind": "value"
+    },
+    {
+      "name": "creditsRefilled",
+      "kind": "value"
+    },
+    {
+      "name": "decodeBundle",
+      "kind": "value"
+    },
+    {
+      "name": "decodeCloneRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeExtensionFields",
+      "kind": "value"
+    },
+    {
+      "name": "decodeFusionOrder",
+      "kind": "value"
+    },
+    {
+      "name": "decodeJitExtension",
+      "kind": "value"
+    },
+    {
+      "name": "decodeKnownLog",
+      "kind": "value"
+    },
+    {
+      "name": "decodeLopFillRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMakerTraits",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMarketRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "decodeOrderTuple",
+      "kind": "value"
+    },
+    {
+      "name": "decodeRolloverFillRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeShareTransferRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeSingleCall",
+      "kind": "value"
+    },
+    {
+      "name": "decodeWhitelistRows",
+      "kind": "value"
+    },
+    {
+      "name": "deprecatedEnabled",
+      "kind": "value"
+    },
+    {
+      "name": "deprecatedGateMessage",
+      "kind": "value"
+    },
+    {
+      "name": "deriveJitMarket",
+      "kind": "value"
+    },
+    {
+      "name": "encodeAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeCorkAction",
+      "kind": "value"
+    },
+    {
+      "name": "encodeExtensionFields",
+      "kind": "value"
+    },
+    {
+      "name": "encodeJitExtraData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "envioToken",
+      "kind": "value"
+    },
+    {
+      "name": "erc1271Abi",
+      "kind": "value"
+    },
+    {
+      "name": "erc20Abi",
+      "kind": "value"
+    },
+    {
+      "name": "erc20MetadataAbi",
+      "kind": "value"
+    },
+    {
+      "name": "extractDockerComposeFile",
+      "kind": "value"
+    },
+    {
+      "name": "fetchDigestLogs",
+      "kind": "value"
+    },
+    {
+      "name": "filterChainlistRpcs",
+      "kind": "value"
+    },
+    {
+      "name": "finalizeMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "fixedToTokenNativeDecimals",
+      "kind": "value"
+    },
+    {
+      "name": "fixedToTokenNativeDecimalsCeil",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfAbi",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfBindingAbi",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfSelector",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfSelectors",
+      "kind": "value"
+    },
+    {
+      "name": "fundingLegs",
+      "kind": "value"
+    },
+    {
+      "name": "fundingPlan",
+      "kind": "value"
+    },
+    {
+      "name": "fusionMakerGives",
+      "kind": "value"
+    },
+    {
+      "name": "fusionRateBump",
+      "kind": "value"
+    },
+    {
+      "name": "fusionTakerPays",
+      "kind": "value"
+    },
+    {
+      "name": "fusionTotalFee",
+      "kind": "value"
+    },
+    {
+      "name": "generalAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "getLopFills",
+      "kind": "value"
+    },
+    {
+      "name": "getLopMarkets",
+      "kind": "value"
+    },
+    {
+      "name": "getLopOrderbook",
+      "kind": "value"
+    },
+    {
+      "name": "getPools",
+      "kind": "value"
+    },
+    {
+      "name": "getRfq",
+      "kind": "value"
+    },
+    {
+      "name": "getRfqs",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverContracts",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverFills",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverOrder",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverOrders",
+      "kind": "value"
+    },
+    {
+      "name": "hashLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "hashOrderDataManual",
+      "kind": "value"
+    },
+    {
+      "name": "hostOf",
+      "kind": "value"
+    },
+    {
+      "name": "hyperRpcHost",
+      "kind": "value"
+    },
+    {
+      "name": "hyperSyncUrl",
+      "kind": "value"
+    },
+    {
+      "name": "impairmentFloor",
+      "kind": "value"
+    },
+    {
+      "name": "implementationRoleAddress",
+      "kind": "value"
+    },
+    {
+      "name": "implementationWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "intentStructHash",
+      "kind": "value"
+    },
+    {
+      "name": "isBundlerMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "isBurnAction",
+      "kind": "value"
+    },
+    {
+      "name": "isGetterWhitelisted",
+      "kind": "value"
+    },
+    {
+      "name": "isTransportError",
+      "kind": "value"
+    },
+    {
+      "name": "jitAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "jsonSafe",
+      "kind": "value"
+    },
+    {
+      "name": "knownVenueStatus",
+      "kind": "value"
+    },
+    {
+      "name": "labelLogs",
+      "kind": "value"
+    },
+    {
+      "name": "loadHyperSync",
+      "kind": "value"
+    },
+    {
+      "name": "lopDomain",
+      "kind": "value"
+    },
+    {
+      "name": "lopInvalidatorAbi",
+      "kind": "value"
+    },
+    {
+      "name": "lopInvalidatorPlan",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryAbi",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "max",
+      "kind": "value"
+    },
+    {
+      "name": "min",
+      "kind": "value"
+    },
+    {
+      "name": "mkClient",
+      "kind": "value"
+    },
+    {
+      "name": "mulDiv",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeDecimals",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeDecimalsCeil",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeNapiLog",
+      "kind": "value"
+    },
+    {
+      "name": "oracleModeForSource",
+      "kind": "value"
+    },
+    {
+      "name": "parseAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "parseDefaults",
+      "kind": "value"
+    },
+    {
+      "name": "parsePostInteractionData",
+      "kind": "value"
+    },
+    {
+      "name": "parseSignedLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "parseTdxQuote",
+      "kind": "value"
+    },
+    {
+      "name": "permit2AllowanceAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolManagerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolPreflightWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "poolShareAbi",
+      "kind": "value"
+    },
+    {
+      "name": "postLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "postRfq",
+      "kind": "value"
+    },
+    {
+      "name": "postRfqAnswer",
+      "kind": "value"
+    },
+    {
+      "name": "postRfqCounter",
+      "kind": "value"
+    },
+    {
+      "name": "postRolloverOrder",
+      "kind": "value"
+    },
+    {
+      "name": "predictShares",
+      "kind": "value"
+    },
+    {
+      "name": "previewAdjustedRate",
+      "kind": "value"
+    },
+    {
+      "name": "previewExercise",
+      "kind": "value"
+    },
+    {
+      "name": "previewExerciseOther",
+      "kind": "value"
+    },
+    {
+      "name": "previewSwap",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindExercise",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindExerciseOther",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindSwap",
+      "kind": "value"
+    },
+    {
+      "name": "rateOracleAbi",
+      "kind": "value"
+    },
+    {
+      "name": "readAdapterRoles",
+      "kind": "value"
+    },
+    {
+      "name": "readForeignSharePool",
+      "kind": "value"
+    },
+    {
+      "name": "readPoolState",
+      "kind": "value"
+    },
+    {
+      "name": "realConfigDeps",
+      "kind": "value"
+    },
+    {
+      "name": "realDeps",
+      "kind": "value"
+    },
+    {
+      "name": "recipeAbi",
+      "kind": "value"
+    },
+    {
+      "name": "reconstructMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "redactEnvioUrl",
+      "kind": "value"
+    },
+    {
+      "name": "redactUrlIn",
+      "kind": "value"
+    },
+    {
+      "name": "refillRatePerSecond",
+      "kind": "value"
+    },
+    {
+      "name": "replayRtmr3",
+      "kind": "value"
+    },
+    {
+      "name": "replayWhitelist",
+      "kind": "value"
+    },
+    {
+      "name": "reportEndpointFailure",
+      "kind": "value"
+    },
+    {
+      "name": "resetConfigMemo",
+      "kind": "value"
+    },
+    {
+      "name": "resetExplicitVerification",
+      "kind": "value"
+    },
+    {
+      "name": "resetRegistryBindingGuardCache",
+      "kind": "value"
+    },
+    {
+      "name": "resetRpcInflight",
+      "kind": "value"
+    },
+    {
+      "name": "resetVenueBreaker",
+      "kind": "value"
+    },
+    {
+      "name": "resolveConfig",
+      "kind": "value"
+    },
+    {
+      "name": "resolveDeployment",
+      "kind": "value"
+    },
+    {
+      "name": "resolveLogsEndpoint",
+      "kind": "value"
+    },
+    {
+      "name": "resolveMarketRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "resolveMarketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "resolvePoolTokens",
+      "kind": "value"
+    },
+    {
+      "name": "resolveRollover",
+      "kind": "value"
+    },
+    {
+      "name": "resolveRpc",
+      "kind": "value"
+    },
+    {
+      "name": "roleMemberSlot",
+      "kind": "value"
+    },
+    {
+      "name": "rpcDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "runTool",
+      "kind": "value"
+    },
+    {
+      "name": "saltExtensionBinding",
+      "kind": "value"
+    },
+    {
+      "name": "settlerStatusAbi",
+      "kind": "value"
+    },
+    {
+      "name": "sha256Hex",
+      "kind": "value"
+    },
+    {
+      "name": "sharePoolIdAbi",
+      "kind": "value"
+    },
+    {
+      "name": "spenderRoleOf",
+      "kind": "value"
+    },
+    {
+      "name": "summarizeBundle",
+      "kind": "value"
+    },
+    {
+      "name": "toSalt",
+      "kind": "value"
+    },
+    {
+      "name": "tokenNativeDecimalsToFixed",
+      "kind": "value"
+    },
+    {
+      "name": "venueBaseUrl",
+      "kind": "value"
+    },
+    {
+      "name": "venueChainConsistent",
+      "kind": "value"
+    },
+    {
+      "name": "venueDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "verificationDigest",
+      "kind": "value"
+    },
+    {
+      "name": "verifyCreate2",
+      "kind": "value"
+    },
+    {
+      "name": "whitelistManagerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "windowedRpcSource",
+      "kind": "value"
+    }
+  ],
+  "./bundle": [
+    {
+      "name": "AuthorityAction",
+      "kind": "type"
+    },
+    {
+      "name": "AuthorityTx",
+      "kind": "type"
+    },
+    {
+      "name": "CORK_ACTION_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "Call",
+      "kind": "type"
+    },
+    {
+      "name": "CorkActionName",
+      "kind": "type"
+    },
+    {
+      "name": "CorkActionParamMap",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedLeg",
+      "kind": "type"
+    },
+    {
+      "name": "FundingMode",
+      "kind": "type"
+    },
+    {
+      "name": "FundingPlan",
+      "kind": "type"
+    },
+    {
+      "name": "MULTICALL_SELECTOR",
+      "kind": "value"
+    },
+    {
+      "name": "PAUSE_BIT",
+      "kind": "value"
+    },
+    {
+      "name": "PoolTokens",
+      "kind": "type"
+    },
+    {
+      "name": "PreflightInput",
+      "kind": "type"
+    },
+    {
+      "name": "PreflightWarning",
+      "kind": "type"
+    },
+    {
+      "name": "REENTER_SELECTOR",
+      "kind": "value"
+    },
+    {
+      "name": "SafeDepositParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeExerciseOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeExerciseParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeMintParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeRedeemParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeSwapParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindDepositParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindExerciseOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindExerciseParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindMintParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeUnwindSwapParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeWithdrawOtherParams",
+      "kind": "type"
+    },
+    {
+      "name": "SafeWithdrawParams",
+      "kind": "type"
+    },
+    {
+      "name": "SummaryOptions",
+      "kind": "type"
+    },
+    {
+      "name": "TokenRole",
+      "kind": "type"
+    },
+    {
+      "name": "ZERO_CALLBACK_HASH",
+      "kind": "value"
+    },
+    {
+      "name": "buildAuthorityTx",
+      "kind": "value"
+    },
+    {
+      "name": "bundler3Abi",
+      "kind": "value"
+    },
+    {
+      "name": "bundlerLegAbi",
+      "kind": "value"
+    },
+    {
+      "name": "bundlerSweepAbi",
+      "kind": "value"
+    },
+    {
+      "name": "call",
+      "kind": "value"
+    },
+    {
+      "name": "canAutoFund",
+      "kind": "value"
+    },
+    {
+      "name": "corkActionCall",
+      "kind": "value"
+    },
+    {
+      "name": "corkAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "decodeBundle",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "decodeSingleCall",
+      "kind": "value"
+    },
+    {
+      "name": "encodeCorkAction",
+      "kind": "value"
+    },
+    {
+      "name": "encodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "fundingLegs",
+      "kind": "value"
+    },
+    {
+      "name": "fundingPlan",
+      "kind": "value"
+    },
+    {
+      "name": "generalAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "isBundlerMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "isBurnAction",
+      "kind": "value"
+    },
+    {
+      "name": "poolPreflightWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "spenderRoleOf",
+      "kind": "value"
+    },
+    {
+      "name": "summarizeBundle",
+      "kind": "value"
+    }
+  ],
+  "./chain": [
+    {
+      "name": "CorkAddresses",
+      "kind": "type"
+    },
+    {
+      "name": "DEFAULT_CONFIG",
+      "kind": "value"
+    },
+    {
+      "name": "DEFAULT_RPCS",
+      "kind": "value"
+    },
+    {
+      "name": "DecodedLogRow",
+      "kind": "type"
+    },
+    {
+      "name": "FALLBACK_CHAINS",
+      "kind": "value"
+    },
+    {
+      "name": "KNOWN_EVENTS_ABI",
+      "kind": "value"
+    },
+    {
+      "name": "PoolStateRead",
+      "kind": "type"
+    },
+    {
+      "name": "PoolTokensRead",
+      "kind": "type"
+    },
+    {
+      "name": "ProbeResult",
+      "kind": "type"
+    },
+    {
+      "name": "RawLogLike",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedRpc",
+      "kind": "type"
+    },
+    {
+      "name": "RpcChainMismatchError",
+      "kind": "value+type"
+    },
+    {
+      "name": "RpcConfig",
+      "kind": "type"
+    },
+    {
+      "name": "RpcDeps",
+      "kind": "type"
+    },
+    {
+      "name": "RpcState",
+      "kind": "type"
+    },
+    {
+      "name": "TransportRequest",
+      "kind": "type"
+    },
+    {
+      "name": "constraintAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "decodeKnownLog",
+      "kind": "value"
+    },
+    {
+      "name": "erc20Abi",
+      "kind": "value"
+    },
+    {
+      "name": "filterChainlistRpcs",
+      "kind": "value"
+    },
+    {
+      "name": "hostOf",
+      "kind": "value"
+    },
+    {
+      "name": "isTransportError",
+      "kind": "value"
+    },
+    {
+      "name": "mkClient",
+      "kind": "value"
+    },
+    {
+      "name": "permit2AllowanceAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolManagerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolShareAbi",
+      "kind": "value"
+    },
+    {
+      "name": "rateOracleAbi",
+      "kind": "value"
+    },
+    {
+      "name": "readPoolState",
+      "kind": "value"
+    },
+    {
+      "name": "realDeps",
+      "kind": "value"
+    },
+    {
+      "name": "reportEndpointFailure",
+      "kind": "value"
+    },
+    {
+      "name": "resetExplicitVerification",
+      "kind": "value"
+    },
+    {
+      "name": "resetRpcInflight",
+      "kind": "value"
+    },
+    {
+      "name": "resolvePoolTokens",
+      "kind": "value"
+    },
+    {
+      "name": "resolveRpc",
+      "kind": "value"
+    },
+    {
+      "name": "rpcDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "whitelistManagerAbi",
+      "kind": "value"
+    }
+  ],
+  "./config": [
+    {
+      "name": "BUILD_COMMIT",
+      "kind": "value"
+    },
+    {
+      "name": "BUILD_TARGET",
+      "kind": "value"
+    },
+    {
+      "name": "BUILD_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "CORK_DEFAULTS_URL",
+      "kind": "value"
+    },
+    {
+      "name": "CREATE2_ATTESTATIONS",
+      "kind": "value"
+    },
+    {
+      "name": "CREATE2_DEPLOYER",
+      "kind": "value"
+    },
+    {
+      "name": "CodeReader",
+      "kind": "type"
+    },
+    {
+      "name": "ConfigDeps",
+      "kind": "type"
+    },
+    {
+      "name": "CorkDefaults",
+      "kind": "type"
+    },
+    {
+      "name": "CorkDeployment",
+      "kind": "type"
+    },
+    {
+      "name": "CorkMarketRegistry",
+      "kind": "type"
+    },
+    {
+      "name": "CorkMarketRegistryLegacy",
+      "kind": "type"
+    },
+    {
+      "name": "CorkRolloverDeployment",
+      "kind": "type"
+    },
+    {
+      "name": "Create2Attestation",
+      "kind": "type"
+    },
+    {
+      "name": "EIP1967_IMPLEMENTATION_SLOT",
+      "kind": "value"
+    },
+    {
+      "name": "FETCH_FAILED_WARNING",
+      "kind": "value"
+    },
+    {
+      "name": "ImagePinCheck",
+      "kind": "type"
+    },
+    {
+      "name": "ImplementationCheck",
+      "kind": "type"
+    },
+    {
+      "name": "MAINNET_DEPLOYMENT",
+      "kind": "value"
+    },
+    {
+      "name": "ParsedTdxQuote",
+      "kind": "type"
+    },
+    {
+      "name": "RemoteFetchResult",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedConfig",
+      "kind": "type"
+    },
+    {
+      "name": "RtmrEvent",
+      "kind": "type"
+    },
+    {
+      "name": "STALE_CACHE_WARNING",
+      "kind": "value"
+    },
+    {
+      "name": "StoredCache",
+      "kind": "type"
+    },
+    {
+      "name": "approvedImplementationGuard",
+      "kind": "value"
+    },
+    {
+      "name": "checkApprovedImplementations",
+      "kind": "value"
+    },
+    {
+      "name": "checkComposeHash",
+      "kind": "value"
+    },
+    {
+      "name": "checkImagePins",
+      "kind": "value"
+    },
+    {
+      "name": "compareVersions",
+      "kind": "value"
+    },
+    {
+      "name": "composeHashFromEvents",
+      "kind": "value"
+    },
+    {
+      "name": "configDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "extractDockerComposeFile",
+      "kind": "value"
+    },
+    {
+      "name": "implementationRoleAddress",
+      "kind": "value"
+    },
+    {
+      "name": "implementationWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "parseDefaults",
+      "kind": "value"
+    },
+    {
+      "name": "parseTdxQuote",
+      "kind": "value"
+    },
+    {
+      "name": "realConfigDeps",
+      "kind": "value"
+    },
+    {
+      "name": "replayRtmr3",
+      "kind": "value"
+    },
+    {
+      "name": "resetConfigMemo",
+      "kind": "value"
+    },
+    {
+      "name": "resolveConfig",
+      "kind": "value"
+    },
+    {
+      "name": "resolveDeployment",
+      "kind": "value"
+    },
+    {
+      "name": "resolveMarketRegistry",
+      "kind": "value"
+    },
+    {
+      "name": "resolveMarketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "resolveRollover",
+      "kind": "value"
+    },
+    {
+      "name": "sha256Hex",
+      "kind": "value"
+    }
+  ],
+  "./indexer": [
+    {
+      "name": "CLONE_DEPLOYED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "CloneRow",
+      "kind": "type"
+    },
+    {
+      "name": "ERC20_TRANSFER_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "EnvioProduct",
+      "kind": "type"
+    },
+    {
+      "name": "HYPERSYNC_MAX_PAGES",
+      "kind": "value"
+    },
+    {
+      "name": "HYPERSYNC_URLS",
+      "kind": "value"
+    },
+    {
+      "name": "HsAddress",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLoad",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLog",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncLogsQuery",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncPage",
+      "kind": "type"
+    },
+    {
+      "name": "HyperSyncSource",
+      "kind": "type"
+    },
+    {
+      "name": "LOP_FILLED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "LogMeta",
+      "kind": "type"
+    },
+    {
+      "name": "LopFillRow",
+      "kind": "type"
+    },
+    {
+      "name": "MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "MarketRow",
+      "kind": "type"
+    },
+    {
+      "name": "ROLLOVER_FILL_TOPICS",
+      "kind": "value"
+    },
+    {
+      "name": "RolloverFillRow",
+      "kind": "type"
+    },
+    {
+      "name": "ShareTransferRow",
+      "kind": "type"
+    },
+    {
+      "name": "WHITELIST_TOPICS",
+      "kind": "value"
+    },
+    {
+      "name": "WINDOWED_RPC_MAX_WINDOWS",
+      "kind": "value"
+    },
+    {
+      "name": "WINDOWED_RPC_WINDOW_BLOCKS",
+      "kind": "value"
+    },
+    {
+      "name": "WhitelistEventRow",
+      "kind": "type"
+    },
+    {
+      "name": "WhitelistReplay",
+      "kind": "type"
+    },
+    {
+      "name": "collectPagedLogs",
+      "kind": "value"
+    },
+    {
+      "name": "decodeCloneRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeLopFillRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMarketRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeRolloverFillRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeShareTransferRows",
+      "kind": "value"
+    },
+    {
+      "name": "decodeWhitelistRows",
+      "kind": "value"
+    },
+    {
+      "name": "envioToken",
+      "kind": "value"
+    },
+    {
+      "name": "hyperRpcHost",
+      "kind": "value"
+    },
+    {
+      "name": "hyperSyncUrl",
+      "kind": "value"
+    },
+    {
+      "name": "loadHyperSync",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeNapiLog",
+      "kind": "value"
+    },
+    {
+      "name": "redactEnvioUrl",
+      "kind": "value"
+    },
+    {
+      "name": "redactUrlIn",
+      "kind": "value"
+    },
+    {
+      "name": "replayWhitelist",
+      "kind": "value"
+    },
+    {
+      "name": "windowedRpcSource",
+      "kind": "value"
+    }
+  ],
+  "./math": [
+    {
+      "name": "ConstraintState",
+      "kind": "type"
+    },
+    {
+      "name": "Create2Verification",
+      "kind": "type"
+    },
+    {
+      "name": "Decimals",
+      "kind": "type"
+    },
+    {
+      "name": "ExerciseOtherPreview",
+      "kind": "type"
+    },
+    {
+      "name": "ExercisePreview",
+      "kind": "type"
+    },
+    {
+      "name": "Hex40",
+      "kind": "type"
+    },
+    {
+      "name": "ImpairmentFloor",
+      "kind": "type"
+    },
+    {
+      "name": "Market",
+      "kind": "type"
+    },
+    {
+      "name": "PCT_DENOM",
+      "kind": "value"
+    },
+    {
+      "name": "PoolFees",
+      "kind": "type"
+    },
+    {
+      "name": "RateCalcParams",
+      "kind": "type"
+    },
+    {
+      "name": "RateCalcResult",
+      "kind": "type"
+    },
+    {
+      "name": "Rounding",
+      "kind": "type"
+    },
+    {
+      "name": "SECONDS_PER_DAY",
+      "kind": "value"
+    },
+    {
+      "name": "SwapContext",
+      "kind": "type"
+    },
+    {
+      "name": "SwapPreview",
+      "kind": "type"
+    },
+    {
+      "name": "TARGET_DECIMALS",
+      "kind": "value"
+    },
+    {
+      "name": "U160_MAX",
+      "kind": "value"
+    },
+    {
+      "name": "U256_MAX",
+      "kind": "value"
+    },
+    {
+      "name": "UnwindContext",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindExerciseOtherPreview",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindExercisePreview",
+      "kind": "type"
+    },
+    {
+      "name": "UnwindSwapPreview",
+      "kind": "type"
+    },
+    {
+      "name": "WAD",
+      "kind": "value"
+    },
+    {
+      "name": "calculateDepositAmountWithSwapRate",
+      "kind": "value"
+    },
+    {
+      "name": "calculateEqualSwapAmount",
+      "kind": "value"
+    },
+    {
+      "name": "calculateGrossAmountBeforeFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculateGrossAmountWithTimeDecayFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculatePercentageFee",
+      "kind": "value"
+    },
+    {
+      "name": "calculateRate",
+      "kind": "value"
+    },
+    {
+      "name": "calculateTimeDecayFee",
+      "kind": "value"
+    },
+    {
+      "name": "ceilDiv",
+      "kind": "value"
+    },
+    {
+      "name": "computeMarketId",
+      "kind": "value"
+    },
+    {
+      "name": "computeT",
+      "kind": "value"
+    },
+    {
+      "name": "create2FromInitCode",
+      "kind": "value"
+    },
+    {
+      "name": "create2FromInitCodeHash",
+      "kind": "value"
+    },
+    {
+      "name": "creditsRefilled",
+      "kind": "value"
+    },
+    {
+      "name": "fixedToTokenNativeDecimals",
+      "kind": "value"
+    },
+    {
+      "name": "fixedToTokenNativeDecimalsCeil",
+      "kind": "value"
+    },
+    {
+      "name": "impairmentFloor",
+      "kind": "value"
+    },
+    {
+      "name": "max",
+      "kind": "value"
+    },
+    {
+      "name": "min",
+      "kind": "value"
+    },
+    {
+      "name": "mulDiv",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeDecimals",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeDecimalsCeil",
+      "kind": "value"
+    },
+    {
+      "name": "previewAdjustedRate",
+      "kind": "value"
+    },
+    {
+      "name": "previewExercise",
+      "kind": "value"
+    },
+    {
+      "name": "previewExerciseOther",
+      "kind": "value"
+    },
+    {
+      "name": "previewSwap",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindExercise",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindExerciseOther",
+      "kind": "value"
+    },
+    {
+      "name": "previewUnwindSwap",
+      "kind": "value"
+    },
+    {
+      "name": "refillRatePerSecond",
+      "kind": "value"
+    },
+    {
+      "name": "toSalt",
+      "kind": "value"
+    },
+    {
+      "name": "tokenNativeDecimalsToFixed",
+      "kind": "value"
+    },
+    {
+      "name": "verifyCreate2",
+      "kind": "value"
+    }
+  ],
+  "./orders": [
+    {
+      "name": "AuctionPriceReport",
+      "kind": "type"
+    },
+    {
+      "name": "CALL_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "ChainOrderStatus",
+      "kind": "type"
+    },
+    {
+      "name": "CorkSettlerDomain",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedFusionOrder",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedMakerTraits",
+      "kind": "type"
+    },
+    {
+      "name": "ERC1271_MAGIC",
+      "kind": "value"
+    },
+    {
+      "name": "FORSELF_ACTION_MAP",
+      "kind": "value"
+    },
+    {
+      "name": "FORSELF_ALLOWANCES",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_BASE_POINTS",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_FEE_BASE",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_GAS_PRICE_BASE",
+      "kind": "value"
+    },
+    {
+      "name": "FUSION_SETTLEMENTS",
+      "kind": "value"
+    },
+    {
+      "name": "FillOrderForSelfArgs",
+      "kind": "type"
+    },
+    {
+      "name": "FinalizeMakerOrderArgs",
+      "kind": "type"
+    },
+    {
+      "name": "FinalizedMakerOrder",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfAllowance",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfCallResult",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfPoolActionType",
+      "kind": "type"
+    },
+    {
+      "name": "FusionAuction",
+      "kind": "type"
+    },
+    {
+      "name": "FusionGetterFees",
+      "kind": "type"
+    },
+    {
+      "name": "FusionPostInteraction",
+      "kind": "type"
+    },
+    {
+      "name": "LOP_ADDRESSES",
+      "kind": "value"
+    },
+    {
+      "name": "LabeledLog",
+      "kind": "type"
+    },
+    {
+      "name": "LogsEndpoint",
+      "kind": "type"
+    },
+    {
+      "name": "LogsRangeLimited",
+      "kind": "value+type"
+    },
+    {
+      "name": "LopDomain",
+      "kind": "type"
+    },
+    {
+      "name": "LopExtensionFields",
+      "kind": "type"
+    },
+    {
+      "name": "LopInvalidatorPlan",
+      "kind": "type"
+    },
+    {
+      "name": "LopOnChainStatus",
+      "kind": "type"
+    },
+    {
+      "name": "LopOrder",
+      "kind": "type"
+    },
+    {
+      "name": "MakerOrderArgs",
+      "kind": "type"
+    },
+    {
+      "name": "MakerOrderResult",
+      "kind": "type"
+    },
+    {
+      "name": "MakerTraitsParts",
+      "kind": "type"
+    },
+    {
+      "name": "NotAFusionOrder",
+      "kind": "value+type"
+    },
+    {
+      "name": "ORDER_DATA_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_DATA_TYPES",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_STATUS_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "OrderDataStruct",
+      "kind": "type"
+    },
+    {
+      "name": "ROLLOVER_INTENT_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "ROLLOVER_PARAMS_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "RateBumpParts",
+      "kind": "type"
+    },
+    {
+      "name": "RawLog",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverCall",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentArgs",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentResult",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverIntentStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverVenuePost",
+      "kind": "type"
+    },
+    {
+      "name": "SETTLER_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "SettlementClass",
+      "kind": "type"
+    },
+    {
+      "name": "TakerFillArgs",
+      "kind": "type"
+    },
+    {
+      "name": "TakerFillResult",
+      "kind": "type"
+    },
+    {
+      "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "buildAuctionAmountData",
+      "kind": "value"
+    },
+    {
+      "name": "buildCancelOrder",
+      "kind": "value"
+    },
+    {
+      "name": "buildFillOrderForSelfCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "buildMakerTraits",
+      "kind": "value"
+    },
+    {
+      "name": "buildPoolForSelfCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildRolloverIntent",
+      "kind": "value"
+    },
+    {
+      "name": "buildTakerFill",
+      "kind": "value"
+    },
+    {
+      "name": "chainStatusName",
+      "kind": "value"
+    },
+    {
+      "name": "classifyBitInvalidator",
+      "kind": "value"
+    },
+    {
+      "name": "classifyRemainingRaw",
+      "kind": "value"
+    },
+    {
+      "name": "classifySettlement",
+      "kind": "value"
+    },
+    {
+      "name": "computeOrderDigest",
+      "kind": "value"
+    },
+    {
+      "name": "corkSettlerDomain",
+      "kind": "value"
+    },
+    {
+      "name": "corkSettlerDomainSeparator",
+      "kind": "value"
+    },
+    {
+      "name": "decodeExtensionFields",
+      "kind": "value"
+    },
+    {
+      "name": "decodeFusionOrder",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMakerTraits",
+      "kind": "value"
+    },
+    {
+      "name": "decodeOrderTuple",
+      "kind": "value"
+    },
+    {
+      "name": "encodeAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeExtensionFields",
+      "kind": "value"
+    },
+    {
+      "name": "erc1271Abi",
+      "kind": "value"
+    },
+    {
+      "name": "fetchDigestLogs",
+      "kind": "value"
+    },
+    {
+      "name": "finalizeMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfAbi",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfBindingAbi",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfSelector",
+      "kind": "value"
+    },
+    {
+      "name": "forSelfSelectors",
+      "kind": "value"
+    },
+    {
+      "name": "fusionMakerGives",
+      "kind": "value"
+    },
+    {
+      "name": "fusionRateBump",
+      "kind": "value"
+    },
+    {
+      "name": "fusionTakerPays",
+      "kind": "value"
+    },
+    {
+      "name": "fusionTotalFee",
+      "kind": "value"
+    },
+    {
+      "name": "hashLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "hashOrderDataManual",
+      "kind": "value"
+    },
+    {
+      "name": "intentStructHash",
+      "kind": "value"
+    },
+    {
+      "name": "isGetterWhitelisted",
+      "kind": "value"
+    },
+    {
+      "name": "knownVenueStatus",
+      "kind": "value"
+    },
+    {
+      "name": "labelLogs",
+      "kind": "value"
+    },
+    {
+      "name": "lopDomain",
+      "kind": "value"
+    },
+    {
+      "name": "lopInvalidatorAbi",
+      "kind": "value"
+    },
+    {
+      "name": "lopInvalidatorPlan",
+      "kind": "value"
+    },
+    {
+      "name": "parseAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "parsePostInteractionData",
+      "kind": "value"
+    },
+    {
+      "name": "reconstructMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "resolveLogsEndpoint",
+      "kind": "value"
+    },
+    {
+      "name": "saltExtensionBinding",
+      "kind": "value"
+    },
+    {
+      "name": "settlerStatusAbi",
+      "kind": "value"
+    },
+    {
+      "name": "venueChainConsistent",
+      "kind": "value"
+    },
+    {
+      "name": "verificationDigest",
+      "kind": "value"
+    }
+  ],
+  "./registry": [
+    {
+      "name": "ASSET_KIND",
+      "kind": "value"
+    },
+    {
+      "name": "CONFIGURATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "DENOMINATION_PSEUDO_UNITS",
+      "kind": "value"
+    },
+    {
+      "name": "JITMarketParams",
+      "kind": "type"
+    },
+    {
+      "name": "JIT_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_CREATED_LEGACY_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MINTED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "ORACLE_MODE",
+      "kind": "value"
+    },
+    {
+      "name": "OracleModeName",
+      "kind": "type"
+    },
+    {
+      "name": "POOL_CREATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "PermitParams",
+      "kind": "type"
+    },
+    {
+      "name": "PredictSharesResult",
+      "kind": "type"
+    },
+    {
+      "name": "RECIPE_CATALOG",
+      "kind": "value"
+    },
+    {
+      "name": "RECIPE_SOURCE",
+      "kind": "value"
+    },
+    {
+      "name": "REGISTRY_DEPLOY_ERROR_NAMES",
+      "kind": "value"
+    },
+    {
+      "name": "RecipeCatalogEntry",
+      "kind": "type"
+    },
+    {
+      "name": "RecipeSourceName",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedConstraint",
+      "kind": "type"
+    },
+    {
+      "name": "SOURCE_INTERFACE",
+      "kind": "value"
+    },
+    {
+      "name": "SOURCE_TYPE",
+      "kind": "value"
+    },
+    {
+      "name": "accessControlAbi",
+      "kind": "value"
+    },
+    {
+      "name": "aggregatorV3Abi",
+      "kind": "value"
+    },
+    {
+      "name": "buildCreatePoolCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildDeployFixedRateOracleCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildDeployOracleCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildJitExtension",
+      "kind": "value"
+    },
+    {
+      "name": "buildSharesCall",
+      "kind": "value"
+    },
+    {
+      "name": "constantGetterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "controllerCreatePoolAbi",
+      "kind": "value"
+    },
+    {
+      "name": "controllerViewsAbi",
+      "kind": "value"
+    },
+    {
+      "name": "decodeJitExtension",
+      "kind": "value"
+    },
+    {
+      "name": "deprecatedEnabled",
+      "kind": "value"
+    },
+    {
+      "name": "deprecatedGateMessage",
+      "kind": "value"
+    },
+    {
+      "name": "deriveJitMarket",
+      "kind": "value"
+    },
+    {
+      "name": "encodeJitExtraData",
+      "kind": "value"
+    },
+    {
+      "name": "erc20MetadataAbi",
+      "kind": "value"
+    },
+    {
+      "name": "jitAdapterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryAbi",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "oracleModeForSource",
+      "kind": "value"
+    },
+    {
+      "name": "predictShares",
+      "kind": "value"
+    },
+    {
+      "name": "readAdapterRoles",
+      "kind": "value"
+    },
+    {
+      "name": "readForeignSharePool",
+      "kind": "value"
+    },
+    {
+      "name": "recipeAbi",
+      "kind": "value"
+    },
+    {
+      "name": "roleMemberSlot",
+      "kind": "value"
+    },
+    {
+      "name": "sharePoolIdAbi",
+      "kind": "value"
+    }
+  ],
+  "./venue": [
+    {
+      "name": "DEFAULT_VENUE_URL",
+      "kind": "value"
+    },
+    {
+      "name": "LopBookParams",
+      "kind": "type"
+    },
+    {
+      "name": "PageParams",
+      "kind": "type"
+    },
+    {
+      "name": "RfqListParams",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverOrdersParams",
+      "kind": "type"
+    },
+    {
+      "name": "SignedLopOrder",
+      "kind": "type"
+    },
+    {
+      "name": "VENUE_BREAKER_POLICY",
+      "kind": "value"
+    },
+    {
+      "name": "VenueBreakerState",
+      "kind": "type"
+    },
+    {
+      "name": "VenueDeps",
+      "kind": "type"
+    },
+    {
+      "name": "VenueFetch",
+      "kind": "type"
+    },
+    {
+      "name": "VenueHttpError",
+      "kind": "value+type"
+    },
+    {
+      "name": "VenueList",
+      "kind": "type"
+    },
+    {
+      "name": "VenuePostResult",
+      "kind": "type"
+    },
+    {
+      "name": "VenueUnreachable",
+      "kind": "value+type"
+    },
+    {
+      "name": "getLopFills",
+      "kind": "value"
+    },
+    {
+      "name": "getLopMarkets",
+      "kind": "value"
+    },
+    {
+      "name": "getLopOrderbook",
+      "kind": "value"
+    },
+    {
+      "name": "getPools",
+      "kind": "value"
+    },
+    {
+      "name": "getRfq",
+      "kind": "value"
+    },
+    {
+      "name": "getRfqs",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverContracts",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverFills",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverOrder",
+      "kind": "value"
+    },
+    {
+      "name": "getRolloverOrders",
+      "kind": "value"
+    },
+    {
+      "name": "parseSignedLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "postLopOrder",
+      "kind": "value"
+    },
+    {
+      "name": "postRfq",
+      "kind": "value"
+    },
+    {
+      "name": "postRfqAnswer",
+      "kind": "value"
+    },
+    {
+      "name": "postRfqCounter",
+      "kind": "value"
+    },
+    {
+      "name": "postRolloverOrder",
+      "kind": "value"
+    },
+    {
+      "name": "resetVenueBreaker",
+      "kind": "value"
+    },
+    {
+      "name": "venueBaseUrl",
+      "kind": "value"
+    },
+    {
+      "name": "venueDiagnostics",
+      "kind": "value"
+    }
+  ]
+}

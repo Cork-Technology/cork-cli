@@ -23,6 +23,7 @@
     "paths": {
       "@cork/schemas": ["packages/schemas/src/index.ts"],
       "@cork/core": ["packages/core/src/index.ts"],
+      "@cork/core/*": ["packages/core/src/exports/*.ts"],
       "@cork/mcp": ["packages/mcp/src/index.ts"],
       "@cork/cli": ["packages/cli/src/index.ts"]
     }

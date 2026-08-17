@@ -5,13 +5,56 @@
   "license": "UNLICENSED",
   "private": false,
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/packages/core/src/index.js",
   "types": "./dist/packages/core/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/packages/core/src/index.d.ts",
-      "import": "./dist/packages/core/src/index.js"
-    }
+      "import": "./dist/packages/core/src/index.js",
+      "default": "./dist/packages/core/src/index.js"
+    },
+    "./bundle": {
+      "types": "./dist/packages/core/src/exports/bundle.d.ts",
+      "import": "./dist/packages/core/src/exports/bundle.js",
+      "default": "./dist/packages/core/src/exports/bundle.js"
+    },
+    "./chain": {
+      "types": "./dist/packages/core/src/exports/chain.d.ts",
+      "import": "./dist/packages/core/src/exports/chain.js",
+      "default": "./dist/packages/core/src/exports/chain.js"
+    },
+    "./config": {
+      "types": "./dist/packages/core/src/exports/config.d.ts",
+      "import": "./dist/packages/core/src/exports/config.js",
+      "default": "./dist/packages/core/src/exports/config.js"
+    },
+    "./indexer": {
+      "types": "./dist/packages/core/src/exports/indexer.d.ts",
+      "import": "./dist/packages/core/src/exports/indexer.js",
+      "default": "./dist/packages/core/src/exports/indexer.js"
+    },
+    "./math": {
+      "types": "./dist/packages/core/src/exports/math.d.ts",
+      "import": "./dist/packages/core/src/exports/math.js",
+      "default": "./dist/packages/core/src/exports/math.js"
+    },
+    "./orders": {
+      "types": "./dist/packages/core/src/exports/orders.d.ts",
+      "import": "./dist/packages/core/src/exports/orders.js",
+      "default": "./dist/packages/core/src/exports/orders.js"
+    },
+    "./registry": {
+      "types": "./dist/packages/core/src/exports/registry.d.ts",
+      "import": "./dist/packages/core/src/exports/registry.js",
+      "default": "./dist/packages/core/src/exports/registry.js"
+    },
+    "./venue": {
+      "types": "./dist/packages/core/src/exports/venue.d.ts",
+      "import": "./dist/packages/core/src/exports/venue.js",
+      "default": "./dist/packages/core/src/exports/venue.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"

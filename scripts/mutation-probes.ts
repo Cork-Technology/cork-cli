@@ -58,6 +58,7 @@ const T = {
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
+  apiSurface: "packages/core/test/api-surface.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
@@ -2104,6 +2105,31 @@ const CATALOG: Mutant[] = [
     find: 'if (c.verdict === "not_approved") {',
     replace: 'if (c.verdict === ("not_approved_x" as string)) {',
     tests: [T.implementations],
+  },
+  // ── the SDK package surface (2026-08-17): subpath exports + the api-surface drift gate ──────
+  {
+    // A tier barrel silently loses a module: every export it carried vanishes from the
+    // published subpath AND the root. The api-surface fixture must see the hole.
+    id: "sdk-barrel-module-dropped",
+    file: "packages/core/src/exports/indexer.ts",
+    find: 'export * from "../datasources/hypersync.ts";',
+    replace: "",
+    tests: [T.apiSurface],
+  },
+  {
+    // package.json loses a subpath entry: installed consumers hit ERR_PACKAGE_PATH_NOT_EXPORTED
+    // while every in-repo resolver (tsconfig paths, vitest alias) keeps working — only the
+    // offline exports-map parity test can catch it before publish.
+    id: "sdk-exports-map-subpath-dropped",
+    file: "packages/core/package.json",
+    find: `    "./indexer": {
+      "types": "./dist/packages/core/src/exports/indexer.d.ts",
+      "import": "./dist/packages/core/src/exports/indexer.js",
+      "default": "./dist/packages/core/src/exports/indexer.js"
+    },
+`,
+    replace: "",
+    tests: [T.apiSurface],
   },
 ];
 

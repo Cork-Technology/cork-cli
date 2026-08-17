@@ -406,3 +406,15 @@ split per tool under `src/handlers/`) · `packages/mcp` (stdio server) · `packa
 projection) · `evals/` (agent-eval suite). Tests: `packages/core/test/` (unit +
 `fork-parity`/`bundle-sim` vnet suites), `packages/mcp/test/` (integration + surface-drift gate),
 `packages/schemas/test/`.
+
+**`@cork/core` is also the integrator SDK** (2026-08-17): the root export is the full curated
+surface; eight domain subpaths (`/math` `/orders` `/registry` `/chain` `/bundle` `/venue`
+`/indexer` `/config`) map 1:1 to barrels in `packages/core/src/exports/` — package.json exports
+map ⟷ barrel files ⟷ tsconfig `paths` ⟷ vitest alias must stay in sync (the parity tests in
+`packages/core/test/api-surface.test.ts` pin all pairings). `breaker.ts`/`atomic-file.ts`/
+`fetch-timeout.ts`/`scan-cache.ts`/`handlers/*` are INTERNAL — never re-export them; their tests
+import relatively. The whole public surface (type exports included) is fixture-pinned by the
+API-surface drift gate — an intended change needs a CHANGELOG note + `UPDATE_API_SURFACE=1`
+regen, mirroring the MCP surface-drift workflow. `bun run verify:publish` = build + layout gate +
+`publint --strict` + `attw --profile esm-only` (all must stay green; node10/CJS are deliberately
+out of the support matrix — ESM-only, engines node ≥ 22).

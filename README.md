@@ -16,6 +16,48 @@ and the Tenderly virtual-mainnet fixture pool.
 | `@cork/mcp` | MCP server projecting the registry via the low-level `Server` API (advertises JSON Schema directly; avoids the SDK's bundled-zod coupling). Stdio entry `packages/mcp/src/bin.ts` (package bin `cork-mcp`), launched by your MCP client under Bun — see "Use it with Claude Code" below. |
 | `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`. Input as the wire JSON or as schema-derived flags; output as prose for people and JSON on request; `--explain` for a tool's contract; state-mapped exit codes. Binary: `ch` (launcher at `bin/ch`). |
 
+## Use as a library (TypeScript SDK)
+
+`@cork/schemas` and `@cork/core` are publish-ready library packages (ESM-only, Node ≥ 22 / Bun,
+`sideEffects: false`, types shipped). Until they land on a registry, install from a packed
+tarball: `bun pm pack` in each package directory rewrites `workspace:*` to real versions, and
+the tarballs npm-install cleanly.
+
+The root export is the full SDK; domain subpaths let you load only the tier you need — a
+consumer of the pure math never loads the venue client or an RPC transport:
+
+```ts
+// The envelope: the exact same 9-tool contract the MCP server and CLI ship,
+// same result envelope ({ state, data, warnings, provenance }), same gates.
+import { runTool } from "@cork/core";
+const result = await runTool("cork_query", { resource: "cork-pool", filters: { poolId } });
+if (result.state === "ok") console.log(result.data);
+
+// Pure, zero-IO math: bit-exact ports, MarketId hashing, CREATE2 derivation.
+import { computeMarketId, previewSwap } from "@cork/core/math";
+
+// Order primitives: LOP v4 build/hash/verify, Fusion auctions, rollover EIP-712.
+import { buildMakerOrder, hashLopOrder } from "@cork/core/orders";
+```
+
+| Subpath | Tier |
+|---|---|
+| `@cork/core` | Everything below, plus the `runTool` envelope (the covered 9-tool contract). |
+| `@cork/core/math` | Pure zero-IO: bit-exact math ports, `MarketId`, CREATE2. |
+| `@cork/core/orders` | LOP v4 orders, Fusion auction pricing, rollover ERC-7683, ForSelf builders. |
+| `@cork/core/registry` | MarketRegistry 2.1.0 reads, JIT derivation, recipe constraints. |
+| `@cork/core/chain` | ABIs, pool/registry state reads, event decode, RPC resolution. |
+| `@cork/core/bundle` | Bundler3 action encoders, decode, funding + sweep legs, signer summary. |
+| `@cork/core/venue` | The typed venue (api-phoenix) client with cursor pagination. |
+| `@cork/core/indexer` | HyperSync/HyperRPC event-archive access for full-decentralized reads. |
+| `@cork/core/config` | Deployment config, CREATE2 attestations, implementation + TEE guards. |
+
+The public surface — every export name on the root and each subpath, type exports included — is
+pinned by a drift gate (`packages/core/test/api-surface.test.ts`): an accidental addition or
+removal fails CI until the fixture is regenerated deliberately. Package shape is audited on
+every `bun run verify:publish` with `publint --strict` and `arethetypeswrong` (all entry points
+resolve green under node16-ESM and bundler resolution).
+
 ## Use it with Claude Code (MCP)
 
 The MCP server exposes all 9 Cork tools to Claude Code (or any MCP client) over stdio. Claude

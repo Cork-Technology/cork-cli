@@ -32,6 +32,20 @@ silently.
 
 ### Added
 
+- **`@cork/core` is now an integrator-ready SDK package with domain subpath exports.** The root
+  export stays the full curated surface (envelope + every tier); eight subpaths (`/math`,
+  `/orders`, `/registry`, `/chain`, `/bundle`, `/venue`, `/indexer`, `/config`) let a consumer
+  load one tier without the rest — pure math never loads the venue client or an RPC transport.
+  Two internal modules leave the public barrel (`breaker.ts`, `atomic-file.ts`; they carried no
+  stability promise and no external consumer). The whole public surface — every export name on
+  the root and each subpath, type exports included — is pinned by a new API-surface drift gate
+  (`packages/core/test/api-surface.test.ts`, regenerate deliberately with `UPDATE_API_SURFACE=1`),
+  and both cut-paths are mutation-probed. Package shape is audited by `bun run verify:publish`:
+  `publint --strict` plus `arethetypeswrong` (every entry point green under node16-ESM and
+  bundler resolution; `sideEffects: false`; types condition first; `./package.json` exported).
+  Proven on the real integrator path: `bun pm pack` rewrites `workspace:*`, the tarballs
+  npm-install cleanly, and Node resolves every subpath through the published exports map —
+  `runTool("cork_capabilities")` answers `ok` with 9 tools from the installed tarball.
 - **`modes` doc topic** (aliases `data-modes`, `backends`). It shows the three data modes side
   by side as connectivity pledges: hybrid contacts the venue and your RPC; lite-decentralized
   contacts your RPC only; full-decentralized contacts your RPC and HyperSync, never the venue.

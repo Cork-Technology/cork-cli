@@ -5,12 +5,15 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@cork/schemas": r("packages/schemas/src/index.ts"),
-      "@cork/core": r("packages/core/src/index.ts"),
-      "@cork/mcp": r("packages/mcp/src/index.ts"),
-      "@cork/cli": r("packages/cli/src/index.ts"),
-    },
+    // Array form, most-specific first: the subpath regex must win before the bare "@cork/core"
+    // entry can prefix-match "@cork/core/math" into ".../index.ts/math".
+    alias: [
+      { find: /^@cork\/core\/(.+)$/u, replacement: r("packages/core/src/exports") + "/$1.ts" },
+      { find: "@cork/schemas", replacement: r("packages/schemas/src/index.ts") },
+      { find: "@cork/core", replacement: r("packages/core/src/index.ts") },
+      { find: "@cork/mcp", replacement: r("packages/mcp/src/index.ts") },
+      { find: "@cork/cli", replacement: r("packages/cli/src/index.ts") },
+    ],
   },
   test: {
     include: ["packages/*/test/**/*.test.ts", "scripts/*.test.ts", "evals/*.test.ts"],

@@ -1,42 +1,23 @@
-// @cork/core — deterministic, bit-exact ports of Cork Phoenix on-chain math + address derivation.
-export * from "./types.ts";
-export * from "./math/fixed.ts";
-export * from "./math/mathhelper.ts";
-export * from "./math/constraint.ts";
-export * from "./math/preview.ts";
-export * from "./marketid.ts";
-export * from "./breaker.ts";
-export * from "./atomic-file.ts";
-export * from "./create2.ts";
-export * from "./orders.ts";
-export * from "./forself.ts";
-export * from "./market-registry.ts";
-// The DEPRECATED pre-2.1.0 generation, namespaced to avoid colliding with the 2.1.0 surface —
-// reachable at runtime only through the deprecation gate.
-export * as marketRegistryLegacy from "./market-registry-legacy.ts";
-export * from "./deprecation.ts";
-export * from "./rollover.ts";
-export * from "./rollover-verify.ts";
-export * from "./datasources/venue.ts";
-export * from "./datasources/envio.ts";
-export * from "./datasources/hypersync.ts";
-export * from "./event-decode.ts";
-export * from "./fusion.ts";
-export * from "./chain/abis.ts";
-export * from "./chain/reads.ts";
-export * from "./chain/rpc.ts";
-export * from "./bundle/corkAdapterAbi.ts";
-export * from "./bundle/bundler3.ts";
-export * from "./bundle/actions.ts";
-export * from "./bundle/decode.ts";
-export * from "./bundle/summary.ts";
-export * from "./bundle/authority.ts";
-export * from "./bundle/funding.ts";
-export * from "./bundle/preflight.ts";
-export * from "./bundle/legs.ts";
-export * from "./version.ts";
-export * from "./config.ts";
-export * from "./config-remote.ts";
-export * from "./implementations.ts";
+// @cork/core — deterministic, bit-exact ports of Cork Phoenix on-chain math + address
+// derivation, chain reads, Bundler3 encode/decode, and the typed 9-tool runTool dispatch.
+//
+// The root export is the full curated SDK surface: every tier barrel below plus the envelope
+// (runTool). The same tiers are importable individually as subpaths (`@cork/core/math`,
+// `@cork/core/orders`, …) so a consumer who only wants the pure math never loads the venue
+// client or an RPC transport. The public surface — root and every subpath — is pinned by the
+// API-surface drift gate (packages/core/test/api-surface.test.ts): adding or removing an export
+// fails CI until the fixture is regenerated deliberately (UPDATE_API_SURFACE=1).
+//
+// Deliberately NOT exported (internal machinery, no stability promise): breaker.ts,
+// atomic-file.ts, fetch-timeout.ts, scan-cache.ts, and the per-tool handlers under handlers/
+// (reachable only through runTool).
+export * from "./exports/math.ts";
+export * from "./exports/orders.ts";
+export * from "./exports/registry.ts";
+export * from "./exports/chain.ts";
+export * from "./exports/bundle.ts";
+export * from "./exports/venue.ts";
+export * from "./exports/indexer.ts";
+export * from "./exports/config.ts";
+// The envelope: runTool + ToolInputError + HandlerContext + the CLI filter-key constants.
 export * from "./handlers.ts";
-export * from "./phala-attest.ts";
