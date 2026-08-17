@@ -32,6 +32,22 @@ silently.
 
 ### Added
 
+- **Every LOP-order prepare result now states its token approvals — with the unsigned grant
+  payloads.** maker-order, finalize-maker-order, and taker-fill (raw and forSelf) carry
+  `data.approvals`: one entry per required grant with holder, token, spender, stage, mechanism,
+  amount, and the unsigned approve transaction (ERC-20 `approve`, or Permit2's own `approve`
+  for the internal layer). The lifecycle is explicit: the maker's grants must exist before the
+  order rests (a resting order without them looks fillable but reverts); the taker grants
+  before broadcasting the fill. Permit2 sourcing (`usePermit2`) reports BOTH layers — token →
+  Permit2 and the Permit2 internal allowance → the LOP with a live expiration (bound to the
+  order's own expiry when it has one). JIT orders mark the predicted-cST side as covered by
+  the embedded ERC-2612 permit — EOA-only, because the LOP executes no permit for a CONTRACT
+  maker (verified in OrderMixin: `_fillContractOrder` skips the extension permit), which needs
+  a standing allowance instead — and name the Cork JIT adapter's collateral pull, previously
+  stated nowhere in results. Approval txs work identically from EOAs and contract wallets.
+  With an RPC, entries are annotated against current on-chain allowances (boundary-exact,
+  same rule as account-state) and confirmed-missing grants raise `approval_missing`. All
+  payload bytes and comparators are mutation-probed (5 new probes).
 - **`@cork/core` is now an integrator-ready SDK package with domain subpath exports.** The root
   export stays the full curated surface (envelope + every tier); eight subpaths (`/math`,
   `/orders`, `/registry`, `/chain`, `/bundle`, `/venue`, `/indexer`, `/config`) let a consumer

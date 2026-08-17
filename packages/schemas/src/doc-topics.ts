@@ -109,12 +109,24 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
 
 - Read the bundle \`summary\` (prepare results and \`cork_decode\`) before signing — it is the
   plain-English statement of what the bytes do, leg by leg.
-- Allowance prerequisites: a taker-fill needs the taker-asset allowance to the LOP;
-  permit2-funded bundles need BOTH Permit2 layers in place (\`cork_query\`
-  resource:"account-state" shows both). ForSelf-mode artifacts (\`forSelf\` on
-  \`cork_prepare_phoenix\` / taker-fill — for parameter-blind session-key wallets) invert
-  this: every allowance is granted to the INTEGRATOR-DEPLOYED ForSelf adapter itself, never
-  to the LOP or pool manager, and outputs are structurally delivered to the calling account.
+- Allowance prerequisites: every LOP-order prepare result (maker-order, finalize-maker-order,
+  taker-fill) carries \`data.approvals\` — one entry per required grant with holder, token,
+  spender, stage, and the UNSIGNED approve tx payload [K1]; entries confirmed missing on-chain
+  raise \`approval_missing\`. The lifecycle in one line: the MAKER's grants (maker asset → the
+  LOP; or, with Permit2 sourcing, BOTH layers: token → Permit2 AND the Permit2 internal
+  allowance → the LOP with a live expiration) must exist BEFORE the order rests — a resting
+  order without them looks fillable but reverts; the TAKER grants the taker asset → the LOP
+  before broadcasting the fill. JIT orders differ: the cST side is covered by an ERC-2612
+  permit embedded in the extension (EOA makers/takers only — the LOP executes NO permit for a
+  CONTRACT maker, which needs a standing allowance instead), and a JIT MINT additionally pulls
+  collateral into the Cork JIT adapter under its own allowance. Approval txs work identically
+  from EOAs and contract wallets (a contract wallet executes the same payload through its own
+  flow). \`cork_query\` resource:"account-state" shows current allowances for pool tokens;
+  \`cork_prepare_phoenix\` authority-onboard builds an approve tx for any token/spender/amount.
+  ForSelf-mode artifacts (\`forSelf\` on \`cork_prepare_phoenix\` / taker-fill — for
+  parameter-blind session-key wallets) invert this: every allowance is granted to the
+  INTEGRATOR-DEPLOYED ForSelf adapter itself, never to the LOP or pool manager, and outputs
+  are structurally delivered to the calling account.
 - The server reads chains through its own server-side RPC configuration; there is no per-call
   RPC override on the tool surface, and broadcasting is always client-side.`,
     searchText:

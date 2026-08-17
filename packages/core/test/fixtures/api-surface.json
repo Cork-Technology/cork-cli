@@ -5,6 +5,10 @@
       "kind": "value"
     },
     {
+      "name": "ApprovalRequirement",
+      "kind": "type"
+    },
+    {
       "name": "AuctionPriceReport",
       "kind": "type"
     },
@@ -465,6 +469,14 @@
       "kind": "value"
     },
     {
+      "name": "PERMIT2_ADDRESS",
+      "kind": "value"
+    },
+    {
+      "name": "PERMIT2_EXPIRATION_NEVER",
+      "kind": "value"
+    },
+    {
       "name": "POOL_CREATOR_ROLE",
       "kind": "value"
     },
@@ -777,6 +789,10 @@
       "kind": "value"
     },
     {
+      "name": "UnsignedApprovalTx",
+      "kind": "type"
+    },
+    {
       "name": "UnwindContext",
       "kind": "type"
     },
@@ -858,6 +874,10 @@
     },
     {
       "name": "aggregatorV3Abi",
+      "kind": "value"
+    },
+    {
+      "name": "annotateApprovalStatus",
       "kind": "value"
     },
     {
@@ -1181,6 +1201,10 @@
       "kind": "value"
     },
     {
+      "name": "erc20ApproveTx",
+      "kind": "value"
+    },
+    {
       "name": "erc20MetadataAbi",
       "kind": "value"
     },
@@ -1377,6 +1401,10 @@
       "kind": "value"
     },
     {
+      "name": "makerApprovalRequirements",
+      "kind": "value"
+    },
+    {
       "name": "marketRegistryAbi",
       "kind": "value"
     },
@@ -1438,6 +1466,10 @@
     },
     {
       "name": "permit2AllowanceAbi",
+      "kind": "value"
+    },
+    {
+      "name": "permit2ApproveTx",
       "kind": "value"
     },
     {
@@ -1646,6 +1678,10 @@
     },
     {
       "name": "summarizeBundle",
+      "kind": "value"
+    },
+    {
+      "name": "takerApprovalRequirements",
       "kind": "value"
     },
     {
@@ -2621,6 +2657,10 @@
   ],
   "./orders": [
     {
+      "name": "ApprovalRequirement",
+      "kind": "type"
+    },
+    {
       "name": "AuctionPriceReport",
       "kind": "type"
     },
@@ -2777,6 +2817,14 @@
       "kind": "type"
     },
     {
+      "name": "PERMIT2_ADDRESS",
+      "kind": "value"
+    },
+    {
+      "name": "PERMIT2_EXPIRATION_NEVER",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_INTENT_TYPEHASH",
       "kind": "value"
     },
@@ -2831,6 +2879,14 @@
     {
       "name": "TakerFillResult",
       "kind": "type"
+    },
+    {
+      "name": "UnsignedApprovalTx",
+      "kind": "type"
+    },
+    {
+      "name": "annotateApprovalStatus",
+      "kind": "value"
     },
     {
       "name": "auctionPhase",
@@ -2925,6 +2981,10 @@
       "kind": "value"
     },
     {
+      "name": "erc20ApproveTx",
+      "kind": "value"
+    },
+    {
       "name": "fetchDigestLogs",
       "kind": "value"
     },
@@ -3001,11 +3061,19 @@
       "kind": "value"
     },
     {
+      "name": "makerApprovalRequirements",
+      "kind": "value"
+    },
+    {
       "name": "parseAuctionGetterData",
       "kind": "value"
     },
     {
       "name": "parsePostInteractionData",
+      "kind": "value"
+    },
+    {
+      "name": "permit2ApproveTx",
       "kind": "value"
     },
     {
@@ -3022,6 +3090,10 @@
     },
     {
       "name": "settlerStatusAbi",
+      "kind": "value"
+    },
+    {
+      "name": "takerApprovalRequirements",
       "kind": "value"
     },
     {

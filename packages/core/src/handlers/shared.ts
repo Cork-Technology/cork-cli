@@ -239,9 +239,9 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
 
 export const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
-/** Canonical Uniswap Permit2 (same address on every chain) — a pure chain constant, housed here
- *  so read handlers don't import an address from the side-effecting submit module. */
-export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+/** Canonical Uniswap Permit2 — single-sourced from the PUBLIC order-approvals module (part of
+ *  the SDK surface via the orders tier) and re-exported here for the handlers that predate it. */
+export { PERMIT2_ADDRESS } from "../order-approvals.ts";
 
 /** First line of an unknown error's message — the one spelling of the repeated
  *  `err instanceof Error ? err.message.split("\n")[0] : String(err)` idiom. */

@@ -2,8 +2,9 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
+import { annotateApprovalStatus, type ApprovalRequirement, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
@@ -31,6 +32,26 @@ type MakerJitReport = {
   predictedCorkSwapToken?: `0x${string}`;
   permitNote?: string;
 };
+
+/** Best-effort approval-status annotation for the maker/finalize paths: runs ONLY with an
+ *  explicit RPC context (ctx.rpcUrl / ctx.resolveRpc) — same policy as funding-leg resolution —
+ *  so pure offline order building stays chain-silent. The requirement entries always ride;
+ *  this may only ADD satisfied/current fields, never block the artifact. */
+async function annotateIfExplicitRpc(ctx: HandlerContext, chainId: PrepareOrdersInput["chainId"], entries: ApprovalRequirement[]): Promise<ApprovalRequirement[]> {
+  if (!ctx.resolveRpc && !ctx.rpcUrl) return entries;
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) return entries;
+  return annotateApprovalStatus(resolved.client, { entries, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+}
+
+/** One info warning naming every approval the chain CONFIRMED missing (satisfied === false —
+ *  unknown states stay silent; the entries themselves carry the full picture). */
+function approvalMissingWarning(entries: ApprovalRequirement[], deadline: string): { code: string; message: string } | null {
+  const missing = entries.filter((e) => e.satisfied === false);
+  if (missing.length === 0) return null;
+  const lines = missing.map((e) => `${e.tokenRole} ${e.token} → ${e.spenderRole} ${e.spender} (current ${e.currentAllowance ?? "0"}, needs ${e.amount ?? "a simulated cap"}${e.currentExpiration !== undefined ? `, permit2 expiration ${e.currentExpiration}` : ""})`);
+  return { code: "approval_missing", message: `${missing.length} required approval${missing.length === 1 ? " is" : "s are"} NOT in place: ${lines.join("; ")} — grant ${deadline}, using the unsigned payload(s) in data.approvals` };
+}
 
 /** Maker-side auction plan echoed in `data.fusion`: what the signed extension commits to. */
 interface MakerAuctionPlan {
@@ -193,9 +214,34 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // The gate-facing artifact is content-addressed so an independent policy gate can pin
       // exactly what it admitted before submit.
       const artifact = { kind: "signed-maker-order", orderHash: finalized.orderHash, recoveredSigner, makerAccountType, signature: finalized.signature, extension: finalized.extension, submitInput };
+      // Approval requirements re-derived from the SIGNED bytes [K3]: the Permit2 sourcing bit
+      // and expiry from the signed makerTraits; for a JIT extension, the adapter/collateral
+      // from the decoded extension and the predicted cST from its embedded permit. Advisory
+      // only — deliberately OUTSIDE `artifact`, so the digest pins signed content alone.
+      const finalizeTraits = decodeMakerTraits(finalized.order.makerTraits);
+      let finalizeJit: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` } | undefined;
+      if (finalized.extension !== "0x") {
+        try {
+          const dec = decodeJitExtension(finalized.extension);
+          finalizeJit = { adapter: dec.adapter, collateralAsset: dec.params.collateralAsset, enableJitMint: Boolean(dec.params.enableJitMint), ...(dec.permits[0] ? { predictedCorkSwapToken: dec.permits[0].token } : {}) };
+        } catch {
+          /* not a JIT extension (e.g. auction-only) — the plain requirements apply */
+        }
+      }
+      const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
+        maker: finalized.order.maker,
+        makerAsset: finalized.order.makerAsset,
+        makingAmount: finalized.order.makingAmount,
+        lop,
+        usePermit2: finalizeTraits.usePermit2,
+        orderExpiry: finalizeTraits.expiry,
+        ...(finalizeJit ? { jit: finalizeJit } : {}),
+      }));
+      const finalizeApprovalWarn = approvalMissingWarning(approvals, "before submitting the listing (a resting order without them fills-then-reverts)");
+      if (finalizeApprovalWarn) finalizeWarnings.push(finalizeApprovalWarn);
       return envelope({
         state: "ok",
-        data: { ...artifact, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
+        data: { ...artifact, approvals, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
         chainId,
         source: makerAccountType === "ERC1271" ? "chain" : "config",
         warnings: [
@@ -407,6 +453,23 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         floorTakingAmount: String(built.order.takingAmount),
       };
     }
+    // The maker's (underwriter's) approval requirements — every grant must exist BEFORE the
+    // order rests, or it sits on the book fillable-looking and every fill attempt reverts.
+    const jitApprovalCtx =
+      action.jitMarket && jitData && "adapter" in jitData
+        ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, enableJitMint: action.jitMarket.enableJitMint ?? false, ...("predictedCorkSwapToken" in jitData && jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+        : undefined;
+    const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
+      maker: input.account,
+      makerAsset: action.makerAsset,
+      makingAmount: BigInt(action.makingAmount),
+      lop,
+      usePermit2: action.usePermit2,
+      orderExpiry: decodeMakerTraits(built.order.makerTraits).expiry,
+      ...(jitApprovalCtx ? { jit: jitApprovalCtx } : {}),
+    }));
+    const makerApprovalWarn = approvalMissingWarning(approvals, "before signing and listing this order");
+    if (makerApprovalWarn) warnings.push(makerApprovalWarn);
     return envelope({
       state: "ok",
       data: {
@@ -418,6 +481,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // The venue listing must carry this exact value: cork_submit compares the listing's nonce
         // against what the signed makerTraits encode and refuses to relay a mismatch.
         nonce: built.nonce,
+        approvals,
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
         execution: executionMakerOrder(),
@@ -666,8 +730,10 @@ async function buildTakerFillArtifact(a: {
   // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
   // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
   // resolved RPC or a failed read builds as before (this tool never claimed liveness).
+  // The resolved client is hoisted: the approval-status annotation below reuses it, so this
+  // path's chain-contact policy is unchanged (one resolution, security + advisory reads).
+  const resolved = await getRpc(ctx, chainId);
   {
-    const resolved = await getRpc(ctx, chainId);
     if (resolved) {
       try {
         const plan = lopInvalidatorPlan(signed.order.makerTraits);
@@ -794,6 +860,26 @@ async function buildTakerFillArtifact(a: {
   } catch (err) {
     return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "the resting order cannot be filled by this variant", ctx);
   }
+  // The taker's (hedger's) approval requirements, with the fill's ACTUAL cap (for an auction
+  // row that is the curve ceiling the cap was defaulted to). Annotated against the client the
+  // liveness pre-flight already resolved — no extra chain-contact policy.
+  const takerJitCtx =
+    jitData && action.jitMarket
+      ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, ...(jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+      : undefined;
+  let approvals = takerApprovalRequirements({
+    taker: account,
+    takerAsset: signed.order.takerAsset,
+    requiredTakingAmount: BigInt(fill.requiredTakingAmount),
+    lop,
+    ...(auctionData ? { auction: true } : {}),
+    ...(takerJitCtx ? { jit: takerJitCtx } : {}),
+  });
+  if (resolved) {
+    approvals = await annotateApprovalStatus(resolved.client, { entries: approvals, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+  }
+  const takerApprovalWarn = approvalMissingWarning(approvals, "before broadcasting this fill");
+  if (takerApprovalWarn) jitWarnings.push(takerApprovalWarn);
   return envelope({
     state: "ok",
     data: {
@@ -809,6 +895,7 @@ async function buildTakerFillArtifact(a: {
       requiredMakingAmount: fill.requiredMakingAmount,
       requiredTakingAmount: fill.requiredTakingAmount,
       takerTraits: fill.takerTraits,
+      approvals,
       ...(jitData ? { jit: jitData } : {}),
       ...(auctionData ? { auction: auctionData } : {}),
       simulationRequired: true,

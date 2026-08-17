@@ -59,6 +59,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
+  approvals: "packages/core/test/order-approvals.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
@@ -2105,6 +2106,52 @@ const CATALOG: Mutant[] = [
     find: 'if (c.verdict === "not_approved") {',
     replace: 'if (c.verdict === ("not_approved_x" as string)) {',
     tests: [T.implementations],
+  },
+  // ── order-lifecycle approvals (2026-08-17): who grants what to whom, payload-exact ──────────
+  {
+    // The plain maker grant authorizes the WRONG spender: the payload approves Permit2 while
+    // the fill pulls via the LOP — the order rests fillable-looking and every fill reverts.
+    id: "sdk-approval-maker-spender-swapped",
+    file: "packages/core/src/order-approvals.ts",
+    find: "unsignedTx: erc20ApproveTx(a.makerAsset, a.lop, a.makingAmount),",
+    replace: "unsignedTx: erc20ApproveTx(a.makerAsset, PERMIT2_ADDRESS, a.makingAmount),",
+    tests: [T.approvals],
+  },
+  {
+    // Permit2.approve(token, spender, …) with token/spender transposed: the tx grants the
+    // makerAsset ADDRESS as a spender over the LOP-as-token — silently useless bytes.
+    id: "sdk-approval-permit2-arg-order",
+    file: "packages/core/src/order-approvals.ts",
+    find: "args: [token, spender, amount, Number(expiration)]",
+    replace: "args: [spender, token, amount, Number(expiration)]",
+    tests: [T.approvals],
+  },
+  {
+    // An exactly-sufficient allowance must read satisfied (>= at the boundary): the strict
+    // comparator would nag every exact-approve holder with a false approval_missing.
+    id: "sdk-approval-satisfied-boundary",
+    file: "packages/core/src/order-approvals.ts",
+    find: "{ satisfied: current >= BigInt(e.amount) }",
+    replace: "{ satisfied: current > BigInt(e.amount) }",
+    tests: [T.approvals],
+  },
+  {
+    // Permit2 spending is allowed AT the expiration second (account-state's exact rule): the
+    // strict comparator flags a live allowance as expired at the boundary.
+    id: "sdk-approval-expiration-boundary",
+    file: "packages/core/src/order-approvals.ts",
+    find: "const live = args.nowSeconds <= BigInt(expiration);",
+    replace: "const live = args.nowSeconds < BigInt(expiration);",
+    tests: [T.approvals],
+  },
+  {
+    // The taker's cap must be the fill's TAKING amount — sourcing it from the making amount
+    // tells the hedger to approve the wrong token quantity entirely.
+    id: "sdk-approval-taker-cap-source",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "requiredTakingAmount: BigInt(fill.requiredTakingAmount),",
+    replace: "requiredTakingAmount: BigInt(fill.requiredMakingAmount),",
+    tests: [T.approvals],
   },
   // ── the SDK package surface (2026-08-17): subpath exports + the api-surface drift gate ──────
   {

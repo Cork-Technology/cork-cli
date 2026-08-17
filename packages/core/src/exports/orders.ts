@@ -3,6 +3,7 @@
 // rollover ERC-7683 intent (CorkSettler EIP-712), rollover lifecycle verification, and the
 // ForSelf adapter call builders for parameter-blind session-key wallets.
 export * from "../orders.ts";
+export * from "../order-approvals.ts";
 export * from "../forself.ts";
 export * from "../fusion.ts";
 export * from "../rollover.ts";
