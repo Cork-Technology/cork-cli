@@ -40,6 +40,7 @@ describe("eval per-task log row", () => {
       efficient: false,
       calls: 3,
       tokens: 81234,
+      cacheReadTokens: 0, // absent on the input → defaulted, never undefined (NDJSON contract)
     });
     // Trace rows render the same compact form the console FAIL line uses — one vocabulary
     // (every warning code rides, `+`-joined: expect.code grades against ANY of them).

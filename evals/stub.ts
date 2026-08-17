@@ -1,7 +1,8 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import type { HandlerContext } from "@cork/core";
+import { type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { privateKeyToAccount } from "viem/accounts";
 import { DEMO_POOL_ID } from "@cork/schemas";
 
 const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
@@ -62,6 +63,8 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 42_000_000_000_000_000_000n;
     case "allowance":
       return 0n;
+    case "bitInvalidatorForOrder":
+      return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight [K7]
     case "isWhitelisted":
       return false;
     case "isGlobalWhitelisted":
@@ -123,8 +126,44 @@ function whitelistHyperSync() {
   };
 }
 
+// One REAL resting order on the venue stub's book — realistic, not mocked: the maker is a
+// throwaway key, the signature is a genuine ECDSA signature over the genuine LOP v4 order hash
+// (the taker-fill handler re-hashes the row and can ecrecover it), and the liveness pre-flight
+// reads a genuine bit-invalidator answer from the chain stub. The hash is computed HERE, once,
+// so the task prompt and the served row cannot drift.
+const RESTING_MAKER = privateKeyToAccount(`0x${"07".repeat(32)}`);
+const RESTING_ORDER: LopOrder = {
+  salt: 7n,
+  maker: RESTING_MAKER.address,
+  receiver: "0x0000000000000000000000000000000000000000",
+  makerAsset: CST,
+  takerAsset: SUSDE,
+  makingAmount: 10n ** 18n,
+  takingAmount: 5n * 10n ** 16n,
+  makerTraits: 0n,
+};
+export const RESTING_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESTING_ORDER);
+let restingRowMemo: Record<string, string> | undefined;
+async function restingRow(): Promise<Record<string, string>> {
+  restingRowMemo ??= {
+    salt: RESTING_ORDER.salt.toString(),
+    maker: RESTING_ORDER.maker,
+    receiver: RESTING_ORDER.receiver,
+    makerAsset: RESTING_ORDER.makerAsset,
+    takerAsset: RESTING_ORDER.takerAsset,
+    makingAmount: RESTING_ORDER.makingAmount.toString(),
+    takingAmount: RESTING_ORDER.takingAmount.toString(),
+    makerTraits: RESTING_ORDER.makerTraits.toString(),
+    signature: await RESTING_MAKER.sign({ hash: RESTING_ORDER_HASH }),
+    extension: "0x",
+    makerAccountType: "EOA",
+    orderHash: RESTING_ORDER_HASH,
+  };
+  return restingRowMemo;
+}
+
 /** Offline venue stub: canned api-phoenix responses for the eval tasks. */
-function venueFetch(url: string, init?: RequestInit): Promise<Response> {
+async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
   if (init?.method === "POST") {
     if (url.includes("/rollover/v1/orders")) return r(201, {}); // handler fills the digest from its local recomputation
@@ -134,6 +173,7 @@ function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
   if (/\/rollover\/v1\/orders\/0x/.test(url)) return r(404, { message: "not found" });
   if (url.includes("/rollover/")) return r(200, { items: [] });
+  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [await restingRow()] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });
 }
@@ -149,6 +189,7 @@ export function stubContext(): HandlerContext {
       source: "explicit" as const,
       client: {
         readContract: async (a: never) => readContract(a),
+        getCode: async () => "0x", // every fixture account is an EOA
         getBlockNumber: async () => 23_000_000n,
         getBlock: async () => ({ timestamp: NOW }),
         getTransactionReceipt: async () => ({ status: "success", blockNumber: 23_000_000n, gasUsed: 21_000n, logs: [] }),

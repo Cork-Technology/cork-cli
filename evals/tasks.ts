@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { CST, LIQUIDITY_RECIPE } from "./stub.ts";
+import { CST, LIQUIDITY_RECIPE, RESTING_ORDER_HASH } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -27,7 +27,8 @@ export interface Expectation {
    *  match `params` when given — outcome grading, not first-attempt grading: a recovered miss
    *  is a pass here and shows up in the `efficient`/`recovered` axes instead). */
   state?: "ok" | "unavailable" | "conflict";
-  /** warnings[0].code expected on a gated outcome (checked on the same call as `state`). */
+  /** A warning code the matching call must carry — matched against EVERY warning on the
+   *  envelope (not just the first; a multi-warning result must not fail on ordering). */
   code?: string;
   /** Regex the agent's final text answer must match. */
   answer?: RegExp;
@@ -90,8 +91,10 @@ export const TASKS: EvalTask[] = [
       code: "approval_missing",
       // A correct answer surfaces data.approvals: it names the LOP as the spender AND states a
       // negative grant status (agents phrase it as prose OR as a table cell — "current 0",
-      // "❌", "not satisfied" — so the alternation covers both registers).
-      answer: new RegExp(`(?=[\\s\\S]*${MAINNET_LOP.slice(2)})(?=[\\s\\S]*(missing|not in place|not currently|no allowance|not satisfied|unsatisfied|current(ly)?\\W{0,3}0\\b|❌|zero))`, "i"),
+      // "❌", "not satisfied" — so the alternation covers both registers). The address match is
+      // a distinctive 12-hex PREFIX, not the full 40: agents routinely ellipsize addresses
+      // (`0x1111…2A65`), and requiring the full spelling grades formatting, not correctness.
+      answer: new RegExp(`(?=[\\s\\S]*${MAINNET_LOP.slice(2, 14)})(?=[\\s\\S]*(missing|not in place|not currently|no allowance|not satisfied|unsatisfied|current(ly)?\\W{0,3}0\\b|❌|zero))`, "i"),
       maxCalls: 4,
     },
   },
@@ -133,6 +136,22 @@ export const TASKS: EvalTask[] = [
     id: "predict-market",
     prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract ${LIQUIDITY_RECIPE}. Report the derived pool id plus the cST and cPT contracts.`,
     expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: new RegExp(CST.slice(2), "i"), maxCalls: 2 },
+  },
+  {
+    // The hedger's fill: a REAL signed order rests on the venue stub's book (genuine ECDSA
+    // signature, genuine hash, live bit-invalidator) — the handler re-hashes and verifies it
+    // for real. Grades the taker-fill variant AND the approvals-on-fill story in one task.
+    id: "fill-resting-order",
+    prompt: `Build the unsigned fill for the resting Cork limit order ${RESTING_ORDER_HASH} on mainnet (chain 1), taker account ${A}, request id "eval-fill-0001". Also tell me which token approval I must grant before broadcasting this fill, and to whom exactly.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH } },
+      state: "ok",
+      code: "approval_missing",
+      answer: new RegExp(`(?=[\\s\\S]*${MAINNET_LOP.slice(2, 14)})(?=[\\s\\S]*(approv|allowance))`, "i"),
+      maxCalls: 3,
+    },
   },
   // ── market infrastructure (cork_prepare_market had ZERO coverage until 2026-08-17) ──
   {

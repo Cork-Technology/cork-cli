@@ -48,19 +48,29 @@ defaults differ from pushed main (a registry redeploy mid-integration) turns eva
 
 Grading is programmatic over the tool-call **trace**, not the free text:
 
-- **tool selection** — first tool called matches the expected tool
+- **tool selection** — first tool called matches the expected tool (or a task-declared prelude
+  tool: a prompt that legitimately invites a discovery/state-check hop lists those tools)
 - **parameter accuracy** — deep-subset match on discriminators + key params
-- **outcome/state** — expected envelope `state` (and `warnings[0].code` for gated paths)
+- **outcome/state** — expected envelope `state`; a task's expected warning `code` matches ANY
+  warning on the call, not just the first (multi-warning results must not fail on ordering)
 - **answer** — regex over the agent's final text, where the task has a checkable fact
 - **efficiency** — trace length within the task's call budget
 - **error recovery** — after an invalid call, did a later call to the same tool validate?
   (this is the metric the teaching-error work exists to move)
 
+The grading function is exported (`gradeTask`) and pinned offline by `evals/grading.test.ts` +
+mutation probes — a grading regression fails a unit test, not a score baseline. The model is
+gated to the sonnet family (`sonnetModelGate`, owner ruling 2026-07-28); the tools+system prefix
+is prompt-cached (one breakpoint), and the summary reports the cache hit rate alongside total
+tokens (which still count all context processed, so run totals stay comparable).
+
 ### Task set (`evals/tasks.ts`)
 
-30+ active tasks spanning reads, compute, prepare, decode/track, discovery, and *gated* outcomes
-(the agent must report `needs_indexer` / `phase_gated` / `mode_unavailable` / `chain_read_failed`
-honestly instead of inventing data), plus **5 held-out tasks**.
+35+ active tasks spanning reads, compute, prepare (bundles, maker orders, fills of a REAL
+signed resting order, market-oracle txs), token-approval reporting, submit (the one
+side-effecting tool), decode/track, discovery, and *gated* outcomes (the agent must report
+`needs_indexer` / `phase_gated` / `mode_unavailable` / `chain_read_failed` honestly instead of
+inventing data), plus **5 held-out tasks**.
 
 **Held-out rule: never tune tool descriptions, examples, or teaching text against the held-out
 set.** It exists to catch description overfitting. Run it occasionally (`EVAL_HELD_OUT=1`) and

@@ -46,6 +46,9 @@ if (!Number.isInteger(TRIALS) || TRIALS < 1) {
 }
 const MAX_LOOP = 6;
 
+const EVAL_SYSTEM_PROMPT =
+  "You operate the Cork Phoenix tool server. Use the tools to answer precisely; report gated/unavailable outcomes honestly instead of inventing data. Answer concisely when done.";
+
 export interface TraceCall {
   tool: string;
   input: unknown;
@@ -65,7 +68,11 @@ interface TaskResult {
   efficient: boolean;
   recovered?: boolean | undefined;
   calls: number;
+  /** TOTAL context processed (input + output + cache writes + cache reads) — the same meaning
+   *  tokens had before prompt caching landed, so run totals stay comparable across baselines. */
   tokens: number;
+  /** The cached share of that total — the run summary reports the hit rate. */
+  cacheReadTokens: number;
   finalText: string;
   trace: TraceCall[];
 }
@@ -138,6 +145,7 @@ export function evalLogRow(r: TaskResult, model: string) {
     ...(r.recovered !== undefined ? { recovered: r.recovered } : {}),
     calls: r.calls,
     tokens: r.tokens,
+    cacheReadTokens: r.cacheReadTokens ?? 0,
     trace: r.trace.map(traceCell),
     // 2000, not 400: a failed answer-regex must be diagnosable from the log alone. The 400-char
     // excerpt cut a graded answer mid-table (2026-08-17), leaving the miss unexplainable — the
@@ -150,6 +158,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
   const ctx = stubContext();
   const trace: TraceCall[] = [];
   let tokens = 0;
+  let cacheReadTokens = 0;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task.prompt }];
   let finalText = "";
 
@@ -157,12 +166,16 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 16000,
-      system:
-        "You operate the Cork Phoenix tool server. Use the tools to answer precisely; report gated/unavailable outcomes honestly instead of inventing data. Answer concisely when done.",
+      // One cache breakpoint on the final prompt block caches the whole tools+prompt prefix
+      // (~80k tokens, identical for every call in the run): the first call writes it, every
+      // later call — same task or next task — reads it at the cached rate.
+      system: [{ type: "text" as const, text: EVAL_SYSTEM_PROMPT, cache_control: { type: "ephemeral" as const } }],
       tools: TOOLS,
       messages,
     });
-    tokens += response.usage.input_tokens + response.usage.output_tokens;
+    const u = response.usage as { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null };
+    tokens += u.input_tokens + u.output_tokens + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    cacheReadTokens += u.cache_read_input_tokens ?? 0;
 
     const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
     finalText = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n");
@@ -187,7 +200,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
     messages.push({ role: "user", content: results });
   }
 
-  return { task, ...gradeTask(task, trace, finalText), calls: trace.length, tokens, finalText, trace };
+  return { task, ...gradeTask(task, trace, finalText), calls: trace.length, tokens, cacheReadTokens, finalText, trace };
 }
 
 function pct(n: number, d: number): string {
@@ -261,7 +274,9 @@ async function main() {
   console.log(`outcome/state:     ${pct(results.filter((r) => r.statePass).length, n)}`);
   console.log(`within call budget:${pct(results.filter((r) => r.efficient).length, n)}`);
   console.log(`error recovery:    ${invalids.length ? pct(invalids.filter((r) => r.recovered).length, invalids.length) : "n/a (no invalid calls)"}`);
-  console.log(`total tokens:      ${results.reduce((s, r) => s + r.tokens, 0)}`);
+  const totalTokens = results.reduce((s, r) => s + r.tokens, 0);
+  const cacheRead = results.reduce((s, r) => s + r.cacheReadTokens, 0);
+  console.log(`total tokens:      ${totalTokens}  (cache reads: ${cacheRead}${totalTokens > 0 ? ` — ${((100 * cacheRead) / totalTokens).toFixed(0)}% served from cache` : ""})`);
 
   if (process.env.EVAL_GATE) {
     // A zero-run gate is a FAILURE, not a pass (C13); a NaN threshold would silently disable
