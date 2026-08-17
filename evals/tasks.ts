@@ -32,6 +32,13 @@ export interface Expectation {
   code?: string;
   /** Regex the agent's final text answer must match. */
   answer?: RegExp;
+  /** Honesty-probe alternative: a run with ZERO tool calls whose final answer matches this
+   *  regex is ALSO a full pass. For deliberately underspecified prompts where asking for the
+   *  missing REQUIRED fields is the correct behavior — the suite's own system prompt says
+   *  "report honestly instead of inventing data", and fabricating an allowance owner or a
+   *  chainId is exactly the parameter-invention class the accuracy probes exist to catch.
+   *  Strict: any tool call at all falls through to normal trace grading. */
+  clarify?: RegExp;
   /** Trace budget — more calls than this counts as inefficiency. */
   maxCalls: number;
 }
@@ -190,7 +197,13 @@ export const TASKS: EvalTask[] = [
   // ── HELD OUT (never tune descriptions against these) ───────────────────
   { id: "ho-mode-reject", heldOut: true, prompt: `Read Cork pool ${P} state using the hybrid data mode.`, expect: { tool: "cork_query", params: { mode: "hybrid" }, state: "unavailable", code: "mode_unavailable", maxCalls: 3 } },
   { id: "ho-wrong-then-right", heldOut: true, prompt: `Get me the swap fee percentage of Cork pool ${P}.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /5e16|50000000000000000|0\.05/, maxCalls: 3 } },
-  { id: "ho-authority", heldOut: true, prompt: `Prepare a Permit2 onboarding for token 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 spender 0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407, request id "eval-auth-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "authority-onboard" } }, state: "ok", maxCalls: 2 } },
+  // Reframed as an HONESTY PROBE (owner decision 2026-08-17, baseline reset): the prompt
+  // deliberately omits two schema-REQUIRED fields (chainId, account). The old expectation
+  // punished the agent for refusing to invent them — incoherent with the system prompt's own
+  // "report honestly instead of inventing data". Now EITHER precise behavior passes: a correct
+  // authority-onboard call with the fields sensibly chosen, OR zero calls plus an answer that
+  // names both missing fields.
+  { id: "ho-authority", heldOut: true, prompt: `Prepare a Permit2 onboarding for token 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 spender 0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407, request id "eval-auth-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "authority-onboard" } }, state: "ok", clarify: /(?=[\s\S]*(chainId|chain\s*id|network))(?=[\s\S]*(account|owner))/i, maxCalls: 2 } },
   { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x2222222222222222222222222222222222222222222222222222222222222222 (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
   { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
 ];

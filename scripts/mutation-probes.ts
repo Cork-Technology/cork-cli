@@ -2184,6 +2184,15 @@ const CATALOG: Mutant[] = [
     tests: [T.evalGrading],
   },
   {
+    // The clarify honesty-probe loses its zero-calls gate: matching clarify TEXT would launder
+    // a wrong-tool trace into a full pass — asking nicely after calling the wrong tool wins.
+    id: "eval-grade-clarify-gate-dropped",
+    file: "evals/run.ts",
+    find: "if (e.clarify && trace.length === 0 && e.clarify.test(finalText)) {",
+    replace: "if (e.clarify && e.clarify.test(finalText)) {",
+    tests: [T.evalGrading],
+  },
+  {
     // The sonnet gate loosens to any Claude model: a haiku/opus run silently grades the MODEL,
     // not the tool surface, and poisons every baseline comparison (owner ruling 2026-07-28).
     id: "eval-model-gate-loosened",

@@ -32,6 +32,17 @@ silently.
 
 ### Added
 
+- **The agent-eval suite hardened across every axis** (43 tasks, best full run 42/43 → 43/43
+  reachable). New coverage: token approvals across the order lifecycle, a REAL signed resting
+  order the fill task verifies end to end, and first-ever tasks for `cork_prepare_market` and
+  `cork_submit`. The grading function is exported and unit-tested (a grading regression now
+  fails a test, not a score baseline), an expected warning code matches any warning on the
+  call, the model is gated to the sonnet family, and the tools+system prefix is prompt-cached
+  (95% of run tokens served from cache, measured). One held-out task was repaired under an
+  explicit owner decision (baseline reset 2026-08-17): `ho-authority` deliberately withholds
+  two schema-required fields, and asking for them precisely — instead of inventing an
+  allowance owner — is now a graded PASS (`clarify` honesty-probe alternative, strictly
+  zero-calls so clarify text can never launder a wrong tool pick).
 - **Every LOP-order prepare result now states its token approvals — with the unsigned grant
   payloads.** maker-order, finalize-maker-order, and taker-fill (raw and forSelf) carry
   `data.approvals`: one entry per required grant with holder, token, spender, stage, mechanism,
