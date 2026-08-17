@@ -11,6 +11,9 @@ import corkDefaults from "../cork-defaults.json";
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
 // stub's own header documents). Held-out tasks keep their inline copies untouched by rule.
 const MAINNET_ADAPTER = (corkDefaults as { deployments: Record<string, { corkAdapter?: string }> }).deployments["1"]!.corkAdapter!;
+// The mainnet 1inch LOP — the spender the approval tasks expect the agent to NAME (it is the
+// `spender` field of data.approvals entries, so a correct answer must surface it).
+const MAINNET_LOP = (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
 
 export interface Expectation {
   /** The tool the agent should reach for first. */
@@ -70,6 +73,43 @@ export const TASKS: EvalTask[] = [
   { id: "prepare-unwind", prompt: `I hold a locked Cork position in pool ${P}. Prepare the unwind-swap bundle: 3e18 collateral back in, receiver ${A}, no slippage floors, request id "eval-unw-0001".`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "unwind-swap" } }, state: "ok", maxCalls: 3 } },
   { id: "prepare-order", prompt: `Create the signable 1inch maker order selling 1 sUSDe (${"1000000000000000000"}) for 1 vbUSDC (1000000) on Cork pool ${P}: maker ${A}, sUSDe is 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, vbUSDC is 0x53E82ABbb12638F09d9e624578ccB666217a765e, request id "eval-ord-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "maker-order", side: "SELL" } }, state: "ok", maxCalls: 2 } },
 
+  // ── token approvals across the order lifecycle (data.approvals; the underwriter/hedger ask:
+  //    WHICH grants, to WHOM, WHEN — and the unsigned payload). The stub answers allowance 0,
+  //    so every required grant reads confirmed-missing and approval_missing rides. ──
+  {
+    id: "approvals-maker-order",
+    prompt: `I am an underwriter about to sign and list a 1inch maker order on Cork pool ${P}: selling 1 sUSDe (1000000000000000000, token 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 1 vbUSDC (1000000, token 0x53E82ABbb12638F09d9e624578ccB666217a765e), maker ${A}, request id "eval-appr-0001". Before I sign: which token approvals must be in place for this order to be fillable, who exactly is the spender, are they in place right now — and give me the unsigned approve transaction if not.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      // "are they in place right now?" legitimately invites a state-verify hop (account-state /
+      // pool read) before AND a re-check after building — the prepare-unwind precedent
+      // (observed on the 2026-08-17 first run: query, query, prepare, query — all correct).
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "maker-order" } },
+      state: "ok",
+      code: "approval_missing",
+      // A correct answer surfaces data.approvals: it names the LOP as the spender AND states a
+      // negative grant status (agents phrase it as prose OR as a table cell — "current 0",
+      // "❌", "not satisfied" — so the alternation covers both registers).
+      answer: new RegExp(`(?=[\\s\\S]*${MAINNET_LOP.slice(2)})(?=[\\s\\S]*(missing|not in place|not currently|no allowance|not satisfied|unsatisfied|current(ly)?\\W{0,3}0\\b|❌|zero))`, "i"),
+      maxCalls: 4,
+    },
+  },
+  {
+    id: "approvals-permit2-layers",
+    prompt: `Build the same signable Cork maker order but sourced through Permit2: selling 1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 for 1000000 of 0x53E82ABbb12638F09d9e624578ccB666217a765e on pool ${P}, maker ${A}, expiry 3600 seconds, request id "eval-appr-0002". Then explain EVERY allowance layer I must grant for a fill to succeed, and where each grant transaction is sent.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "maker-order", usePermit2: true } },
+      state: "ok",
+      // Both layers surfaced: the canonical Permit2 contract (layer 1's spender, layer 2's tx
+      // target) and the two-layer framing from the entries.
+      answer: /(?=[\s\S]*000000000022D473030F116dDEE9F6B43aC78BA3)(?=[\s\S]*(two|both|layer))/i,
+      maxCalls: 3,
+    },
+  },
+
   // ── parameter-accuracy probes (from the 2026-07 live A/B pass — each pins the EXACT value,
   //    catching the measured DeFi failure classes: decimal scaling, base-unit pass-through,
   //    whole-number scaling, absolute-vs-relative deadlines, near-twin variant selection) ──
@@ -93,6 +133,21 @@ export const TASKS: EvalTask[] = [
     id: "predict-market",
     prompt: `Predict the Cork market a JIT fill would create on Arbitrum (chain 42161) BEFORE anything is deployed: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1900000000 (unix seconds), recipe contract ${LIQUIDITY_RECIPE}. Report the derived pool id plus the cST and cPT contracts.`,
     expect: { tool: "cork_query", params: { resource: "derive-cork-pool", filters: { recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: new RegExp(CST.slice(2), "i"), maxCalls: 2 },
+  },
+  // ── market infrastructure (cork_prepare_market had ZERO coverage until 2026-08-17) ──
+  {
+    id: "deploy-oracle",
+    prompt: `Prepare the unsigned transaction that deploys the price rate-oracle wrapper for the pair collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 / reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on the Arbitrum Cork market registry (chain 42161), request id "eval-mkt-0001". Tell me if it is already deployed.`,
+    // prelude includes cork_query: "tell me if it is already deployed" legitimately invites a
+    // registry-oracle status read before building (observed on the 2026-08-17 first run; the
+    // prepare call, params, state, and answer were all correct).
+    expect: { tool: "cork_prepare_market", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "deploy-oracle" } }, state: "ok", code: "oracle_already_deployed", answer: /already deployed|idempotent|no-op|exists/i, maxCalls: 3 },
+  },
+  // ── submit (the ONE side-effecting tool had ZERO coverage until 2026-08-17) ──
+  {
+    id: "submit-rfq-open",
+    prompt: `Open a Cork request-for-quote on Arbitrum (chain 42161) as requester 0xc0ffee0000000000000000000000000000000001: reference asset 0xdDb46999F8891663a8F2828d25298f70416d7610, collateral exactly 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, mode liquidity_only, package "pkg_default", pool expiry between 1900000000 and 1910000000 (unix seconds), notional 1000e18 of the collateral, valid until 1795000000, my signature is 0x${"ab".repeat(65)}, request id "eval-rfq-0001". Report the RFQ id the venue assigned.`,
+    expect: { tool: "cork_submit", prelude: ["cork_capabilities"], params: { action: { type: "rfq-open" } }, state: "ok", answer: /rfq_eval1/, maxCalls: 3 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
   // The example bytes are inlined in cork_decode's own description, so decoding DIRECTLY is the

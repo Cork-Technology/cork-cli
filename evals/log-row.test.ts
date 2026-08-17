@@ -16,9 +16,9 @@ const baseResult = {
   efficient: false,
   calls: 3,
   tokens: 81234,
-  finalText: "x".repeat(1000),
+  finalText: "x".repeat(3000),
   trace: [
-    { tool: "cork_track", invalid: false, state: "conflict", code: "marketid_mismatch" },
+    { tool: "cork_track", invalid: false, state: "conflict", codes: ["marketid_mismatch", "venue_reported"] },
     { tool: "cork_query", invalid: true },
   ],
 } as never as Parameters<typeof evalLogRow>[0];
@@ -41,10 +41,12 @@ describe("eval per-task log row", () => {
       calls: 3,
       tokens: 81234,
     });
-    // Trace rows render the same compact form the console FAIL line uses — one vocabulary.
-    expect(row.trace).toEqual(["cork_track→conflict/marketid_mismatch", "cork_query!"]);
-    // Bounded answer excerpt: enough to diagnose, never the transcript bulk.
-    expect(row.finalText.length).toBe(400);
+    // Trace rows render the same compact form the console FAIL line uses — one vocabulary
+    // (every warning code rides, `+`-joined: expect.code grades against ANY of them).
+    expect(row.trace).toEqual(["cork_track→conflict/marketid_mismatch+venue_reported", "cork_query!"]);
+    // Bounded answer excerpt: enough to diagnose a failed answer-regex from the log alone
+    // (400 cut a graded answer mid-table, 2026-08-17), never the transcript bulk.
+    expect(row.finalText.length).toBe(2000);
     // recovered is tri-state (undefined = no invalid-call happened): absent, not null/false.
     expect("recovered" in row).toBe(false);
   });

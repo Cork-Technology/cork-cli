@@ -46,11 +46,13 @@ if (!Number.isInteger(TRIALS) || TRIALS < 1) {
 }
 const MAX_LOOP = 6;
 
-interface TraceCall {
+export interface TraceCall {
   tool: string;
   input: unknown;
   state?: string | undefined;
-  code?: string | undefined;
+  /** EVERY warning code on the envelope — `expect.code` matches ANY of them (a multi-warning
+   *  result must not fail grading because the expected code landed second). */
+  codes?: string[] | undefined;
   invalid?: boolean | undefined;
 }
 interface TaskResult {
@@ -80,11 +82,43 @@ const TOOLS = REGISTRY.map((t) => ({
   input_schema: inputJsonSchema(t.name) as Anthropic.Tool.InputSchema,
 }));
 
-/** Compact per-call cell: `tool→state/code`, `tool!` for schema-invalid. ONE renderer for the
- *  log row and the console FAIL line — the log-row test asserts they share a vocabulary, which
- *  was previously maintained by hand in two copies of this expression. */
+/** Compact per-call cell: `tool→state/code+code`, `tool!` for schema-invalid. ONE renderer for
+ *  the log row and the console FAIL line — the log-row test asserts they share a vocabulary,
+ *  which was previously maintained by hand in two copies of this expression. */
 function traceCell(c: TraceCall): string {
-  return `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.code ? `/${c.code}` : ""}`}`;
+  return `${c.tool}${c.invalid ? "!" : `→${c.state ?? "?"}${c.codes?.length ? `/${c.codes.join("+")}` : ""}`}`;
+}
+
+/** The owner ruling (2026-07-28) as a GATE, not a default: evals run on a sonnet model, always.
+ *  Any sonnet generation passes; anything else is refused loud — a haiku/opus run would grade
+ *  the model, not the tool surface, and its numbers would poison every baseline comparison.
+ *  Returns the refusal message, or null when the model is admissible. Exported for the test. */
+export function sonnetModelGate(model: string): string | null {
+  return /^claude-sonnet-/.test(model)
+    ? null
+    : `CORK_EVAL_MODEL must name a sonnet model (owner ruling 2026-07-28: evals ALWAYS run on sonnet) — got '${model}'`;
+}
+
+/** Programmatic verdict over the tool-call trace — extracted from the loop so it is unit-testable
+ *  and mutation-probeable (evals/grading.test.ts; sdk probes eval-grade-*). */
+export function gradeTask(task: EvalTask, trace: TraceCall[], finalText: string) {
+  const e = task.expect;
+  const first = trace[0];
+  const toolPick = first?.tool === e.tool || (first !== undefined && (e.prelude?.includes(first.tool) ?? false));
+  // Grade the OUTCOME, not the first attempt: some schema-valid call to the target tool must
+  // have matched. A recovered miss (e.g. missing_filter then ok) passes here and is charged on
+  // the `efficient` axis instead — that split is what the two axes claim to measure.
+  const validCalls = trace.filter((c) => c.tool === e.tool && !c.invalid);
+  const paramsOk = e.params ? validCalls.some((c) => subsetMatch(e.params, c.input)) : true;
+  const statePass = e.state
+    ? validCalls.some((c) => c.state === e.state && (e.code ? (c.codes?.includes(e.code) ?? false) : true) && (!e.params || subsetMatch(e.params, c.input)))
+    : true;
+  const answerPass = e.answer ? e.answer.test(finalText) : true;
+  const efficient = trace.length <= e.maxCalls;
+  // Error recovery: after an invalid call to a tool, did a later call to the SAME tool validate?
+  const invalidIdx = trace.findIndex((c) => c.invalid);
+  const recovered = invalidIdx === -1 ? undefined : trace.slice(invalidIdx + 1).some((c) => c.tool === trace[invalidIdx]!.tool && !c.invalid);
+  return { ok: toolPick && paramsOk && statePass && answerPass, toolPick, paramsOk, statePass, answerPass, efficient, recovered };
 }
 
 /** One durable NDJSON row per run — everything the variance re-trial recipe and a post-hoc
@@ -105,7 +139,10 @@ export function evalLogRow(r: TaskResult, model: string) {
     calls: r.calls,
     tokens: r.tokens,
     trace: r.trace.map(traceCell),
-    finalText: r.finalText.slice(0, 400),
+    // 2000, not 400: a failed answer-regex must be diagnosable from the log alone. The 400-char
+    // excerpt cut a graded answer mid-table (2026-08-17), leaving the miss unexplainable — the
+    // same evidence-destruction class the log file itself exists to prevent.
+    finalText: r.finalText.slice(0, 2000),
   };
 }
 
@@ -138,7 +175,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
       try {
         const envelope = await runTool(tu.name, tu.input, ctx);
         call.state = envelope.state;
-        call.code = envelope.warnings[0]?.code;
+        call.codes = envelope.warnings.map((w) => w.code);
         results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(envelope), is_error: envelope.state === "unavailable" });
       } catch (err) {
         call.invalid = true;
@@ -150,24 +187,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
     messages.push({ role: "user", content: results });
   }
 
-  const e = task.expect;
-  const first = trace[0];
-  const toolPick = first?.tool === e.tool || (first !== undefined && (e.prelude?.includes(first.tool) ?? false));
-  // Grade the OUTCOME, not the first attempt: some schema-valid call to the target tool must
-  // have matched. A recovered miss (e.g. missing_filter then ok) passes here and is charged on
-  // the `efficient` axis instead — that split is what the two axes claim to measure.
-  const validCalls = trace.filter((c) => c.tool === e.tool && !c.invalid);
-  const paramsOk = e.params ? validCalls.some((c) => subsetMatch(e.params, c.input)) : true;
-  const statePass = e.state
-    ? validCalls.some((c) => c.state === e.state && (e.code ? c.code === e.code : true) && (!e.params || subsetMatch(e.params, c.input)))
-    : true;
-  const answerPass = e.answer ? e.answer.test(finalText) : true;
-  const efficient = trace.length <= e.maxCalls;
-  // Error recovery: after an invalid call to a tool, did a later call to the SAME tool validate?
-  const invalidIdx = trace.findIndex((c) => c.invalid);
-  const recovered = invalidIdx === -1 ? undefined : trace.slice(invalidIdx + 1).some((c) => c.tool === trace[invalidIdx]!.tool && !c.invalid);
-
-  return { task, ok: toolPick && paramsOk && statePass && answerPass, toolPick, paramsOk, statePass, answerPass, efficient, recovered, calls: trace.length, tokens, finalText, trace };
+  return { task, ...gradeTask(task, trace, finalText), calls: trace.length, tokens, finalText, trace };
 }
 
 function pct(n: number, d: number): string {
@@ -180,6 +200,11 @@ async function main() {
   // keyed; a configured ANTHROPIC_BASE_URL gateway runs keyless and fails LOUD if its auth is
   // broken; NOTHING configured self-skips green — the documented CI/fork contract (a missing
   // repo secret must not paint main red; exactly that regression shipped 2026-08-10).
+  const modelRefusal = sonnetModelGate(MODEL);
+  if (modelRefusal) {
+    console.error(modelRefusal);
+    process.exit(2);
+  }
   const mode = evalAuthMode(process.env);
   if (mode === "skip") {
     console.log("agent evals: skipped — no Claude-on-AWS config (ANTHROPIC_AWS_WORKSPACE_ID), no explicit key/token, and no ANTHROPIC_BASE_URL gateway. Wire OIDC + the AWS repo variables (or a key) to enable the eval gate.");

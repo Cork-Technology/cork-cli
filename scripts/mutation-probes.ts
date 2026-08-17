@@ -60,6 +60,7 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
+  evalGrading: "evals/grading.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
@@ -2162,6 +2163,34 @@ const CATALOG: Mutant[] = [
     find: "requiredTakingAmount: BigInt(fill.requiredTakingAmount),",
     replace: "requiredTakingAmount: BigInt(fill.requiredMakingAmount),",
     tests: [T.approvals],
+  },
+  // ── eval grading contract (2026-08-17): the verdict semantics, pinned offline ───────────────
+  {
+    // expect.code regresses to first-warning-only: a task whose expected code lands second on a
+    // multi-warning envelope grades as a miss — a phantom regression in every score report.
+    id: "eval-grade-code-first-only",
+    file: "evals/run.ts",
+    find: "(e.code ? (c.codes?.includes(e.code) ?? false) : true)",
+    replace: "(e.code ? c.codes?.[0] === e.code : true)",
+    tests: [T.evalGrading],
+  },
+  {
+    // The call budget's boundary flips exclusive: a task using exactly its budget reads as
+    // over-budget, deflating the efficiency axis across the whole suite.
+    id: "eval-grade-budget-boundary",
+    file: "evals/run.ts",
+    find: "const efficient = trace.length <= e.maxCalls;",
+    replace: "const efficient = trace.length < e.maxCalls;",
+    tests: [T.evalGrading],
+  },
+  {
+    // The sonnet gate loosens to any Claude model: a haiku/opus run silently grades the MODEL,
+    // not the tool surface, and poisons every baseline comparison (owner ruling 2026-07-28).
+    id: "eval-model-gate-loosened",
+    file: "evals/run.ts",
+    find: 'return /^claude-sonnet-/.test(model)',
+    replace: 'return /^claude-/.test(model)',
+    tests: [T.evalGrading],
   },
   // ── the SDK package surface (2026-08-17): subpath exports + the api-surface drift gate ──────
   {
