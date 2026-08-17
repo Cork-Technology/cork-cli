@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.3.5"
+  "version": "0.3.14"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -60,13 +60,17 @@
       }
      },
      {
-      "description": "Optional. Filter flows to pools owned by this pool manager deployment.",
+      "description": "Optional. Filter flows to pools owned by these pool manager deployments - single value (?poolManagerAddress=0x..A) or repeated (?poolManagerAddress=0x..A&poolManagerAddress=0x..B) to cover every manager of a deployment in one query.",
       "in": "query",
       "name": "poolManagerAddress",
       "required": false,
       "schema": {
-       "pattern": "^0x[a-fA-F0-9]{40}$",
-       "type": "string"
+       "items": {
+        "pattern": "^0x[a-fA-F0-9]{40}$",
+        "type": "string"
+       },
+       "maxItems": 10,
+       "type": "array"
       }
      },
      {
@@ -705,6 +709,71 @@
            "nullable": true,
            "type": "integer"
           },
+          "decoders": {
+           "additionalProperties": false,
+           "description": "Event-consumption declaration published by the indexer at boot: per contract type, the topic0s it decodes. Decode check: every topic0 listed for a pinned contract's type must exist in the pinned ABI. null = the indexer has not published a snapshot yet.",
+           "nullable": true,
+           "properties": {
+            "contract_types": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "contract_type": {
+                "type": "string"
+               },
+               "events": {
+                "items": {
+                 "additionalProperties": false,
+                 "properties": {
+                  "name": {
+                   "type": "string"
+                  },
+                  "signature": {
+                   "description": "Canonical event signature, e.g. Deposit(bytes32,address).",
+                   "type": "string"
+                  },
+                  "topic0": {
+                   "description": "0x-prefixed keccak256 of the canonical event signature.",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "name",
+                  "topic0",
+                  "signature"
+                 ],
+                 "type": "object"
+                },
+                "type": "array"
+               }
+              },
+              "required": [
+               "contract_type",
+               "events"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            },
+            "published_at": {
+             "description": "Unix seconds of the snapshot publish (worker boot). A long-running worker legitimately carries an old value; use worker_commit to pin which build declared it.",
+             "maximum": 9007199254740991,
+             "minimum": -9007199254740991,
+             "type": "integer"
+            },
+            "worker_commit": {
+             "description": "Git commit of the indexer build that published; null = unknown.",
+             "nullable": true,
+             "type": "string"
+            }
+           },
+           "required": [
+            "published_at",
+            "worker_commit",
+            "contract_types"
+           ],
+           "type": "object"
+          },
           "verdicts_fresh": {
            "description": "false = the watchdog itself is down or lagging (verdicts older than ~3 check intervals); `facts` remain authoritative, fall back to your own thresholds over them.",
            "type": "boolean"
@@ -736,12 +805,55 @@
             "type": "object"
            },
            "type": "array"
+          },
+          "watching": {
+           "description": "The indexer's live watch-list: every actively indexed (chain, address), straight from the shared worklist table (archived rows excluded; generated per-pool share tokens cPT/cST excluded - they are never pinned and their decode surface is covered by decoders[]). Coverage check: a deployment pinned as indexed must appear here.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "address": {
+              "description": "0x-prefixed contract address.",
+              "type": "string"
+             },
+             "chain_id": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "contract_type": {
+              "description": "Indexer ContractType enum value (e.g. CORK_POOL_MANAGER, ROLLOVER_FACTORY). Namespace is the indexer's, not the distribution manifest's; join on (chain_id, address).",
+              "type": "string"
+             },
+             "contracts_version": {
+              "description": "Hand-maintained release label \"<component>@<version>\" (e.g. phoenix@1.3.0-rc.1), joining the distribution component names. INFORMATIONAL ONLY: it is typed from the same release notes a distribution pin comes from and can go stale on in-place proxy upgrades - verify may WARN on it, never FAIL; decoders[] topic0 comparison is the ground-truth decode check. null = unlabeled (older deployments, or the indexer-side column not deployed yet).",
+              "nullable": true,
+              "type": "string"
+             },
+             "last_block_confirmed": {
+              "description": "Indexing checkpoint for this contract.",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "chain_id",
+             "address",
+             "contract_type",
+             "last_block_confirmed",
+             "contracts_version"
+            ],
+            "type": "object"
+           },
+           "type": "array"
           }
          },
          "required": [
           "verdicts_fresh",
           "check_interval_minutes",
-          "chains"
+          "chains",
+          "watching",
+          "decoders"
          ],
          "type": "object"
         }
@@ -1765,7 +1877,7 @@
   },
   "/limit-orders/v1/orderbook": {
    "get": {
-    "description": "Get limit orders with pagination support",
+    "description": "Get limit orders with pagination support. Expiry filtering is keyed to each row's status: fillable rows (OPEN, PARTIALLY_FILLED) whose expiry has passed are excluded, while terminal rows (FILLED, CANCELLED, EXPIRED) are returned regardless of expiry — an explicit terminal-status query is a history read, so settled orders from short-tenor markets stay readable after their expiry passes.",
     "parameters": [
      {
       "description": "Optional. Numeric chain id, leave empty for all chains.",
@@ -1832,7 +1944,7 @@
       }
      },
      {
-      "description": "Optional. Order status filter — single value (?status=OPEN) or repeated (?status=OPEN&status=PARTIALLY_FILLED). Filtering by OPEN also returns PARTIALLY_FILLED orders (both are fillable). When omitted, defaults to the fillable book (OPEN + PARTIALLY_FILLED); pass explicit statuses to read terminal rows.",
+      "description": "Optional. Order status filter — single value (?status=OPEN) or repeated (?status=OPEN&status=PARTIALLY_FILLED). Filtering by OPEN also returns PARTIALLY_FILLED orders (both are fillable). When omitted, defaults to the fillable book (OPEN + PARTIALLY_FILLED); pass explicit statuses to read terminal rows. Expiry filtering is status-keyed per row: fillable rows (OPEN, PARTIALLY_FILLED) past their expiry are always excluded, terminal rows (FILLED, CANCELLED, EXPIRED) are returned regardless of expiry.",
       "in": "query",
       "name": "status",
       "required": false,
@@ -3312,7 +3424,18 @@
       }
      },
      {
-      "description": "Optional. Opaque pagination cursor from a previous response. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the legacy alias. Legacy timestamp cursors (ISO 8601) are still accepted.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Legacy alias of `cursor`. If both are sent they must be equal.",
       "in": "query",
       "name": "nextCursor",
       "required": false,
@@ -10042,6 +10165,35 @@
            "minimum": -9007199254740991,
            "type": "integer"
           },
+          "counters": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "counter": {
+              "additionalProperties": {},
+              "type": "object"
+             },
+             "counter_id": {
+              "type": "string"
+             },
+             "received_at": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "counter_id",
+             "received_at",
+             "counter"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "counters_truncated": {
+           "type": "boolean"
+          },
           "received_at": {
            "maximum": 9007199254740991,
            "minimum": -9007199254740991,
@@ -10108,7 +10260,9 @@
           "answer_count",
           "truncated",
           "counter",
-          "counter_count"
+          "counters",
+          "counter_count",
+          "counters_truncated"
          ],
          "type": "object"
         }
@@ -11326,6 +11480,16 @@
       }
      },
      {
+      "description": "Optional. Only clones deployed by this factory (disambiguates deployment generations; one wallet can own one clone per factory).",
+      "in": "query",
+      "name": "factory",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{40}$",
+       "type": "string"
+      }
+     },
+     {
       "in": "query",
       "name": "limit",
       "required": false,
@@ -12083,12 +12247,15 @@
              "fillerHint": {
               "nullable": true
              },
+             "jitMarketHash": {
+              "nullable": true
+             },
              "minCaReceived": {
               "nullable": true,
               "type": "string"
              },
              "minPremiumPerShare": {
-              "description": "Unit: WAD (1e18 fixed-point) premium floor per dstCST share.",
+              "description": "Raw premiumToken base units owed per 1e18 dstCST produced; contracts ceil-round the owed premium.",
               "type": "string"
              },
              "minSharesOut": {
@@ -12187,6 +12354,7 @@
              "minPremiumPerShare",
              "minCaReceived",
              "minSharesOut",
+             "jitMarketHash",
              "allowPartialFills",
              "allowUnderfill",
              "premiumPaymentMode",
@@ -12701,6 +12869,10 @@
               "type": "string"
              },
              "dstPoolId": {
+              "pattern": "^0x[a-fA-F0-9]{64}$",
+              "type": "string"
+             },
+             "jitMarketHash": {
               "pattern": "^0x[a-fA-F0-9]{64}$",
               "type": "string"
              },
@@ -13219,12 +13391,15 @@
             "fillerHint": {
              "nullable": true
             },
+            "jitMarketHash": {
+             "nullable": true
+            },
             "minCaReceived": {
              "nullable": true,
              "type": "string"
             },
             "minPremiumPerShare": {
-             "description": "Unit: WAD (1e18 fixed-point) premium floor per dstCST share.",
+             "description": "Raw premiumToken base units owed per 1e18 dstCST produced; contracts ceil-round the owed premium.",
              "type": "string"
             },
             "minSharesOut": {
@@ -13323,6 +13498,7 @@
             "minPremiumPerShare",
             "minCaReceived",
             "minSharesOut",
+            "jitMarketHash",
             "allowPartialFills",
             "allowUnderfill",
             "premiumPaymentMode",
@@ -13479,6 +13655,606 @@
     },
     "tags": [
      "Rollover"
+    ]
+   }
+  },
+  "/stats/v1/lp-daily": {
+   "get": {
+    "description": "Protocol-level LP activity per chain per day (v_lp_protocol_daily): gross/net USD flow and action counts split mint/unwind/redeem",
+    "parameters": [
+     {
+      "description": "Optional. Numeric chain id. Leave empty to aggregate over production chains only (the deployment's PRODUCTION_CHAIN_IDS, currently Arbitrum 42161 + Base 8453); pass an explicit id to read any chain, including staging.",
+      "in": "query",
+      "name": "chainId",
+      "required": false,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Earliest day to include (ISO date).",
+      "in": "query",
+      "name": "fromDay",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Latest day to include (ISO date).",
+      "in": "query",
+      "name": "toDay",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 1000,
+       "maximum": 1000,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the alias.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Alias of `cursor`. If both are sent they must be equal.",
+      "in": "query",
+      "name": "nextCursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "hasMore": {
+           "type": "boolean"
+          },
+          "items": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "chainId": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "day": {
+              "type": "string"
+             },
+             "grossInUsd": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "number"
+               }
+              ],
+              "nullable": true
+             },
+             "grossOutUsd": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "number"
+               }
+              ],
+              "nullable": true
+             },
+             "lpActions": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "mints": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "netFlowUsd": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "number"
+               }
+              ],
+              "nullable": true
+             },
+             "redeems": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "unwinds": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "chainId",
+             "day",
+             "grossInUsd",
+             "grossOutUsd",
+             "netFlowUsd",
+             "lpActions",
+             "mints",
+             "unwinds",
+             "redeems"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "nextCursor": {
+           "nullable": true,
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "500": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Stats"
+    ]
+   }
+  },
+  "/stats/v1/notional-coverage-daily": {
+   "get": {
+    "description": "Protocol-level notional coverage per chain per day (v_protocol_notional_coverage_per_day)",
+    "parameters": [
+     {
+      "description": "Optional. Numeric chain id. Leave empty to aggregate over production chains only (the deployment's PRODUCTION_CHAIN_IDS, currently Arbitrum 42161 + Base 8453); pass an explicit id to read any chain, including staging.",
+      "in": "query",
+      "name": "chainId",
+      "required": false,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Earliest day to include (ISO date).",
+      "in": "query",
+      "name": "fromDay",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Latest day to include (ISO date).",
+      "in": "query",
+      "name": "toDay",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 1000,
+       "maximum": 1000,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Optional. Opaque pagination cursor from a previous response. Canonical spelling; `nextCursor` is the alias.",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Optional. Alias of `cursor`. If both are sent they must be equal.",
+      "in": "query",
+      "name": "nextCursor",
+      "required": false,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "hasMore": {
+           "type": "boolean"
+          },
+          "items": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "chainId": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "coverageUsd": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "number"
+               }
+              ],
+              "nullable": true
+             },
+             "coverageWei": {
+              "nullable": true,
+              "type": "string"
+             },
+             "day": {
+              "type": "string"
+             },
+             "maxPriceAge": {
+              "nullable": true,
+              "type": "string"
+             }
+            },
+            "required": [
+             "chainId",
+             "day",
+             "coverageWei",
+             "coverageUsd",
+             "maxPriceAge"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "nextCursor": {
+           "nullable": true,
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "500": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Stats"
     ]
    }
   }

@@ -3,7 +3,7 @@
 import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
-import { annotateApprovalStatus, type ApprovalRequirement, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
+import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent } from "../rollover.ts";
@@ -42,15 +42,6 @@ async function annotateIfExplicitRpc(ctx: HandlerContext, chainId: PrepareOrders
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return entries;
   return annotateApprovalStatus(resolved.client, { entries, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
-}
-
-/** One info warning naming every approval the chain CONFIRMED missing (satisfied === false —
- *  unknown states stay silent; the entries themselves carry the full picture). */
-function approvalMissingWarning(entries: ApprovalRequirement[], deadline: string): { code: string; message: string } | null {
-  const missing = entries.filter((e) => e.satisfied === false);
-  if (missing.length === 0) return null;
-  const lines = missing.map((e) => `${e.tokenRole} ${e.token} → ${e.spenderRole} ${e.spender} (current ${e.currentAllowance ?? "0"}, needs ${e.amount ?? "a simulated cap"}${e.currentExpiration !== undefined ? `, permit2 expiration ${e.currentExpiration}` : ""})`);
-  return { code: "approval_missing", message: `${missing.length} required approval${missing.length === 1 ? " is" : "s are"} NOT in place: ${lines.join("; ")} — grant ${deadline}, using the unsigned payload(s) in data.approvals` };
 }
 
 /** Maker-side auction plan echoed in `data.fusion`: what the signed extension commits to. */
@@ -896,6 +887,10 @@ async function buildTakerFillArtifact(a: {
       requiredTakingAmount: fill.requiredTakingAmount,
       takerTraits: fill.takerTraits,
       approvals,
+      // A caller-assembled interaction is opaque bytes: whatever tokens the interaction
+      // contract itself pulls mid-fill are invisible here — say so instead of implying the
+      // report is complete (jitMarket-built interactions ARE characterized, in `jit`).
+      ...(action.interaction !== undefined ? { approvalsNote: "a custom taker interaction rides this fill — any tokens the interaction contract itself pulls are OUTSIDE this approvals report; discover them with cork_track simulate before granting anything" } : {}),
       ...(jitData ? { jit: jitData } : {}),
       ...(auctionData ? { auction: auctionData } : {}),
       simulationRequired: true,

@@ -2145,6 +2145,16 @@ const CATALOG: Mutant[] = [
     tests: [T.approvals],
   },
   {
+    // approval_missing must fire strictly on CONFIRMED-missing (satisfied === false): the
+    // relaxed comparator also matches unannotated entries (undefined), so every offline
+    // build would nag about grants nobody checked.
+    id: "sdk-approval-missing-filter",
+    file: "packages/core/src/order-approvals.ts",
+    find: "const missing = entries.filter((e) => e.satisfied === false);",
+    replace: "const missing = entries.filter((e) => e.satisfied !== true);",
+    tests: [T.approvals],
+  },
+  {
     // The taker's cap must be the fill's TAKING amount — sourcing it from the making amount
     // tells the hedger to approve the wrong token quantity entirely.
     id: "sdk-approval-taker-cap-source",

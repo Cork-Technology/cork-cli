@@ -243,6 +243,30 @@ describe("handler wiring: data.approvals across the order lifecycle", () => {
     // The cap must come from the fill's TAKING amount, never the making amount.
     expect(approvals[0]!.amount).toBe((5n * 10n ** 16n).toString());
     expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(true);
+    // No custom interaction on this fill — the completeness caveat must NOT ride.
+    expect((env.data as { approvalsNote?: string }).approvalsNote).toBeUndefined();
+  });
+
+  it("a caller-assembled raw interaction adds the completeness caveat (its pulls are opaque)", async () => {
+    const order: LopOrder = { salt: 43n, maker: makerAccount.address, receiver: zeroAddress, makerAsset: CST, takerAsset: COLLATERAL, makingAmount: AMOUNT, takingAmount: 5n * 10n ** 16n, makerTraits: 0n };
+    const orderHash = hashLopOrder(1, LOP, order);
+    const signature = await makerAccount.sign({ hash: orderHash });
+    const env = await runTool(
+      "cork_prepare_orders",
+      {
+        chainId: 1, account: TAKER, clientRequestId: "approvals-tk-0002", format: "concise",
+        action: {
+          type: "taker-fill", orderHash,
+          interaction: `0x${ADAPTER.slice(2)}deadbeef`,
+          signedOrder: { order: { salt: "43", maker: makerAccount.address, receiver: zeroAddress, makerAsset: CST, takerAsset: COLLATERAL, makingAmount: AMOUNT.toString(), takingAmount: (5n * 10n ** 16n).toString(), makerTraits: "0" }, signature },
+        },
+      },
+      { nowSeconds: NOW, resolveRpc: allowanceStub(0n) },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { approvals: ApprovalRequirement[]; approvalsNote?: string };
+    expect(d.approvals).toHaveLength(1); // the LOP-level grant is still stated…
+    expect(d.approvalsNote).toContain("OUTSIDE this approvals report"); // …and the limit is, too
   });
 
   it("finalize-maker-order: approvals re-derived from the SIGNED makerTraits, outside the digest", async () => {

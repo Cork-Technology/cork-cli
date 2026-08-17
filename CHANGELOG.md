@@ -120,7 +120,11 @@ silently.
   more rows without a cursor reads as an honest partial (`cursor_absent`), never a loop. The
   `trading-pairs` infinite-cursor bug we reported on 2026-08-13 was the same silent-strip trap
   sprung venue-side; venue 0.3.4 fixed it by accepting `cursor` on its five cursor-paged
-  routes, and we verified the full walk live (358 rows, clean termination).
+  routes, and we verified the full walk live (358 rows, clean termination). Re-verified
+  2026-08-17 against venue 0.3.14 (spec capture updated; the diff is additive only): the
+  `/limit-orders/v1/markets` cursor-repeat loop we reported is fixed venue-side (15 pages,
+  358 rows, complete), and the last silent-strip route (`whitelisted-addresses`) now takes
+  canonical `cursor` and answers loud 400s on malformed, misspelled, or conflicting cursors.
 
 ### Changed
 

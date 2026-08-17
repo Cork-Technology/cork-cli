@@ -5,6 +5,10 @@
       "kind": "value"
     },
     {
+      "name": "AllowanceReader",
+      "kind": "type"
+    },
+    {
       "name": "ApprovalRequirement",
       "kind": "type"
     },
@@ -878,6 +882,10 @@
     },
     {
       "name": "annotateApprovalStatus",
+      "kind": "value"
+    },
+    {
+      "name": "approvalMissingWarning",
       "kind": "value"
     },
     {
@@ -2657,6 +2665,10 @@
   ],
   "./orders": [
     {
+      "name": "AllowanceReader",
+      "kind": "type"
+    },
+    {
       "name": "ApprovalRequirement",
       "kind": "type"
     },
@@ -2886,6 +2898,10 @@
     },
     {
       "name": "annotateApprovalStatus",
+      "kind": "value"
+    },
+    {
+      "name": "approvalMissingWarning",
       "kind": "value"
     },
     {

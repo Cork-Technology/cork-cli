@@ -200,12 +200,27 @@ export function takerApprovalRequirements(a: {
   return out;
 }
 
+/** One info warning naming every approval the chain CONFIRMED missing. Strictly
+ *  `satisfied === false`: an unannotated entry (no RPC, unreadable token, or a permit) is
+ *  UNKNOWN, not missing — warning on unknown would nag every offline build. */
+export function approvalMissingWarning(entries: ApprovalRequirement[], deadline: string): { code: "approval_missing"; message: string } | null {
+  const missing = entries.filter((e) => e.satisfied === false);
+  if (missing.length === 0) return null;
+  const lines = missing.map((e) => `${e.tokenRole} ${e.token} → ${e.spenderRole} ${e.spender} (current ${e.currentAllowance ?? "0"}, needs ${e.amount ?? "a simulated cap"}${e.currentExpiration !== undefined ? `, permit2 expiration ${e.currentExpiration}` : ""})`);
+  return { code: "approval_missing", message: `${missing.length} required approval${missing.length === 1 ? " is" : "s are"} NOT in place: ${lines.join("; ")} — grant ${deadline}, using the unsigned payload(s) in data.approvals` };
+}
+
+/** Structural slice of a viem PublicClient. The parameter is typed `never` so any concrete
+ *  client — whose readContract carries generic ABI-typed overloads no loose interface can
+ *  name — stays assignable by contravariance; the one internal call site casts once. */
+export type AllowanceReader = { readContract: (args: never) => Promise<unknown> };
+
 /** Best-effort chain annotation: read each grant's CURRENT state and mark it satisfied or not.
  *  Every read degrades to silence (the entry just stays unannotated) — this may only add
  *  information, never block the artifact. erc2612-permit entries are never annotated (the token
  *  may not exist yet, and a permit is not a stored allowance). */
 export async function annotateApprovalStatus(
-  client: { readContract: (args: never) => Promise<unknown> },
+  client: AllowanceReader,
   args: { entries: ApprovalRequirement[]; nowSeconds: bigint; atBlock?: bigint },
 ): Promise<ApprovalRequirement[]> {
   const blockOpt = args.atBlock !== undefined ? { blockNumber: args.atBlock } : {};

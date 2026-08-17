@@ -11,7 +11,7 @@ import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } fr
 import type { AuctionPriceReport } from "../fusion.ts";
 import { decodeJitExtension } from "../market-registry.ts";
 import { buildTakerFill } from "../orders.ts";
-import { annotateApprovalStatus, takerApprovalRequirements } from "../order-approvals.ts";
+import { annotateApprovalStatus, approvalMissingWarning, takerApprovalRequirements } from "../order-approvals.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { whitelistManagerAbi } from "../chain/abis.ts";
@@ -292,10 +292,8 @@ export async function prepareForSelfTakerFill(args: {
   });
   if (resolved) {
     approvals = await annotateApprovalStatus(resolved.client, { entries: approvals, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
-    const missing = approvals.filter((e) => e.satisfied === false);
-    if (missing.length > 0) {
-      warnings.push({ code: "approval_missing", message: `${missing.length === 1 ? "a required approval is" : `${missing.length} required approvals are`} NOT in place: ${missing.map((e) => `${e.tokenRole} ${e.token} → ${e.spenderRole} ${e.spender} (current ${e.currentAllowance ?? "0"}, needs ${e.amount ?? "a simulated cap"})`).join("; ")} — grant before broadcasting this fill, using the unsigned payload(s) in data.approvals` });
-    }
+    const missingWarn = approvalMissingWarning(approvals, "before broadcasting this fill");
+    if (missingWarn) warnings.push(missingWarn);
   }
   return envelope({
     state: "ok",

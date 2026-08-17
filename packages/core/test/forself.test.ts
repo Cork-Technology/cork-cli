@@ -233,6 +233,8 @@ const chainStubAnswer = (c: { functionName: string }, over: { cork?: string; lop
         return true;
       case "bitInvalidatorForOrder":
         return 0n; // live-untouched
+      case "allowance":
+        return 0n; // nothing granted — approvals annotate as confirmed-missing
       default:
         throw new Error(`no stub for ${c.functionName}`);
     }
@@ -277,6 +279,25 @@ describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
     expect(codes).toContain("unsigned_artifact");
     expect(codes).not.toContain("would_revert"); // pair matches the pool
     expect((d.forSelf as { pullCap: string }).pullCap).toBe(String(5n * 10n ** 16n));
+  });
+
+  it("data.approvals: the taker grant goes to the ADAPTER, payload-ready, annotated missing", async () => {
+    const { orderHash, row } = await signedVenueRow();
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0010", action: { type: "taker-fill", orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(row), resolveRpc: chainStub() },
+    );
+    expect(env.state).toBe("ok");
+    const approvals = (env.data as { approvals: Array<Record<string, unknown>> }).approvals;
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ role: "taker", token: COLLATERAL, spender: ADAPTER, spenderRole: "ForSelf adapter", kind: "cap", satisfied: false, amount: String(5n * 10n ** 16n) });
+    // The unsigned grant tx approves the ADAPTER on the taker asset — never the LOP.
+    const tx = approvals[0]!.unsignedTx as { to: string; calldata: string };
+    expect(tx.to).toBe(COLLATERAL);
+    expect(tx.calldata.startsWith("0x095ea7b3")).toBe(true);
+    expect(tx.calldata.toLowerCase()).toContain(ADAPTER.slice(2).toLowerCase());
+    expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(true);
   });
 
   it("binding mismatch is a CONFLICT: the adapter wraps a different pool manager", async () => {
