@@ -6,7 +6,7 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
-## [0.3.0-rc.1] — 2026-08-13
+## [0.3.0-rc.1] — 2026-08-17
 
 **New line (0.2 → 0.3), declared by the integrability owner 2026-08-13 under policy R10/R11.**
 We renamed the data-mode value `centralized` to `hybrid`. Mode is an input enum and a provenance
