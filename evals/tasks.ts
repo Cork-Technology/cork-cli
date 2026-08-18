@@ -207,6 +207,12 @@ export const TASKS: EvalTask[] = [
   // authority-onboard call with the fields sensibly chosen, OR zero calls plus an answer that
   // names both missing fields.
   { id: "ho-authority", heldOut: true, prompt: `Prepare a Permit2 onboarding for token 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 spender 0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407, request id "eval-auth-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "authority-onboard" } }, state: "ok", clarify: /(?=[\s\S]*(chainId|chain\s*id|network))(?=[\s\S]*(account|owner))/i, maxCalls: 2 } },
-  { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x2222222222222222222222222222222222222222222222222222222222222222 (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
+  // Fixture hash made REALISTIC (owner decision 2026-08-18, baseline reset): the old 64x'2'
+  // degenerate string tripled the model's hex-length miscount rate ("66 chars/33 bytes" on a
+  // valid bytes32 — measured 4-fail-in-6 vs 1-in-4 with a keccak-looking hash). Real users
+  // paste real hashes; the degenerate fixture accidentally measured tokenizer counting, not
+  // cancel-building. The residual miscount rate is model behavior — never tune the tool
+  // surface against it.
+  { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x8f3c1a76e0b2d94c55f10e7a3db6c821904bfe5d67a8c3210e5b49d7fa6301cb (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
   { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
 ];
