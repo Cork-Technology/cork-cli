@@ -180,12 +180,15 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          # `env "PATH=$PATH"` is load-bearing: melange resolves to aqua's SHIM, and sudoers
-          # secure_path resets PATH even under -E, so the shim run as root cannot find the
-          # `aqua` binary ("aqua isn't found: executable file not found in $PATH" — learned
-          # live on this step's first-ever execution, 2026-08-18). -E still preserves HOME,
-          # which aqua needs to locate its install root under the runner user.
-          sudo -E env "PATH=$PATH" "$(command -v melange)" build packaging/melange.yaml \
+          # ROOTLESS, sudo-free (the wolfi-dev/os shape — their Makefile runs melange with zero
+          # sudo): the bubblewrap runner contains each pipeline command in an unprivileged
+          # user-namespace sandbox. The flag is EXPLICIT rather than relying on melange's
+          # Linux-default-is-bubblewrap, so a default change upstream cannot silently move the
+          # isolation model. Rootless also ends the sudo/aqua-shim PATH conflicts outright and
+          # leaves every artifact owned by the runner user. Fallback if a runner-image update
+          # ever breaks unprivileged userns: `--runner docker` (also sudo-free here).
+          melange build packaging/melange.yaml \
+            --runner bubblewrap \
             --arch "${{ matrix.arch }}" \
             --signing-key melange.rsa \
             --generate-provenance \
