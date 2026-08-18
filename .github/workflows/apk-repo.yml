@@ -180,7 +180,12 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          sudo -E "$(command -v melange)" build packaging/melange.yaml \
+          # `env "PATH=$PATH"` is load-bearing: melange resolves to aqua's SHIM, and sudoers
+          # secure_path resets PATH even under -E, so the shim run as root cannot find the
+          # `aqua` binary ("aqua isn't found: executable file not found in $PATH" — learned
+          # live on this step's first-ever execution, 2026-08-18). -E still preserves HOME,
+          # which aqua needs to locate its install root under the runner user.
+          sudo -E env "PATH=$PATH" "$(command -v melange)" build packaging/melange.yaml \
             --arch "${{ matrix.arch }}" \
             --signing-key melange.rsa \
             --generate-provenance \
@@ -189,7 +194,7 @@ jobs:
           # image job then needs no secret at all (one fewer reviewer gate), and on the
           # candidate path the key never leaves this job. Production regenerates its own
           # CUMULATIVE index in production-publish; this local one is candidate-only.
-          (cd "packages/${{ matrix.arch }}" && sudo -E "$(command -v melange)" index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+          (cd "packages/${{ matrix.arch }}" && sudo -E env "PATH=$PATH" "$(command -v melange)" index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
           rm -f melange.rsa
           ls -l "packages/${{ matrix.arch }}/"
 
