@@ -190,11 +190,13 @@ jobs:
             --signing-key melange.rsa \
             --generate-provenance \
             --out-dir packages
-          # Sign the per-arch index HERE, while the key is already materialized: the candidate
-          # image job then needs no secret at all (one fewer reviewer gate), and on the
-          # candidate path the key never leaves this job. Production regenerates its own
-          # CUMULATIVE index in production-publish; this local one is candidate-only.
-          (cd "packages/${{ matrix.arch }}" && sudo -E env "PATH=$PATH" "$(command -v melange)" index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+          # No separate `melange index` call: `melange build` already generates AND signs the
+          # per-arch APKINDEX.tar.gz with the same key (observed in the v0.3.0-rc.1 backfill
+          # log, 2026-08-18 — "signed index packages/<arch>/APKINDEX.tar.gz with key
+          # melange.rsa"). The explicit call was redundant, and its `cd` subshell also broke
+          # aqua's relative AQUA_CONFIG. The candidate image job still needs no secret; the key
+          # never leaves this job. Production regenerates its own CUMULATIVE index in
+          # production-publish; this local one is candidate-only.
           rm -f melange.rsa
           ls -l "packages/${{ matrix.arch }}/"
 
