@@ -117,8 +117,10 @@ jobs:
         with:
           aqua_version: v2.53.5
 
-      - name: Install bubblewrap (melange build sandbox)
-        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+      # No bubblewrap install: its only consumer was melange's bwrap runner, which refuses to
+      # run unprivileged on these runner images (run 32178646153) — the build uses the docker
+      # runner, already present on GitHub runners. Removing it also drops an apt edge and
+      # ~15s per job.
 
       - name: Substitute release identity into the spec
         env:
@@ -180,15 +182,17 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          # ROOTLESS, sudo-free (the wolfi-dev/os shape — their Makefile runs melange with zero
-          # sudo): the bubblewrap runner contains each pipeline command in an unprivileged
-          # user-namespace sandbox. The flag is EXPLICIT rather than relying on melange's
-          # Linux-default-is-bubblewrap, so a default change upstream cannot silently move the
-          # isolation model. Rootless also ends the sudo/aqua-shim PATH conflicts outright and
-          # leaves every artifact owned by the runner user. Fallback if a runner-image update
-          # ever breaks unprivileged userns: `--runner docker` (also sudo-free here).
+          # Sudo-free (the wolfi-dev/os `docker-package` shape — their Makefile runs melange
+          # with zero sudo): the docker runner isolates the build in a container the runner
+          # user can already create (GitHub runners grant daemon access). The flag is EXPLICIT
+          # so an upstream default change cannot silently move the isolation model. Measured,
+          # not assumed: melange's bubblewrap runner REFUSES to run unprivileged on the
+          # ubuntu-24.04 runner images ("unable to run containers using bubblewrap", both
+          # arches, run 32178646153, 2026-08-18) — it worked earlier only because sudo made it
+          # root. Rootless-invocation ends the sudo/aqua-shim PATH conflict class outright and
+          # leaves every artifact owned by the runner user.
           melange build packaging/melange.yaml \
-            --runner bubblewrap \
+            --runner docker \
             --arch "${{ matrix.arch }}" \
             --signing-key melange.rsa \
             --generate-provenance \
