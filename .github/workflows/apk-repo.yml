@@ -15,9 +15,11 @@
 #     served at the Pages root for consumers).
 #   - Pages enabled from the gh-pages branch.
 #   - The `release` environment: deployment rule restricted to v* tags, required reviewers set.
-#     Every secret-reading job below declares `environment: release`, so the secrets resolve
-#     from the environment directly — a run from any other ref cannot read them at all, and each
-#     job wave waits for a reviewer click that shows which workflow and ref asked. A production
+#     Every secret-reading job below declares `environment: release` — the GATE: a run from any
+#     other ref cannot enter it, and each job wave waits for a reviewer click that shows which
+#     workflow and ref asked. On the workflow_call path the declaration is NOT the transport:
+#     the caller must also pass `secrets: inherit` or the environment secrets resolve EMPTY
+#     (actions/runner#4453; proven live on v0.3.0-rc.1, 2026-08-18). A production
 #     release gates twice (melange-build, then production-publish), a candidate once
 #     (melange-build only — its signed per-arch index feeds the ungated candidate image job);
 #     `plan` is deliberately ungated so tag parsing fails fast
@@ -27,10 +29,11 @@
 #   - workflow_call from release.yml (the NORMAL path): a release published by the pipeline's own
 #     GITHUB_TOKEN cannot fire `release: published` here (Actions suppresses token-created event
 #     cascades), so the release workflow CALLS this one directly — no PAT/app token exists to
-#     leak, and the chain is an explicit `needs:` edge. The caller forwards NO secrets: a caller
-#     job using `uses:` cannot declare `environment:`, and `secrets: inherit` forwards repo/org
-#     secrets only — so the jobs here resolve them from the `release` environment themselves,
-#     and the secrets never transit the caller.
+#     leak, and the chain is an explicit `needs:` edge. The caller passes `secrets: inherit`:
+#     REQUIRED for environment secrets to resolve in a called workflow's jobs at all
+#     (actions/runner#4453 — the env declaration alone reads empty; learned live 2026-08-18).
+#     The environment gate above still decides WHERE they materialize: only inside
+#     reviewer-approved jobs on v* refs. (A caller `uses:` job cannot declare `environment:`.)
 #   - release: published — still fires for a release a human publishes by hand (the run's ref is
 #     the tag, so the environment's v* rule passes).
 #   - workflow_dispatch — operator backfill/retry (safe: the publish step refuses to overwrite
