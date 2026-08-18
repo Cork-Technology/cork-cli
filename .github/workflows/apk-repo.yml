@@ -267,6 +267,12 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
+          # pipefail is load-bearing: `| tee` otherwise reports TEE's exit status, and an apko
+          # failure sails through green (observed v0.3.0-rc.1 backfill, 2026-08-18 — apko died
+          # moving SBOMs into a sboms/ dir it does NOT create itself, the step stayed green,
+          # and the empty digest surfaced two steps later as a misleading attest error).
+          set -o pipefail
+          mkdir -p sboms
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
           # Candidates never move :latest (policy R7: the pointer tracks production only).
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
@@ -274,6 +280,7 @@ jobs:
             --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation.
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
+          test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
 
@@ -413,6 +420,11 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
+          # Same three guards as the candidate path (proven necessary on the v0.3.0-rc.1
+          # backfill): pipefail so an apko failure cannot hide behind tee, the sboms/ dir apko
+          # expects but never creates, and a loud stop on an empty captured digest.
+          set -o pipefail
+          mkdir -p sboms
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
           apko publish packaging/cork-cli.apko.yaml \
@@ -420,6 +432,7 @@ jobs:
             --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation.
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
+          test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
 
