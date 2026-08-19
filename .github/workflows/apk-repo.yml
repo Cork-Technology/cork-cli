@@ -150,7 +150,14 @@ jobs:
       # ship (checkout died on exactly that, run 32225158751).
       - name: Install the build toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl yq
+        run: |
+          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl yq
+          # The bind-mounted workspace belongs to the HOST runner user while container steps
+          # run as root, so every git command in later run steps refuses with "dubious
+          # ownership" — and on run 32225918023 that SILENTLY emptied both COMMIT (the
+          # expected-commit supply-chain pin) and SOURCE_DATE_EPOCH, because the run stayed
+          # green. Trust the workspace once, up front.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Stolen from chainguard-dev/actions/setup-melange: prove the sandbox works in seconds
       # — before the reviewer-gated tripwire and the multi-minute build — and emit
@@ -176,8 +183,14 @@ jobs:
         run: |
           # The checkout tag is substituted EXPLICITLY (candidates: package.version is the apk
           # mapping X.Y.Z_rcN, so the spec's default checkout tag of v + package.version would
-          # name a git tag that does not exist).
-          COMMIT="$(git rev-parse HEAD)" \
+          # name a git tag that does not exist). COMMIT is resolved as a PLAIN assignment plus
+          # an explicit guard — the old env-prefix form (`COMMIT="$(...)" yq ...`) swallows a
+          # git failure even under `sh -e`, and on run 32225918023 that silently ERASED the
+          # expected-commit pin (melange: "Warning: no expected-commit") while the run stayed
+          # green.
+          COMMIT="$(git rev-parse HEAD)"
+          test -n "$COMMIT" || { echo "::error::could not resolve HEAD — refusing to build without the expected-commit pin"; exit 1; }
+          export COMMIT
           yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.tag = strenv(TAG) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
             packaging/melange.yaml
           yq '.package.version, .vars.commit, .pipeline[0].with.tag' packaging/melange.yaml
@@ -236,7 +249,11 @@ jobs:
           # later re-dispatch has a real shot at rebuilding byte-identical apks, which is
           # exactly what production-publish's immutability check (cmp, refuse different
           # bytes) needs in order to pass on a partial-publish retry instead of bricking.
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          # Plain assignment + guard, NOT `export X="$(...)"` — export returns 0 even when
+          # the substitution fails, and run 32225918023 shipped an empty epoch that way.
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          test -n "$SOURCE_DATE_EPOCH" || { echo "::error::could not read the tag commit's timestamp for SOURCE_DATE_EPOCH"; exit 1; }
+          export SOURCE_DATE_EPOCH
           echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (tag commit)"
           # bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the
           # runner this job container exists to restore): as in-container root the bwrap
