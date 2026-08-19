@@ -279,11 +279,16 @@ jobs:
           rm -f melange.rsa
           ls -l "packages/${{ matrix.arch }}/"
 
+      # Three EXPLICIT patterns — the old `*.apk*` glob silently DROPPED the SLSA provenance
+      # (cork-cli-…-r0.attest.tar.gz has no ".apk" substring), so every artifact carried 2 of
+      # the 3 files melange wrote and "provenance beside each apk" was never true downstream
+      # (found by unpacking the run-32227460341 artifact, 2026-08-19).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: apk-${{ matrix.arch }}
           path: |
-            packages/${{ matrix.arch }}/*.apk*
+            packages/${{ matrix.arch }}/*.apk
+            packages/${{ matrix.arch }}/*.attest.tar.gz
             packages/${{ matrix.arch }}/APKINDEX.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -453,6 +458,14 @@ jobs:
                   echo "already published byte-identical: $arch/$base — skipping (re-run)"
                   continue
                 fi
+                # Provenance is the one legitimately non-reproducible file: melange stamps
+                # wall-clock build times into the SLSA predicate, so a re-dispatch rebuilds a
+                # DIFFERENT .attest.tar.gz for byte-identical apks. First-published provenance
+                # wins; refusing here would brick every partial-publish retry.
+                case "$base" in *.attest.tar.gz)
+                  echo "already published provenance $arch/$base differs (re-run rebuilt it with fresh wall-clock fields) — keeping the FIRST-published attestation"
+                  continue ;;
+                esac
                 echo "REFUSING to overwrite already-published $arch/$base with DIFFERENT bytes — published apks are immutable (bump the epoch instead)" >&2
                 exit 1
               fi
