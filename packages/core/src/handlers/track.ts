@@ -7,7 +7,7 @@ import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
 import { classifyBitInvalidator, classifyRemainingRaw, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, type LopOnChainStatus } from "../orders.ts";
 import { JIT_EVENTS } from "../market-registry.ts";
-import { resolveRollover } from "../config-remote.ts";
+import { resolveRollover, rolloverScanTargets } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -242,12 +242,15 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
           if (logsEndpoint && rollover) {
             try {
+              // Span every settler generation from the earliest seed block: a retired
+              // generation's digests still have their full event history on-chain.
+              const targets = rolloverScanTargets(rollover);
               const logs = await fetchDigestLogs({
                 url: logsEndpoint.url,
                 ...(logsEndpoint.bearerToken ? { bearerToken: logsEndpoint.bearerToken } : {}),
-                addresses: [rollover.exactSettler, rollover.partialSettler],
+                addresses: targets.settlers,
                 digest,
-                fromBlock: rollover.seededAtBlock,
+                fromBlock: targets.fromBlock,
                 ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
               });
               chainVerification = { ...(chainVerification ?? {}), events: labelLogs(logs) };

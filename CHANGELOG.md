@@ -58,7 +58,10 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   `RolloverGenerationAddresses`; `/config` gains `CorkRolloverGeneration` and the
   `legacyGenerations`/`contractsVersion` fields on `CorkRolloverDeployment`.
   `RolloverParamsStruct` gains required `jitMarketHash` (breaking for direct struct
-  construction — deliberate: the field is signed either way).
+  construction — deliberate: the field is signed either way). `rolloverScanTargets` derives
+  every event-scan site's generation-spanning address set + earliest seed block — used by the
+  full-decentralized rollover feeds AND `cork_track` reconcile's digest event-history leg,
+  which previously scanned only the active generation.
 
 - **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
   errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,

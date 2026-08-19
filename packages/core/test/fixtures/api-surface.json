@@ -1705,6 +1705,10 @@
       "kind": "value"
     },
     {
+      "name": "rolloverScanTargets",
+      "kind": "value"
+    },
+    {
       "name": "rpcDiagnostics",
       "kind": "value"
     },
@@ -2316,6 +2320,10 @@
     },
     {
       "name": "resolveRollover",
+      "kind": "value"
+    },
+    {
+      "name": "rolloverScanTargets",
       "kind": "value"
     },
     {

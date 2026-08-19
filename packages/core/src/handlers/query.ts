@@ -6,7 +6,7 @@ import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
-import { resolveRollover } from "../config-remote.ts";
+import { resolveRollover, rolloverScanTargets } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
@@ -318,14 +318,13 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       // block, and each row's `emitter`/`factory` says which generation produced it.
       const { rollover } = await resolveRollover(chainId);
       if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId}`, ctx);
-      const generations = [rollover, ...(rollover.legacyGenerations ?? [])];
-      const earliestSeed = Math.min(...generations.map((g) => g.seededAtBlock));
+      const targets = rolloverScanTargets(rollover);
       if (kind === "fills") {
         const topics: Array<`0x${string}`[] | null> = [ROLLOVER_FILL_TOPICS];
         if (filters.orderDigest) topics.push([filters.orderDigest]);
         spec = {
-          fromBlock: earliestSeed,
-          address: generations.flatMap((g) => [g.exactSettler, g.partialSettler] as `0x${string}`[]),
+          fromBlock: targets.fromBlock,
+          address: targets.settlers,
           topics,
           decode: decodeRolloverFillRows,
           postFilter: (rows) => (filters.filler ? rows.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase()) : rows),
@@ -334,8 +333,8 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         };
       } else {
         spec = {
-          fromBlock: earliestSeed,
-          address: generations.map((g) => g.factory as `0x${string}`),
+          fromBlock: targets.fromBlock,
+          address: targets.factories,
           topics: [[CLONE_DEPLOYED_TOPIC]],
           decode: decodeCloneRows,
           postFilter: (rows) => {

@@ -58,6 +58,7 @@ const T = {
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
+  rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
@@ -838,6 +839,16 @@ const CATALOG: Mutant[] = [
     find: "for (const g of dep.legacyGenerations ?? []) {",
     replace: "for (const g of [] as RolloverGenerationAddresses[]) {",
     tests: [T.rollover],
+  },
+  {
+    // Event-history scans must span every generation from the EARLIEST seed block — dropping
+    // the legacy set silently empties retired-generation fills/clones/digest histories in
+    // full-decentralized query AND track reconcile.
+    id: "rollover-scan-targets-active-only",
+    file: "packages/core/src/config-remote.ts",
+    find: "const generations = [dep, ...(dep.legacyGenerations ?? [])];",
+    replace: "const generations = [dep];",
+    tests: [T.hypersync, T.rolloverVerify],
   },
   // ── CREATE2 attestations: binds is the attestation↔config drift gate; salts are identity ──
   {

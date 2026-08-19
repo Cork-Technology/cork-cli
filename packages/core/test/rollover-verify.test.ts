@@ -306,3 +306,32 @@ describe("consistency map is EXACT (terminal states never cross-accept — kills
     expect(env.warnings[0]?.code).toBe("status_mismatch");
   });
 });
+
+describe("reconcile event-history leg — scan targets span settler GENERATIONS", () => {
+  it("requests logs from active + retired settlers, from the EARLIEST seed block", async () => {
+    // A July-generation digest's history lives on the retired settlers; scanning only the
+    // active generation would answer an empty history for a real settled order.
+    let requested: { address?: string[]; fromBlock?: string } | undefined;
+    const ctx: HandlerContext = {
+      nowSeconds: 1_790_000_000n,
+      venueFetch: async () =>
+        new Response(JSON.stringify({ order: { orderDigest: DIGEST, status: "SETTLED", settler: EXACT, chainId: 42161 }, fills: [], slots: [] }), { status: 200 }),
+      resolveRpc: async () => null,
+      logsUrl: "https://stub-logs/rpc",
+      logsFetch: async (_url: string, init?: RequestInit) => {
+        requested = (JSON.parse(String(init?.body)) as { params: [{ address?: string[]; fromBlock?: string }] }).params[0];
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+      },
+    };
+    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, ctx);
+    expect(requested).toBeDefined();
+    expect(requested!.address!.map((a) => a.toLowerCase()).sort()).toEqual([
+      "0x8e9ca640338d3bdbfe3781d7178ca73af66f366a", // retired July partial
+      "0x983270ae48545665cee4d7ef61c65ff3fdc8222d", // retired July exact
+      "0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e", // rc.2 partial
+      "0xf4ffd4b3faedb784b04d1883119840515f224c2f", // rc.2 exact
+    ]);
+    // 484973917 (July seed) < 494104750 (rc.2 seed) — history starts at the earliest.
+    expect(BigInt(requested!.fromBlock!)).toBe(484973917n);
+  });
+});

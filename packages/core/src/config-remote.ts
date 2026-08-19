@@ -71,6 +71,23 @@ const RolloverDeploymentSchema = z
   .strip();
 export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
 
+/** Event-scan targets across EVERY generation of a rollover deployment: retired settlers'
+ *  fills and retired factories' clones stay on-chain, so history reads span active + legacy
+ *  addresses from the earliest seed block. One derivation for every scan site (query's
+ *  full-decentralized feeds, track's digest event-history leg). */
+export function rolloverScanTargets(dep: CorkRolloverDeployment): {
+  settlers: `0x${string}`[];
+  factories: `0x${string}`[];
+  fromBlock: number;
+} {
+  const generations = [dep, ...(dep.legacyGenerations ?? [])];
+  return {
+    settlers: generations.flatMap((g) => [g.exactSettler, g.partialSettler]),
+    factories: generations.map((g) => g.factory),
+    fromBlock: Math.min(...generations.map((g) => g.seededAtBlock)),
+  };
+}
+
 // MarketRegistry stack (market-registry-api, contracts release 2.1.0): the registry, the JIT
 // CorkLimitOrderAdapter, the two oracle factories (pair wrappers + fixed-rate), and named recipe
 // hints. Addresses are VOLATILE by team guidance (the whole set was redeployed from scratch for
