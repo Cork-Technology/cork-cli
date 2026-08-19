@@ -242,6 +242,12 @@ default in a shell. Supplying input *as* `--json '<object>'` also returns JSON �
 tool the wire shape is itself a machine-readable intent — so scripts that pass the wire shape
 keep working unchanged.
 
+**Prose is colored on a terminal, plain everywhere else.** SGR styling follows the usual
+conventions — off when the stream is piped, [`NO_COLOR`](https://no-color.org) disables,
+`FORCE_COLOR=1` forces (e.g. in CI logs), `TERM=dumb` disables — implemented in-tree with
+zero dependencies. Color never changes a character: stripping the escapes yields the exact
+plain output, and JSON output never carries them.
+
 **Exit codes map the envelope state** so scripts can branch: `0` ok · `2` invalid input · `3`
 unavailable · `4` conflict · `1` unexpected error. Chain-backed commands resolve an RPC
 automatically (see below); pass `--rpc-url <url>` (or set `CORK_RPC_URL`) to override.

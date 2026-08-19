@@ -21,6 +21,7 @@ import { REGISTRY, RENAMED_VALUES, SCHEMA_VERSION, inputJsonSchema, type ToolDef
 import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, DIGIT_FILTER_KEYS, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { envFlag } from "./env.ts";
 import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
+import { colorEnabled, makeStyle } from "./ansi.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError } from "./render.ts";
 import { runSelfUpdate } from "./self-update.ts";
@@ -323,11 +324,19 @@ export async function runCli(
   argv: string[],
   ctx: HandlerContext = {},
   env: Record<string, string | undefined> = {},
+  // TTY-ness is an input, not a probe: runCli captures strings and never touches process.*,
+  // so bin.ts reports what its real streams are and tests/embedders default to "not a TTY"
+  // (plain output). Per stream, because stdout piped + stderr on the terminal is common.
+  io: { stdoutIsTTY?: boolean; stderrIsTTY?: boolean } = {},
 ): Promise<CliResult> {
   let out = "";
   let err = "";
   let code: number = EXIT.ok;
   const envWantsJson = envFlag(env, "CORK_JSON");
+  // SGR styling for the prose renderers, decided once per stream (ansi.ts owns the
+  // NO_COLOR/FORCE_COLOR/TERM ladder). JSON paths never see these — they stringify directly.
+  const outStyle = makeStyle(colorEnabled(env, io.stdoutIsTTY === true));
+  const errStyle = makeStyle(colorEnabled(env, io.stderrIsTTY === true));
   // JSON intent for errors that fire BEFORE any command action runs (audit R6): commander-level
   // failures (unknown option/command, excess args) and pre-parse errors happen before the
   // per-command `--json` option is bound, so the intent is read straight off argv — a JSON-mode
@@ -565,7 +574,7 @@ export async function runCli(
         /** Emit one structured error payload (JSON or prose per --json intent) and set the exit
          *  code — the single shape every CLI-level failure takes, so no site can drift. */
         const fail = (payload: { error: Record<string, unknown> }, exitCode: number): void => {
-          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+          err += wantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload, errStyle);
           code = exitCode;
         };
 
@@ -585,7 +594,7 @@ export async function runCli(
           }
           const doc = { tool: tool.name, cli, phase: tool.phase, description: tool.description, inputSchema: schemaDoc };
           // explainWantsJson carries the explain-scoped env var; the global one applies too.
-          out += wantsJson || explainWantsJson(env) ? `${JSON.stringify(doc, null, 2)}\n` : `${formatExplainText(doc)}\n`;
+          out += wantsJson || explainWantsJson(env) ? `${JSON.stringify(doc, null, 2)}\n` : `${formatExplainText(doc, outStyle)}\n`;
           return;
         }
 
@@ -753,7 +762,7 @@ export async function runCli(
         const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
         try {
           const envelope = await runTool(tool.name, input, callCtx);
-          out += wantsJson ? `${JSON.stringify(envelope, null, 2)}\n` : renderEnvelope(envelope, tool);
+          out += wantsJson ? `${JSON.stringify(envelope, null, 2)}\n` : renderEnvelope(envelope, tool, outStyle);
           const state = (envelope as { state?: string }).state;
           code = state === "ok" ? EXIT.ok : state === "conflict" ? EXIT.conflict : EXIT.unavailable;
         } catch (e) {
@@ -907,7 +916,7 @@ export async function runCli(
     const payload = { error: { code: "invalid_input", tool: "ch", message: pre.error } };
     // argvWantsJson, not envWantsJson: pre-parse errors fire before `--json` is bound as an
     // option, and the bare-flag spelling must reach the same JSON contract (audit R6).
-    err += argvWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload);
+    err += argvWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload, errStyle);
     return { code: EXIT.invalid, stdout: out, stderr: err };
   }
   try {

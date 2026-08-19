@@ -12,6 +12,7 @@
 // a handler grew a field. The cost is that this file knows nothing about domain meaning —
 // it lays out whatever shape it is handed.
 import type { ToolDef } from "@cork/schemas";
+import { GLYPH, PLAIN, type Style } from "./ansi.ts";
 
 /** Terminal-ish width. Fixed rather than read from tput so output is reproducible in tests. */
 const WIDTH = 88;
@@ -74,25 +75,35 @@ function scalar(v: unknown): string {
  * one line; arrays of objects become numbered blocks so a reader can tell items apart.
  * Nothing is truncated — hiding fields from a person debugging an integration is worse
  * than a long scroll, and `--json` remains available for machine consumption.
+ *
+ * Styling discipline (holds for every renderer in this file): wrap and pad on PLAIN text,
+ * apply SGR to the finished token — escape sequences are zero-width on screen but would
+ * count toward width/padEnd math, so they must never enter it. Keys get color (the eye
+ * scans by key), values stay plain (they are the payload being read).
  */
-function renderValue(value: unknown, indent = 0): string {
+function renderValue(value: unknown, indent = 0, s: Style = PLAIN): string {
   const pad = " ".repeat(indent);
   if (!isPlainObject(value) && !Array.isArray(value)) return `${pad}${scalar(value)}`;
 
   if (Array.isArray(value)) {
-    if (value.length === 0) return `${pad}(none)`;
+    if (value.length === 0) return `${pad}${s.dim("(none)")}`;
     const allScalar = value.every((v) => !isPlainObject(v) && !Array.isArray(v));
     if (allScalar) return wrapped(value.map(scalar).join(", "), indent);
-    return value.map((item, i) => `${pad}[${i + 1}]${itemLabel(item)}\n${renderValue(item, indent + 2)}`).join("\n");
+    return value
+      .map((item, i) => {
+        const label = itemLabel(item);
+        return `${pad}${s.dim(`[${i + 1}]`)}${label === "" ? "" : s.bold(label)}\n${renderValue(item, indent + 2, s)}`;
+      })
+      .join("\n");
   }
 
   const entries = Object.entries(value);
-  if (entries.length === 0) return `${pad}(empty)`;
+  if (entries.length === 0) return `${pad}${s.dim("(empty)")}`;
   return entries
     .map(([k, v]) => {
-      if (isPlainObject(v) || Array.isArray(v)) return `${pad}${k}\n${renderValue(v, indent + 2)}`;
+      if (isPlainObject(v) || Array.isArray(v)) return `${pad}${s.cyan(s.bold(k))}\n${renderValue(v, indent + 2, s)}`;
       const label = k.padEnd(Math.max(0, LABEL - indent));
-      return `${pad}${label} ${scalar(v)}`;
+      return `${pad}${s.cyan(label)} ${scalar(v)}`;
     })
     .join("\n");
 }
@@ -115,36 +126,58 @@ function stateHint(state: string): string {
   return "";
 }
 
+/** The state badge: glyph + word, colored by trust level — green ✔ ok, yellow ⚠ unavailable,
+ *  red ✖ conflict. An unrecognized state stays bold-plain rather than guessing a color. */
+function stateBadge(state: string, s: Style): string {
+  const word = state.toUpperCase();
+  if (state === "ok") return s.green(s.bold(`${GLYPH.ok} ${word}`));
+  if (state === "unavailable") return s.yellow(s.bold(`${GLYPH.warn} ${word}`));
+  if (state === "conflict") return s.red(s.bold(`${GLYPH.fail} ${word}`));
+  return s.bold(word);
+}
+
 /**
  * The result of a tool call, for a person. Leads with the state because that is what
  * decides whether the rest is trustworthy, keeps warnings prominent (they carry the
  * reason an `unavailable` happened), and compresses provenance to one line.
  */
-export function renderEnvelope(env: unknown, tool: ToolDef): string {
-  if (!isPlainObject(env)) return renderValue(env);
+export function renderEnvelope(env: unknown, tool: ToolDef, s: Style = PLAIN): string {
+  if (!isPlainObject(env)) return renderValue(env, 0, s);
   const e = env as Envelope;
   const parts: string[] = [];
 
   const state = e.state ?? "ok";
   const chain = e.provenance?.["chainId"];
-  const head = [state.toUpperCase(), `ch ${tool.cliPath.join(" ")}`, chain ? `chain ${chain}` : ""].filter(Boolean).join("  ·  ");
+  const sep = s.dim(`  ${GLYPH.sep}  `);
+  const head = [stateBadge(state, s), `ch ${tool.cliPath.join(" ")}`, chain ? `chain ${chain}` : ""].filter(Boolean).join(sep);
   parts.push(head);
 
-  if (state !== "ok") parts.push("", wrapped(stateHint(state)));
+  // The hint gets the state's color line-by-line AFTER wrapping — the wrap math never sees
+  // an escape sequence.
+  const tint = state === "conflict" ? s.red : s.yellow;
+  if (state !== "ok") parts.push("", ...wrap(stateHint(state)).map((line) => tint(line)));
 
   // `data: null` is the normal shape of a non-ok envelope; printing a bare "null" would
   // say nothing a reader does not already know from the state line.
-  if (e.data !== undefined && e.data !== null) parts.push("", renderValue(e.data, 0));
+  if (e.data !== undefined && e.data !== null) parts.push("", renderValue(e.data, 0, s));
 
   if (e.warnings && e.warnings.length > 0) {
-    parts.push("", `warnings (${e.warnings.length})`);
-    for (const w of e.warnings) parts.push(wrapped(`! ${w.code ?? "warning"} — ${w.message ?? ""}`.trim(), 2));
+    parts.push("", s.bold(`warnings (${e.warnings.length})`));
+    for (const w of e.warnings) {
+      const code = w.code ?? "warning";
+      const head = `${GLYPH.warn} ${code}`;
+      const lines = wrap(`${head} — ${w.message ?? ""}`.trim(), 2);
+      // Colorize the code token in place: it is the leading text of the first wrapped line,
+      // so a plain first-occurrence replace can only hit the prefix.
+      if (lines.length > 0) lines[0] = lines[0]!.replace(head, s.yellow(head));
+      parts.push(lines.join("\n"));
+    }
   }
 
   if (e.provenance) {
     const p = e.provenance;
     const bits = ["source", "mode", "block", "fetchedAt"].map((k) => (p[k] === undefined ? "" : `${k} ${scalar(p[k])}`)).filter(Boolean);
-    if (bits.length > 0) parts.push("", `provenance  ${bits.join(" · ")}`);
+    if (bits.length > 0) parts.push("", s.dim(`provenance  ${bits.join(` ${GLYPH.sep} `)}`));
   }
 
   return `${parts.join("\n")}\n`;
@@ -165,13 +198,13 @@ export interface CliErrorPayload {
 }
 
 /** Structured failures, for a person. The JSON form stays on stderr when JSON is requested. */
-export function renderError(payload: CliErrorPayload): string {
+export function renderError(payload: CliErrorPayload, s: Style = PLAIN): string {
   const e = payload.error;
-  const parts: string[] = [`ERROR  ${scalar(e.code ?? "error")}`];
+  const parts: string[] = [`${s.red(s.bold(`${GLYPH.fail} ERROR`))}  ${s.red(scalar(e.code ?? "error"))}`];
   if (e.message) parts.push("", wrapped(String(e.message), 2));
   const issues = e.issues;
   if (Array.isArray(issues) && issues.length > 0) {
-    parts.push("", "Problems");
+    parts.push("", s.bold("Problems"));
     for (const raw of issues) {
       const i = raw as Record<string, unknown>;
       const where = i["path"] ? String(i["path"]) : "(input)";
@@ -179,13 +212,17 @@ export function renderError(payload: CliErrorPayload): string {
       const detail = i["message"]
         ? String(i["message"])
         : [i["expected"] ? `expected ${i["expected"]}` : "", i["received"] ? `received ${i["received"]}` : ""].filter(Boolean).join(", ");
-      parts.push(wrapped(`- ${where}${detail ? `: ${detail}` : ""}`, 2));
+      // Colorize the field path in place after wrapping, same first-occurrence-prefix trick
+      // as the warning codes.
+      const lines = wrap(`- ${where}${detail ? `: ${detail}` : ""}`, 2);
+      if (lines.length > 0) lines[0] = lines[0]!.replace(`- ${where}`, `- ${s.cyan(where)}`);
+      parts.push(lines.join("\n"));
       // Suggestions are complete sentences ('did you mean "x"?', '"a" was renamed to "b"') —
       // print verbatim, never re-wrap.
-      if (i["suggestion"]) parts.push(wrapped(`→ ${i["suggestion"]}`, 4));
+      if (i["suggestion"]) parts.push(wrap(`${GLYPH.suggest} ${i["suggestion"]}`, 4).map((line) => s.green(line)).join("\n"));
     }
   }
   if (e.remediation) parts.push("", wrapped(String(e.remediation), 2));
-  if (e.example) parts.push("", "Working example", `  ${JSON.stringify(e.example)}`);
+  if (e.example) parts.push("", s.bold("Working example"), `  ${s.dim(JSON.stringify(e.example))}`);
   return `${parts.join("\n")}\n`;
 }

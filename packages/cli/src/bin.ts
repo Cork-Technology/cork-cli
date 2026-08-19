@@ -86,8 +86,13 @@ if (argv[0] === "mcp") {
   const { runCli } = await import("./app.ts");
 
   // The environment is passed in rather than read inside runCli so tests can drive output
-  // mode (CORK_JSON / CORK_EXPLAIN_JSON) without mutating the process they run in.
-  const { code, stdout, stderr } = await runCli(argv, ctx, process.env);
+  // mode (CORK_JSON / CORK_EXPLAIN_JSON) without mutating the process they run in. TTY-ness
+  // rides the same way (per stream): it decides SGR color for the prose renderers, and a
+  // pipe must always get plain text.
+  const { code, stdout, stderr } = await runCli(argv, ctx, process.env, {
+    stdoutIsTTY: process.stdout.isTTY === true,
+    stderrIsTTY: process.stderr.isTTY === true,
+  });
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);
   // exitCode (not process.exit): a hard exit can truncate a large piped envelope whose stdout

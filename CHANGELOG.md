@@ -6,6 +6,20 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
+## [Unreleased]
+
+### Added
+
+- **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
+  errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,
+  `✖ CONFLICT` red), colored keys, and dimmed provenance — on a TTY only. The resolution
+  ladder is the conventional one: `FORCE_COLOR` strongest, then `NO_COLOR`
+  (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. Implemented
+  in-tree with zero new dependencies (`packages/cli/src/ansi.ts`). Two invariants are
+  test-pinned: stripping the escapes yields the plain output byte-for-byte, and JSON output
+  never carries an escape sequence. Not covered surface (policy R11 — human-readable text),
+  so no version-line impact.
+
 ## [0.3.0-rc.1] — 2026-08-17
 
 **New line (0.2 → 0.3), declared by the integrability owner 2026-08-13 under policy R10/R11.**
