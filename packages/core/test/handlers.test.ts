@@ -526,7 +526,7 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
   const orderHash = hashLopOrder(1, LOP, orderT);
   // The wire form the caller round-trips back (amounts as decimal strings).
   const prepared = { kind: "maker-order", lop: LOP, typedData: { domain: { chainId: 1, verifyingContract: LOP }, message: { salt: "5", maker: acct.address, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" } }, orderHash, extension: "0x", clientRequestId: "final-int-01" };
-  const listing = { side: "SELL", premium: 4.1, expiry: 0, nonce: "0", allowsPartialFills: true };
+  const listing = { side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: "0", allowsPartialFills: true };
   // resolveRpc pinned to null: finalize now checks whether the maker has code (the ERC-1271
   // path) whenever an RPC resolves — offline tests must not attempt the built-in endpoints.
   const call = (over: Record<string, unknown>, crid = "final-int-01") =>
@@ -536,14 +536,14 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
     const signature = await acct.sign({ hash: orderHash });
     const env = await call({ signature });
     expect(env.state).toBe("ok");
-    const d = env.data as { recoveredSigner: string; callerSigned: boolean; helperSigned: boolean; signedArtifactDigest: string; submitInput: { action: { type: string; signature: string; premium: number } } };
+    const d = env.data as { recoveredSigner: string; callerSigned: boolean; helperSigned: boolean; signedArtifactDigest: string; submitInput: { action: { type: string; signature: string; premiumAnnualized: string } } };
     expect(d.recoveredSigner).toBe(acct.address);
     expect(d.callerSigned).toBe(true);
     expect(d.helperSigned).toBe(false);
     expect(d.signedArtifactDigest).toMatch(/^0x[0-9a-f]{64}$/);
     expect(d.submitInput.action.type).toBe("lop-order");
     expect(d.submitInput.action.signature).toBe(signature);
-    expect(d.submitInput.action.premium).toBe(4.1);
+    expect(d.submitInput.action.premiumAnnualized).toBe("0.041");
     expect(env.warnings[0]?.code).toBe("caller_signed_artifact");
   });
 

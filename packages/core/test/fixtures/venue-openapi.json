@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.3.14"
+  "version": "0.3.16"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -927,14 +927,8 @@
           "pattern": "^0x[a-fA-F0-9]{64}$",
           "type": "string"
          },
-         "premium": {
-          "description": "DEPRECATED, removed 2026-08-17: percent number (4.1 = 4.1%). Use premium_annualized.",
-          "maximum": 10000,
-          "minimum": 0,
-          "type": "number"
-         },
          "premium_annualized": {
-          "description": "Annualized premium as a decimal fraction string, \"0.041\" = 4.1% (COR-35). Same convention as the RFQ surface. Successor to `premium`; at least one of the two must be provided, and both must agree if both are sent.",
+          "description": "Annualized premium as a decimal fraction string, \"0.041\" = 4.1% (COR-35). Same convention as the RFQ surface. Replaced the percent-number `premium` field, removed 2026-08-17.",
           "pattern": "^\\d{1,3}(\\.\\d{1,18})?$",
           "type": "string"
          },
@@ -1006,6 +1000,7 @@
          "makerAccountType",
          "makerPermit2",
          "side",
+         "premium_annualized",
          "nonce",
          "allowsPartialFills",
          "chainId"
@@ -2068,10 +2063,6 @@
              "orderHash": {
               "type": "string"
              },
-             "premium": {
-              "description": "DEPRECATED, removed 2026-08-17 (see warnings[]): percent number. Read premium_annualized instead. Informational only - authoritative pricing lives in the order's amount-getter extension data (COR-35 ratified units).",
-              "type": "number"
-             },
              "premium_annualized": {
               "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1% (COR-35 ratified units). Same convention and name as the RFQ surface. Successor to `premium`. Informational only - authoritative pricing lives in the order's amount-getter extension data.",
               "type": "string"
@@ -2156,7 +2147,6 @@
              "extension",
              "quoteRef",
              "side",
-             "premium",
              "premium_annualized",
              "expiry",
              "nonce",
