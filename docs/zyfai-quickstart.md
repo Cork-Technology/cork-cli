@@ -153,7 +153,7 @@ This step is entirely off-chain: choosing what to cover, deriving the market tho
 asking the supply side to price it. There is no UI for RFQs — the CLI/MCP is the way in. Or take the
 code route: the same core ships as the typed `@cork/core` SDK — attested tarballs beside every
 release's binaries, verified with the same `gh attestation verify` recipe ([sdk.md](sdk.md) is the
-guide; [sdk-pathway.md](sdk-pathway.md) explains why tarballs before npm and how the distribution
+guide; [sdk-roadmap.md](sdk-roadmap.md) explains why tarballs before npm and how the distribution
 relates to the threat model). Forking the repository or cherry-picking the per-tool handlers from
 [`packages/core/src/handlers`](https://github.com/Cork-Technology/cork-cli/tree/main/packages/core/src/handlers)
 works too.

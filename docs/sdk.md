@@ -53,7 +53,7 @@ cd ../core        && bun pm pack --destination /tmp/cork-pkgs
 npm install /tmp/cork-pkgs/cork-schemas-*.tgz /tmp/cork-pkgs/cork-core-*.tgz
 ```
 
-Why tarballs and not npm? See [sdk-pathway.md](sdk-pathway.md) — the distribution posture, the
+Why tarballs and not npm? See [sdk-roadmap.md](sdk-roadmap.md) — the distribution posture, the
 verification chain, and when the npm stage arrives.
 
 ## Your first call

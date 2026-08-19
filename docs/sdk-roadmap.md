@@ -1,8 +1,8 @@
-# The SDK pathway — why the binary comes first, and what comes next
+# The SDK roadmap — why the binary comes first, and what comes next
 
 **Audience:** integrators who wrap Cork inside their own trust boundary — Zyfai first among them.
 This page answers three questions: why the signed binary is the integration surface today, what
-the pathway to a library looks like, and how each stage relates to the threat-model posture.
+the roadmap to a library looks like, and how each stage relates to the threat-model posture.
 The hands-on guides are [sdk.md](sdk.md) (the `@cork/core` library) and
 [zyfai-quickstart.md](zyfai-quickstart.md) (the full integration flow).
 
@@ -37,7 +37,7 @@ security-conscious integrator:
    transaction before broadcast. That client-side verification is the product; it does not
    survive being put behind an endpoint. This is why there is no API-only integration pathway.
 
-## The pathway, in three stages
+## The roadmap, in three stages
 
 **Stage 1 — today: the signed binary (CLI + MCP).** Drive it from a shell, a script, or an MCP
 client. This is the pilot surface, and for agent-driven flows it stays the right one even after
@@ -64,7 +64,7 @@ verifies for the binary.
 ## How this relates to the threat model
 
 The threat-model posture for a wrapped integration rests on two separations, and every stage of
-the pathway preserves both:
+the roadmap preserves both:
 
 - **Prepare ≠ sign ≠ submit.** Whatever surface you consume — binary, tarball, someday npm —
   it returns unsigned bytes or typed-data. Compromising the artifact channel never yields a
@@ -74,10 +74,10 @@ the pathway preserves both:
 - **One provenance chain, verified at your edge.** The binary you wrap and the SDK you import
   come from the same tagged commit, the same double-build, the same attestation identity. Your
   supply-chain check is one recipe applied uniformly, and it runs on your machine before
-  anything enters your boundary. Nothing in the pathway asks you to trust a registry account,
+  anything enters your boundary. Nothing in the roadmap asks you to trust a registry account,
   a maintainer laptop, or an unverifiable mirror.
 
-What the pathway does NOT change: you still audit what you deploy and what you import. An
+What the roadmap does NOT change: you still audit what you deploy and what you import. An
 attestation proves the bytes came from this repo's release workflow at a named commit — it is
 the start of your review, not a substitute for it.
 
@@ -89,5 +89,5 @@ the start of your review, not a substitute for it.
 | A backend that calls Cork in-process, typed | Stage 2: the release tarballs | Same provenance chain; typed envelopes; explicit, verifiable upgrades |
 | Anything, once the SDK is public on npm | Stage 3: npm + trusted publishing | Semver and reach, with OIDC provenance — announced when it lands |
 
-Questions on the pathway or the threat model: ask your Cork contact. The deeper security
+Questions on the roadmap or the threat model: ask your Cork contact. The deeper security
 analysis referenced in the quickstart (§5) covers the wrapped-adapter posture in full.
