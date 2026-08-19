@@ -116,20 +116,27 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([RC2_FACTORY, FACTORY].sort());
   });
 
-  it("flows kind=contracts: filters.factory scopes clones to ONE generation (the venue's rc.2 disambiguator, mirrored)", async () => {
-    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }), resolveRpc: noRpc };
+  it("flows kind=contracts: filters.factory scopes clones to ONE generation (the venue's rc.2 disambiguator, mirrored) AND scopes the scan to that generation's seed", async () => {
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }, seen), resolveRpc: noRpc };
     const run = (factory: string) =>
       runTool(
         "cork_query",
         { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized", filters: { kind: "contracts", factory }, pageSize: 25, format: "concise" },
         ctx,
       );
-    // The fixture clone was deployed by the July factory: filtering on it keeps the row…
+    // The fixture clone was deployed by the July factory: filtering on it keeps the row, and
+    // the SCAN itself narrows to that factory from ITS seed block (a full-span walk starves
+    // the windowed no-token fallback's range budget on generations the filter excludes).
     const july = await run(FACTORY);
     expect((july.data as { count: number }).count).toBe(1);
-    // …and filtering on the rc.2 factory excludes it.
+    expect(seen[0]!.fromBlock).toBe(484973917);
+    expect(seen[0]!.address!.map((a) => a.toLowerCase())).toEqual([FACTORY]);
+    // …and filtering on the rc.2 factory excludes it, scanning ONLY rc.2 from the rc.2 seed.
     const rc2 = await run(RC2_FACTORY);
     expect((rc2.data as { count: number }).count).toBe(0);
+    expect(seen[1]!.fromBlock).toBe(494104750);
+    expect(seen[1]!.address!.map((a) => a.toLowerCase())).toEqual([RC2_FACTORY]);
   });
 
   it("structural rejections: resting orders emit no events in ANY mode", async () => {

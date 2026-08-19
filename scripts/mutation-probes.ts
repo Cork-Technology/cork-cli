@@ -852,6 +852,15 @@ const CATALOG: Mutant[] = [
     tests: [T.hypersync, T.rolloverVerify],
   },
   {
+    // The clone scan must scope to the filtered factory's OWN generation seed — a full-span
+    // fallback starves the windowed no-token path's range budget on excluded generations.
+    id: "rollover-factory-scan-full-span",
+    file: "packages/core/src/config-remote.ts",
+    find: "    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: g.seededAtBlock };",
+    replace: "    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: full.fromBlock };",
+    tests: [T.hypersync],
+  },
+  {
     // The digest scan must scope to the settler's OWN generation seed — falling back to the
     // full span re-opens the ~9M-block range that trips ordinary endpoints' caps.
     id: "rollover-digest-scan-full-span",

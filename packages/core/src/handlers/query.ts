@@ -6,7 +6,7 @@ import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
-import { resolveRollover, rolloverScanTargets } from "../config-remote.ts";
+import { resolveRollover, rolloverFactoryScanTargets, rolloverScanTargets } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
@@ -332,16 +332,21 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           cache: "rollover-fills",
         };
       } else {
+        // A factory filter also SCOPES the scan (address + that generation's seed block): a
+        // clone binds to one factory, and the full-span walk starves the windowed no-token
+        // fallback's range budget on generations the filter excludes.
+        const factoryTargets = rolloverFactoryScanTargets(rollover, filters.factory);
         spec = {
-          fromBlock: targets.fromBlock,
-          address: targets.factories,
+          fromBlock: factoryTargets.fromBlock,
+          address: factoryTargets.addresses,
           topics: [[CLONE_DEPLOYED_TOPIC]],
           decode: decodeCloneRows,
           postFilter: (rows) => {
             let out = rows;
             if (filters.account) out = out.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
             // Same disambiguator the venue grew in rc.2: one wallet can own one clone PER
-            // factory generation, so the factory is a first-class filter.
+            // factory generation. The address scope above already excludes other generations;
+            // this row filter stays as the belt for the unknown-factory verbatim scan.
             if (filters.factory) out = out.filter((c) => String(c.factory).toLowerCase() === filters.factory!.toLowerCase());
             return out;
           },

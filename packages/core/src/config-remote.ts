@@ -96,6 +96,25 @@ export function rolloverDigestScanTargets(
   return { addresses: [settler as `0x${string}`], fromBlock: full.fromBlock };
 }
 
+/** Scan targets for the CLONE feed when `filters.factory` names one generation: a clone binds
+ *  to exactly one factory, so the scan scopes to that factory and ITS seed block — the
+ *  full-span walk from the EARLIEST seed makes the windowed no-token fallback spend its whole
+ *  range budget on generations the filter excludes (observed live: a 20-window walk stopped
+ *  ~10M blocks short of the rc.2 clone it was asked for). An unknown factory scans verbatim
+ *  across the full window — the caller asked about an address the config does not know. */
+export function rolloverFactoryScanTargets(
+  dep: CorkRolloverDeployment,
+  factory?: string,
+): { addresses: `0x${string}`[]; fromBlock: number } {
+  const full = rolloverScanTargets(dep);
+  if (!factory) return { addresses: full.factories, fromBlock: full.fromBlock };
+  const lc = factory.toLowerCase();
+  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
+    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: g.seededAtBlock };
+  }
+  return { addresses: [factory as `0x${string}`], fromBlock: full.fromBlock };
+}
+
 export function rolloverScanTargets(dep: CorkRolloverDeployment): {
   settlers: `0x${string}`[];
   factories: `0x${string}`[];

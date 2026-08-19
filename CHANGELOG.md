@@ -81,6 +81,25 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   full-decentralized rollover feeds AND `cork_track` reconcile's digest event-history leg,
   which previously scanned only the active generation.
 
+- **A factory filter also SCOPES the full-decentralized clone scan.** A clone binds to one
+  factory, so `filters.factory` naming a configured generation narrows the event scan to that
+  factory from ITS seed block (verified live: an 11.3M-block full-span walk became a 2.1M-block
+  scoped one). Without the filter, generation-spanning scans keep the earliest seed — retired
+  history stays reachable. The windowed no-token eth_getLogs fallback remains honestly partial
+  on ranges wider than one walk (partial backfills are never cached, by design); the
+  `logs_windowed_fallback` warning teaches the ENVIO token as the archive-grade answer.
+
+- **Agent-eval coverage grew to 44 active tasks (+5 held-out) with an offline fixture gate.**
+  Six new tasks close the rc.2 gap over realistic fixtures (real ECDSA over real digests,
+  config-tracked addresses): the JIT rollover commitment + venue-gap honesty, the
+  retired-settler teaching relay, the factory-filtered clone read, a REAL signed rc.2 rollover
+  relayed through the full recompute/recover/admission pipeline, the track venue-miss chain
+  sweep, and the fraction-premium unit graded at the exact wire value ("4.1%" →
+  `premiumAnnualized "0.041"`). `evals/task-fixtures.test.ts` pins every stub-backed task
+  envelope offline (canonical call must reproduce state+code; answer regexes must accept the
+  teaching message itself), so fixture rot and regex rot fail a unit test before any LLM
+  tokens are spent. Runs: 42/43 baseline, 47/49 expanded (misses: held-out clarify-variance).
+
 - **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
   errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,
   `✖ CONFLICT` red), colored keys, and dimmed provenance — on a TTY only. The resolution
