@@ -8,7 +8,57 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Rollover speaks the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
+  `RolloverParams` gained a trailing `bytes32 jitMarketHash` on-chain (zero = the order does
+  not authorize just-in-time market creation), changing both EIP-712 typehashes and the
+  OrderData static ABI length (832 → 864). Every digest this tool computes, signs over,
+  verifies, and relays now uses the rc.2 types; pre-rc.2 digests no longer verify on any
+  deployed settler and the venue rejects them. `cork_prepare_orders rollover-intent` accepts
+  an optional `jitMarketHash` (pre-computed commitment) or `jitMarket` (the negotiated
+  instruction — collateral/reference/expiry/recipe/constraint/fees — hashed locally via the
+  BaseFiller `hashJITMarketParams` mirror, golden-vectored against the release's own Solidity
+  libraries); `cork_submit rollover-order` takes `rolloverParams.jitMarketHash` with a
+  zero-hash default, so an omitted field re-hashes to exactly what the wallet signed.
+  Config: the rc.2 generation (identical CREATE2 addresses on Arbitrum One AND Base — Base is
+  new rollover coverage) replaces the July 2026 set, which moves to
+  `rollover.<chain>.legacyGenerations` — retired at the venue but kept for event-history
+  scans and precise teaching. A retired settler now refuses with the new `settler_retired`
+  code at prepare AND submit instead of building an unfillable artifact.
+
+- **The removed percent `premium` listing field is refused, not relayed.** The venue completed
+  its scheduled sunset on 2026-08-17 (cork-api 0.3.15) and answers a pointed 400 on presence;
+  `cork_submit lop-order` and `finalize-maker-order` now refuse a percent-bearing listing
+  before relay with the same teaching (including the exact fraction spelling to use).
+  `premiumAnnualized` is the one premium field. The schema keeps `premium` only so legacy
+  callers get teaching instead of a bare shape error. The `premium_fields_disagree` and
+  percent-path `deprecation_notice` warnings retire with the field.
+
 ### Added
+
+- **Venue admission, pre-flighted for rollover orders.** The deterministic subset of the
+  venue's POST admission battery (cork-api 0.3.16) runs locally at prepare AND submit through
+  one shared `checkRolloverOrderTerms`: deadline ordering and past-ness (openDeadline
+  included), positive `minPremiumPerShare`, non-zero and pairwise-distinct tokens
+  (premiumToken must be a third asset), distinct pool ids, `exclusiveFiller ≠ settler`,
+  `intent.deadline ≥ fillDeadline`, and the hook policy (delegatecall-only, zero-value,
+  non-optional). Chain-dependent admission (hook-target code existence, the settler
+  `resolveFor` preflight) deliberately stays venue-side; a live test replicates the
+  `resolveFor` probe against the deployed settlers on both chains.
+
+- **`filters.factory` on rollover contracts.** Mirrors the venue's rc.2 disambiguator (one
+  wallet owns one clone per factory generation) on the hybrid path, and scopes the
+  full-decentralized clone scan — which, like the fills scan, now covers ACTIVE + LEGACY
+  generations from the earliest seed block so retired-generation history stays visible.
+
+- **SDK (`@cork/core` `/orders`):** `JIT_MARKET_PARAMS_TYPEHASH`, `ZERO_JIT_MARKET_HASH`,
+  `ORDER_DATA_ABI_LENGTH`, `encodeOrderData`, `hashJitMarketParams`, `JitMarketParamsStruct`,
+  `checkRolloverOrderTerms`, `classifyRolloverSettler`, `RolloverSettlerClassification`,
+  `RolloverGenerationAddresses`; `/config` gains `CorkRolloverGeneration` and the
+  `legacyGenerations`/`contractsVersion` fields on `CorkRolloverDeployment`.
+  `RolloverParamsStruct` gains required `jitMarketHash` (breaking for direct struct
+  construction — deliberate: the field is signed either way).
 
 - **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
   errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,

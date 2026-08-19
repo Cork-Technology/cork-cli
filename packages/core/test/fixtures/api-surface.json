@@ -121,6 +121,10 @@
       "kind": "type"
     },
     {
+      "name": "CorkRolloverGeneration",
+      "kind": "type"
+    },
+    {
       "name": "CorkSettlerDomain",
       "kind": "type"
     },
@@ -341,8 +345,16 @@
       "kind": "value"
     },
     {
+      "name": "JIT_MARKET_PARAMS_TYPEHASH",
+      "kind": "value"
+    },
+    {
       "name": "JIT_MINTED_TOPIC",
       "kind": "value"
+    },
+    {
+      "name": "JitMarketParamsStruct",
+      "kind": "type"
     },
     {
       "name": "KNOWN_EVENTS_ABI",
@@ -442,6 +454,10 @@
     },
     {
       "name": "ORACLE_MODE",
+      "kind": "value"
+    },
+    {
+      "name": "ORDER_DATA_ABI_LENGTH",
       "kind": "value"
     },
     {
@@ -613,6 +629,10 @@
       "kind": "type"
     },
     {
+      "name": "RolloverGenerationAddresses",
+      "kind": "type"
+    },
+    {
       "name": "RolloverIntentArgs",
       "kind": "type"
     },
@@ -625,11 +645,19 @@
       "kind": "type"
     },
     {
+      "name": "RolloverOrderTermsInput",
+      "kind": "type"
+    },
+    {
       "name": "RolloverOrdersParams",
       "kind": "type"
     },
     {
       "name": "RolloverParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverSettlerClassification",
       "kind": "type"
     },
     {
@@ -873,6 +901,10 @@
       "kind": "value"
     },
     {
+      "name": "ZERO_JIT_MARKET_HASH",
+      "kind": "value"
+    },
+    {
       "name": "accessControlAbi",
       "kind": "value"
     },
@@ -1021,11 +1053,19 @@
       "kind": "value"
     },
     {
+      "name": "checkRolloverOrderTerms",
+      "kind": "value"
+    },
+    {
       "name": "classifyBitInvalidator",
       "kind": "value"
     },
     {
       "name": "classifyRemainingRaw",
+      "kind": "value"
+    },
+    {
+      "name": "classifyRolloverSettler",
       "kind": "value"
     },
     {
@@ -1197,6 +1237,10 @@
       "kind": "value"
     },
     {
+      "name": "encodeOrderData",
+      "kind": "value"
+    },
+    {
       "name": "envioToken",
       "kind": "value"
     },
@@ -1322,6 +1366,10 @@
     },
     {
       "name": "getRolloverOrders",
+      "kind": "value"
+    },
+    {
+      "name": "hashJitMarketParams",
       "kind": "value"
     },
     {
@@ -2139,6 +2187,10 @@
       "kind": "type"
     },
     {
+      "name": "CorkRolloverGeneration",
+      "kind": "type"
+    },
+    {
       "name": "Create2Attestation",
       "kind": "type"
     },
@@ -2761,6 +2813,14 @@
       "kind": "type"
     },
     {
+      "name": "JIT_MARKET_PARAMS_TYPEHASH",
+      "kind": "value"
+    },
+    {
+      "name": "JitMarketParamsStruct",
+      "kind": "type"
+    },
+    {
       "name": "LOP_ADDRESSES",
       "kind": "value"
     },
@@ -2813,6 +2873,10 @@
       "kind": "value+type"
     },
     {
+      "name": "ORDER_DATA_ABI_LENGTH",
+      "kind": "value"
+    },
+    {
       "name": "ORDER_DATA_TYPEHASH",
       "kind": "value"
     },
@@ -2857,6 +2921,10 @@
       "kind": "type"
     },
     {
+      "name": "RolloverGenerationAddresses",
+      "kind": "type"
+    },
+    {
       "name": "RolloverIntentArgs",
       "kind": "type"
     },
@@ -2869,7 +2937,15 @@
       "kind": "type"
     },
     {
+      "name": "RolloverOrderTermsInput",
+      "kind": "type"
+    },
+    {
       "name": "RolloverParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverSettlerClassification",
       "kind": "type"
     },
     {
@@ -2895,6 +2971,10 @@
     {
       "name": "UnsignedApprovalTx",
       "kind": "type"
+    },
+    {
+      "name": "ZERO_JIT_MARKET_HASH",
+      "kind": "value"
     },
     {
       "name": "annotateApprovalStatus",
@@ -2945,11 +3025,19 @@
       "kind": "value"
     },
     {
+      "name": "checkRolloverOrderTerms",
+      "kind": "value"
+    },
+    {
       "name": "classifyBitInvalidator",
       "kind": "value"
     },
     {
       "name": "classifyRemainingRaw",
+      "kind": "value"
+    },
+    {
+      "name": "classifyRolloverSettler",
       "kind": "value"
     },
     {
@@ -2990,6 +3078,10 @@
     },
     {
       "name": "encodeExtensionFields",
+      "kind": "value"
+    },
+    {
+      "name": "encodeOrderData",
       "kind": "value"
     },
     {
@@ -3038,6 +3130,10 @@
     },
     {
       "name": "fusionTotalFee",
+      "kind": "value"
+    },
+    {
+      "name": "hashJitMarketParams",
       "kind": "value"
     },
     {

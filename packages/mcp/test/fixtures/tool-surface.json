@@ -57,7 +57,7 @@
               "type": "string"
             },
             "additionalProperties": {},
-            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter). Unknown keys are a teachable error"
+            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter). Unknown keys are a teachable error"
           },
           "cursor": {
             "type": "string",
@@ -2156,13 +2156,13 @@
                         "type": "number",
                         "minimum": 0,
                         "maximum": 1000,
-                        "description": "DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying",
+                        "description": "REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead",
                         "x-units": "{%}"
                       },
                       "premiumAnnualized": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "the listing premium as an annualized decimal-fraction STRING (\"0.041\" = 4.1%) — the venue's successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement",
+                        "description": "the listing premium: an annualized decimal-fraction STRING (\"0.041\" = 4.1%), same name and convention as the RFQ surface — required at relay (the shape is the published spec pattern; values above 100, the legacy 10000% ceiling, are refused as venue policy). The percent-number premium field was removed 2026-08-17",
                         "x-units": "{%}"
                       },
                       "expiry": {
@@ -2558,6 +2558,101 @@
                   "minSharesOut": {
                     "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals",
                     "$ref": "#/$defs/TokenAmount"
+                  },
+                  "jitMarketHash": {
+                    "description": "pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally [K3]; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket",
+                    "$ref": "#/$defs/Bytes32"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "collateralAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "referenceAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "expiryTimestamp": {
+                        "description": "destination pool expiry — must outlast the order's fillDeadline",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS the created market names (discover with cork_query resource:'registry-recipes')",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0); MUST stay 0 for price/nav recipes",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"
+                      },
+                      "additionalData": {
+                        "description": "recipe-specific bytes the constraint was derived from — committed as keccak256(additionalData)",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      }
+                    },
+                    "required": [
+                      "collateralAsset",
+                      "referenceAsset",
+                      "expiryTimestamp",
+                      "recipe",
+                      "constraint"
+                    ],
+                    "additionalProperties": false,
+                    "description": "negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash [K3] — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"
                   },
                   "allowPartialFills": {
                     "type": "boolean",
@@ -3352,8 +3447,8 @@
     },
     {
       "name": "cork_submit",
-      "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0x983270AE48545665Cee4D7EF61C65fF3fdC8222D\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x97ccd3eb8faa84248754800ef050b1ee4ae6f2f073df6f5cf2b28c9bf6478e052af96f77cd1291a576bcdb77ba3bd1df363f4fc4e55624b353b1d99c34e795ea1b\"}}",
-      "descriptionTokensApprox": 545,
+      "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"jitMarketHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x0c8cb5af9b2e3b8121ffc8b8c3a3bd9bd77afe194b20f62cb55cd04d0b9e734b004b4cd56082c23f9bda704c58126acc61f3c36b7963db0530abf9003e4d31dd1c\"}}",
+      "descriptionTokensApprox": 566,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3480,6 +3575,10 @@
                           },
                           "settler": {
                             "$ref": "#/$defs/Address"
+                          },
+                          "jitMarketHash": {
+                            "description": "JITMarketParams commitment; omitted = the ZERO hash (no JIT market) — the digest recomputation covers the zeroed field exactly as the wallet signed it (rollover v0.1.0-rc.2)",
+                            "$ref": "#/$defs/Bytes32"
                           }
                         },
                         "required": [
@@ -3753,13 +3852,13 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1000,
-                    "description": "DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying",
+                    "description": "REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead",
                     "x-units": "{%}"
                   },
                   "premiumAnnualized": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "the listing premium as an annualized decimal-fraction STRING (\"0.041\" = 4.1%) — the venue's successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement",
+                    "description": "the listing premium: an annualized decimal-fraction STRING (\"0.041\" = 4.1%), same name and convention as the RFQ surface — required at relay (the shape is the published spec pattern; values above 100, the legacy 10000% ceiling, are refused as venue policy). The percent-number premium field was removed 2026-08-17",
                     "x-units": "{%}"
                   },
                   "expiry": {
