@@ -46,7 +46,7 @@ cache/
 # single-binary release build outputs (scripts/compile-binaries.mjs) + bun temp files
 dist/
 *.bun-build
-evals/.last-run.jsonl
+evals/.*.jsonl
 
 # Slack-thread drafts are working files, never repo content (owner rule 2026-08-11)
 notes/*slack*
