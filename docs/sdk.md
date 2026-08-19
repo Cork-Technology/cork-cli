@@ -9,7 +9,7 @@ broadcast through your own RPC. The one side-effecting call, `cork_submit`, only
 payload you already signed.
 
 One trade-off to make deliberately before you import anything: a library runs **in-process**,
-with your backend's full authority — unlike the `ch` binary, which runs behind an OS boundary
+with your backend's full authority — unlike the `ch` binary, which runs behind an OS-process boundary
 you can sandbox. If your posture needs that boundary, use the binary, or run this SDK in its own
 worker process. [sdk-roadmap.md](sdk-roadmap.md) weighs the two.
 

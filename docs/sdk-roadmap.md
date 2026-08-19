@@ -25,8 +25,8 @@ security-conscious integrator:
    You can also rebuild it yourself from the tagged commit and compare checksums. There is no
    dependency tree to audit at install time — the audit surface is the repo at one commit.
 
-2. **It is a process you can cage.** The binary runs behind an OS boundary, so every isolation
-   tool you already trust applies: a container or TEE, a seccomp or no-network profile, a
+2. **It is a process you can cage.** The binary runs behind an OS-process boundary, so every
+   isolation tool you already trust applies: a container or TEE, a seccomp or no-network profile, a
    read-only filesystem, an environment that holds no secrets. The tool never signs, never
    holds keys, and never broadcasts, so the sandbox can grant it almost nothing — and a
    compromised binary is *contained*: its only channel to you is the artifacts it emits, which
@@ -35,10 +35,10 @@ security-conscious integrator:
    ambient authority of your backend — its memory, environment, credentials, and every other
    loaded module — so the same compromise has the blast radius of the whole host process.
    In-process isolation exists (Node's permission model is process-wide; SES/LavaMoat
-   compartments and WASM sandboxes are per-package but exotic), and none of it matches an OS
-   boundary. If you need a real boundary around a library, you run it in its own process —
-   which is what the binary already is, hardened and attested. Either way, signing and
-   broadcasting stay on your stack, where your controls already live.
+   compartments and WASM sandboxes are per-package but exotic), and none of it matches an
+   OS-process boundary. If you need a real boundary around a library, you run it in its own
+   process — which is what the binary already is, hardened and attested. Either way, signing
+   and broadcasting stay on your stack, where your controls already live.
 
 3. **A hosted API cannot carry this posture.** An API moves the computation — and the
    verification — to someone else's machine. You would trust a network response where the binary
@@ -104,7 +104,7 @@ the start of your review, not a substitute for it.
 
 | You are building… | Use | Why |
 |---|---|---|
-| Agent-driven flows, human operators, scripts | Stage 1: the binary (`ch`, `ch mcp`) | One attested artifact behind an OS boundary you can sandbox; the MCP surface is the agent-native interface |
+| Agent-driven flows, human operators, scripts | Stage 1: the binary (`ch`, `ch mcp`) | One attested artifact behind an OS-process boundary you can sandbox; the MCP surface is the agent-native interface |
 | A backend that calls Cork in-process, typed | Stage 2: the release tarballs | Same provenance chain; typed envelopes; explicit, verifiable upgrades — trades the process sandbox for in-process convenience |
 | Anything, once the SDK is public on npm | Stage 3: npm + trusted publishing | Semver and reach, with OIDC provenance — announced when it lands |
 
