@@ -144,10 +144,13 @@ jobs:
       # git before checkout — without it actions/checkout falls back to a REST tarball and
       # the later `git rev-parse HEAD` has no repository to ask.
       # diffutils: the tripwire's `cmp` — GNU, not a bet on which applets this wolfi-base
-      # busybox build enables.
+      # busybox build enables. libgcc + libstdc++: not for OUR tools — the runner mounts its
+      # own node24 into the container to execute the JS actions (checkout, upload-artifact),
+      # and that binary dynamically links libstdc++.so.6, which minimal wolfi-base does not
+      # ship (checkout died on exactly that, run 32225158751).
       - name: Install the build toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash bubblewrap diffutils git melange openssl yq
+        run: apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl yq
 
       # Stolen from chainguard-dev/actions/setup-melange: prove the sandbox works in seconds
       # — before the reviewer-gated tripwire and the multi-minute build — and emit
@@ -290,10 +293,11 @@ jobs:
       attestations: write
     steps:
       # grep + coreutils: the digest capture's `grep -o` and `tr` — GNU, not a bet on which
-      # applets this wolfi-base busybox build enables.
+      # applets this wolfi-base busybox build enables. libgcc + libstdc++: for the runner's
+      # own mounted node24 that executes the JS actions (see melange-build's note).
       - name: Install the publish toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash apko coreutils git grep yq
+        run: apk add --no-cache bash apko coreutils git grep libgcc libstdc++ yq
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
