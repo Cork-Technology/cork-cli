@@ -1,8 +1,8 @@
 {
-  "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
+  "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately \u2014 handlers gate per capability.",
   "schemaVersion": 1,
-  "updated": "2026-08-12",
-  "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix v1.3.0-rc.1, prerelease 2026-08-07): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). Adopted together with market-registry 0.3.2 (Zian's redeploy against this pool manager) — the generations are ALIGNED. The previous Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']; rollover still binds the v1.1 stack (its redeploy is pending).",
+  "updated": "2026-08-19",
+  "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix v1.3.0-rc.1, prerelease 2026-08-07): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). Adopted together with market-registry 0.3.2 (Zian's redeploy against this pool manager) \u2014 the generations are ALIGNED. The previous Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']; rollover still binds the v1.1 stack (its redeploy is pending).",
   "deployments": {
     "1": {
       "poolManager": "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
@@ -31,7 +31,7 @@
     "42161": "0x111111125421cA6dc452d289314280a0f8842A65",
     "8453": "0x111111125421cA6dc452d289314280a0f8842A65"
   },
-  "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only — the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement; base verified 2026-08-07: runtime byte-identical to Arbitrum's SimpleSettlement except ONE 20-byte immutable, the chain's WETH — 0x4200…0006 vs 0x82aF…Bab1); legacy = recognized-but-refused older layouts (v2 present on all three chains; v1 is mainnet-only and LOP v3 era).",
+  "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only \u2014 the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement; base verified 2026-08-07: runtime byte-identical to Arbitrum's SimpleSettlement except ONE 20-byte immutable, the chain's WETH \u2014 0x4200\u20260006 vs 0x82aF\u2026Bab1); legacy = recognized-but-refused older layouts (v2 present on all three chains; v1 is mainnet-only and LOP v3 era).",
   "fusionSettlements": {
     "1": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
@@ -68,7 +68,7 @@
       }
     }
   },
-  "$marketRegistryComment": "MarketRegistry stack, contracts release 0.3.3 (Zian's full redeploy 2026-08-10 — the CREATE2-collision fix: the wrapper key doubles as the CREATE2 salt and is now keccak256(abi.encode(registryAddress, ca, ref, caSource, refSource)), so every registry instance derives its own salt space and the sUSDe/sUSDS@42161 brick cannot recur. Verified empirically 2026-08-10: the pair simulates DEPLOYABLE on the new registry and still reverts on the old one. Identical addresses on 42161 + 8453 via ONE AtomicDeployer batch — guarded CREATE2, salts + initCodeHashes attested in packages/core/src/config.ts, re-derived locally from the 0.3.3 broadcast records and matched against BOTH chains' live addresses 2026-08-10). `recipes` are NAMED HINTS for the deprecated mode sugar only — membership is decided solely by isRecipe on chain: as of 2026-08-10 all three recipes are APPROVED on Base but NOT YET on Arbitrum (isRecipe false ×3, API /v1/42161/recipes empty) — JIT resolution on 42161 answers recipe_not_found until the approvals land. POOL_CREATOR + FEE_MANAGER are GRANTED to the new adapter on BOTH chains (verified on-chain 2026-08-10 — the roles_not_granted era is over; adapter LOP/POOL_MANAGER/CONTROLLER/MARKET_REGISTRY bindings all verified). The 0.3.2 predecessor (registry 0xF5323F305360A792284814a7EDe78c2209A1DC94, adapter 0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE; no markets were ever created through it — its roles landed only with this redeploy) and the 0.3.0 one before it are superseded and dropped from config — git history has their full record; the adapter.MARKET_REGISTRY() binding guard refuses cross-generation reads. The PRE-2.1.0 generation (different interface, misdecoding answers) stays under marketRegistryLegacy, reachable only with CORK_ENABLE_DEPRECATED=1.",
+  "$marketRegistryComment": "MarketRegistry stack, contracts release 0.3.3 (Zian's full redeploy 2026-08-10 \u2014 the CREATE2-collision fix: the wrapper key doubles as the CREATE2 salt and is now keccak256(abi.encode(registryAddress, ca, ref, caSource, refSource)), so every registry instance derives its own salt space and the sUSDe/sUSDS@42161 brick cannot recur. Verified empirically 2026-08-10: the pair simulates DEPLOYABLE on the new registry and still reverts on the old one. Identical addresses on 42161 + 8453 via ONE AtomicDeployer batch \u2014 guarded CREATE2, salts + initCodeHashes attested in packages/core/src/config.ts, re-derived locally from the 0.3.3 broadcast records and matched against BOTH chains' live addresses 2026-08-10). `recipes` are NAMED HINTS for the deprecated mode sugar only \u2014 membership is decided solely by isRecipe on chain: as of 2026-08-10 all three recipes are APPROVED on Base but NOT YET on Arbitrum (isRecipe false \u00d73, API /v1/42161/recipes empty) \u2014 JIT resolution on 42161 answers recipe_not_found until the approvals land. POOL_CREATOR + FEE_MANAGER are GRANTED to the new adapter on BOTH chains (verified on-chain 2026-08-10 \u2014 the roles_not_granted era is over; adapter LOP/POOL_MANAGER/CONTROLLER/MARKET_REGISTRY bindings all verified). The 0.3.2 predecessor (registry 0xF5323F305360A792284814a7EDe78c2209A1DC94, adapter 0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE; no markets were ever created through it \u2014 its roles landed only with this redeploy) and the 0.3.0 one before it are superseded and dropped from config \u2014 git history has their full record; the adapter.MARKET_REGISTRY() binding guard refuses cross-generation reads. The PRE-2.1.0 generation (different interface, misdecoding answers) stays under marketRegistryLegacy, reachable only with CORK_ENABLE_DEPRECATED=1.",
   "marketRegistry": {
     "42161": {
       "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
@@ -111,19 +111,42 @@
       "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172"
     }
   },
+  "$rolloverComment": "Rollover ERC-7683 stack (rollover-private v0.1.0-rc.2 @ 5af1048e, deployed 2026-08-13; identical CREATE2 addresses on 42161+8453, chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts). rc.2 changed the OrderData/RolloverParams typehashes (jitMarketHash), so the July 2026 generation below is RETIRED: the venue archives it and admits only rc.2 settlers; rc.2-typed digests do not verify on the old settlers. legacyGenerations exists for event-history scans (full-decentralized fills/contracts) and retired-settler teaching only.",
   "rollover": {
     "42161": {
-      "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
-      "exactSettler": "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
-      "partialSettler": "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+      "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+      "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+      "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
       "settlerDomain": {
         "name": "CorkSettler",
         "version": "1.0.0"
       },
-      "seededAtBlock": 484973917
+      "seededAtBlock": 494104750,
+      "contractsVersion": "v0.1.0-rc.2",
+      "legacyGenerations": [
+        {
+          "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
+          "exactSettler": "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
+          "partialSettler": "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+          "seededAtBlock": 484973917,
+          "retired": "2026-08-13",
+          "label": "july-2026"
+        }
+      ]
+    },
+    "8453": {
+      "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+      "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+      "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
+      "settlerDomain": {
+        "name": "CorkSettler",
+        "version": "1.0.0"
+      },
+      "seededAtBlock": 49917191,
+      "contractsVersion": "v0.1.0-rc.2"
     }
   },
-  "$implementationsComment": "Approved implementations per interface role (2026-08-12; the same schema is proposed for the distribution repo — see github.com/Cork-Technology/distribution/issues/1): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups). Hashes are keccak256(eth_getCode) — equal to EXTCODEHASH for deployed code — captured live 2026-08-12. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Roles resolve against the address blocks that already own them (deployments / marketRegistry) — no address is duplicated here.",
+  "$implementationsComment": "Approved implementations per interface role (2026-08-12; the same schema is proposed for the distribution repo \u2014 see github.com/Cork-Technology/distribution/issues/1): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups). Hashes are keccak256(eth_getCode) \u2014 equal to EXTCODEHASH for deployed code \u2014 captured live 2026-08-12. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Roles resolve against the address blocks that already own them (deployments / marketRegistry) \u2014 no address is duplicated here.",
   "approvedImplementations": {
     "1": {
       "corkAdapter": {

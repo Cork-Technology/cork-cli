@@ -61,6 +61,9 @@ const signRollover = (chainId: number, o: Record<string, unknown>) => {
       srcPoolId: p.srcPoolId as `0x${string}`,
       dstPoolId: p.dstPoolId as `0x${string}`,
       settler: p.settler as `0x${string}`,
+      // The submit schema defaults an omitted jitMarketHash to the zero hash — sign what the
+      // handler will re-hash (rc.2: the zeroed field is part of the digest either way).
+      jitMarketHash: (p.jitMarketHash ?? `0x${"00".repeat(32)}`) as `0x${string}`,
     },
   };
   return SIGNER.sign({ hash: computeOrderDigest(chainId, struct) });
@@ -376,7 +379,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
         order,
         signature: await signLop(1, order),
         side: "SELL",
-        premium: 3.6,
+        premiumAnnualized: "0.036",
         expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
         nonce: "0",
         allowsPartialFills: true,
@@ -415,7 +418,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   const lop = async (over: Record<string, unknown> = {}) => ({
     chainId: 1,
     clientRequestId: "test-fh-0001",
-    action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premium: 4.1, expiry: 0, nonce: "0", allowsPartialFills: true, ...over },
+    action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: "0", allowsPartialFills: true, ...over },
   });
 
   it("F3: listing fields contradicting the signed makerTraits → conflict listing_traits_mismatch, NOT relayed", async () => {
@@ -504,7 +507,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.041" }] } }] };
     const env = await runTool(
       "cork_submit",
-      await lop({ premium: 410, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
+      await lop({ premiumAnnualized: "4.10", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
       ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("conflict");
@@ -641,7 +644,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       order: lopOrder,
       signature: await signLop(1, lopOrder),
       side: "SELL",
-      premium: 0.036, // a fraction pasted into the percent field
+      premiumAnnualized: "0.00036", // 0.036% — a fraction-of-a-fraction paste, below the 0.1% tripwire
       expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
       nonce: "0",
       allowsPartialFills: true,
@@ -665,7 +668,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
-      { ...lopBase, action: { ...lopBase.action, premium: 0.036, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.00036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
       ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }], seen),
     );
     // declared 0.036 percent vs cited 3.6 percent = 1/100x divergence
@@ -677,45 +680,46 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
 
   it("quote_ref band replicates the venue's strict float gate: which side of 10x you land on is the VENUE's float answer", async () => {
     const lopBase = await lopBaseP;
-    const cite = (fraction: string, premium: number, extraRoutes: Array<{ match: string; status?: number; body: unknown }> = []) =>
+    const cite = (fraction: string, declared: string, extraRoutes: Array<{ match: string; status?: number; body: unknown }> = []) =>
       runTool(
         "cork_submit",
-        { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+        { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
         ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
       );
     const ok = [{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }];
 
-    // "0.036"*100 floats to 3.5999999999999996, so 36/it = 10.000000000000002 > 10: the venue
-    // rejects this nominal exactly-10x — and therefore so do we.
-    const rejected10x = await cite("0.036", 36);
+    // Both sides now canonicalize by parseFloat × 100: "0.036"*100 floats to
+    // 3.5999999999999996 while "0.36"*100 is exactly 36, so 36/it = 10.000000000000002 > 10 —
+    // the venue rejects this nominal exactly-10x, and therefore so do we.
+    const rejected10x = await cite("0.036", "0.36");
     expect(rejected10x.state).toBe("conflict");
     expect(rejected10x.warnings[0]?.code).toBe("premium_scale_mismatch");
     expect(rejected10x.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
 
-    // "0.25"*100 is EXACT in binary (25), so 250/25 = 10.0 exactly — and the venue's gate is
+    // "0.25"*100 and "2.5"*100 are EXACT in binary (25 and 250), so the ratio is 10.0 exactly — and the venue's gate is
     // STRICT (ratio > 10): it accepts this exactly-10x. The earlier inclusive-bigint form
     // refused it — a relay must never out-reject its venue.
-    expect((await cite("0.25", 250, ok)).state).toBe("ok");
+    expect((await cite("0.25", "2.5", ok)).state).toBe("ok");
     // Same at the low edge: 2.5/25 = 0.1 exactly, strict < 0.1 → accepted.
-    expect((await cite("0.25", 2.5, ok)).state).toBe("ok");
+    expect((await cite("0.25", "0.025", ok)).state).toBe("ok");
     // Beyond the band on each side: rejected. (990/25 = 39.6x; 0.2/25 = 1/125x.)
-    expect((await cite("0.25", 990)).state).toBe("conflict");
-    expect((await cite("0.25", 0.2)).state).toBe("conflict");
+    expect((await cite("0.25", "9.9")).state).toBe("conflict");
+    expect((await cite("0.25", "0.002")).state).toBe("conflict");
 
     // A zero declared premium skips the venue's band entirely (premium > 0 guard: the signed
     // amounts are the truth, premium is display metadata) — the old form refused it as <=1/10x.
-    expect((await cite("0.25", 0, ok)).state).toBe("ok");
+    expect((await cite("0.25", "0", ok)).state).toBe("ok");
 
-    const rePrice = await cite("0.036", 32, ok);
+    const rePrice = await cite("0.036", "0.32", ok);
     expect(rePrice.state).toBe("ok"); // inside the band: tolerated as a re-price, exactly like the book
   });
 
   it("quote_ref provenance mirrors the venue: maker must be the RFQ's requester, option must cohere (chain, collateral leg)", async () => {
     const lopBase = await lopBaseP;
-    const withRfq = (rfq: Record<string, unknown>, premium = 3.6) =>
+    const withRfq = (rfq: Record<string, unknown>, declared = "0.036") =>
       runTool(
         "cork_submit",
-        { ...lopBase, action: { ...lopBase.action, premium, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+        { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
         ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
       );
     const goodOption = { option_id: "1", premium_annualized: "0.036" };
@@ -749,7 +753,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     // declared premium diverges wildly from anything, proving the band gate did NOT run.
     const env = await runTool(
       "cork_submit",
-      { ...lopBase, action: { ...lopBase.action, premium: 999, quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
+      { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "9.99", quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
       ctxWith([
         { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } },
         { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
@@ -765,7 +769,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
-      { ...lopBase, action: { ...lopBase.action, premium: 3.6, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+      { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
       ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }]),
     );
     expect(env.state).toBe("ok");
@@ -885,7 +889,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const order = { salt: "1", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1", takingAmount: "1", makerTraits: "0" };
     const env = await runTool(
       "cork_submit",
-      { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premium: 3.6, expiry: 0, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
+      { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premiumAnnualized: "0.036", expiry: 0, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
       ctxWith([{ match: "/rfqs/v1/rfq_missing", status: 404, body: { message: "not found" } }], seen),
     );
     expect(env.state).toBe("unavailable");

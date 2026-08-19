@@ -311,15 +311,21 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         note = `Cork-scoped by same-transaction share-token movement across ${String(poolCount)} pool(s); each row carries the poolIds its transaction touched. A transaction that fills an unrelated 1inch order AND moves a Cork share token would also match. Pass filters.orderHash for one order, or hybrid mode for the venue's own feed`;
       }
     } else {
-      // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed block).
+      // flows kind=fills|contracts — needs the rollover deployment (settlers/factory + seed
+      // block). Event HISTORY spans every generation: a wire-format release (rc.2) retires the
+      // venue-admissible set, but the retired settlers' fills and the retired factory's clones
+      // stay on-chain — so the scan covers active + legacy addresses from the EARLIEST seed
+      // block, and each row's `emitter`/`factory` says which generation produced it.
       const { rollover } = await resolveRollover(chainId);
       if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId}`, ctx);
+      const generations = [rollover, ...(rollover.legacyGenerations ?? [])];
+      const earliestSeed = Math.min(...generations.map((g) => g.seededAtBlock));
       if (kind === "fills") {
         const topics: Array<`0x${string}`[] | null> = [ROLLOVER_FILL_TOPICS];
         if (filters.orderDigest) topics.push([filters.orderDigest]);
         spec = {
-          fromBlock: rollover.seededAtBlock,
-          address: [rollover.exactSettler, rollover.partialSettler],
+          fromBlock: earliestSeed,
+          address: generations.flatMap((g) => [g.exactSettler, g.partialSettler] as `0x${string}`[]),
           topics,
           decode: decodeRolloverFillRows,
           postFilter: (rows) => (filters.filler ? rows.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase()) : rows),
@@ -328,11 +334,18 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         };
       } else {
         spec = {
-          fromBlock: rollover.seededAtBlock,
-          address: [rollover.factory],
+          fromBlock: earliestSeed,
+          address: generations.map((g) => g.factory as `0x${string}`),
           topics: [[CLONE_DEPLOYED_TOPIC]],
           decode: decodeCloneRows,
-          postFilter: (rows) => (filters.account ? rows.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase()) : rows),
+          postFilter: (rows) => {
+            let out = rows;
+            if (filters.account) out = out.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
+            // Same disambiguator the venue grew in rc.2: one wallet can own one clone PER
+            // factory generation, so the factory is a first-class filter.
+            if (filters.factory) out = out.filter((c) => String(c.factory).toLowerCase() === filters.factory!.toLowerCase());
+            return out;
+          },
           key: (c) => `clone:${String(c.rolloverContract).toLowerCase()}`,
           cache: "rollover-clones",
         };
@@ -522,7 +535,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         } else if (kind === "fills") {
           traversal = await collectVenuePages(paging, (cursor) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         } else {
-          traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+          traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(filters.factory ? { factory: filters.factory.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         }
       }
       // Hybrid's verification leg [K7]: the venue DISCOVERED these rows; the chain now CONFIRMS

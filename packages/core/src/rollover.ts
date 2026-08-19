@@ -3,10 +3,16 @@
 // locally, never accepted from the caller].
 //
 // Structs, typehash preimages, and encoding order are ported from the DEPLOYED pin
-// `rollover-private @ 032d3e5a` (src/libraries/{Typehashes,LibSettlerHashing,
-// LibAuthenticatedHooks}.sol). The typehash preimages are frozen post-launch on-chain
-// (INV-WIRE-ORDER-STABILITY), and the computed domain separator is proven equal to both live
-// Arbitrum settlers' DOMAIN_SEPARATOR() (golden vectors in test/rollover.test.ts).
+// `rollover-private @ 5af1048e` (public tag v0.1.0-rc.2; src/libraries/{Typehashes,
+// LibSettlerHashing,LibAuthenticatedHooks}.sol + src/BaseFiller.sol). The typehash preimages are
+// frozen post-launch on-chain (INV-WIRE-ORDER-STABILITY), and the computed domain separator is
+// proven equal to all four live rc.2 settlers' DOMAIN_SEPARATOR() (Arbitrum + Base, identical
+// CREATE2 addresses; golden vectors in test/rollover.test.ts).
+//
+// rc.2 wire break (2026-08-13): `RolloverParams` gained a trailing `bytes32 jitMarketHash`
+// (zero = the order does not authorize just-in-time market creation), changing BOTH typehashes
+// and the static OrderData ABI length (832 → 864 bytes). Digests computed under the previous
+// generation's types no longer verify on the deployed settlers and are rejected by the venue.
 import {
   concatHex,
   encodeAbiParameters,
@@ -21,11 +27,13 @@ import {
 type Address = `0x${string}`;
 type Hex = `0x${string}`;
 
-// ── Frozen EIP-712 type strings (verbatim from Typehashes.sol @ 032d3e5a) ──────────────────────
+// ── Frozen EIP-712 type strings (verbatim from Typehashes.sol @ 5af1048e) ──────────────────────
 const ORDER_DATA_TYPE_STRING =
-  "OrderData(address user,address settler,address fillerHint,address exclusiveFiller,address srcCstToken,address dstCstToken,address premiumToken,address rolloverContract,uint64 originChainId,uint64 destinationChainId,uint64 openDeadline,uint64 fillDeadline,uint64 orderSalt,uint256 orderSize,uint256 minPremiumPerShare,bool allowPartialFills,bool allowUnderfill,uint8 premiumPaymentMode,bytes32 rolloverIntentHash,RolloverParams rolloverParams)RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler)";
+  "OrderData(address user,address settler,address fillerHint,address exclusiveFiller,address srcCstToken,address dstCstToken,address premiumToken,address rolloverContract,uint64 originChainId,uint64 destinationChainId,uint64 openDeadline,uint64 fillDeadline,uint64 orderSalt,uint256 orderSize,uint256 minPremiumPerShare,bool allowPartialFills,bool allowUnderfill,uint8 premiumPaymentMode,bytes32 rolloverIntentHash,RolloverParams rolloverParams)RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";
 const ROLLOVER_PARAMS_TYPE_STRING =
-  "RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler)";
+  "RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";
+const JIT_MARKET_PARAMS_TYPE_STRING =
+  "JITMarketParams(address collateralAsset,address referenceAsset,uint256 expiryTimestamp,address recipe,uint256 rateOverride,uint256 rateMin,uint256 rateMax,uint256 rateChangePerDayMax,uint256 rateChangeCapacityMax,bytes additionalData,uint256 swapFeePercentage,uint256 unwindSwapFeePercentage)";
 const ROLLOVER_INTENT_TYPE_STRING =
   "RolloverIntent(address rolloverContract,bytes32 orderDigest,uint64 deadline,uint64 nonce,Call[] preRolloverHooks,Call[] midRolloverHooks,Call[] postRolloverHooks,Call[] premiumHooks)Call(address target,uint256 value,bytes callData,bool allowFailure,bool isDelegateCall)";
 const CALL_TYPE_STRING =
@@ -35,6 +43,16 @@ export const ORDER_DATA_TYPEHASH: Hex = keccak256(stringToHex(ORDER_DATA_TYPE_ST
 export const ROLLOVER_PARAMS_TYPEHASH: Hex = keccak256(stringToHex(ROLLOVER_PARAMS_TYPE_STRING));
 export const ROLLOVER_INTENT_TYPEHASH: Hex = keccak256(stringToHex(ROLLOVER_INTENT_TYPE_STRING));
 export const CALL_TYPEHASH: Hex = keccak256(stringToHex(CALL_TYPE_STRING));
+export const JIT_MARKET_PARAMS_TYPEHASH: Hex = keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING));
+
+/** `RolloverParams.jitMarketHash` value meaning "this order does not authorize just-in-time
+ *  market creation" (rollover v0.1.0-rc.2 Typehashes.sol). Orders built without a JIT market
+ *  MUST sign over this zero value — the field is part of the digest either way. */
+export const ZERO_JIT_MARKET_HASH: Hex = zeroHash;
+
+/** Canonical ABI byte length of the static-only OrderData tuple
+ *  (LibRolloverOrder.ORDER_DATA_ABI_LENGTH @ 5af1048e — 864 since rc.2, was 832). */
+export const ORDER_DATA_ABI_LENGTH = 864;
 
 // viem-shaped types for hashTypedData/signTypedData. EIP-712 appends referenced structs sorted
 // by name, so this reproduces ORDER_DATA_TYPE_STRING exactly (asserted in tests).
@@ -69,6 +87,7 @@ export const ORDER_DATA_TYPES = {
     { name: "srcPoolId", type: "bytes32" },
     { name: "dstPoolId", type: "bytes32" },
     { name: "settler", type: "address" },
+    { name: "jitMarketHash", type: "bytes32" },
   ],
 } as const;
 
@@ -82,7 +101,7 @@ const DOMAIN_TYPES = {
 } as const;
 
 /** The CorkSettler EIP-712 domain — the exact shape signers pass to eth_signTypedData_v4
- *  (ERC-5267-verified on both live Arbitrum settlers). */
+ *  (ERC-5267-verified on all four live rc.2 settlers, Arbitrum + Base). */
 export interface CorkSettlerDomain {
   name: "CorkSettler";
   version: "1.0.0";
@@ -175,6 +194,8 @@ export interface RolloverParamsStruct {
   srcPoolId: Hex;
   dstPoolId: Hex;
   settler: Address;
+  /** JITMarketParams commitment (hashJitMarketParams), or ZERO_JIT_MARKET_HASH for none. */
+  jitMarketHash: Hex;
 }
 
 export interface OrderDataStruct {
@@ -214,6 +235,7 @@ export function hashOrderDataManual(o: OrderDataStruct): Hex {
         { type: "bytes32" },
         { type: "bytes32" },
         { type: "address" },
+        { type: "bytes32" },
       ],
       [
         ROLLOVER_PARAMS_TYPEHASH,
@@ -224,6 +246,7 @@ export function hashOrderDataManual(o: OrderDataStruct): Hex {
         o.rolloverParams.srcPoolId,
         o.rolloverParams.dstPoolId,
         o.rolloverParams.settler,
+        o.rolloverParams.jitMarketHash,
       ],
     ),
   );
@@ -289,7 +312,200 @@ export function computeOrderDigest(chainId: number, o: OrderDataStruct): Hex {
   });
 }
 
+/** Static ABI encoding of the OrderData tuple — the ERC-7683 envelope's `orderData` blob the
+ *  settlers decode (LibRolloverOrder.decodeOrderData; always ORDER_DATA_ABI_LENGTH bytes). */
+export function encodeOrderData(o: OrderDataStruct): Hex {
+  return encodeAbiParameters(
+    [
+      {
+        type: "tuple",
+        components: [
+          { name: "user", type: "address" },
+          { name: "settler", type: "address" },
+          { name: "fillerHint", type: "address" },
+          { name: "exclusiveFiller", type: "address" },
+          { name: "srcCstToken", type: "address" },
+          { name: "dstCstToken", type: "address" },
+          { name: "premiumToken", type: "address" },
+          { name: "rolloverContract", type: "address" },
+          { name: "originChainId", type: "uint64" },
+          { name: "destinationChainId", type: "uint64" },
+          { name: "openDeadline", type: "uint64" },
+          { name: "fillDeadline", type: "uint64" },
+          { name: "orderSalt", type: "uint64" },
+          { name: "orderSize", type: "uint256" },
+          { name: "minPremiumPerShare", type: "uint256" },
+          { name: "allowPartialFills", type: "bool" },
+          { name: "allowUnderfill", type: "bool" },
+          { name: "premiumPaymentMode", type: "uint8" },
+          { name: "rolloverIntentHash", type: "bytes32" },
+          {
+            name: "rolloverParams",
+            type: "tuple",
+            components: [
+              { name: "srcCstToken", type: "address" },
+              { name: "dstCstToken", type: "address" },
+              { name: "minCaReceived", type: "uint256" },
+              { name: "minSharesOut", type: "uint256" },
+              { name: "srcPoolId", type: "bytes32" },
+              { name: "dstPoolId", type: "bytes32" },
+              { name: "settler", type: "address" },
+              { name: "jitMarketHash", type: "bytes32" },
+            ],
+          },
+        ],
+      },
+    ],
+    [o],
+  );
+}
+
+/** Just-in-time market instruction a rollover order commits to when the destination pool may not
+ *  exist yet (BaseFiller.JITMarketParams @ 5af1048e). The order separately signs
+ *  `rolloverParams.dstPoolId` (the Phoenix Market commitment) and `rolloverParams.jitMarketHash`
+ *  (this struct's commitment, negotiated fees included). Scales: the four constraint rates and
+ *  rateOverride are ABSOLUTE 1e18 = 1.0; the two fee fields are PERCENTAGES 1e18 = 1%. */
+export interface JitMarketParamsStruct {
+  collateralAsset: Address;
+  referenceAsset: Address;
+  expiryTimestamp: bigint;
+  recipe: Address;
+  rateOverride: bigint;
+  rateMin: bigint;
+  rateMax: bigint;
+  rateChangePerDayMax: bigint;
+  rateChangeCapacityMax: bigint;
+  additionalData: Hex;
+  swapFeePercentage: bigint;
+  unwindSwapFeePercentage: bigint;
+}
+
+/** Commitment hash embedded in `RolloverParams.jitMarketHash`
+ *  (BaseFiller.hashJITMarketParams — `additionalData` rides as its keccak256, EIP-712-style). */
+export function hashJitMarketParams(p: JitMarketParamsStruct): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [
+        { type: "bytes32" },
+        { type: "address" },
+        { type: "address" },
+        { type: "uint256" },
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "bytes32" },
+        { type: "uint256" },
+        { type: "uint256" },
+      ],
+      [
+        JIT_MARKET_PARAMS_TYPEHASH,
+        p.collateralAsset,
+        p.referenceAsset,
+        p.expiryTimestamp,
+        p.recipe,
+        p.rateOverride,
+        p.rateMin,
+        p.rateMax,
+        p.rateChangePerDayMax,
+        p.rateChangeCapacityMax,
+        keccak256(p.additionalData),
+        p.swapFeePercentage,
+        p.unwindSwapFeePercentage,
+      ],
+    ),
+  );
+}
+
 const U64 = (1n << 64n) - 1n;
+
+// ── Admission pre-flight (venue parity) ────────────────────────────────────────────────────────
+// The deterministic subset of the venue's POST /rollover/v1/orders admission battery
+// (cork-indexing-api post-order.ts @ 0.3.16), replicated op-for-op so a refusal here lands
+// exactly where the venue's 400 would. Chain-dependent admission (hook-target getCode, the
+// settler resolveFor preflight) deliberately stays venue-side — this module is pure.
+
+/** One settler generation's addresses (structural subset of the config's rollover record). */
+export interface RolloverGenerationAddresses {
+  exactSettler: string;
+  partialSettler: string;
+  retired?: string | undefined;
+  label?: string | undefined;
+}
+
+export type RolloverSettlerClassification =
+  | { status: "active"; kind: "EXACT" | "PARTIAL" }
+  | { status: "retired"; kind: "EXACT" | "PARTIAL"; generation: RolloverGenerationAddresses }
+  | { status: "unknown" };
+
+/** Classify a settler address against the configured deployment: the active generation's
+ *  Exact/Partial settler, a RETIRED generation's (venue-inadmissible: the venue archives old
+ *  generations, and a wire-format release means its digests no longer verify there), or unknown. */
+export function classifyRolloverSettler(
+  dep: { exactSettler: string; partialSettler: string; legacyGenerations?: RolloverGenerationAddresses[] | undefined },
+  settler: string,
+): RolloverSettlerClassification {
+  const lc = settler.toLowerCase();
+  if (lc === dep.exactSettler.toLowerCase()) return { status: "active", kind: "EXACT" };
+  if (lc === dep.partialSettler.toLowerCase()) return { status: "active", kind: "PARTIAL" };
+  for (const g of dep.legacyGenerations ?? []) {
+    if (lc === g.exactSettler.toLowerCase()) return { status: "retired", kind: "EXACT", generation: g };
+    if (lc === g.partialSettler.toLowerCase()) return { status: "retired", kind: "PARTIAL", generation: g };
+  }
+  return { status: "unknown" };
+}
+
+/** Order-term fields the deterministic admission battery reads. `intentDeadline`/`hooks` are
+ *  submit-side extras (the prepare builder pins deadline = fillDeadline and attaches no hooks). */
+export interface RolloverOrderTermsInput {
+  nowSeconds: bigint;
+  openDeadline: bigint;
+  fillDeadline: bigint;
+  orderSize: bigint;
+  minPremiumPerShare: bigint;
+  srcCstToken: string;
+  dstCstToken: string;
+  premiumToken: string;
+  srcPoolId: string;
+  dstPoolId: string;
+  settler: string;
+  exclusiveFiller?: string | undefined;
+  intentDeadline?: bigint | undefined;
+  hooks?: RolloverCall[] | undefined;
+}
+
+/** First venue-admission violation among the deterministic checks, or null when they all pass.
+ *  First-fail (not a list) to mirror the venue's own 400 semantics. */
+export function checkRolloverOrderTerms(t: RolloverOrderTermsInput): string | null {
+  const lc = (s: string) => s.toLowerCase();
+  if (t.orderSize <= 0n) return "orderSize must be positive — the venue rejects non-positive sizes";
+  if (t.openDeadline > t.fillDeadline) return `openDeadline (${t.openDeadline}) must not exceed fillDeadline (${t.fillDeadline})`;
+  if (t.fillDeadline <= t.nowSeconds) return `fillDeadline (${t.fillDeadline}) is not in the future (now ${t.nowSeconds}) — the venue rejects past deadlines`;
+  if (t.openDeadline < t.nowSeconds) return `openDeadline (${t.openDeadline}) is in the past (now ${t.nowSeconds}) — the venue rejects it, and the order could never be opened`;
+  if (t.minPremiumPerShare <= 0n) return "minPremiumPerShare must be positive — the venue rejects zero-premium orders";
+  if (lc(t.srcCstToken) === zeroAddress || lc(t.dstCstToken) === zeroAddress || lc(t.premiumToken) === zeroAddress) {
+    return "srcCstToken, dstCstToken, and premiumToken must be non-zero addresses";
+  }
+  if (lc(t.premiumToken) === lc(t.srcCstToken) || lc(t.premiumToken) === lc(t.dstCstToken)) {
+    return "premiumToken must differ from srcCstToken and dstCstToken — the venue rejects premium paid in either cST";
+  }
+  if (lc(t.srcPoolId) === lc(t.dstPoolId)) return "srcPoolId and dstPoolId must differ — a rollover migrates between two pools";
+  if (t.exclusiveFiller !== undefined && lc(t.exclusiveFiller) === lc(t.settler)) {
+    return "exclusiveFiller cannot be the settler itself";
+  }
+  if (t.intentDeadline !== undefined) {
+    if (t.intentDeadline < t.fillDeadline) return `intent.deadline (${t.intentDeadline}) must be at least fillDeadline (${t.fillDeadline}) — the intent must outlive the fill window`;
+    if (t.intentDeadline < t.nowSeconds) return `intent.deadline (${t.intentDeadline}) is in the past (now ${t.nowSeconds})`;
+  }
+  for (const hook of t.hooks ?? []) {
+    if (!hook.isDelegateCall || hook.allowFailure || hook.value !== 0n) {
+      return "intent hooks must be delegatecall-only, zero-value, and non-optional (isDelegateCall:true, value:'0', allowFailure:false) — the venue rejects any other shape";
+    }
+  }
+  return null;
+}
 
 export interface RolloverIntentArgs {
   chainId: number;
@@ -307,6 +523,10 @@ export interface RolloverIntentArgs {
   fillDeadline: bigint;
   minCaReceived?: bigint;
   minSharesOut?: bigint;
+  /** JITMarketParams commitment (hashJitMarketParams). Omitted = ZERO_JIT_MARKET_HASH — the
+   *  order does not authorize just-in-time market creation, and the signature still covers the
+   *  zeroed field (rc.2 digests include it either way). */
+  jitMarketHash?: Hex;
   allowPartialFills?: boolean;
   allowUnderfill?: boolean;
   premiumPaymentMode?: 0 | 1;
@@ -366,6 +586,7 @@ export interface RolloverVenuePost {
       srcPoolId: Hex;
       dstPoolId: Hex;
       settler: string;
+      jitMarketHash: Hex;
     };
   };
   intent: {
@@ -427,6 +648,7 @@ export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult
       srcPoolId: a.srcPoolId,
       dstPoolId: a.dstPoolId,
       settler: a.settler,
+      jitMarketHash: a.jitMarketHash ?? ZERO_JIT_MARKET_HASH,
     },
   };
   const orderDigest = computeOrderDigest(a.chainId, order);
@@ -462,6 +684,7 @@ export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult
         srcPoolId: order.rolloverParams.srcPoolId,
         dstPoolId: order.rolloverParams.dstPoolId,
         settler: lc(order.rolloverParams.settler),
+        jitMarketHash: order.rolloverParams.jitMarketHash,
       },
     },
     intent: {

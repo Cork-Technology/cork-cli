@@ -1,12 +1,13 @@
 // [K7] chain-over-indexer verification for rollover orders, two independent legs:
-//   1. STATUS — `ISettler.orderStatus(orderDigest)` (public view @ 032d3e5a) via the regular
+//   1. STATUS — `ISettler.orderStatus(orderDigest)` (public view @ 5af1048e, v0.1.0-rc.2) via the regular
 //      resolved RPC: the authoritative CURRENT lifecycle status, readable with zero tokens.
 //   2. EVENT HISTORY — `eth_getLogs` over a logs-capable endpoint (HyperRPC preferred; ordinary
 //      public RPCs refuse historical ranges). Every settler lifecycle event indexes the
 //      orderDigest as topic1, so one `topics=[null, digest]` scan from the seeding block returns
 //      the full history. Endpoint + token resolution lives in ./datasources/envio.ts.
 //
-// Event signatures are verbatim from rollover-private @ 032d3e5a (ISettler/IPartialSettler);
+// Event signatures are verbatim from rollover-private @ 5af1048e (ISettler/IPartialSettler —
+// unchanged by the rc.2 wire break, which touched only typehashes/ABI length);
 // the ERC-7683 `Open` event's tuple layout is not reproduced here, so an Open log surfaces as
 // an unlabeled event rather than being guessed [K3-honest].
 import { keccak256, stringToHex, toEventSelector } from "viem";

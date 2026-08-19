@@ -75,7 +75,7 @@ export const QueryInput = z.object({
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter). Unknown keys are a teachable error",
+      "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/flows/rfqs — rfqs maps it to the requester), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter). Unknown keys are a teachable error",
     ),
   cursor: z.string().optional().describe("opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"),
   pageSize: z.number().int().min(1).max(200).default(25).describe("items requested per venue page during traversal"),
@@ -107,6 +107,11 @@ const JitUnwindSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1
 const RolloverOrderSizeWire = TokenAmount.describe("src cST shares to roll — cST is always 18 decimals");
 const RolloverMinCaWire = TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)");
 const RolloverMinSharesWire = TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals");
+// rc.2 (rollover v0.1.0-rc.2, 2026-08-13): RolloverParams carries a trailing jitMarketHash that
+// is PART OF THE SIGNED DIGEST either way — zero means "no JIT market", and an omitted field
+// must produce the same digest the wallet signed over a zeroed one, so the default is the zero
+// hash at both use sites (prepare builds it, submit re-hashes it).
+const RolloverJitMarketHashWire = Bytes32.describe("commitment to negotiated just-in-time market-creation parameters (BaseFiller.hashJITMarketParams); the ZERO hash = this order does not authorize market creation. Signed either way (rollover v0.1.0-rc.2)");
 const RateConstraintWire = z.strictObject({
   rateMin: UintStr.describe("ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)").meta({ "x-units": X_UNITS.wad }),
   rateMax: UintStr.describe("ABSOLUTE rate ceiling, 1e18 = 1.0").meta({ "x-units": X_UNITS.wad }),
@@ -359,18 +364,19 @@ export type PreparePhoenixInput = z.infer<typeof PreparePhoenixInput>;
 // ────────────────────────────────────────────────────────────────────────────
 const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optionId: z.string() });
 
-/** The two premium spellings a venue listing accepts during the cork-api 0.3.3 migration
- *  window. `premiumAnnualized` is the successor: the venue minted a NEW field for the fraction
- *  unit (COR-35/R13 — a unit change is a new name), shared verbatim with the RFQ surface, so we
- *  mirror name and unit and never convert between them. `premium` (percent) is REMOVED by the
- *  venue on 2026-08-17. At least one is required — enforced at relay with teaching, mirroring
- *  the venue (whose own at-least-one rule is prose + refine, not schema shape). */
+/** The venue listing's one premium field since cork-api 0.3.15: the percent-number `premium`
+ *  completed its scheduled sunset on 2026-08-17 and the venue now answers a pointed 400 on its
+ *  presence. `premiumAnnualized` carries the fraction unit the venue minted as a NEW field
+ *  (COR-35/R13 — a unit change is a new name), shared verbatim with the RFQ surface, so we
+ *  mirror name and unit and never convert between them. The removed field stays in this schema
+ *  ONLY so a legacy caller gets the relay's pointed teaching instead of a bare shape error —
+ *  any value in it is refused before relay, mirroring the venue's own preValidation gate. */
 const ListingPremiumFields = {
   premium: z.number().min(0).max(1000).optional()
-    .describe("DEPRECATED — the venue removes this field 2026-08-17; send premiumAnnualized. PERCENT number for the venue listing (4.1 means 4.1%), NOT a fraction. Deliberately tighter than the venue's 10000 cap: above 1000 is a scale mistake refused with teaching, not a value worth relaying")
+    .describe("REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead")
     .meta({ "x-units": X_UNITS.percent }),
   premiumAnnualized: z.string().min(1).optional()
-    .describe('the listing premium as an annualized decimal-fraction STRING ("0.041" = 4.1%) — the venue\'s successor field, same name and convention as the RFQ surface. The shape is the published spec pattern (structure); values above 100 (= the legacy 10000% ceiling) are refused as venue policy. At least one of premium/premiumAnnualized is required; when both are sent the venue hard-rejects disagreement')
+    .describe('the listing premium: an annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface — required at relay (the shape is the published spec pattern; values above 100, the legacy 10000% ceiling, are refused as venue policy). The percent-number premium field was removed 2026-08-17')
     .meta({ "x-units": X_UNITS.percent }),
 };
 
@@ -539,6 +545,21 @@ export const OrdersAction = z.discriminatedUnion("type", [
     fillDeadline: UnixSeconds,
     minCaReceived: RolloverMinCaWire.optional(),
     minSharesOut: RolloverMinSharesWire.optional(),
+    jitMarketHash: RolloverJitMarketHashWire.optional().describe("pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally [K3]; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket"),
+    jitMarket: z
+      .strictObject({
+        collateralAsset: Address,
+        referenceAsset: Address,
+        expiryTimestamp: UnixSeconds.describe("destination pool expiry — must outlast the order's fillDeadline"),
+        recipe: Address.describe("the approved IMarketRecipe CONTRACT ADDRESS the created market names (discover with cork_query resource:'registry-recipes')"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0); MUST stay 0 for price/nav recipes").meta({ "x-units": X_UNITS.wad }),
+        constraint: RateConstraintWire.describe("the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"),
+        additionalData: Hex.default("0x").describe("recipe-specific bytes the constraint was derived from — committed as keccak256(additionalData)"),
+        swapFeePercentage: JitSwapFeeWire,
+        unwindSwapFeePercentage: JitUnwindSwapFeeWire,
+      })
+      .optional()
+      .describe("negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash [K3] — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
     allowUnderfill: z.boolean().default(false),
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
@@ -637,6 +658,7 @@ const RolloverParamsWire = z.strictObject({
   srcPoolId: MarketId,
   dstPoolId: MarketId,
   settler: Address,
+  jitMarketHash: RolloverJitMarketHashWire.optional().default(`0x${"00".repeat(32)}`).describe("JITMarketParams commitment; omitted = the ZERO hash (no JIT market) — the digest recomputation covers the zeroed field exactly as the wallet signed it (rollover v0.1.0-rc.2)"),
 });
 const RolloverOrderWire = z.strictObject({
   user: Address,

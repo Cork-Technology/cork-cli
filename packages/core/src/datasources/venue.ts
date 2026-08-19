@@ -334,8 +334,8 @@ export async function getRolloverFills(deps: VenueDeps, p: { chainId: number; or
 }
 
 /** GET /rollover/v1/contracts — per-user rollover clones (setup gate: "does my clone exist?"). */
-export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string } & PageParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/v1/contracts${qs({ chainId: p.chainId, owner: p.owner, address: p.address, cursor: p.cursor, limit: p.limit })}`), "rollover contracts");
+export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number; owner?: string; address?: string; factory?: string } & PageParams): Promise<VenueList> {
+  return asList(await getJson(deps, `/rollover/v1/contracts${qs({ chainId: p.chainId, owner: p.owner, address: p.address, factory: p.factory, cursor: p.cursor, limit: p.limit })}`), "rollover contracts");
 }
 
 export interface RfqListParams extends PageParams {

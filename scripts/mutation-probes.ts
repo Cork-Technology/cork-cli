@@ -776,6 +776,69 @@ const CATALOG: Mutant[] = [
     replace: "[CALL_TYPEHASH, c.target, c.value, keccak256(c.callData), c.isDelegateCall, c.allowFailure]",
     tests: [T.rollover],
   },
+  // ── rc.2 wire (jitMarketHash): every mutant below produces a plausible pre-rc.2 or reordered
+  // encoding whose digest no deployed settler accepts ─────────────────────────────────────────
+  {
+    // Reverting the params type string to the pre-rc.2 preimage regenerates the RETIRED
+    // generation's typehash — the exact wire break rc.2 shipped, run backwards.
+    id: "rollover-params-typestring-pre-rc2",
+    file: "packages/core/src/rollover.ts",
+    find: '"RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";',
+    replace: '"RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler)";',
+    tests: [T.rollover],
+  },
+  {
+    // Dropping jitMarketHash from the manual params encode keeps every remaining value correct
+    // but hashes the 832-byte-era struct — the dual-implementation cross-check must catch it.
+    id: "rollover-params-hash-drops-jit",
+    file: "packages/core/src/rollover.ts",
+    find: "        o.rolloverParams.settler,\n        o.rolloverParams.jitMarketHash,",
+    replace: "        o.rolloverParams.settler,\n        o.rolloverParams.srcPoolId,",
+    tests: [T.rollover],
+  },
+  {
+    // A wrong non-zero default would sign a phantom JIT commitment on every plain order.
+    id: "rollover-jit-zero-default",
+    file: "packages/core/src/rollover.ts",
+    find: "jitMarketHash: a.jitMarketHash ?? ZERO_JIT_MARKET_HASH,",
+    replace: "jitMarketHash: a.jitMarketHash ?? ORDER_DATA_TYPEHASH,",
+    tests: [T.rollover],
+  },
+  {
+    // additionalData rides as its keccak256 (EIP-712 dynamic-type rule); committing the swap/
+    // unwind fees in swapped order keeps both values plausible but breaks the commitment.
+    id: "rollover-jit-params-fee-order",
+    file: "packages/core/src/rollover.ts",
+    find: "        keccak256(p.additionalData),\n        p.swapFeePercentage,\n        p.unwindSwapFeePercentage,",
+    replace: "        keccak256(p.additionalData),\n        p.unwindSwapFeePercentage,\n        p.swapFeePercentage,",
+    tests: [T.rollover],
+  },
+  {
+    // The admission battery's past-openDeadline gate is strictly-past (the venue's own
+    // comparison): widening it to <= would refuse the legal open-exactly-now boundary.
+    id: "rollover-admission-open-boundary",
+    file: "packages/core/src/rollover.ts",
+    find: "if (t.openDeadline < t.nowSeconds) return",
+    replace: "if (t.openDeadline <= t.nowSeconds) return",
+    tests: [T.rollover],
+  },
+  {
+    // premiumToken distinctness must check BOTH cSTs — halving it admits venue-rejected orders.
+    id: "rollover-admission-premium-distinct",
+    file: "packages/core/src/rollover.ts",
+    find: "if (lc(t.premiumToken) === lc(t.srcCstToken) || lc(t.premiumToken) === lc(t.dstCstToken)) {",
+    replace: "if (lc(t.premiumToken) === lc(t.srcCstToken) && lc(t.premiumToken) === lc(t.dstCstToken)) {",
+    tests: [T.rollover],
+  },
+  {
+    // Retired-settler classification must consult the LEGACY generations — skipping them
+    // degrades the precise settler_retired refusal into relay-with-warning.
+    id: "rollover-settler-legacy-skipped",
+    file: "packages/core/src/rollover.ts",
+    find: "for (const g of dep.legacyGenerations ?? []) {",
+    replace: "for (const g of [] as RolloverGenerationAddresses[]) {",
+    tests: [T.rollover],
+  },
   // ── CREATE2 attestations: binds is the attestation↔config drift gate; salts are identity ──
   {
     // A binds path pointing at the WRONG config field would let the attestation and the served
@@ -1346,7 +1409,7 @@ const CATALOG: Mutant[] = [
     // every did-you-mean become JSON-only — invisible to a person at a terminal.
     id: "cli-render-suggestion-dropped",
     file: "packages/cli/src/render.ts",
-    find: 'if (i["suggestion"]) parts.push(wrapped(`→ ${i["suggestion"]}`, 4));',
+    find: 'if (i["suggestion"]) parts.push(wrap(`${GLYPH.suggest} ${i["suggestion"]}`, 4).map((line) => s.green(line)).join("\\n"));',
     replace: "",
     tests: [T.cli],
   },
@@ -1945,30 +2008,30 @@ const CATALOG: Mutant[] = [
     tests: [T.venuePremium],
   },
   {
-    // The agreement tolerance regresses from the venue's relative comparison to absolute:
-    // float noise at premium 100 reads as disagreement the venue would accept.
-    id: "premium-agreement-scale-absolute",
+    // The removed-field gate softens to "only when the fraction is absent": a payload carrying
+    // BOTH fields relays and dies as the venue's opaque 400 instead of local teaching.
+    id: "premium-removed-gate-softened",
     file: "packages/core/src/handlers/submit.ts",
-    find: "const scale = Math.max(1, premium, annualizedPct);",
-    replace: "const scale = 1;",
+    find: "if (premium !== undefined) {\n    return { ok: false, problem: \"removed\"",
+    replace: "if (premium !== undefined && premiumAnnualized === undefined) {\n    return { ok: false, problem: \"removed\"",
     tests: [T.venuePremium],
   },
   {
-    // The agreement tolerance regresses 100x tighter than the venue's: benign fraction×100
-    // float noise becomes a refusal the venue would not issue.
-    id: "premium-agreement-tolerance-tightened",
+    // The required-fraction gate regresses to unreachable: a premium-less listing relays and
+    // fails only as an opaque venue 400 instead of local teaching.
+    id: "premium-required-gate-unreachable",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (Math.abs(premium - annualizedPct) > 1e-9 * scale) {",
-    replace: "if (Math.abs(action.premium - annualizedPct) > 1e-16 * scale) {",
+    find: "if (premiumAnnualized === undefined) {\n    return { ok: false, problem: \"missing\"",
+    replace: "if (premiumAnnualized === undefined && premium !== undefined) {\n    return { ok: false, problem: \"missing\"",
     tests: [T.venuePremium],
   },
   {
-    // The at-least-one gate regresses to unreachable: a premium-less listing relays and fails
-    // only as an opaque venue 400 instead of local teaching.
-    id: "premium-at-least-one-unreachable",
+    // The venue's parseFloat×100 canonicalization drifts by 10x: every downstream comparison
+    // (suspect tripwires, the quote_ref band) compares the WRONG canonical percent.
+    id: "premium-canonicalization-scale",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (premium === undefined && premiumAnnualized === undefined) {",
-    replace: "if (premium === undefined && premiumAnnualized === undefined && premium !== undefined) {",
+    find: "return { ok: true, premiumPct: Number.parseFloat(premiumAnnualized) * 100 };",
+    replace: "return { ok: true, premiumPct: Number.parseFloat(premiumAnnualized) * 10 };",
     tests: [T.venuePremium],
   },
   // ── taker-fill signedOrder: the venue-free fill path's verification gates ─────────────────

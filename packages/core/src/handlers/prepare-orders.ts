@@ -6,13 +6,13 @@ import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidat
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
-import { buildRolloverIntent } from "../rollover.ts";
+import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
-import { PREMIUM_DEPRECATION_NOTICE, resolveListingPremium } from "./submit.ts";
+import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -113,14 +113,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
     // The full listing-premium resolution runs HERE, not just at submit — finalize's whole
     // contract is that submitInput relays as-is after the caller's policy gate admits the
-    // artifact, so a listing the relay would refuse (missing premium, malformed fraction, the
-    // two spellings disagreeing) must fail before that gate ever sees it. Same function, same
-    // messages, same refusal vocabulary as the relay (resolveListingPremium in submit.ts).
+    // artifact, so a listing the relay would refuse (the removed percent field present, the
+    // premium missing, a malformed fraction) must fail before that gate ever sees it. Same
+    // function, same messages, same refusal vocabulary as the relay (resolveListingPremium
+    // in submit.ts).
     const listingPremium = resolveListingPremium(action.listing.premium, action.listing.premiumAnnualized);
     if (!listingPremium.ok) {
-      if (listingPremium.problem === "disagree") {
-        return envelope({ state: "conflict", data: listingPremium.data, chainId, source: "config", warnings: [{ code: "premium_fields_disagree", message: listingPremium.message }], ctx });
-      }
       return unavailable(chainId, "invalid_order_terms", listingPremium.message, ctx);
     }
     const p = action.prepared;
@@ -149,9 +147,6 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // contract maker's finalization fails honestly in the ecrecover branch below.
       const { orderHash: reconstructedHash } = reconstructMakerOrder(orderArgs);
       const finalizeWarnings: Array<{ code: string; message: string }> = [];
-      if (action.listing.premium !== undefined) {
-        finalizeWarnings.push({ code: "deprecation_notice", message: PREMIUM_DEPRECATION_NOTICE });
-      }
       let makerAccountType: "EOA" | "ERC1271" = "EOA";
       let recoveredSigner: `0x${string}` | null = null;
       const verdict = await verifyMakerSignatureLadder({ ctx, chainId, maker: m.maker, orderHash: reconstructedHash, signature: action.signature });
@@ -191,8 +186,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           signature: finalized.signature,
           extension: finalized.extension,
           side: action.listing.side,
-          ...(action.listing.premium !== undefined ? { premium: action.listing.premium } : {}),
-          ...(action.listing.premiumAnnualized !== undefined ? { premiumAnnualized: action.listing.premiumAnnualized } : {}),
+          // The removed percent field never reaches submitInput — resolveListingPremium
+          // refused it above; the fraction is the one listing premium (cork-api 0.3.15).
+          premiumAnnualized: action.listing.premiumAnnualized!,
           expiry: action.listing.expiry,
           nonce: action.listing.nonce,
           allowsPartialFills: action.listing.allowsPartialFills,
@@ -495,15 +491,18 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "rollover-intent") {
     const { rollover, warning: rolloverWarn } = await resolveRollover(chainId);
     if (!rollover) {
-      return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One, 42161)`, ctx);
+      return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One and Base — 42161, 8453)`, ctx);
     }
     const warnings: Array<{ code: string; message: string }> = rolloverWarn ? [rolloverWarn] : [];
 
     // Settler-kind pre-flight: the mode gate is enforced ON-CHAIN (ExactSettler reverts
     // Settler__PartialFillsNotSupported on allowPartialFills:true and PartialSettler reverts
     // Settler__ExactFillsNotSupported on false), so a mismatched order is signable but unfillable.
-    const settlerLc = action.settler.toLowerCase();
-    const kind = settlerLc === rollover.exactSettler.toLowerCase() ? "EXACT" : settlerLc === rollover.partialSettler.toLowerCase() ? "PARTIAL" : undefined;
+    const cls = classifyRolloverSettler(rollover, action.settler);
+    if (cls.status === "retired") {
+      return unavailable(chainId, "settler_retired", `settler ${action.settler} is the ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the rc.2 wire change"}) — nothing useful can be built against it: the venue admits only the active generation, and this tool's current-generation digest would not verify on that contract; use the active ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} ${cls.kind === "EXACT" ? rollover.exactSettler : rollover.partialSettler}`, ctx);
+    }
+    const kind = cls.status === "active" ? cls.kind : undefined;
     if (kind === "EXACT" && action.allowPartialFills) {
       return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — use the PartialSettler ${rollover.partialSettler} or set allowPartialFills:false`, ctx);
     }
@@ -514,13 +513,58 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (exact: ${rollover.exactSettler}, partial: ${rollover.partialSettler}) — the venue only admits factory-approved settlers` });
     }
 
+    // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
+    // pre-computed hash verbatim; never both (two sources of the same commitment can disagree).
+    if (action.jitMarket && action.jitMarketHash) {
+      return unavailable(chainId, "invalid_order_terms", "jitMarket and jitMarketHash are mutually exclusive — pass the instruction to hash locally, or the pre-computed commitment, not both", ctx);
+    }
+    let jitMarketHash: `0x${string}` | undefined = action.jitMarketHash;
+    if (action.jitMarket) {
+      const jm = action.jitMarket;
+      // Same value-domain gate the LOP JIT builders run (fee cap + future expiry, one place so
+      // the boundary rules cannot drift), plus the rollover-specific window rule.
+      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx));
+      if (gate) return gate;
+      if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
+        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
+      }
+      jitMarketHash = hashJitMarketParams({
+        collateralAsset: jm.collateralAsset,
+        referenceAsset: jm.referenceAsset,
+        expiryTimestamp: BigInt(jm.expiryTimestamp),
+        recipe: jm.recipe,
+        rateOverride: BigInt(jm.rateOverride),
+        rateMin: BigInt(jm.constraint.rateMin),
+        rateMax: BigInt(jm.constraint.rateMax),
+        rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
+        rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
+        additionalData: jm.additionalData,
+        swapFeePercentage: BigInt(jm.swapFeePercentage),
+        unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
+      });
+    }
+
+    // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
+    // refuse the same orders). The builder pins intent.deadline = fillDeadline and attaches no
+    // hooks, so the submit-side extras don't apply here.
     const openDeadline = BigInt(action.openDeadline);
     const fillDeadline = BigInt(action.fillDeadline);
     const orderSize = BigInt(action.orderSize);
-    const nowSecs = nowSecondsOf(ctx);
-    if (orderSize === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
-    if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
-    if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
+    const violation = checkRolloverOrderTerms({
+      nowSeconds: nowSecondsOf(ctx),
+      openDeadline,
+      fillDeadline,
+      orderSize,
+      minPremiumPerShare: BigInt(action.minPremiumPerShare),
+      srcCstToken: action.srcCstToken,
+      dstCstToken: action.dstCstToken,
+      premiumToken: action.premiumToken,
+      srcPoolId: action.srcPoolId,
+      dstPoolId: action.dstPoolId,
+      settler: action.settler,
+      ...(action.exclusiveFiller !== undefined ? { exclusiveFiller: action.exclusiveFiller } : {}),
+    });
+    if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — the venue would reject the signed order with the same complaint`, ctx);
 
     const built = buildRolloverIntent({
       chainId,
@@ -538,6 +582,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       fillDeadline,
       ...(action.minCaReceived !== undefined ? { minCaReceived: BigInt(action.minCaReceived) } : {}),
       ...(action.minSharesOut !== undefined ? { minSharesOut: BigInt(action.minSharesOut) } : {}),
+      ...(jitMarketHash !== undefined ? { jitMarketHash } : {}),
       allowPartialFills: action.allowPartialFills,
       allowUnderfill: action.allowUnderfill,
       ...(action.premiumPaymentMode !== undefined ? { premiumPaymentMode: action.premiumPaymentMode } : {}),

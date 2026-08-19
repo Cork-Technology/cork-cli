@@ -163,15 +163,35 @@ describe("resolveConfig precedence", () => {
 });
 
 describe("resolveRollover", () => {
-  it("returns the bundled Arbitrum rollover deployment (factory + both settlers + seed block)", async () => {
-    const r = await resolveRollover(42161);
-    expect(r.rollover).toMatchObject({
-      factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
-      exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
-      partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+  it("returns the bundled rc.2 rollover deployment on BOTH chains (identical CREATE2 addresses, per-chain seed blocks)", async () => {
+    const arb = await resolveRollover(42161);
+    expect(arb.rollover).toMatchObject({
+      factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+      exactSettler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+      partialSettler: "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
       settlerDomain: { name: "CorkSettler", version: "1.0.0" },
-      seededAtBlock: 484973917,
+      seededAtBlock: 494104750,
     });
+    const base = await resolveRollover(8453);
+    expect(base.rollover).toMatchObject({
+      factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+      seededAtBlock: 49917191,
+    });
+    // Base has never had another generation — no legacy entries there.
+    expect(base.rollover?.legacyGenerations).toBeUndefined();
+  });
+  it("carries the RETIRED July generation on Arbitrum (event-history scans + retired-settler teaching)", async () => {
+    const r = await resolveRollover(42161);
+    expect(r.rollover?.legacyGenerations).toEqual([
+      {
+        factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
+        exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
+        partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+        seededAtBlock: 484973917,
+        retired: "2026-08-13",
+        label: "july-2026",
+      },
+    ]);
   });
   it("is undefined for chains without a rollover deployment", async () => {
     const r = await resolveRollover(1);

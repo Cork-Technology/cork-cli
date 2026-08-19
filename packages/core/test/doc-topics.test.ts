@@ -209,7 +209,7 @@ describe("data.execution on prepare results (offline-buildable variants)", () =>
   });
 
   it("rollover-intent (typed-data family, direct submit path)", async () => {
-    const env = await runTool("cork_prepare_orders", { chainId: 42161, account: A, clientRequestId: "exec-test-0004", action: { type: "rollover-intent", settler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", rolloverContract: A, srcPoolId: `0x${"11".repeat(32)}`, dstPoolId: `0x${"22".repeat(32)}`, srcCstToken: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", dstCstToken: "0x53E82ABbb12638F09d9e624578ccB666217a765e", premiumToken: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1900000000", fillDeadline: "1900604800" } }, { nowSeconds: NOW });
+    const env = await runTool("cork_prepare_orders", { chainId: 42161, account: A, clientRequestId: "exec-test-0004", action: { type: "rollover-intent", settler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", rolloverContract: A, srcPoolId: `0x${"11".repeat(32)}`, dstPoolId: `0x${"22".repeat(32)}`, srcCstToken: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", dstCstToken: "0x53E82ABbb12638F09d9e624578ccB666217a765e", premiumToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1900000000", fillDeadline: "1900604800" } }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
     const ex = execOf(env)!;
     expect(ex.kind).toBe("eip712-typed-data");

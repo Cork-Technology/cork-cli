@@ -4,7 +4,7 @@ import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
-import { computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
+import { checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
@@ -46,52 +46,37 @@ export function bookPremiumAnnualizedViolation(p: unknown): string | null {
   return null;
 }
 
-/** A refused listing premium, mapped by the caller onto its envelope vocabulary: `missing` and
- *  `fraction` are caller mistakes (unavailable/invalid_order_terms), `disagree` is the two
- *  spellings contradicting each other (conflict/premium_fields_disagree). */
+/** A refused listing premium, mapped by the caller onto its envelope vocabulary: every problem
+ *  is a caller mistake (unavailable/invalid_order_terms) — `removed` is the sunset percent
+ *  field, `missing`/`fraction` are the successor field absent or malformed. */
 export type ListingPremiumResolution =
   | { ok: true; premiumPct: number }
-  | { ok: false; problem: "missing" | "fraction"; message: string }
-  | { ok: false; problem: "disagree"; message: string; data: { premiumPercent: number; premiumAnnualized: string; annualizedPercentEquivalent: number } };
+  | { ok: false; problem: "removed" | "missing" | "fraction"; message: string };
 
 /**
- * The venue's listing-premium RESOLUTION (cork-api 0.3.3 post-order.ts), replicated
- * operation-for-operation: at least one spelling; the fraction canonicalized by
- * `Number.parseFloat × 100`; both-sent agreement decided by the venue's exact 1e-9-RELATIVE
- * comparison (`Math.abs(pct − frac×100) > 1e-9 × Math.max(1, pct, frac×100)`); the fraction
- * takes precedence. ONE function for both call sites — cork_submit lop-order (the relay) and
- * finalize-maker-order (which emits a relayable submitInput and must therefore refuse the same
- * listings the relay would, BEFORE the caller's policy gate admits the artifact) — so the two
- * gates cannot drift apart and teach differently.
+ * The venue's listing-premium RESOLUTION (cork-api 0.3.15 post-order.ts), replicated
+ * operation-for-operation: `premium_annualized` is the ONE premium field since the percent
+ * `premium` completed its sunset on 2026-08-17 — the venue answers a pointed 400 on `premium`
+ * presence (a preValidation gate, not a silent schema strip), and we refuse before relay with
+ * the same teaching. The fraction canonicalizes by `Number.parseFloat × 100`. ONE function for
+ * both call sites — cork_submit lop-order (the relay) and finalize-maker-order (which emits a
+ * relayable submitInput and must therefore refuse the same listings the relay would, BEFORE the
+ * caller's policy gate admits the artifact) — so the two gates cannot drift apart and teach
+ * differently.
  */
 export function resolveListingPremium(premium: number | undefined, premiumAnnualized: string | undefined): ListingPremiumResolution {
-  if (premium === undefined && premiumAnnualized === undefined) {
-    return { ok: false, problem: "missing", message: `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field is deprecated and the venue removes it 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
+  if (premium !== undefined) {
+    return { ok: false, problem: "removed", message: `the percent-number premium field was REMOVED by the venue on 2026-08-17 (its scheduled sunset) — it now answers a pointed 400 on presence, so nothing was relayed. Send only premiumAnnualized: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface${premiumAnnualized === undefined ? ` (for ${premium}%, that is "${(premium / 100).toString()}")` : ""}. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
   }
-  if (premiumAnnualized !== undefined) {
-    const violation = bookPremiumAnnualizedViolation(premiumAnnualized);
-    if (violation) {
-      return { ok: false, problem: "fraction", message: `premiumAnnualized ${JSON.stringify(premiumAnnualized)} ${violation}; percent numbers (4.1) belong only in the deprecated premium field, and the RFQ's < 0.5 cap does not apply to the book. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
-    }
+  if (premiumAnnualized === undefined) {
+    return { ok: false, problem: "missing", message: `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field was removed 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
   }
-  const annualizedPct = premiumAnnualized !== undefined ? Number.parseFloat(premiumAnnualized) * 100 : undefined;
-  if (premium !== undefined && annualizedPct !== undefined) {
-    const scale = Math.max(1, premium, annualizedPct);
-    if (Math.abs(premium - annualizedPct) > 1e-9 * scale) {
-      return {
-        ok: false,
-        problem: "disagree",
-        message: `premium (${premium}%) and premiumAnnualized (= ${annualizedPct}%) disagree — the classic percent-vs-fraction mistake, and the venue hard-rejects it (its exact 1e-9-relative comparison, replicated here). Send only premiumAnnualized, or make them agree; NOT relayed. Full scale table: ${UNITS_TOPIC_REFERENCE}`,
-        data: { premiumPercent: premium, premiumAnnualized: premiumAnnualized!, annualizedPercentEquivalent: annualizedPct },
-      };
-    }
+  const violation = bookPremiumAnnualizedViolation(premiumAnnualized);
+  if (violation) {
+    return { ok: false, problem: "fraction", message: `premiumAnnualized ${JSON.stringify(premiumAnnualized)} ${violation}; percent numbers (4.1) were the REMOVED premium field's convention and do not belong here. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
   }
-  return { ok: true, premiumPct: annualizedPct ?? premium! };
+  return { ok: true, premiumPct: Number.parseFloat(premiumAnnualized) * 100 };
 }
-
-/** The dated migration warning a listing still using the percent spelling carries, everywhere
- *  such a listing is accepted (submit AND finalize — one string, no drift). */
-export const PREMIUM_DEPRECATION_NOTICE = `the percent-number premium listing field is DEPRECATED — the venue removes it 2026-08-17 (the date rides in-band in warnings[] on every limit-orders response); send premiumAnnualized instead: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface`;
 
 /**
  * Resolve a cited option inside a fetched RFQ record. The venue validates citations against
@@ -149,34 +134,52 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (o.originChainId !== String(chainId) || o.destinationChainId !== String(chainId)) {
         return unavailable(chainId, "invalid_order_terms", `originChainId/destinationChainId must equal chainId ${chainId} (single-chain rollover)`, ctx);
       }
-      // [F14] Re-run the settler/deadline checks the prepare path enforces — a submit-only caller
+      // [F14] Re-run the settler/term checks the prepare path enforces — a submit-only caller
       // must not be able to relay an order the prepare path would have refused to build.
       // Non-fatal findings (unrecognized settler, missing config) ride the OK envelope as
       // warnings — prepare's relay-with-warning posture, previously silently skipped here.
       const settlerWarnings: Array<{ code: string; message: string }> = [];
+      const hookStructs = (hooks: typeof action.intent.preRolloverHooks) =>
+        hooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall }));
       {
         const { rollover } = await resolveRollover(chainId);
         if (rollover) {
-          const settlerLc = o.settler.toLowerCase();
-          const kind = settlerLc === rollover.exactSettler.toLowerCase() ? "EXACT" : settlerLc === rollover.partialSettler.toLowerCase() ? "PARTIAL" : undefined;
-          if (kind === "EXACT" && o.allowPartialFills) {
+          const cls = classifyRolloverSettler(rollover, o.settler);
+          if (cls.status === "retired") {
+            return unavailable(chainId, "settler_retired", `settler ${o.settler} is the ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the rc.2 wire change"}) — the venue archives it and admits only the active generation, and the current-generation digest this tool computes would not verify on that contract anyway; re-sign against the active ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} ${cls.kind === "EXACT" ? rollover.exactSettler : rollover.partialSettler}`, ctx);
+          }
+          if (cls.status === "active" && cls.kind === "EXACT" && o.allowPartialFills) {
             return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — this signed order is unfillable; re-sign against the PartialSettler ${rollover.partialSettler} or with allowPartialFills:false`, ctx);
           }
-          if (kind === "PARTIAL" && !o.allowPartialFills) {
+          if (cls.status === "active" && cls.kind === "PARTIAL" && !o.allowPartialFills) {
             return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — this signed order is unfillable; re-sign against the ExactSettler ${rollover.exactSettler} or with allowPartialFills:true`, ctx);
           }
-          if (kind === undefined) {
+          if (cls.status === "unknown") {
             settlerWarnings.push({ code: "settler_not_recognized", message: `settler ${o.settler} is not a configured Cork settler for chainId ${chainId} (exact ${rollover.exactSettler}, partial ${rollover.partialSettler}) — relayed, but verify the address before counting on settlement` });
           }
         } else {
           settlerWarnings.push({ code: "settler_not_recognized", message: `no rollover deployment configured for chainId ${chainId} — the settler/mode coherence checks could not run; relayed unverified` });
         }
-        const openDeadline = BigInt(o.openDeadline);
-        const fillDeadline = BigInt(o.fillDeadline);
-        const nowSecs = nowSecondsOf(ctx);
-        if (BigInt(o.orderSize) === 0n) return unavailable(chainId, "invalid_order_terms", "orderSize must be positive — the venue rejects non-positive sizes", ctx);
-        if (openDeadline > fillDeadline) return unavailable(chainId, "invalid_order_terms", `openDeadline (${openDeadline}) must not exceed fillDeadline (${fillDeadline})`, ctx);
-        if (fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `fillDeadline (${fillDeadline}) is not in the future (now ${nowSecs}) — the venue rejects past deadlines`, ctx);
+        // Deterministic venue-admission battery (shared with prepare; a violation is the venue's
+        // 400 pre-flighted locally — NOT relayed). Chain-dependent admission (hook-target code
+        // existence, the settler resolveFor preflight) stays venue-side.
+        const violation = checkRolloverOrderTerms({
+          nowSeconds: nowSecondsOf(ctx),
+          openDeadline: BigInt(o.openDeadline),
+          fillDeadline: BigInt(o.fillDeadline),
+          orderSize: BigInt(o.orderSize),
+          minPremiumPerShare: BigInt(o.minPremiumPerShare),
+          srcCstToken: o.srcCstToken,
+          dstCstToken: o.dstCstToken,
+          premiumToken: o.premiumToken,
+          srcPoolId: o.rolloverParams.srcPoolId,
+          dstPoolId: o.rolloverParams.dstPoolId,
+          settler: o.settler,
+          exclusiveFiller: o.exclusiveFiller,
+          intentDeadline: BigInt(action.intent.deadline),
+          hooks: hookStructs([...action.intent.preRolloverHooks, ...action.intent.midRolloverHooks, ...action.intent.postRolloverHooks, ...action.intent.premiumHooks]),
+        });
+        if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — NOT relayed (the venue rejects it with the same complaint)`, ctx);
       }
       if (o.rolloverParams.settler.toLowerCase() !== o.settler.toLowerCase() || o.rolloverParams.srcCstToken.toLowerCase() !== o.srcCstToken.toLowerCase() || o.rolloverParams.dstCstToken.toLowerCase() !== o.dstCstToken.toLowerCase()) {
         return unavailable(chainId, "invalid_order_terms", "rolloverParams (settler/srcCstToken/dstCstToken) must mirror OrderData exactly — the venue rejects mismatches", ctx);
@@ -192,10 +195,10 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         orderDigest: `0x${"00".repeat(32)}`,
         deadline: BigInt(action.intent.deadline),
         nonce: BigInt(action.intent.nonce),
-        preRolloverHooks: action.intent.preRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
-        midRolloverHooks: action.intent.midRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
-        postRolloverHooks: action.intent.postRolloverHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
-        premiumHooks: action.intent.premiumHooks.map((h) => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall })),
+        preRolloverHooks: hookStructs(action.intent.preRolloverHooks),
+        midRolloverHooks: hookStructs(action.intent.midRolloverHooks),
+        postRolloverHooks: hookStructs(action.intent.postRolloverHooks),
+        premiumHooks: hookStructs(action.intent.premiumHooks),
       };
       const recomputedIntentHash = intentStructHash(intentStruct);
       if (recomputedIntentHash.toLowerCase() !== o.rolloverIntentHash.toLowerCase()) {
@@ -237,6 +240,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           srcPoolId: o.rolloverParams.srcPoolId,
           dstPoolId: o.rolloverParams.dstPoolId,
           settler: o.rolloverParams.settler,
+          jitMarketHash: o.rolloverParams.jitMarketHash,
         },
       };
       const localDigest = computeOrderDigest(chainId, orderStruct);
@@ -392,22 +396,16 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // below (suspect tripwires, the quote_ref band) compare exactly what the venue compares.
       const resolved = resolveListingPremium(action.premium, action.premiumAnnualized);
       if (!resolved.ok) {
-        if (resolved.problem === "disagree") {
-          return envelope({ state: "conflict", data: resolved.data, chainId, source: "config", warnings: [{ code: "premium_fields_disagree", message: resolved.message }], ctx });
-        }
         return unavailable(chainId, "invalid_order_terms", resolved.message, ctx);
       }
       const premiumPct = resolved.premiumPct;
-      if (action.premium !== undefined) {
-        lopWarnings.push({ code: "deprecation_notice", message: PREMIUM_DEPRECATION_NOTICE });
-      }
       // Numbers-contract tripwires, on the venue's CANONICAL percent: a sub-0.1% premium is the
       // classic fraction-pasted-as-percent mistake — flagged, not blocked (par-priced cPT
       // orders can be legitimately tiny; the venue logs this same signal without rejecting).
       if (premiumPct > 0 && premiumPct < 0.1) {
         // Teaching by exemplar, not by computed suggestion: premiumPct is a float and any
         // arithmetic on it for display re-teaches the very artifact this warning polices.
-        lopWarnings.push({ code: "premium_scale_suspect", message: `the declared premium resolves to ${premiumPct}% — below 0.1%. The classic cause is a scale mix-up between the two spellings (4.1% is premiumAnnualized "0.041", or 4.1 in the deprecated percent field); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
+        lopWarnings.push({ code: "premium_scale_suspect", message: `the declared premium resolves to ${premiumPct}% — below 0.1%. The classic cause is a percent number scaled as a fraction (4.1% is premiumAnnualized "0.041"); the venue rejects ~100x divergence when quote_ref is present. Full scale table: ${UNITS_TOPIC_REFERENCE}` });
       }
       // The successor field's own paste mistake runs the OTHER way: a percent number typed into
       // the fraction field ("4.1" = 410% annualized). Legal at the venue (its cap is 100), and
@@ -521,8 +519,9 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         makerAccountType: action.makerAccountType === "ERC1271" ? "CONTRACT" : "EOA",
         makerPermit2: action.makerPermit2,
         side: action.side,
-        ...(action.premium !== undefined ? { premium: action.premium } : {}),
-        ...(action.premiumAnnualized !== undefined ? { premium_annualized: action.premiumAnnualized } : {}),
+        // The removed percent `premium` is never relayed — resolveListingPremium refuses any
+        // payload carrying it before this point (the venue 400s on presence since 0.3.15).
+        premium_annualized: action.premiumAnnualized!,
         expiry: action.expiry,
         nonce: action.nonce,
         allowsPartialFills: action.allowsPartialFills,

@@ -32,7 +32,10 @@ const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
 const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
 const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
 const STAGING_PM = "0x4d0ab6735def9fbaddbf0f2ffb92353afae623d2";
+// Clone fixtures are emitted by the RETIRED July factory — the multi-generation scan must still
+// discover them (rc.2 retired the generation at the venue, not on-chain).
 const FACTORY = "0xbbcc54c637c26b484a8c57b5695c04e09dace13a";
+const RC2_FACTORY = "0x697a6a2d5e09dc1cabd0aa46678e053567275f82";
 const OWNER = "0xc0ffee0000000000000000000000000000000001";
 const CLONE = "0xc10e000000000000000000000000000000000001";
 
@@ -107,9 +110,26 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     const d = env.data as { count: number; items: Array<Record<string, unknown>> };
     expect(d.count).toBe(1);
     expect(d.items[0]).toMatchObject({ owner: expect.stringMatching(/^0x/) as unknown, rolloverContract: expect.stringMatching(/^0x/) as unknown });
-    // scan starts at the seeding block, scoped to the factory
+    // scan starts at the EARLIEST generation's seeding block, scoped to every factory
+    // generation (active rc.2 + retired July) — retired clones stay discoverable.
     expect(seen[0]!.fromBlock).toBe(484973917);
-    expect(seen[0]!.address!.map((a) => a.toLowerCase())).toEqual([FACTORY]);
+    expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([RC2_FACTORY, FACTORY].sort());
+  });
+
+  it("flows kind=contracts: filters.factory scopes clones to ONE generation (the venue's rc.2 disambiguator, mirrored)", async () => {
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({ [CLONE_DEPLOYED_TOPIC]: [cloneLog()] }), resolveRpc: noRpc };
+    const run = (factory: string) =>
+      runTool(
+        "cork_query",
+        { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized", filters: { kind: "contracts", factory }, pageSize: 25, format: "concise" },
+        ctx,
+      );
+    // The fixture clone was deployed by the July factory: filtering on it keeps the row…
+    const july = await run(FACTORY);
+    expect((july.data as { count: number }).count).toBe(1);
+    // …and filtering on the rc.2 factory excludes it.
+    const rc2 = await run(RC2_FACTORY);
+    expect((rc2.data as { count: number }).count).toBe(0);
   });
 
   it("structural rejections: resting orders emit no events in ANY mode", async () => {
@@ -227,9 +247,14 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     expect(d.items.map((i) => i.leg).sort()).toEqual(["PREMIUM", "RECLAIM", "ROLLOVER"]);
     const roll = d.items.find((i) => i.leg === "ROLLOVER")!;
     expect(roll).toMatchObject({ srcCstProvided: "100", dstCstProduced: "95" });
-    // both settlers scanned from the seeding block
+    // all four settlers (rc.2 + retired July generation) scanned from the earliest seed block
     expect(seen[0]!.fromBlock).toBe(484973917);
-    expect(seen[0]!.address!.length).toBe(2);
+    expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([
+      "0x8e9ca640338d3bdbfe3781d7178ca73af66f366a",
+      "0x983270ae48545665cee4d7ef61c65ff3fdc8222d",
+      "0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e",
+      "0xf4ffd4b3faedb784b04d1883119840515f224c2f",
+    ]);
   });
 
   it("fills (LOP): OrderFilled decodes from data (non-indexed) and orderHash filters client-side", async () => {

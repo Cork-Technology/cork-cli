@@ -1,7 +1,7 @@
 // Known-event decoding for cork_decode event/receipt: label a raw log (topics + data) against
 // the Cork protocol's verified ABI set and return NAMED args. Reconstructs from the bytes;
 // never trusts a caller-supplied parse [K3]. Coverage is exactly the declarations verified
-// verbatim against the pinned sources (phoenix-private, rollover-private @ 032d3e5a, 1inch
+// verbatim against the pinned sources (phoenix-private, rollover-private @ 5af1048e, 1inch
 // limit-order-protocol, market-registry-private tag 2.1.0) — events whose INDEXED layout is
 // not source-verified (the LEGACY pre-2.1.0 JITMarketCreated, ERC-7683 Open) are labeled
 // name-only with raw bytes preserved rather than guessed.
@@ -20,7 +20,8 @@ export const KNOWN_EVENTS_ABI = parseAbi([
   "event MarketWhitelistRemoved(bytes32 indexed poolId, address account)",
   "event MarketWhitelistDisabled(bytes32 indexed poolId)",
   "event MarketWhitelistEnabled(bytes32 indexed poolId)",
-  // rollover-private @ 032d3e5a: settler lifecycle (ISettler / IPartialSettler) + clone factory
+  // rollover-private @ 5af1048e: settler lifecycle (ISettler / IPartialSettler) + clone factory
+  // (event set unchanged by the rc.2 wire break)
   "event OrderSettled(bytes32 indexed orderId)",
   "event OrderExpired(bytes32 indexed orderId)",
   "event OrderCancelled(bytes32 indexed orderId)",

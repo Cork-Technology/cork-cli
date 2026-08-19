@@ -38,8 +38,26 @@ const DeploymentSchema = z
 
 // Rollover venue contracts (rollover-private): the factory that self-deploys per-user clones and
 // the two ERC-7683 settlers. `settlerDomain` is the EIP-712 domain OrderData is signed under
-// (verifyingContract = the settler). `seededAtBlock` = the SettlerApproved seeding block — the
-// backfill start for event reconstruction (the factory itself deploys at most a few blocks earlier).
+// (verifyingContract = the settler). `seededAtBlock` = the factory seeding block — the backfill
+// start for event reconstruction (settlers deploy + approve within a few blocks of it).
+//
+// A wire-format release retires a whole generation at once (observed: rc.2's jitMarketHash
+// typehash change, 2026-08-13): the venue archives the old factory/settlers and admits only the
+// active set, and digests typed for one generation do not verify on the other. Retired sets move
+// to `legacyGenerations` — kept ONLY so event-history scans still see their fills/clones and so
+// prepare/submit can name a retired settler precisely instead of calling it unknown.
+const RolloverGenerationSchema = z
+  .object({
+    factory: Address,
+    exactSettler: Address,
+    partialSettler: Address,
+    seededAtBlock: z.number().int().nonnegative(),
+    /** ISO date the generation stopped being venue-admissible. */
+    retired: z.string().optional(),
+    label: z.string().optional(),
+  })
+  .strip();
+export type CorkRolloverGeneration = z.infer<typeof RolloverGenerationSchema>;
 const RolloverDeploymentSchema = z
   .object({
     factory: Address,
@@ -47,6 +65,8 @@ const RolloverDeploymentSchema = z
     partialSettler: Address,
     settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
     seededAtBlock: z.number().int().nonnegative(),
+    contractsVersion: z.string().optional(),
+    legacyGenerations: z.array(RolloverGenerationSchema).optional(),
   })
   .strip();
 export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;

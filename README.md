@@ -63,7 +63,9 @@ This proves the exact bytes came from this repository's build workflow at a spec
 <details>
 <summary><b>Alpine Linux: install from the apk repository</b></summary>
 
-Alpine users can install and update through the signed package channel instead:
+Alpine users can install and update through the signed package channel instead. The signing
+key is served already; the package index goes live with the **first production (non-rc)
+release** — until then step 2's `apk update` reports the repository as unavailable.
 
 ```sh
 # 1. trust the signing key (the same key is committed as packaging/melange.rsa.pub)

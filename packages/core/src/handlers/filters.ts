@@ -15,6 +15,7 @@ export interface QueryFilters {
   orderHash?: `0x${string}`;
   filler?: `0x${string}`;
   address?: `0x${string}`;
+  factory?: `0x${string}`;
   fillable?: boolean;
   source?: "API" | "CHAIN";
   collateralAsset?: `0x${string}`;
@@ -47,6 +48,7 @@ export const KNOWN_FILTER_KEYS = [
   "orderHash",
   "filler",
   "address",
+  "factory",
   "fillable",
   "source",
   "collateralAsset",
@@ -88,7 +90,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     if (!r.success) fail("poolId", "not a valid 32-byte pool id");
     else out.poolId = r.data;
   }
-  for (const key of ["account", "filler", "address"] as const) {
+  for (const key of ["account", "filler", "address", "factory"] as const) {
     if (raw?.[key] !== undefined) {
       const r = Address.safeParse(raw[key]);
       if (!r.success) fail(key, "not a valid EVM address");
