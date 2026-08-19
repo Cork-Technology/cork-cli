@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEMO_POOL_ID } from "@cork/schemas";
 
@@ -21,6 +21,14 @@ const NOW = 1_790_000_000n;
 // only because the eval log made the misses identifiable). Same for the recipe hints.
 import corkDefaults from "../cork-defaults.json";
 const MR_42161 = (corkDefaults as { marketRegistry: Record<string, { registry: string; recipes: Record<string, string> }> }).marketRegistry["42161"]!;
+// The rc.2 rollover deployment + its RETIRED July generation — read from config like the
+// registry above (the pinned-literal rot class): the retired-settler task's expected teaching
+// and the sweep fixture's settler identity must track config, not a copy.
+type RolloverCfg = { factory: string; exactSettler: string; partialSettler: string; legacyGenerations?: Array<{ exactSettler: string; partialSettler: string }> };
+const ROLLOVER_42161 = (corkDefaults as { rollover: Record<string, RolloverCfg> }).rollover["42161"]!;
+export const RC2_EXACT_SETTLER = ROLLOVER_42161.exactSettler;
+export const RC2_FACTORY = ROLLOVER_42161.factory;
+export const RETIRED_EXACT_SETTLER = ROLLOVER_42161.legacyGenerations![0]!.exactSettler;
 const REGISTRY_210 = MR_42161.registry;
 export const LIQUIDITY_RECIPE = MR_42161.recipes.liquidity!;
 export const FIXED_RECIPE = MR_42161.recipes.fixed!;
@@ -69,6 +77,10 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 0n;
     case "bitInvalidatorForOrder":
       return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight [K7]
+    case "orderStatus":
+      // The venue-miss sweep fixture: ONE digest the venue archived but the RETIRED July exact
+      // settler still holds as Settled (enum 2); every other (settler, digest) answers None.
+      return args.address.toLowerCase() === RETIRED_EXACT_SETTLER.toLowerCase() && String(args.args?.[0]).toLowerCase() === ARCHIVED_DIGEST ? 2 : 0;
     case "isWhitelisted":
       return false;
     case "isGlobalWhitelisted":
@@ -114,6 +126,57 @@ function readContract(args: { address: string; functionName: string; args?: unkn
   }
 }
 
+/** A rollover orderDigest the venue no longer serves (its generation is archived) but whose
+ *  state survives on-chain at the retired settler — the track venue-miss sweep fixture. */
+export const ARCHIVED_DIGEST = `0x${"5e".repeat(32)}`;
+
+/** One rc.2 rollover clone on the venue's contracts feed (the factory-filter task). */
+export const RC2_CLONE = "0x96f126A8503145201A60Bf9BdB29fE26E40cCA14";
+const RC2_CLONE_OWNER = "0x303Dd0B6835b4b4739d35F16A123e77D5A7dCFFF";
+
+// One REAL signed rc.2 rollover order, ready to relay: built through the SAME builder the
+// prepare path uses (typed-data + venue wire body), signed by a throwaway key that IS the
+// order's user — the submit handler ecrecovers it for real, recomputes the intent hash and
+// digest for real, and runs the full admission battery. Realistic, not mocked.
+const ROLLOVER_USER = privateKeyToAccount(`0x${"09".repeat(32)}`);
+const SIGNED_ROLLOVER_BUILT = buildRolloverIntent({
+  chainId: 42161,
+  user: ROLLOVER_USER.address,
+  settler: RC2_EXACT_SETTLER as `0x${string}`,
+  rolloverContract: ROLLOVER_USER.address,
+  srcCstToken: SUSDE,
+  dstCstToken: VBUSDC,
+  premiumToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC — a THIRD asset (admission)
+  srcPoolId: `0x${"11".repeat(32)}`,
+  dstPoolId: `0x${"22".repeat(32)}`,
+  orderSize: 250n * 10n ** 18n,
+  minPremiumPerShare: 12n * 10n ** 15n,
+  openDeadline: 1_795_000_000n,
+  fillDeadline: 1_795_604_800n,
+  clientRequestId: "eval-rollsub-fixture",
+});
+export const SIGNED_ROLLOVER_POST = {
+  ...SIGNED_ROLLOVER_BUILT.venuePost,
+  signature: await ROLLOVER_USER.sign({ hash: SIGNED_ROLLOVER_BUILT.orderDigest }),
+};
+export const SIGNED_ROLLOVER_DIGEST = SIGNED_ROLLOVER_BUILT.orderDigest;
+
+// The JIT rollover task's CORRECT destination pool id: derived through the same Market-tuple
+// hash the fill runs, against the stub's pair oracle and the constraint the prompt carries —
+// so the task grades commitment-building, not pool-id guessing.
+export const JIT_TASK_CONSTRAINT = { rateMin: "1", rateMax: "1600000000000000000", rateChangePerDayMax: "800000000000000000", rateChangeCapacityMax: "2400000000000000000" };
+export const JIT_TASK_EXPIRY = 1_900_000_000n;
+export const DERIVED_JIT_POOL = computeMarketId({
+  collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
+  referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610",
+  expiryTimestamp: JIT_TASK_EXPIRY,
+  rateMin: 1n,
+  rateMax: 1_600_000_000_000_000_000n,
+  rateChangePerDayMax: 800_000_000_000_000_000n,
+  rateChangeCapacityMax: 2_400_000_000_000_000_000n,
+  rateOracle: ORACLE,
+});
+
 // One seeded GlobalWhitelistAdded(WHITELISTED_ACCT) log so whitelisted-addresses has a
 // deterministic non-empty answer. topic0 = keccak("GlobalWhitelistAdded(address)").
 const WHITELISTED_ACCT = "0x00000000000000000000000000000000000a11ce";
@@ -147,9 +210,11 @@ const RESTING_ORDER: LopOrder = {
   makerTraits: 0n,
 };
 export const RESTING_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESTING_ORDER);
-let restingRowMemo: Record<string, string> | undefined;
-async function restingRow(): Promise<Record<string, string>> {
-  restingRowMemo ??= {
+
+/** The same real signed order as a CALLER-HELD payload for the relay task (the fraction-premium
+ *  translation probe): order wire fields + genuine signature, ready for cork_submit lop-order. */
+export const SIGNED_LOP_PAYLOAD = {
+  order: {
     salt: RESTING_ORDER.salt.toString(),
     maker: RESTING_ORDER.maker,
     receiver: RESTING_ORDER.receiver,
@@ -158,13 +223,18 @@ async function restingRow(): Promise<Record<string, string>> {
     makingAmount: RESTING_ORDER.makingAmount.toString(),
     takingAmount: RESTING_ORDER.takingAmount.toString(),
     makerTraits: RESTING_ORDER.makerTraits.toString(),
-    signature: await RESTING_MAKER.sign({ hash: RESTING_ORDER_HASH }),
-    extension: "0x",
-    makerAccountType: "EOA",
-    orderHash: RESTING_ORDER_HASH,
-  };
-  return restingRowMemo;
-}
+  },
+  signature: await RESTING_MAKER.sign({ hash: RESTING_ORDER_HASH }),
+};
+// The venue book row is the SAME payload plus row metadata — one signature, one source of
+// truth (the sign-twice duplication this replaced could drift if the order fixture changes).
+const RESTING_ROW: Record<string, string> = {
+  ...SIGNED_LOP_PAYLOAD.order,
+  signature: SIGNED_LOP_PAYLOAD.signature,
+  extension: "0x",
+  makerAccountType: "EOA",
+  orderHash: RESTING_ORDER_HASH,
+};
 
 /** Offline venue stub: canned api-phoenix responses for the eval tasks. */
 async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
@@ -176,8 +246,16 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   }
   if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
   if (/\/rollover\/v1\/orders\/0x/.test(url)) return r(404, { message: "not found" });
+  if (url.includes("/rollover/v1/contracts")) {
+    // The venue applies the factory filter server-side; the stub mirrors that so a filtered
+    // read is answered by filtering, not by ignoring the parameter.
+    const factory = new URL(url).searchParams.get("factory");
+    const row = { chainId: 42161, address: RC2_CLONE, owner: RC2_CLONE_OWNER, factory: RC2_FACTORY.toLowerCase(), trustThreshold: 1, deploymentBlock: "495935441" };
+    const items = factory && factory.toLowerCase() !== RC2_FACTORY.toLowerCase() ? [] : [row];
+    return r(200, { items, nextCursor: null, hasMore: false });
+  }
   if (url.includes("/rollover/")) return r(200, { items: [] });
-  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [await restingRow()] });
+  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });
 }

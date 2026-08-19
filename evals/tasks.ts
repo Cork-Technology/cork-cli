@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { CST, LIQUIDITY_RECIPE, RESTING_ORDER_HASH } from "./stub.ts";
+import { ARCHIVED_DIGEST, CST, DERIVED_JIT_POOL, JIT_TASK_CONSTRAINT, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -128,9 +128,108 @@ export const TASKS: EvalTask[] = [
   // state-verify hop before building (observed 2026-08-17 run 4: query then a fully correct
   // withdraw-other — the prepare-unwind precedent, third task showing the pattern).
   { id: "param-passthrough-baseunits", prompt: `Cork pool ${P} has expired. I hold CPT and want to settle for EXACTLY 100000000 base units of the pool's REFERENCE asset (not the collateral). Owner and receiver ${A}, cap CPT burned at 1000000000000000000000, pre-funded, request id "eval-pass-0001". Build the unsigned bundle.`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "withdraw-other", referenceAssetsOut: "100000000" } }, state: "ok", maxCalls: 3 } },
-  { id: "param-absolute-deadline", prompt: `Prepare an unsigned Cork swap on pool ${P}: exactly 1000000000000000000 collateral out, receiver ${A}, cap cST in at 2000000000000000000 and reference in at 2000000, pre-funded, request id "eval-dead-0001". The bundle must stop being valid exactly at unix timestamp 1795000000 and a later retry must be byte-identical.`, expect: { tool: "cork_prepare_phoenix", params: { deadlineAt: "1795000000", action: { type: "swap" } }, state: "ok", maxCalls: 2 } },
+  // prelude includes cork_query: the prompt names NO chainId, so a pool-locating read before
+  // building is correct chain disambiguation (observed 2026-08-19: query then a fully correct
+  // deadlineAt swap — the prepare-unwind/param-passthrough precedent, fourth sighting).
+  { id: "param-absolute-deadline", prompt: `Prepare an unsigned Cork swap on pool ${P}: exactly 1000000000000000000 collateral out, receiver ${A}, cap cST in at 2000000000000000000 and reference in at 2000000, pre-funded, request id "eval-dead-0001". The bundle must stop being valid exactly at unix timestamp 1795000000 and a later retry must be byte-identical.`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities", "cork_query"], params: { deadlineAt: "1795000000", action: { type: "swap" } }, state: "ok", maxCalls: 2 } },
   { id: "param-scale-wholenumber", prompt: `What is the guaranteed minimum premium for a Cork rollover producing 1000 destination cST (an 18-decimals token) at a minimum premium per share of 0.02 (also 18 decimals)? Pure math.`, expect: { tool: "cork_compute", params: { params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } }, state: "ok", maxCalls: 2 } },
   { id: "prepare-rollover", prompt: `Build me a signable Cork rollover order on Arbitrum (chain 42161): roll 250e18 srcCST via the ExactSettler 0xF4ffd4b3FAedb784b04d1883119840515f224C2f, my rollover clone is ${A}, src pool 0x1111111111111111111111111111111111111111111111111111111111111111, dst pool 0x2222222222222222222222222222222222222222222222222222222222222222, srcCST 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, dstCST 0x53E82ABbb12638F09d9e624578ccB666217a765e, premium token USDC 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48, min premium per share 0.012e18, open by 1795000000, fill by 1795604800, request id "eval-roll-0001".`, expect: { tool: "cork_prepare_orders", prelude: ["cork_capabilities"], params: { action: { type: "rollover-intent" } }, state: "ok", maxCalls: 3 } },
+  // ── rollover rc.2 (jitMarketHash wire, settler generations, the venue-gap honesty story) ──
+  {
+    // The rc.2 JIT rollover: the agent must carry the negotiated instruction into `jitMarket`
+    // (hashed locally into the signed jitMarketHash) AND relay the venue-gap honesty — the
+    // order is contract-valid but venue-inadmissible until the destination pool is indexed.
+    id: "rollover-jit-market",
+    prompt: `Build a signable Cork rollover order on Arbitrum (chain 42161) whose DESTINATION pool does not exist yet — the filler will create it just in time. Roll 250e18 srcCST via the ExactSettler ${RC2_EXACT_SETTLER}, rollover clone ${A}, src pool 0x1111111111111111111111111111111111111111111111111111111111111111, dst pool ${DERIVED_JIT_POOL} (the derived id), srcCST 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, dstCST 0x53E82ABbb12638F09d9e624578ccB666217a765e, premium token USDC 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48, min premium per share 0.012e18, open by 1795000000, fill by 1795604800, request id "eval-jitroll-0001". The negotiated just-in-time market: collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, pool expiry 1900000000, recipe ${LIQUIDITY_RECIPE}, constraint rateMin ${JIT_TASK_CONSTRAINT.rateMin}, rateMax ${JIT_TASK_CONSTRAINT.rateMax}, rateChangePerDayMax ${JIT_TASK_CONSTRAINT.rateChangePerDayMax}, rateChangeCapacityMax ${JIT_TASK_CONSTRAINT.rateChangeCapacityMax}, no fees. After building, tell me plainly: can I post this order to the Cork venue right now?`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "rollover-intent", jitMarket: { recipe: LIQUIDITY_RECIPE } } },
+      state: "ok",
+      code: "jit_market_notice",
+      // A correct answer relays the venue gap honestly: not relayable until the dst pool is
+      // indexed / hand it to a filler venue-free — NOT "yes, post it now".
+      answer: /venue.free|not (yet )?(relay|post|admit|accept)|until (the )?(destination|dst|pool)|cannot .{0,40}(venue|post)/i,
+      // "can I post this right now?" invites post-build verification hops (observed: a derive/
+      // track double-check after a correct first-call build) — the approvals-maker-order
+      // precedent for verify-inviting prompts.
+      maxCalls: 4,
+    },
+  },
+  {
+    // Settler generations: the July settler still ANSWERS on-chain but is retired at the venue
+    // and wire-incompatible with rc.2 digests. The tool refuses with teaching that names the
+    // active replacement — the task grades whether that teaching reaches the user.
+    id: "rollover-retired-settler",
+    prompt: `Build a signable Cork rollover order on Arbitrum (chain 42161) via the settler ${RETIRED_EXACT_SETTLER}: roll 100e18 srcCST, my account and rollover clone are both ${A}, src pool 0x1111111111111111111111111111111111111111111111111111111111111111, dst pool 0x2222222222222222222222222222222222222222222222222222222222222222, srcCST 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, dstCST 0x53E82ABbb12638F09d9e624578ccB666217a765e, premium token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48, min premium per share 0.01e18, open by 1795000000, fill by 1795604800, request id "eval-retired-0001". If it cannot be built, explain exactly why and what I should use instead.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "rollover-intent", settler: RETIRED_EXACT_SETTLER } },
+      state: "unavailable",
+      code: "settler_retired",
+      // The teaching names the ACTIVE replacement — a correct answer carries it forward
+      // (12-hex prefix; agents ellipsize addresses).
+      answer: new RegExp(`(?=[\\s\\S]*(retired|archived|previous generation))(?=[\\s\\S]*${RC2_EXACT_SETTLER.slice(2, 14)})`, "i"),
+      maxCalls: 3,
+    },
+  },
+  {
+    // One wallet owns one clone PER factory generation — the rc.2 factory filter disambiguates.
+    id: "rollover-clones-by-factory",
+    prompt: `List the Cork rollover contract clones on Arbitrum (chain 42161) that were deployed by the CURRENT factory ${RC2_FACTORY} specifically — I need to disambiguate generations, one wallet can own one clone per factory. Tell me the clone address(es).`,
+    expect: {
+      tool: "cork_query",
+      params: { resource: "rollover-orders", filters: { kind: "contracts", factory: RC2_FACTORY } },
+      state: "ok",
+      answer: new RegExp(RC2_CLONE.slice(2, 14), "i"),
+      maxCalls: 2,
+    },
+  },
+  {
+    // The one side-effecting tool, on the rc.2 wire: a REAL signed order (genuine ECDSA over
+    // the genuine rc.2 digest) relayed as-is — the handler recomputes the intent hash and
+    // digest and recovers the signature for real before the venue POST.
+    id: "submit-rollover-order",
+    prompt: `Relay this caller-signed Cork rollover order to the venue exactly as given (chain 42161, request id "eval-rollsub-0001"): ${JSON.stringify(SIGNED_ROLLOVER_POST)}. Report whether the venue accepted it.`,
+    expect: {
+      tool: "cork_submit",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "rollover-order" } },
+      state: "ok",
+      answer: /accept|relay|success|ok/i,
+      maxCalls: 3,
+    },
+  },
+  {
+    // Track's venue-miss chain sweep [K7]: the venue archived the digest's generation, but the
+    // retired settler still holds it Settled — venue absence must not read as "not found".
+    id: "reconcile-archived-digest",
+    prompt: `Reconcile the Cork rollover order digest ${ARCHIVED_DIGEST} on Arbitrum (chain 42161). The venue may have archived it — I need the order's REAL lifecycle state, wherever it lives.`,
+    expect: {
+      tool: "cork_track",
+      params: { mode: "reconcile", subject: { kind: "orderHash", orderHash: ARCHIVED_DIGEST } },
+      state: "ok",
+      code: "order_not_found",
+      answer: /settled/i,
+      maxCalls: 3,
+    },
+  },
+  // ── the premium fraction unit (venue 0.3.15: premiumAnnualized is the ONE premium field) ──
+  {
+    // The classic percent-vs-fraction collision, graded at the exact wire value: "4.1%
+    // annualized" must become premiumAnnualized "0.041" — not 4.1, not "4.1".
+    id: "submit-lop-fraction-premium",
+    prompt: `Relay this caller-signed Cork limit order to the venue book on mainnet (chain 1), request id "eval-lopsub-0001": ${JSON.stringify(SIGNED_LOP_PAYLOAD)}. List it as a SELL at an annualized premium of 4.1%, no expiry, nonce 0, partial fills allowed. Report whether the venue accepted the listing.`,
+    expect: {
+      tool: "cork_submit",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "lop-order", premiumAnnualized: "0.041" } },
+      state: "ok",
+      answer: /accept|listed|relay|success/i,
+      maxCalls: 3,
+    },
+  },
   // ── registry 2.1.0 (recipes as contracts; the constraint an order signs) ──
   {
     id: "registry-recipes",

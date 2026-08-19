@@ -59,6 +59,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
+  taskFixtures: "evals/task-fixtures.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
@@ -885,6 +886,16 @@ const CATALOG: Mutant[] = [
     find: "      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [",
     replace: "      ...(undefined ?? []).flatMap((g): Array<[string, string | undefined]> => [",
     tests: [T.decodeTx],
+  },
+  // ── eval stub fidelity: the stub must MIRROR venue behavior, not ignore parameters ─────────
+  {
+    // The stub's factory filter mirrors the venue's server-side filtering; a stub that ignores
+    // the parameter grades a task that never exercised the filter (a green no-op, class C13).
+    id: "eval-stub-factory-filter-ignored",
+    file: "evals/stub.ts",
+    find: "const items = factory && factory.toLowerCase() !== RC2_FACTORY.toLowerCase() ? [] : [row];",
+    replace: "const items = [row];",
+    tests: [T.taskFixtures],
   },
   // ── CREATE2 attestations: binds is the attestation↔config drift gate; salts are identity ──
   {

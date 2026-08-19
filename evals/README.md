@@ -66,11 +66,19 @@ tokens (which still count all context processed, so run totals stay comparable).
 
 ### Task set (`evals/tasks.ts`)
 
-35+ active tasks spanning reads, compute, prepare (bundles, maker orders, fills of a REAL
-signed resting order, market-oracle txs), token-approval reporting, submit (the one
-side-effecting tool), decode/track, discovery, and *gated* outcomes (the agent must report
-`needs_indexer` / `phase_gated` / `mode_unavailable` / `chain_read_failed` honestly instead of
-inventing data), plus **5 held-out tasks**.
+44 active tasks spanning reads, compute, prepare (bundles, maker orders, fills of a REAL
+signed resting order, market-oracle txs, rc.2 rollover intents incl. a just-in-time market
+commitment), token-approval reporting, submit (rfq-open, a REAL signed rc.2 rollover order,
+a REAL signed limit-order listing graded on the fraction-premium unit), decode/track (incl.
+the venue-miss chain sweep over an archived rollover digest), discovery, teaching-error
+relay (the retired-settler refusal must reach the user with the active replacement), and
+*gated* outcomes (the agent must report `needs_indexer` / `phase_gated` / `mode_unavailable` /
+`chain_read_failed` honestly instead of inventing data), plus **5 held-out tasks**.
+
+Every stub-backed task outcome is pinned OFFLINE by `evals/task-fixtures.test.ts`: one
+canonical correct call per task must reproduce the expected envelope (state + code) against
+the stub, and teaching-derived answer regexes must accept the teaching message itself — so
+fixture rot and regex rot fail a unit test, never an LLM run.
 
 **Held-out rule: never tune tool descriptions, examples, or teaching text against the held-out
 set.** It exists to catch description overfitting. Run it occasionally (`EVAL_HELD_OUT=1`) and
