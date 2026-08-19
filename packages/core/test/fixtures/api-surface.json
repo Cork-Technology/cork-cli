@@ -1713,6 +1713,10 @@
       "kind": "value"
     },
     {
+      "name": "rolloverFactoryScanTargets",
+      "kind": "value"
+    },
+    {
       "name": "rolloverScanTargets",
       "kind": "value"
     },
@@ -2332,6 +2336,10 @@
     },
     {
       "name": "rolloverDigestScanTargets",
+      "kind": "value"
+    },
+    {
+      "name": "rolloverFactoryScanTargets",
       "kind": "value"
     },
     {

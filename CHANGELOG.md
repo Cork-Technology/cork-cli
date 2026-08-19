@@ -83,8 +83,8 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 - **A factory filter also SCOPES the full-decentralized clone scan.** A clone binds to one
   factory, so `filters.factory` naming a configured generation narrows the event scan to that
-  factory from ITS seed block (verified live: an 11.3M-block full-span walk became a 2.1M-block
-  scoped one). Without the filter, generation-spanning scans keep the earliest seed — retired
+  factory from ITS seed block via the new `rolloverFactoryScanTargets` (SDK `/config`; verified
+  live: an 11.3M-block full-span walk became a 2.1M-block scoped one). Without the filter, generation-spanning scans keep the earliest seed — retired
   history stays reachable. The windowed no-token eth_getLogs fallback remains honestly partial
   on ranges wider than one walk (partial backfills are never cached, by design); the
   `logs_windowed_fallback` warning teaches the ENVIO token as the archive-grade answer.
