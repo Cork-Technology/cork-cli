@@ -8,6 +8,11 @@ prepare function returns unsigned bytes or typed-data. You sign with your own wa
 broadcast through your own RPC. The one side-effecting call, `cork_submit`, only relays a
 payload you already signed.
 
+One trade-off to make deliberately before you import anything: a library runs **in-process**,
+with your backend's full authority — unlike the `ch` binary, which runs behind an OS boundary
+you can sandbox. If your posture needs that boundary, use the binary, or run this SDK in its own
+worker process. [sdk-roadmap.md](sdk-roadmap.md) weighs the two.
+
 ## What you get
 
 - `@cork/core` — the SDK. Math, chain reads, order building, bundle encoding, and `runTool`:

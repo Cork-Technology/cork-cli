@@ -25,10 +25,19 @@ security-conscious integrator:
    You can also rebuild it yourself from the tagged commit and compare checksums. There is no
    dependency tree to audit at install time — the audit surface is the repo at one commit.
 
-2. **It runs inside YOUR boundary.** The tool never signs, never holds keys, and never
-   broadcasts. It reads state, computes, builds unsigned artifacts, and verifies — so wrapping
-   the binary in your own environment (a TEE, a locked-down host, an agent sandbox) composes
-   cleanly: your opsec wraps a pure function from inputs to unsigned bytes. Signing and
+2. **It is a process you can cage.** The binary runs behind an OS boundary, so every isolation
+   tool you already trust applies: a container or TEE, a seccomp or no-network profile, a
+   read-only filesystem, an environment that holds no secrets. The tool never signs, never
+   holds keys, and never broadcasts, so the sandbox can grant it almost nothing — and a
+   compromised binary is *contained*: its only channel to you is the artifacts it emits, which
+   you verify independently (decode the bytes, simulate them, recompute the hashes) before
+   anything is signed. A library gets no such cage. It executes in-process, with the full
+   ambient authority of your backend — its memory, environment, credentials, and every other
+   loaded module — so the same compromise has the blast radius of the whole host process.
+   In-process isolation exists (Node's permission model is process-wide; SES/LavaMoat
+   compartments and WASM sandboxes are per-package but exotic), and none of it matches an OS
+   boundary. If you need a real boundary around a library, you run it in its own process —
+   which is what the binary already is, hardened and attested. Either way, signing and
    broadcasting stay on your stack, where your controls already live.
 
 3. **A hosted API cannot carry this posture.** An API moves the computation — and the
@@ -51,6 +60,16 @@ same `gh attestation verify` recipe, install it by URL, and your lockfile pins i
 against immutable release assets. Install details: [sdk.md](sdk.md). The deliberate trade-off:
 no semver ranges — every upgrade is an explicit URL change you verify and review. For a partner
 integration, that is the posture we want on both sides.
+
+Know what moving in-process costs before you choose this stage: **the sandbox.** The library
+runs with your backend's authority, and its compromise — or a compromise of any dependency it
+loads — has the blast radius of that whole process. The dependency surface also shifts: the
+binary embeds its dependencies from our frozen lockfile inside the attested build, while the
+tarball declares them (exact-pinned: `viem`, `zod`) for *your* machine to fetch from the npm
+registry at install time. Mitigate accordingly: install with `--ignore-scripts`, commit and
+review the lockfile, and if you want typed calls AND a real boundary, run the SDK inside its
+own worker process — the SDK holds no keys either, so it needs no ambient authority to do its
+job.
 
 **Stage 3 — later: the npm registry, via trusted publishing.** When the SDK opens to a broad
 audience, reach starts to matter and the tarball-URL friction stops paying for itself. The
@@ -85,8 +104,8 @@ the start of your review, not a substitute for it.
 
 | You are building… | Use | Why |
 |---|---|---|
-| Agent-driven flows, human operators, scripts | Stage 1: the binary (`ch`, `ch mcp`) | One attested artifact; the MCP surface is the agent-native interface |
-| A backend that calls Cork in-process, typed | Stage 2: the release tarballs | Same provenance chain; typed envelopes; explicit, verifiable upgrades |
+| Agent-driven flows, human operators, scripts | Stage 1: the binary (`ch`, `ch mcp`) | One attested artifact behind an OS boundary you can sandbox; the MCP surface is the agent-native interface |
+| A backend that calls Cork in-process, typed | Stage 2: the release tarballs | Same provenance chain; typed envelopes; explicit, verifiable upgrades — trades the process sandbox for in-process convenience |
 | Anything, once the SDK is public on npm | Stage 3: npm + trusted publishing | Semver and reach, with OIDC provenance — announced when it lands |
 
 Questions on the roadmap or the threat model: ask your Cork contact. The deeper security
