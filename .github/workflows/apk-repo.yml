@@ -149,6 +149,19 @@ jobs:
         shell: sh
         run: apk add --no-cache bash bubblewrap diffutils git melange openssl yq
 
+      # Stolen from chainguard-dev/actions/setup-melange: prove the sandbox works in seconds
+      # — before the reviewer-gated tripwire and the multi-minute build — and emit
+      # diagnostics when it does not. (Their probe verbatim, minus the sudo AppArmor host
+      # mutation it exists to validate; here the container's --privileged is what's under test.)
+      - name: Sandbox preflight — bwrap must work in this container
+        run: |
+          if ! bwrap --unshare-user --bind / / true; then
+            echo "::error::bwrap cannot create its sandbox in this container — the job container's --privileged option (or the runner's userns policy) regressed"
+            ls /proc/self/ns || echo "no /proc/self/ns"
+            exit 1
+          fi
+          echo "bubblewrap sandbox OK"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.tag }}
@@ -213,6 +226,15 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
+          # Stolen from the wolfi-dev/os Makefile (surfaced as the official actions'
+          # source-date-epoch input): pin the build clock to the TAG COMMIT. melange stamps
+          # file times and the package build_date from SOURCE_DATE_EPOCH, and the compiled
+          # `ch` binary is already deterministic (release.yml's double-build gate) — so a
+          # later re-dispatch has a real shot at rebuilding byte-identical apks, which is
+          # exactly what production-publish's immutability check (cmp, refuse different
+          # bytes) needs in order to pass on a partial-publish retry instead of bricking.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (tag commit)"
           # bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the
           # runner this job container exists to restore): as in-container root the bwrap
           # probe that refused the unprivileged runner user (run 32178646153) passes, and no
