@@ -9,6 +9,13 @@
 #   3. apko composes the minimal Wolfi image FROM THE PUBLISHED Pages repo and pushes it to
 #      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
 #
+# Toolchain sourcing (the wolfi-dev/os shape, zero sudo anywhere): melange-build and
+# apko-publish run inside a digest-pinned cgr.dev/chainguard/wolfi-base job container and
+# `apk add` their tools from Wolfi's SIGNED repository — the supply chain for the whole build
+# toolchain is one image digest plus one signing key the image already trusts.
+# production-publish still installs via aqua; it migrates once a production tag can exercise
+# the change (workflow_dispatch validation only reaches the candidate path).
+#
 # One-time setup this expects:
 #   - `melange keygen` pair: private key stored as MELANGE_SIGNING_KEY in the `release`
 #     ENVIRONMENT (not a repo secret), public half committed as packaging/melange.rsa.pub (also
@@ -70,6 +77,9 @@ permissions:
   contents: read
 
 env:
+  # production-publish only: the candidate-path jobs (melange-build, apko-publish) take their
+  # tools from the digest-pinned wolfi-base job container instead — production-publish follows
+  # once a production tag can exercise that migration (dispatch validation only covers rc tags).
   AQUA_CONFIG: packaging/aqua.yaml
 
 jobs:
@@ -107,20 +117,41 @@ jobs:
           - arch: aarch64
             os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
+    # The whole build toolchain enters through ONE digest-pinned wolfi-base image plus Wolfi's
+    # SIGNED apk repository (the image already trusts its key) — replacing this job's former
+    # aqua-installer action + aqua registry + GitHub-release binary downloads. This is where
+    # wolfi-dev/os itself builds: root inside a container, which is exactly the condition
+    # melange's bubblewrap runner wanted (it refused only the UNPRIVILEGED runner user, run
+    # 32178646153 — root cause: Ubuntu 24.04's AppArmor unprivileged-userns restriction,
+    # chainguard-dev/melange#1508. Chainguard's own setup-melange action instead patches
+    # AppArmor via sudo and pulls melange as an unverified curl|tar from GitHub releases —
+    # both edges this container shape exists to avoid, so we did not adopt those actions.)
+    # Bump the digest deliberately: Chainguard's free tier tags only :latest, so
+    # re-resolve and edit the pin here by hand (Dependabot's github-actions ecosystem does not
+    # bump job-container images).
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
+      # melange's documented in-docker shape (its own docs run the melange image with
+      # --privileged): bubblewrap needs mount + namespace privileges, and the default
+      # seccomp/AppArmor container profile blocks those even for in-container root. Scope
+      # check: the runner VM is ephemeral and single-job, and the pre-Phase-A pipeline handed
+      # this same power to sudo on the bare VM.
+      options: --privileged
     timeout-minutes: 30
     steps:
+      # Tools from Wolfi's signed repo, before anything else. bash first — it becomes the
+      # default `run:` shell from the next step on (this one is sh, the image's busybox).
+      # git before checkout — without it actions/checkout falls back to a REST tarball and
+      # the later `git rev-parse HEAD` has no repository to ask.
+      # diffutils: the tripwire's `cmp` — GNU, not a bet on which applets this wolfi-base
+      # busybox build enables.
+      - name: Install the build toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash bubblewrap diffutils git melange openssl yq
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.tag }}
-
-      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
-        with:
-          aqua_version: v2.53.5
-
-      # No bubblewrap install: its only consumer was melange's bwrap runner, which refuses to
-      # run unprivileged on these runner images (run 32178646153) — the build uses the docker
-      # runner, already present on GitHub runners. Removing it also drops an apt edge and
-      # ~15s per job.
 
       - name: Substitute release identity into the spec
         env:
@@ -182,17 +213,16 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          # Sudo-free (the wolfi-dev/os `docker-package` shape — their Makefile runs melange
-          # with zero sudo): the docker runner isolates the build in a container the runner
-          # user can already create (GitHub runners grant daemon access). The flag is EXPLICIT
-          # so an upstream default change cannot silently move the isolation model. Measured,
-          # not assumed: melange's bubblewrap runner REFUSES to run unprivileged on the
-          # ubuntu-24.04 runner images ("unable to run containers using bubblewrap", both
-          # arches, run 32178646153, 2026-08-18) — it worked earlier only because sudo made it
-          # root. Rootless-invocation ends the sudo/aqua-shim PATH conflict class outright and
-          # leaves every artifact owned by the runner user.
+          # bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the
+          # runner this job container exists to restore): as in-container root the bwrap
+          # probe that refused the unprivileged runner user (run 32178646153) passes, and no
+          # daemon socket is involved. The docker runner is NOT usable in here even though
+          # the host socket is mounted: a sibling container's bind mounts resolve against
+          # the HOST filesystem, where this job's /__w workspace path does not exist. The
+          # flag stays EXPLICIT so an upstream default change cannot silently move the
+          # isolation model.
           melange build packaging/melange.yaml \
-            --runner docker \
+            --runner bubblewrap \
             --arch "${{ matrix.arch }}" \
             --signing-key melange.rsa \
             --generate-provenance \
@@ -225,6 +255,11 @@ jobs:
     needs: [plan, melange-build]
     if: ${{ needs.plan.outputs.candidate == 'true' }}
     runs-on: ubuntu-latest
+    # Same digest-pinned toolchain image as melange-build — but NO --privileged: apko is
+    # daemonless (it assembles the OCI image from apks directly and pushes over HTTPS), so
+    # this job runs with the default container confinement.
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
     timeout-minutes: 20
     permissions:
       contents: read
@@ -232,10 +267,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # grep + coreutils: the digest capture's `grep -o` and `tr` — GNU, not a bet on which
+      # applets this wolfi-base busybox build enables.
+      - name: Install the publish toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash apko coreutils git grep yq
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
-        with:
-          aqua_version: v2.53.5
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
