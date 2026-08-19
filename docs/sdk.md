@@ -22,19 +22,39 @@ verified wei-for-wei on live chains. Trust the SDK's numbers over hand-derived o
 
 You need Node ≥ 22 or Bun ≥ 1.3. The packages are ESM-only and ship their own types.
 
-The packages are not on a public registry yet. Until they are, install from packed tarballs:
+The packages are not on a public registry yet. Until they are, every release ships them as
+**attested tarballs** beside the binaries — `cork-schemas-<version>.tgz` and
+`cork-core-<version>.tgz` on the [releases page](https://github.com/Cork-Technology/cork-cli/releases).
+Verify, then install both by URL:
 
 ```sh
-# in a clone of this repo:
+# 1. Verify the provenance (same recipe as the binaries — Sigstore-signed, SLSA Build L3):
+gh attestation verify cork-core-<version>.tgz --repo Cork-Technology/cork-cli \
+  --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml
+
+# 2. Add BOTH tarball URLs to your dependencies (core depends on schemas):
+npm install \
+  https://github.com/Cork-Technology/cork-cli/releases/download/<tag>/cork-schemas-<version>.tgz \
+  https://github.com/Cork-Technology/cork-cli/releases/download/<tag>/cork-core-<version>.tgz
+```
+
+Core's dependency on `@cork/schemas` resolves to the sibling tarball you installed — no registry
+is contacted for either package. Your lockfile pins each tarball's sha512, and releases are
+immutable, so the bytes behind a URL can never change. Every upgrade is an explicit decision:
+you change the URL, verify the new tarball, and review the lockfile diff.
+
+Working from a clone instead? `bun pm pack` produces the identical bytes (the tarballs are
+reproducible), and rewrites the workspace versions so they install cleanly with npm, pnpm, or
+bun:
+
+```sh
 cd packages/schemas && bun pm pack --destination /tmp/cork-pkgs
 cd ../core        && bun pm pack --destination /tmp/cork-pkgs
-
-# in your project:
 npm install /tmp/cork-pkgs/cork-schemas-*.tgz /tmp/cork-pkgs/cork-core-*.tgz
 ```
 
-`bun pm pack` rewrites the workspace versions, so the tarballs install cleanly with npm, pnpm,
-or bun.
+Why tarballs and not npm? See [sdk-pathway.md](sdk-pathway.md) — the distribution posture, the
+verification chain, and when the npm stage arrives.
 
 ## Your first call
 
