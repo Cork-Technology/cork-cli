@@ -490,6 +490,9 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const env = await runTool("cork_submit", tampered, ctxWith([{ match: "/rollover/v1/orders", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("signature_or_reconstruction_mismatch");
+    // The rc.2 migration hint: an omitted signed-nonzero jitMarketHash re-hashes as zero, and
+    // the message must NAME that cause instead of only blaming the signature.
+    expect(env.warnings[0]?.message).toContain("jitMarketHash");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 

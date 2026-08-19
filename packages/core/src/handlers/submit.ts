@@ -4,7 +4,7 @@ import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
-import { checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
+import { checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
@@ -64,9 +64,24 @@ export type ListingPremiumResolution =
  * caller's policy gate admits the artifact) — so the two gates cannot drift apart and teach
  * differently.
  */
+/** The exact fraction spelling for a percent number: shift the decimal point two places left
+ *  on the number's canonical STRING — never float division, which emits the very artifacts
+ *  (0.040999999999999995, 1e-7) the teaching polices. Returns undefined for a repr string
+ *  math cannot shift exactly (scientific notation) — the caller then omits the suggestion. */
+export function percentToFractionString(premium: number): string | undefined {
+  const repr = String(premium);
+  if (!/^\d+(\.\d+)?$/.test(repr)) return undefined;
+  const [int = "0", dec = ""] = repr.split(".");
+  const digits = int.padStart(3, "0");
+  const shifted = `${digits.slice(0, -2)}.${digits.slice(-2)}${dec}`.replace(/\.$/, "");
+  // canonicalize: strip leading zeros to one, trailing zeros after the point
+  return shifted.replace(/^0+(?=\d)/, "").replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
 export function resolveListingPremium(premium: number | undefined, premiumAnnualized: string | undefined): ListingPremiumResolution {
   if (premium !== undefined) {
-    return { ok: false, problem: "removed", message: `the percent-number premium field was REMOVED by the venue on 2026-08-17 (its scheduled sunset) — it now answers a pointed 400 on presence, so nothing was relayed. Send only premiumAnnualized: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface${premiumAnnualized === undefined ? ` (for ${premium}%, that is "${(premium / 100).toString()}")` : ""}. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
+    const suggestion = premiumAnnualized === undefined ? percentToFractionString(premium) : undefined;
+    return { ok: false, problem: "removed", message: `the percent-number premium field was REMOVED by the venue on 2026-08-17 (its scheduled sunset) — it now answers a pointed 400 on presence, so nothing was relayed. Send only premiumAnnualized: the annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface${suggestion !== undefined ? ` (for ${premium}%, that is "${suggestion}")` : ""}. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
   }
   if (premiumAnnualized === undefined) {
     return { ok: false, problem: "missing", message: `a listing premium is required: send premiumAnnualized, the annualized decimal-fraction STRING ("0.041" = 4.1%) shared with the RFQ surface. The percent-number premium field was removed 2026-08-17. Full scale table: ${UNITS_TOPIC_REFERENCE}` };
@@ -146,7 +161,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         if (rollover) {
           const cls = classifyRolloverSettler(rollover, o.settler);
           if (cls.status === "retired") {
-            return unavailable(chainId, "settler_retired", `settler ${o.settler} is the ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the rc.2 wire change"}) — the venue archives it and admits only the active generation, and the current-generation digest this tool computes would not verify on that contract anyway; re-sign against the active ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} ${cls.kind === "EXACT" ? rollover.exactSettler : rollover.partialSettler}`, ctx);
+            return unavailable(chainId, "settler_retired", retiredSettlerTeaching(o.settler, cls, rollover), ctx);
           }
           if (cls.status === "active" && cls.kind === "EXACT" && o.allowPartialFills) {
             return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — this signed order is unfillable; re-sign against the PartialSettler ${rollover.partialSettler} or with allowPartialFills:false`, ctx);
@@ -180,6 +195,9 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           hooks: hookStructs([...action.intent.preRolloverHooks, ...action.intent.midRolloverHooks, ...action.intent.postRolloverHooks, ...action.intent.premiumHooks]),
         });
         if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — NOT relayed (the venue rejects it with the same complaint)`, ctx);
+        if (o.rolloverParams.jitMarketHash.toLowerCase() !== ZERO_JIT_MARKET_HASH) {
+          settlerWarnings.push({ code: "jit_market_notice", message: "this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash) — the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED, with no jitMarketHash bypass: expect a venue 400 until the dst pool exists on-chain; the signed order itself stays contract-valid and can be handed to a filler venue-free" });
+        }
       }
       if (o.rolloverParams.settler.toLowerCase() !== o.settler.toLowerCase() || o.rolloverParams.srcCstToken.toLowerCase() !== o.srcCstToken.toLowerCase() || o.rolloverParams.dstCstToken.toLowerCase() !== o.dstCstToken.toLowerCase()) {
         return unavailable(chainId, "invalid_order_terms", "rolloverParams (settler/srcCstToken/dstCstToken) must mirror OrderData exactly — the venue rejects mismatches", ctx);
@@ -254,7 +272,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
             data: { orderDigest: localDigest, recoveredSigner: recovered, orderUser: o.user },
             chainId,
             source: "config",
-            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature recovers to ${recovered}, not order.user ${o.user} — NOT relayed; the order would rest at the venue but could never settle` }],
+            warnings: [{ code: "signature_or_reconstruction_mismatch", message: `the signature recovers to ${recovered}, not order.user ${o.user} — NOT relayed; the order would rest at the venue but could never settle. The classic rc.2 migration cause: the wallet signed a NON-ZERO rolloverParams.jitMarketHash that this payload omitted — an omitted field re-hashes as the zero hash, so include exactly what was signed` }],
             ctx,
           });
         }

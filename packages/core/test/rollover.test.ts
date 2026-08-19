@@ -24,8 +24,10 @@ import {
   ROLLOVER_PARAMS_TYPEHASH,
   ZERO_JIT_MARKET_HASH,
   type HandlerContext,
+  computeMarketId,
   type OrderDataStruct,
 } from "@cork/core";
+import { stubRpc } from "./helpers.ts";
 
 // Live rc.2 rollover deployment — identical addresses on 42161 + 8453 (verified on-chain
 // 2026-08-19; cork-defaults.json `rollover`).
@@ -598,5 +600,109 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
     const expiry = await run({ jitMarket: { ...JIT_MARKET, expiryTimestamp: String(NOW + 86_400n) } });
     expect(expiry.state).toBe("unavailable");
     expect(expiry.warnings[0]?.message).toContain("expiryTimestamp");
+  });
+});
+
+describe("rollover jitMarket — venue-gap notice, far-future expiry, and the pool-identity cross-check", () => {
+  const LIQ = "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55";
+  const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2";
+  const REF = "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc";
+  const ORACLE = "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+  const JIT_MARKET = {
+    collateralAsset: CA,
+    referenceAsset: REF,
+    expiryTimestamp: "1900000000",
+    recipe: LIQ,
+    constraint: {
+      rateMin: "900000000000000000",
+      rateMax: "1100000000000000000",
+      rateChangePerDayMax: "10000000000000000",
+      rateChangeCapacityMax: "50000000000000000",
+    },
+    additionalData: "0x1234",
+    swapFeePercentage: "300000000000000000",
+    unwindSwapFeePercentage: "200000000000000000",
+  };
+  // The pool this instruction derives, computed through the independently golden-tested
+  // Market-tuple hash (marketid.ts) — NOT through the handler under test.
+  const derivedPoolId = computeMarketId({
+    collateralAsset: CA,
+    referenceAsset: REF,
+    expiryTimestamp: 1_900_000_000n,
+    rateMin: 900000000000000000n,
+    rateMax: 1100000000000000000n,
+    rateChangePerDayMax: 10000000000000000n,
+    rateChangeCapacityMax: 50000000000000000n,
+    rateOracle: ORACLE,
+  });
+  const registryStub = (c: { functionName: string }) => {
+    if (c.functionName === "MARKET_REGISTRY") return "0xa78dd18B10dCae13801237E5A0cAe98a1a2811F1";
+    if (c.functionName === "isRecipe") return true;
+    if (c.functionName === "source") return 1; // PRICE
+    if (c.functionName === "lookupWrapper") return ORACLE;
+    if (c.functionName === "rate") return 10n ** 18n;
+    return undefined;
+  };
+  const base = {
+    chainId: 42161,
+    account: CLONE,
+    clientRequestId: "test-roll-jitx-01",
+    action: {
+      type: "rollover-intent",
+      settler: EXACT,
+      rolloverContract: CLONE,
+      srcPoolId: SRC_POOL,
+      dstPoolId: derivedPoolId,
+      srcCstToken: SRC_CST,
+      dstCstToken: DST_CST,
+      premiumToken: PREMIUM,
+      orderSize: "250000000000000000000",
+      minPremiumPerShare: "12000000000000000",
+      openDeadline: String(NOW + 3_600n),
+      fillDeadline: String(NOW + 86_400n),
+      jitMarket: JIT_MARKET,
+    },
+  };
+  const rpcCtx: HandlerContext = { nowSeconds: NOW, resolveRpc: stubRpc(registryStub) };
+
+  it("dstPoolId equal to the derived pool passes the cross-check (no mismatch warning) and carries the venue-gap notice", async () => {
+    const env = await runTool("cork_prepare_orders", base, rpcCtx);
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "jit_pool_mismatch")).toBe(false);
+    const notice = env.warnings.find((w) => w.code === "jit_market_notice");
+    expect(notice?.message).toContain("venue-free");
+  });
+
+  it("a dstPoolId from an OLDER derivation warns jit_pool_mismatch naming the derived pool (the fill would revert BaseFiller__JitPoolMismatch)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, dstPoolId: DST_POOL } }, rpcCtx);
+    expect(env.state).toBe("ok"); // build-and-warn, like the LOP JIT ladder
+    const warn = env.warnings.find((w) => w.code === "jit_pool_mismatch");
+    expect(warn).toBeDefined();
+    expect(warn!.message).toContain(derivedPoolId);
+    expect(warn!.message).toContain("BaseFiller__JitPoolMismatch");
+  });
+
+  it("without an RPC the cross-check is silent (offline artifacts stay buildable) but the notice still rides", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, dstPoolId: DST_POOL } }, ctx);
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "jit_pool_mismatch")).toBe(false);
+    expect(env.warnings.some((w) => w.code === "jit_market_notice")).toBe(true);
+  });
+
+  it("a raw non-zero jitMarketHash carries the notice too; a zero/no-JIT order does not", async () => {
+    const raw = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: undefined, jitMarketHash: `0x${"11".repeat(32)}` } }, ctx);
+    expect(raw.warnings.some((w) => w.code === "jit_market_notice")).toBe(true);
+    const plain = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: undefined } }, ctx);
+    expect(plain.warnings.some((w) => w.code === "jit_market_notice")).toBe(false);
+  });
+
+  it("a jitMarket expiry more than 5 years out warns expiry_far_future (parity with the LOP JIT path)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { ...base, action: { ...base.action, jitMarket: { ...JIT_MARKET, expiryTimestamp: "4070000000" } } },
+      ctx,
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "expiry_far_future")).toBe(true);
   });
 });

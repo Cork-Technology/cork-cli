@@ -376,6 +376,14 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ["exactSettler", rollover?.exactSettler],
       ["partialSettler", rollover?.partialSettler],
       ["rolloverFactory", rollover?.factory],
+      // Retired generations stay NAMED: their contracts still hold live orders (cancel/settle
+      // txs are genuine Cork traffic), and unknown_target exists to catch address substitution,
+      // not to teach signers to distrust a real Cork settler.
+      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [
+        [`exactSettler (retired ${g.label ?? "legacy"} generation)`, g.exactSettler],
+        [`partialSettler (retired ${g.label ?? "legacy"} generation)`, g.partialSettler],
+        [`rolloverFactory (retired ${g.label ?? "legacy"} generation)`, g.factory],
+      ]),
     ];
     toLabel = to === null ? null : (candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())?.[0] ?? null);
     if (to !== null && toLabel === null) {

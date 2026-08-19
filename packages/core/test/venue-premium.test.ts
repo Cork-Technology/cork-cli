@@ -207,3 +207,34 @@ describe("listing premium — the venue's 0.3.15 resolution, op-for-op", () => {
     expect(finPct.warnings[0]!.message).toContain("REMOVED");
   });
 });
+
+describe("percentToFractionString — the suggestion is exact string math, never float division", () => {
+  it("shifts the decimal point exactly, and every suggestion passes the very gate it teaches", async () => {
+    const { percentToFractionString, bookPremiumAnnualizedViolation } = await import("../src/handlers/submit.ts");
+    for (const [pct, want] of [
+      [4.1, "0.041"], // float division would say 0.040999999999999995
+      [0.036, "0.00036"],
+      [100, "1"],
+      [2500, "25"], // above the retired local 1000 cap — legal under the venue's old 10000
+      [0.5, "0.005"],
+      [12.34, "0.1234"],
+    ] as const) {
+      expect(percentToFractionString(pct)).toBe(want);
+      expect(bookPremiumAnnualizedViolation(want)).toBeNull();
+    }
+    // A canonical repr string math cannot shift (scientific notation) yields NO suggestion —
+    // better none than one that fails the pattern gate.
+    expect(percentToFractionString(1e21)).toBeUndefined();
+    expect(percentToFractionString(1e-7)).toBeUndefined();
+  });
+
+  it("out-of-old-cap legacy values (premium: 2500) reach the REMOVED teaching, not a bare shape error", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool("cork_submit", await lop({ premium: 2500 }, ["premiumAnnualized"]), ok201(seen));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]!.code).toBe("invalid_order_terms");
+    expect(env.warnings[0]!.message).toContain("REMOVED");
+    expect(env.warnings[0]!.message).toContain('"25"'); // the exact fraction spelling for 2500%
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+});

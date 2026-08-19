@@ -37,6 +37,24 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ### Added
 
+- **Self-review round (10 verified findings, all fixed).** A JIT rollover order now carries
+  `jit_market_notice` (the venue cannot admit it until the destination pool is indexed —
+  distribute venue-free meanwhile) and, whenever an RPC resolves, a best-effort
+  `jit_pool_mismatch` cross-check derives the pool the jitMarket instruction pins and compares
+  it to `dstPoolId` (a stale derivation signs an order every fill reverts
+  `BaseFiller__JitPoolMismatch`); the far-future-expiry warning now rides the rollover JIT path
+  too. `cork_track` reconcile scopes the digest event-history scan to the row's OWN settler and
+  its generation's seed block (a digest binds to one settler; the full span tripped ordinary
+  endpoints' range caps), and a venue-miss now runs a chain sweep over every configured settler
+  generation before claiming `order_not_found` — venue archival cannot silence live chain state
+  [K7]. `cork_decode` kind:'tx' names retired-generation settlers/factories ("retired july-2026
+  generation") instead of warning `unknown_target` on genuine Cork traffic. The removed-premium
+  teaching computes its fraction suggestion with exact string math (float division emitted
+  "0.040999999999999995"-class artifacts that failed the very gate being taught), the dead
+  `premium` schema field dropped its live-era 1000 cap so any legacy value reaches the pointed
+  teaching, the rollover signature-mismatch conflict names the omitted-jitMarketHash migration
+  mistake, and the retired-settler refusal is one shared string across prepare and submit.
+
 - **Venue admission, pre-flighted for rollover orders.** The deterministic subset of the
   venue's POST admission battery (cork-api 0.3.16) runs locally at prepare AND submit through
   one shared `checkRolloverOrderTerms`: deadline ordering and past-ness (openDeadline

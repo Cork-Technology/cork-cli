@@ -75,6 +75,27 @@ export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
  *  fills and retired factories' clones stay on-chain, so history reads span active + legacy
  *  addresses from the earliest seed block. One derivation for every scan site (query's
  *  full-decentralized feeds, track's digest event-history leg). */
+/** Scan targets for ONE digest's event history. A digest binds to exactly one settler (the
+ *  EIP-712 domain's verifyingContract), so when the settler is known the scan scopes to that
+ *  address and ITS generation's seed block — a full-span scan (~9M extra blocks on 42161)
+ *  trips ordinary endpoints' range caps for history that is guaranteed empty. An unknown or
+ *  unnamed settler falls back to the full generation span. */
+export function rolloverDigestScanTargets(
+  dep: CorkRolloverDeployment,
+  settler?: string,
+): { addresses: `0x${string}`[]; fromBlock: number } {
+  const full = rolloverScanTargets(dep);
+  if (!settler) return { addresses: full.settlers, fromBlock: full.fromBlock };
+  const lc = settler.toLowerCase();
+  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
+    if (lc === g.exactSettler.toLowerCase() || lc === g.partialSettler.toLowerCase()) {
+      return { addresses: [settler as `0x${string}`], fromBlock: g.seededAtBlock };
+    }
+  }
+  // A settler the config does not recognize: scan it verbatim across the full window.
+  return { addresses: [settler as `0x${string}`], fromBlock: full.fromBlock };
+}
+
 export function rolloverScanTargets(dep: CorkRolloverDeployment): {
   settlers: `0x${string}`[];
   factories: `0x${string}`[];

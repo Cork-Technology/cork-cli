@@ -1701,7 +1701,15 @@
       "kind": "value"
     },
     {
+      "name": "retiredSettlerTeaching",
+      "kind": "value"
+    },
+    {
       "name": "roleMemberSlot",
+      "kind": "value"
+    },
+    {
+      "name": "rolloverDigestScanTargets",
       "kind": "value"
     },
     {
@@ -2320,6 +2328,10 @@
     },
     {
       "name": "resolveRollover",
+      "kind": "value"
+    },
+    {
+      "name": "rolloverDigestScanTargets",
       "kind": "value"
     },
     {
@@ -3202,6 +3214,10 @@
     },
     {
       "name": "resolveLogsEndpoint",
+      "kind": "value"
+    },
+    {
+      "name": "retiredSettlerTeaching",
       "kind": "value"
     },
     {

@@ -307,31 +307,82 @@ describe("consistency map is EXACT (terminal states never cross-accept — kills
   });
 });
 
-describe("reconcile event-history leg — scan targets span settler GENERATIONS", () => {
-  it("requests logs from active + retired settlers, from the EARLIEST seed block", async () => {
-    // A July-generation digest's history lives on the retired settlers; scanning only the
-    // active generation would answer an empty history for a real settled order.
-    let requested: { address?: string[]; fromBlock?: string } | undefined;
-    const ctx: HandlerContext = {
-      nowSeconds: 1_790_000_000n,
-      venueFetch: async () =>
-        new Response(JSON.stringify({ order: { orderDigest: DIGEST, status: "SETTLED", settler: EXACT, chainId: 42161 }, fills: [], slots: [] }), { status: 200 }),
-      resolveRpc: async () => null,
-      logsUrl: "https://stub-logs/rpc",
-      logsFetch: async (_url: string, init?: RequestInit) => {
-        requested = (JSON.parse(String(init?.body)) as { params: [{ address?: string[]; fromBlock?: string }] }).params[0];
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+describe("reconcile event-history leg — a digest binds to ONE settler, and the scan scopes to it", () => {
+  const withRow = (settler: string, requested: Array<{ address?: string[]; fromBlock?: string }>): HandlerContext => ({
+    nowSeconds: 1_790_000_000n,
+    venueFetch: async () =>
+      new Response(JSON.stringify({ order: { orderDigest: DIGEST, status: "SETTLED", settler, chainId: 42161 }, fills: [], slots: [] }), { status: 200 }),
+    resolveRpc: async () => null,
+    logsUrl: "https://stub-logs/rpc",
+    logsFetch: async (_url: string, init?: RequestInit) => {
+      requested.push((JSON.parse(String(init?.body)) as { params: [{ address?: string[]; fromBlock?: string }] }).params[0]);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+    },
+  });
+
+  it("a RETIRED-generation settler scopes to that settler from ITS generation's seed block", async () => {
+    // A July-generation digest's history lives on the retired settler; the scan must reach it
+    // (scanning only the active generation would answer an empty history for a settled order).
+    const requested: Array<{ address?: string[]; fromBlock?: string }> = [];
+    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, withRow(EXACT, requested));
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0x983270ae48545665cee4d7ef61c65ff3fdc8222d"]);
+    expect(BigInt(requested[0]!.fromBlock!)).toBe(484973917n); // the July generation's own seed
+  });
+
+  it("an ACTIVE-generation settler scopes to it from the rc.2 seed — never the ~9M-block legacy span", async () => {
+    const requested: Array<{ address?: string[]; fromBlock?: string }> = [];
+    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, withRow("0xF4ffd4b3FAedb784b04d1883119840515f224C2f", requested));
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0xf4ffd4b3faedb784b04d1883119840515f224c2f"]);
+    expect(BigInt(requested[0]!.fromBlock!)).toBe(494104750n); // rc.2 seed, not 484973917
+  });
+});
+
+describe("reconcile venue-miss sweep [K7] — venue absence must not silence the chain", () => {
+  const RC2_EXACT = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f";
+  const missCtx = (orderStatusBySettler: Record<string, number>): HandlerContext => ({
+    nowSeconds: 1_790_000_000n,
+    // The venue knows nothing: rollover 404, LOP fills + orderbook empty (complete scans).
+    venueFetch: async (url: string) => {
+      if (url.includes("/rollover/")) return new Response(JSON.stringify({ statusCode: 404, message: "not found" }), { status: 404 });
+      return new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 });
+    },
+    resolveRpc: async () => ({
+      url: "stub",
+      source: "explicit",
+      client: {
+        readContract: async ({ address }: { address: string }) => {
+          const v = orderStatusBySettler[address.toLowerCase()];
+          if (v === undefined) throw new Error("no settler here");
+          return v;
+        },
       },
-    };
-    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, ctx);
-    expect(requested).toBeDefined();
-    expect(requested!.address!.map((a) => a.toLowerCase()).sort()).toEqual([
-      "0x8e9ca640338d3bdbfe3781d7178ca73af66f366a", // retired July partial
-      "0x983270ae48545665cee4d7ef61c65ff3fdc8222d", // retired July exact
-      "0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e", // rc.2 partial
-      "0xf4ffd4b3faedb784b04d1883119840515f224c2f", // rc.2 exact
-    ]);
-    // 484973917 (July seed) < 494104750 (rc.2 seed) — history starts at the earliest.
-    expect(BigInt(requested!.fromBlock!)).toBe(484973917n);
+    }) as never,
+  });
+
+  it("a digest the venue no longer serves but a RETIRED settler still holds reconstructs from the chain", async () => {
+    const env = await runTool(
+      "cork_track",
+      { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" },
+      missCtx({ [EXACT.toLowerCase()]: 2 }), // Settled on the July exact settler
+    );
+    expect(env.state).toBe("ok");
+    expect(env.provenance.source).toBe("chain");
+    const v = (env.data as { chainVerification: { settler: string; chainStatus: string } }).chainVerification;
+    expect(v.settler.toLowerCase()).toBe(EXACT.toLowerCase());
+    expect(v.chainStatus).toBe("Settled");
+    expect(env.warnings.some((w) => w.code === "order_not_found" && w.message.includes("outranks"))).toBe(true);
+  });
+
+  it("all settlers answering None (and the venue empty) is an honest order_not_found", async () => {
+    const env = await runTool(
+      "cork_track",
+      { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" },
+      missCtx({ [EXACT.toLowerCase()]: 0, [RC2_EXACT.toLowerCase()]: 0 }),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("order_not_found");
+    expect(env.warnings[0]?.message).toContain("no configured settler holds state");
   });
 });

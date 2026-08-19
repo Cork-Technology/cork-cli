@@ -850,6 +850,42 @@ const CATALOG: Mutant[] = [
     replace: "const generations = [dep];",
     tests: [T.hypersync, T.rolloverVerify],
   },
+  {
+    // The digest scan must scope to the settler's OWN generation seed — falling back to the
+    // full span re-opens the ~9M-block range that trips ordinary endpoints' caps.
+    id: "rollover-digest-scan-full-span",
+    file: "packages/core/src/config-remote.ts",
+    find: "      return { addresses: [settler as `0x${string}`], fromBlock: g.seededAtBlock };",
+    replace: "      return { addresses: [settler as `0x${string}`], fromBlock: full.fromBlock };",
+    tests: [T.rolloverVerify],
+  },
+  {
+    // The venue-miss sweep exists so venue absence cannot silence live chain state [K7]:
+    // skipping non-None statuses degrades every archived-generation reconcile to not-found.
+    id: "rollover-venue-miss-sweep-inert",
+    file: "packages/core/src/handlers/track.ts",
+    find: 'if (chainStatus === "None") continue;',
+    replace: "if (chainStatus !== undefined) continue;",
+    tests: [T.rolloverVerify],
+  },
+  {
+    // The suggestion is exact STRING math; a float-division regression re-emits the artifacts
+    // (0.040999999999999995) the teaching polices — and fails its own gate.
+    id: "premium-suggestion-float-division",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "  const [int = \"0\", dec = \"\"] = repr.split(\".\");",
+    replace: "  const [int = \"0\", dec = \"\"] = String(premium / 100).split(\".\"); void repr;",
+    tests: [T.venuePremium],
+  },
+  {
+    // Retired generations must stay NAMED in decode tx target labeling — dropping them turns
+    // genuine Cork cancel/settle traffic into an unknown_target distrust warning.
+    id: "decode-legacy-generation-naming-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [",
+    replace: "      ...(undefined ?? []).flatMap((g): Array<[string, string | undefined]> => [",
+    tests: [T.decodeTx],
+  },
   // ── CREATE2 attestations: binds is the attestation↔config drift gate; salts are identity ──
   {
     // A binds path pointing at the WRONG config field would let the attestation and the served
@@ -2023,8 +2059,8 @@ const CATALOG: Mutant[] = [
     // BOTH fields relays and dies as the venue's opaque 400 instead of local teaching.
     id: "premium-removed-gate-softened",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (premium !== undefined) {\n    return { ok: false, problem: \"removed\"",
-    replace: "if (premium !== undefined && premiumAnnualized === undefined) {\n    return { ok: false, problem: \"removed\"",
+    find: "if (premium !== undefined) {\n    const suggestion",
+    replace: "if (premium !== undefined && premiumAnnualized === undefined) {\n    const suggestion",
     tests: [T.venuePremium],
   },
   {

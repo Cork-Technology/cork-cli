@@ -4,9 +4,9 @@ import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, encodeJitExtraData, predictShares } from "../market-registry.ts";
-import { resolveRollover } from "../config-remote.ts";
-import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams } from "../rollover.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
+import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
@@ -14,6 +14,7 @@ import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowS
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
+import { resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
 /** Maker-side 2.1.0 JIT report echoed in `data.jit` — the base always rides; the verified half is
@@ -500,7 +501,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // Settler__ExactFillsNotSupported on false), so a mismatched order is signable but unfillable.
     const cls = classifyRolloverSettler(rollover, action.settler);
     if (cls.status === "retired") {
-      return unavailable(chainId, "settler_retired", `settler ${action.settler} is the ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the rc.2 wire change"}) — nothing useful can be built against it: the venue admits only the active generation, and this tool's current-generation digest would not verify on that contract; use the active ${cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler"} ${cls.kind === "EXACT" ? rollover.exactSettler : rollover.partialSettler}`, ctx);
+      return unavailable(chainId, "settler_retired", retiredSettlerTeaching(action.settler, cls, rollover), ctx);
     }
     const kind = cls.status === "active" ? cls.kind : undefined;
     if (kind === "EXACT" && action.allowPartialFills) {
@@ -528,6 +529,50 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
         return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
       }
+      const FIVE_YEARS = 5n * 31_557_600n;
+      if (BigInt(jm.expiryTimestamp) > nowSecondsOf(ctx) + FIVE_YEARS) {
+        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${jm.expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
+      }
+      // Best-effort pool-identity cross-check: the commitment PINS the carried constraint, and
+      // constraint values are part of pool identity — a dstPoolId kept from an OLDER derivation
+      // signs an order every fill reverts (BaseFiller__JitPoolMismatch). Same posture as the
+      // LOP JIT ladder: runs whenever an RPC resolves; silent without one.
+      try {
+        const resolved = await getRpc(ctx, chainId);
+        const { marketRegistry: mr } = await resolveMarketRegistry(chainId);
+        if (resolved && mr) {
+          const res = await resolveRecipeOracleConstraint({
+            client: resolved.client,
+            ctx,
+            chainId,
+            mr,
+            recipe: jm.recipe,
+            collateralAsset: jm.collateralAsset,
+            referenceAsset: jm.referenceAsset,
+            ...(BigInt(jm.rateOverride) > 0n ? { fixedRate: BigInt(jm.rateOverride) } : {}),
+            wantConstraint: false,
+          });
+          if (!res.gate && res.oracle.address) {
+            const derived = deriveJitMarket({
+              collateralAsset: jm.collateralAsset,
+              referenceAsset: jm.referenceAsset,
+              expiryTimestamp: BigInt(jm.expiryTimestamp),
+              constraint: {
+                rateMin: BigInt(jm.constraint.rateMin),
+                rateMax: BigInt(jm.constraint.rateMax),
+                rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
+                rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
+              },
+              oracle: res.oracle.address,
+            });
+            if (derived.poolId.toLowerCase() !== action.dstPoolId.toLowerCase()) {
+              warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${action.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
+            }
+          }
+        }
+      } catch {
+        /* best-effort leg: a transport failure must not block an offline-buildable artifact */
+      }
       jitMarketHash = hashJitMarketParams({
         collateralAsset: jm.collateralAsset,
         referenceAsset: jm.referenceAsset,
@@ -542,6 +587,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         swapFeePercentage: BigInt(jm.swapFeePercentage),
         unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
       });
+    }
+
+    if (jitMarketHash !== undefined && jitMarketHash !== ZERO_JIT_MARKET_HASH) {
+      warnings.push({ code: "jit_market_notice", message: "this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free" });
     }
 
     // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must

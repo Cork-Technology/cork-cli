@@ -372,7 +372,10 @@ const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optio
  *  ONLY so a legacy caller gets the relay's pointed teaching instead of a bare shape error —
  *  any value in it is refused before relay, mirroring the venue's own preValidation gate. */
 const ListingPremiumFields = {
-  premium: z.number().min(0).max(1000).optional()
+  // No bounds on a DEAD field: the live-era .max(1000) made exactly the legacy payloads most
+  // likely to still carry it (the venue's old cap was 10000) fail as a bare shape error before
+  // the pointed removal teaching could run — the one job the retained field has.
+  premium: z.number().optional()
     .describe("REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead")
     .meta({ "x-units": X_UNITS.percent }),
   premiumAnnualized: z.string().min(1).optional()

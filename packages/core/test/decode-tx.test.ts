@@ -194,3 +194,42 @@ describe("runTool: cork_decode kind:'tx'", () => {
     await expect(runTool("cork_decode", { kind: "tx", data: { to: SUSDE } }, { nowSeconds: NOW })).rejects.toBeInstanceOf(ToolInputError);
   });
 });
+
+describe("target naming spans rollover settler generations", () => {
+  it("a tx to a RETIRED July-generation settler is NAMED (retired label), never unknown_target", async () => {
+    // The retired contracts still hold live orders — cancel/settle txs are genuine Cork
+    // traffic, and unknown_target exists to catch address substitution, not to teach signers
+    // to distrust a real Cork settler.
+    const signed = await SIGNER.signTransaction({
+      type: "eip1559",
+      chainId: 42161,
+      nonce: 12,
+      to: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", // July ExactSettler (legacyGenerations[0])
+      value: 0n,
+      gas: 100_000n,
+      maxFeePerGas: 10n ** 9n,
+      maxPriorityFeePerGas: 10n ** 8n,
+    });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as { toLabel: string | null };
+    expect(d.toLabel).toContain("exactSettler");
+    expect(d.toLabel).toContain("retired july-2026");
+    expect(env.warnings.map((w) => w.code)).not.toContain("unknown_target");
+  });
+
+  it("the ACTIVE rc.2 settler keeps its plain label", async () => {
+    const signed = await SIGNER.signTransaction({
+      type: "eip1559",
+      chainId: 42161,
+      nonce: 13,
+      to: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+      value: 0n,
+      gas: 100_000n,
+      maxFeePerGas: 10n ** 9n,
+      maxPriorityFeePerGas: 10n ** 8n,
+    });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
+    expect((env.data as { toLabel: string | null }).toLabel).toBe("exactSettler");
+  });
+});

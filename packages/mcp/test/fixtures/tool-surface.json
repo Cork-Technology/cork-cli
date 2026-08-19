@@ -2154,8 +2154,6 @@
                       },
                       "premium": {
                         "type": "number",
-                        "minimum": 0,
-                        "maximum": 1000,
                         "description": "REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead",
                         "x-units": "{%}"
                       },
@@ -3850,8 +3848,6 @@
                   },
                   "premium": {
                     "type": "number",
-                    "minimum": 0,
-                    "maximum": 1000,
                     "description": "REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead",
                     "x-units": "{%}"
                   },

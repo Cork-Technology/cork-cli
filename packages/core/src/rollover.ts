@@ -457,6 +457,20 @@ export function classifyRolloverSettler(
   return { status: "unknown" };
 }
 
+/** The retired-generation refusal, ONE string for prepare AND submit (the two sites had
+ *  already drifted apart by the first review pass — the resolveListingPremium lesson applies:
+ *  one function, no drift). Names the retired generation, why nothing useful can be built
+ *  (venue-inadmissible AND wire-incompatible), and the active replacement. */
+export function retiredSettlerTeaching(
+  settler: string,
+  cls: Extract<RolloverSettlerClassification, { status: "retired" }>,
+  active: { exactSettler: string; partialSettler: string },
+): string {
+  const role = cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler";
+  const replacement = cls.kind === "EXACT" ? active.exactSettler : active.partialSettler;
+  return `settler ${settler} is the ${role} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the last wire change"}) — nothing useful can be built or relayed against it: the venue archives retired generations and admits only the active set, and the current-generation digest this tool computes would not verify on that contract; use the active ${role} ${replacement}`;
+}
+
 /** Order-term fields the deterministic admission battery reads. `intentDeadline`/`hooks` are
  *  submit-side extras (the prepare builder pins deadline = fillDeadline and attaches no hooks). */
 export interface RolloverOrderTermsInput {

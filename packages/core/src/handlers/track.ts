@@ -7,7 +7,7 @@ import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
 import { classifyBitInvalidator, classifyRemainingRaw, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, type LopOnChainStatus } from "../orders.ts";
 import { JIT_EVENTS } from "../market-registry.ts";
-import { resolveRollover, rolloverScanTargets } from "../config-remote.ts";
+import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -242,13 +242,14 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
           if (logsEndpoint && rollover) {
             try {
-              // Span every settler generation from the earliest seed block: a retired
-              // generation's digests still have their full event history on-chain.
-              const targets = rolloverScanTargets(rollover);
+              // A digest binds to ONE settler (its EIP-712 domain), so the venue row's settler
+              // scopes the scan to that address and its generation's seed block — retired
+              // generations stay reachable, current-generation scans stay range-cap friendly.
+              const targets = rolloverDigestScanTargets(rollover, settlerAddr);
               const logs = await fetchDigestLogs({
                 url: logsEndpoint.url,
                 ...(logsEndpoint.bearerToken ? { bearerToken: logsEndpoint.bearerToken } : {}),
-                addresses: targets.settlers,
+                addresses: targets.addresses,
                 digest,
                 fromBlock: targets.fromBlock,
                 ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
@@ -390,7 +391,68 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             ctx,
           });
         }
-        return unavailable(chainId, "order_not_found", `no rollover order, LOP orderbook row, or LOP fills known to the venue for ${ref} on chainId ${chainId} (a normal outcome for an unposted/unfilled order)`, ctx);
+        // ── Venue-miss rollover sweep [K7]: the venue archives retired generations, so a
+        // digest it no longer serves may still have LIVE state on-chain — chain outranks the
+        // indexer, and venue absence must not silence the chain legs. Ask every configured
+        // settler's own orderStatus view (a digest binds to one settler; up to 4 cheap reads).
+        {
+          const { rollover } = await resolveRollover(chainId);
+          const resolved = rollover ? await getRpc(ctx, chainId) : null;
+          if (rollover && resolved) {
+            const digest = ref.toLowerCase() as `0x${string}`;
+            const sweep = rolloverDigestScanTargets(rollover); // full generation span
+            for (const settler of sweep.addresses) {
+              let statusNum: number;
+              try {
+                statusNum = (await resolved.client.readContract({ address: settler, abi: settlerStatusAbi, functionName: "orderStatus", args: [digest] })) as number;
+              } catch {
+                continue; // best-effort sweep: an unreadable settler must not block the others
+              }
+              const chainStatus = chainStatusName(statusNum);
+              if (chainStatus === "None") continue;
+              const warnings: Array<{ code: string; message: string }> = [
+                { code: "order_not_found", message: `the venue serves no row for this digest (normal once a generation is archived), but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer [K7]` },
+              ];
+              let events: ReturnType<typeof labelLogs> | undefined;
+              const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
+              if (logsEndpoint) {
+                try {
+                  const targets = rolloverDigestScanTargets(rollover, settler);
+                  const logs = await fetchDigestLogs({
+                    url: logsEndpoint.url,
+                    ...(logsEndpoint.bearerToken ? { bearerToken: logsEndpoint.bearerToken } : {}),
+                    addresses: targets.addresses,
+                    digest,
+                    fromBlock: targets.fromBlock,
+                    ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
+                  });
+                  events = labelLogs(logs);
+                } catch (err) {
+                  warnings.push(
+                    err instanceof LogsRangeLimited
+                      ? { code: "logs_range_limited", message: `the logs endpoint refused the historical range (${err.message}) — event history omitted` }
+                      : { code: "logs_unavailable", message: `event-history leg failed: ${firstLine(err)}` },
+                  );
+                }
+              }
+              return envelope({
+                state: "ok",
+                data: {
+                  kind: "rollover-order",
+                  orderDigest: digest,
+                  lifecycle: null,
+                  order: null,
+                  chainVerification: { leg: "orderStatus (settler view, live RPC; venue-miss sweep)", settler, chainStatus, ...(events ? { events } : {}) },
+                },
+                chainId,
+                source: "chain",
+                warnings,
+                ctx,
+              });
+            }
+          }
+        }
+        return unavailable(chainId, "order_not_found", `no rollover order, LOP orderbook row, or LOP fills known to the venue for ${ref} on chainId ${chainId}, and no configured settler holds state for it (a normal outcome for an unposted/unfilled order)`, ctx);
       }
       return unavailable(chainId, "order_not_found", `submissionRef '${ref}' is not a 32-byte order digest — RFQ ids (rfq_/ans_) reconcile via cork_query once the RFQ read surface is wired`, ctx);
     } catch (err) {
