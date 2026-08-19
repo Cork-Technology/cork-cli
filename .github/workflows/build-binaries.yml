@@ -54,8 +54,27 @@ jobs:
           bun run typecheck
           bun run test:unit
 
+      # SDK tarballs ride the same reproducibility contract as the binaries: `bun pm pack` emits
+      # byte-identical tarballs across independent rebuilds (verified empirically — mtimes are
+      # normalized), rewrites `workspace:*` to the pinned versions, and the determinism gate in
+      # release.yml diffs their checksums exactly like the binaries'. Pack BEFORE compiling: the
+      # package build stages into the root dist/ and would clobber compiled binaries placed there.
+      - name: Build, gate, and pack the SDK tarballs (@cork/schemas, @cork/core, @cork/mcp)
+        run: |
+          bun run verify:publish
+          mkdir -p sdk-tarballs
+          for p in schemas core mcp; do
+            (cd "packages/$p" && bun pm pack --quiet --destination "$GITHUB_WORKSPACE/sdk-tarballs")
+          done
+          node scripts/build-packages.mjs --clean-only
+
       - name: Compile release binaries (all targets, cross-compiled)
         run: bun scripts/compile-binaries.mjs --version "${{ inputs.version }}" --commit "${{ github.sha }}" --outdir dist
+
+      - name: Add the SDK tarballs to the release set
+        run: |
+          mv sdk-tarballs/cork-*.tgz dist/
+          (cd dist && sha256sum cork-*.tgz >> checksums.txt)
 
       - name: Attest build provenance
         if: ${{ inputs.attest }}
@@ -63,6 +82,7 @@ jobs:
         with:
           subject-path: |
             dist/ch-*
+            dist/cork-*.tgz
             dist/checksums.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
