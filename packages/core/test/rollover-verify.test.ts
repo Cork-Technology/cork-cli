@@ -330,6 +330,18 @@ describe("reconcile event-history leg — a digest binds to ONE settler, and the
     expect(BigInt(requested[0]!.fromBlock!)).toBe(484973917n); // the July generation's own seed
   });
 
+  it("a PARTIAL settler scopes too — membership is ANY owned address, not just the exact settler", async () => {
+    // Deliberately the rc.2 partial: its generation seed (494104750) differs from the earliest
+    // seed, so an exact-settler-only membership regression (which would dump the partial into
+    // the unknown-address full-span branch) is DISTINGUISHABLE here. The July partial would
+    // not distinguish — its generation seed IS the full-span floor (a mutant survived on that).
+    const requested: Array<{ address?: string[]; fromBlock?: string }> = [];
+    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, withRow("0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e", requested));
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e"]);
+    expect(BigInt(requested[0]!.fromBlock!)).toBe(494104750n);
+  });
+
   it("an ACTIVE-generation settler scopes to it from the rc.2 seed — never the ~9M-block legacy span", async () => {
     const requested: Array<{ address?: string[]; fromBlock?: string }> = [];
     await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, withRow("0xF4ffd4b3FAedb784b04d1883119840515f224C2f", requested));

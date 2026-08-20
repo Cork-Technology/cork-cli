@@ -86,5 +86,10 @@ export async function handleCapabilities(input: { topic?: string; search?: strin
   }
 
   const data = REGISTRY.map(card);
-  return envelope({ state: "ok", data: { tools: data, schemaVersion: SCHEMA_VERSION }, chainId: 1, source: "config", ctx });
+  // The doc-topic CATALOG rides the no-args manual (progressive disclosure: names + summaries
+  // here, bodies on demand via topic:"<name>"). Before this, topics were only discoverable by
+  // guessing a name or tripping unknown_topic — the entry point advertised the mechanism but
+  // hid the catalog. Derived from DOC_TOPICS, like the unknown_topic teaching above.
+  const docTopics = Object.values(DOC_TOPICS).map((d) => ({ name: d.name, aliases: d.aliases, summary: d.summary }));
+  return envelope({ state: "ok", data: { tools: data, docTopics, schemaVersion: SCHEMA_VERSION }, chainId: 1, source: "config", ctx });
 }

@@ -81,6 +81,18 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   full-decentralized rollover feeds AND `cork_track` reconcile's digest event-history leg,
   which previously scanned only the active generation.
 
+- **`filters.settler` on rollover orders/fills, and ONE generation-scoping mechanism.** The
+  hybrid order feed passes `settler` to the venue's own filter; the full-decentralized fills
+  scan scopes to that settler's generation seed — the same range-budget starvation fixed for
+  clones applied one branch up (a digest binds to one settler; the unscoped walk spent the
+  windowed fallback's budget on generations that cannot hold the fill). The digest and factory
+  scoped scans now share one private `generationScanTargets` mechanism (a review finding: the
+  two exported wrappers were near-verbatim copies — a matching-rule change had to land twice),
+  and the dead factory row-filter it exposed is gone: the eval/hypersync fake source now honors
+  the address scope like real HyperSync, which is what had masked it. A surviving mutant also
+  bought a sharper test: generation membership is proven with the rc.2 PARTIAL settler, whose
+  generation seed differs from the full-span floor (the July partial's does not — undetectable).
+
 - **A factory filter also SCOPES the full-decentralized clone scan.** A clone binds to one
   factory, so `filters.factory` naming a configured generation narrows the event scan to that
   factory from ITS seed block via the new `rolloverFactoryScanTargets` (SDK `/config`; verified
@@ -95,10 +107,25 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   retired-settler teaching relay, the factory-filtered clone read, a REAL signed rc.2 rollover
   relayed through the full recompute/recover/admission pipeline, the track venue-miss chain
   sweep, and the fraction-premium unit graded at the exact wire value ("4.1%" →
-  `premiumAnnualized "0.041"`). `evals/task-fixtures.test.ts` pins every stub-backed task
-  envelope offline (canonical call must reproduce state+code; answer regexes must accept the
-  teaching message itself), so fixture rot and regex rot fail a unit test before any LLM
-  tokens are spent. Runs: 42/43 baseline, 47/49 expanded (misses: held-out clarify-variance).
+  `premiumAnnualized "0.041"`). `evals/task-fixtures.test.ts` pins covered task envelopes
+  offline (canonical call must reproduce state+code; answer regexes must accept the teaching
+  message itself; coverage: the rc.2 tasks, the highest-value earlier tasks, and a canary —
+  partial by design, extended with the set), so fixture rot and regex rot fail a unit test
+  before any LLM tokens are spent. Runs: 42/43 baseline, 47/49 expanded (misses: held-out clarify-variance).
+
+- **`topic:"warnings"` + the warning-code registry.** The envelope's warning vocabulary (96
+  codes — the surface's fastest-growing part) now teaches its contract ONCE, by family: a new
+  doc topic (aliases `codes`/`envelope`/`states`) whose table is GENERATED from
+  `WARNING_FAMILIES` (packages/schemas), stating which envelope state each family rides and what
+  any member means for the caller's next move; per-code detail stays in each warning's own
+  message, where the teaching lives. The registry is enforced by test: every code literal the
+  handlers emit must classify into exactly one family, and every registry entry must still be
+  emitted — an undocumented new code or dead documentation fails offline (it caught its first
+  omission, `unknown_topic`, on the first run). The no-args `cork_capabilities` manual now also
+  returns the doc-topic CATALOG (`docTopics`: name/aliases/summary), closing a discoverability
+  gap — topics were previously findable only by guessing a name or tripping `unknown_topic`.
+  Zero growth on the advertised surface: descriptions, schemas, and the instructions string are
+  unchanged (the drift gates never fired).
 
 - **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
   errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,

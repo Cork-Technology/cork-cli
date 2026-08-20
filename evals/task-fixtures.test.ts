@@ -1,9 +1,12 @@
-// Fixture-coherence gate for the eval task set: for each task with a stub-backed outcome, ONE
-// canonical correct tool call must reproduce the task's expected envelope (state + code) against
-// the stub — offline, no LLM. This is the deterministic half of every eval task: if it fails,
-// the task would fail for every agent regardless of competence (fixture rot, the class that
-// silently turned two tasks red on the 0.3.3 redeploy), and no LLM tokens should be spent
-// discovering that. The LLM half (tool selection, phrasing, unit translation) stays Layer B's.
+// Fixture-coherence gate for the eval task set: one canonical correct tool call per COVERED
+// task must reproduce the task's expected envelope (state + code) against the stub — offline,
+// no LLM. This is the deterministic half of a task: if it fails, the task would fail for every
+// agent regardless of competence (fixture rot, the class that silently turned two tasks red on
+// the 0.3.3 redeploy), and no LLM tokens should be spent discovering that. The LLM half (tool
+// selection, phrasing, unit translation) stays Layer B's. COVERAGE IS PARTIAL and grows with
+// the task set: the six rc.2 tasks, the five highest-value earlier tasks (real signed fill,
+// oracle deploy, rfq-open, rollover prepare, constraint resolve), and a read canary — extend
+// this file when adding tasks whose outcome depends on stub fixtures.
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
@@ -17,6 +20,7 @@ import {
   RC2_CLONE,
   RC2_EXACT_SETTLER,
   RC2_FACTORY,
+  RESTING_ORDER_HASH,
   RETIRED_EXACT_SETTLER,
   SIGNED_LOP_PAYLOAD,
   SIGNED_ROLLOVER_POST,
@@ -127,6 +131,56 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
       stubContext(),
     );
     expect(env.state).toBe("ok");
+  });
+
+  it("fill-resting-order: the REAL signed resting order fills with approval_missing (the hedger task's whole spine)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-fill-0001", action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(true);
+  });
+
+  it("deploy-oracle: builds with oracle_already_deployed (the pair wrapper is served as live)", async () => {
+    const env = await runTool(
+      "cork_prepare_market",
+      { chainId: 42161, clientRequestId: "eval-mkt-0001", action: { type: "deploy-oracle", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
+  });
+
+  it("submit-rfq-open: the venue stub assigns rfq_eval1 (the answer regex's ground truth)", async () => {
+    const env = await runTool(
+      "cork_submit",
+      { chainId: 42161, clientRequestId: "eval-rfq-0001", action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateralAsset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], packageIds: ["pkg_default"], expiryWindow: { notBefore: 1900000000, notAfter: 1910000000 }, notionalAssets: "1000000000000000000000", validUntil: 1795000000, signature: `0x${"ab".repeat(65)}` } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(JSON.stringify(env.data)).toContain("rfq_eval1");
+  });
+
+  it("prepare-rollover: the plain (no-JIT) rc.2 intent builds ok against the config settlers", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-roll-0001", action: { type: "rollover-intent", ...rolloverBase } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { settlerKind: string }).settlerKind).toBe("EXACT");
+  });
+
+  it("resolve-constraint: the recipe resolve fixture answers the rateMax the task's regex expects", async () => {
+    const env = await runTool(
+      "cork_compute",
+      { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQUIDITY_RECIPE, collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(JSON.stringify(env.data)).toContain("1600000000000000000");
   });
 
   it("the demo-pool read the oldest task grades still answers (fixture canary)", async () => {

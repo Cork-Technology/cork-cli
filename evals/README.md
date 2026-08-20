@@ -75,10 +75,11 @@ relay (the retired-settler refusal must reach the user with the active replaceme
 *gated* outcomes (the agent must report `needs_indexer` / `phase_gated` / `mode_unavailable` /
 `chain_read_failed` honestly instead of inventing data), plus **5 held-out tasks**.
 
-Every stub-backed task outcome is pinned OFFLINE by `evals/task-fixtures.test.ts`: one
-canonical correct call per task must reproduce the expected envelope (state + code) against
-the stub, and teaching-derived answer regexes must accept the teaching message itself — so
-fixture rot and regex rot fail a unit test, never an LLM run.
+`evals/task-fixtures.test.ts` pins covered tasks OFFLINE: one canonical correct call must
+reproduce the expected envelope (state + code) against the stub, and teaching-derived answer
+regexes must accept the teaching message itself — fixture rot and regex rot fail a unit test,
+never an LLM run. Coverage is partial and grows with the set (the rc.2 tasks, the highest-value
+earlier tasks, and a canary today); extend it when a new task's outcome depends on stub fixtures.
 
 **Held-out rule: never tune tool descriptions, examples, or teaching text against the held-out
 set.** It exists to catch description overfitting. Run it occasionally (`EVAL_HELD_OUT=1`) and

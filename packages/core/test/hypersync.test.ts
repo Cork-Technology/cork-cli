@@ -75,7 +75,11 @@ function fakeSource(logsByTopic: Record<string, HyperSyncLog[]>, seen: Array<{ f
     async queryLogs(q) {
       seen.push({ fromBlock: q.fromBlock, ...(q.address ? { address: q.address } : {}) });
       const t0s = q.topics?.[0] ?? [];
-      const logs = (t0s ?? []).flatMap((t) => logsByTopic[t] ?? []);
+      // Honor the address filter like real HyperSync does: an address-blind fake once masked a
+      // dead row-filter in the handler — the fake served logs the scope had excluded, and the
+      // handler's redundant post-filter quietly did the excluding.
+      const scope = q.address ? new Set(q.address.map((a) => a.toLowerCase())) : null;
+      const logs = (t0s ?? []).flatMap((t) => logsByTopic[t] ?? []).filter((l) => !scope || scope.has(l.address.toLowerCase()));
       return { logs, archiveHeight: 485_999_999 };
     },
   };
@@ -114,6 +118,18 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     // generation (active rc.2 + retired July) — retired clones stay discoverable.
     expect(seen[0]!.fromBlock).toBe(484973917);
     expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([RC2_FACTORY, FACTORY].sort());
+  });
+
+  it("flows kind=fills: filters.settler scopes the scan to that settler and ITS generation's seed", async () => {
+    const seen: Array<{ fromBlock: number; address?: string[] }> = [];
+    const ctx: HandlerContext = { nowSeconds: NOW, hyperSync: fakeSource({}, seen), resolveRpc: noRpc };
+    await runTool(
+      "cork_query",
+      { resource: "rollover-orders", chainId: 42161, mode: "full-decentralized", filters: { kind: "fills", settler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f" }, pageSize: 25, format: "concise" },
+      ctx,
+    );
+    expect(seen[0]!.fromBlock).toBe(494104750); // the rc.2 seed, not the July full span
+    expect(seen[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0xf4ffd4b3faedb784b04d1883119840515f224c2f"]);
   });
 
   it("flows kind=contracts: filters.factory scopes clones to ONE generation (the venue's rc.2 disambiguator, mirrored) AND scopes the scan to that generation's seed", async () => {

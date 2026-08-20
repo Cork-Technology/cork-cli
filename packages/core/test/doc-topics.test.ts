@@ -225,3 +225,19 @@ describe("data.execution on prepare results (offline-buildable variants)", () =>
     expect(execOf(env)).toBeUndefined();
   });
 });
+
+describe("the no-args manual carries the doc-topic CATALOG (progressive disclosure)", () => {
+  it("lists every DOC_TOPICS entry with name, aliases, and summary — bodies stay on demand", async () => {
+    const env = await runTool("cork_capabilities", {}, { nowSeconds: 1_790_000_000n });
+    expect(env.state).toBe("ok");
+    const d = env.data as { docTopics: Array<{ name: string; aliases: readonly string[]; summary: string }> };
+    expect(d.docTopics.map((t) => t.name).sort()).toEqual(Object.values(DOC_TOPICS).map((t) => t.name).sort());
+    for (const t of d.docTopics) {
+      expect(t.summary.length).toBeGreaterThan(0);
+      // the catalog is the light half: no bodies at the entry point
+      expect((t as Record<string, unknown>).body).toBeUndefined();
+    }
+    // the new warnings topic is in the catalog, resolvable on demand
+    expect(d.docTopics.some((t) => t.name === "warnings")).toBe(true);
+  });
+});

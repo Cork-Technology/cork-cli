@@ -6,7 +6,7 @@ import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
-import { resolveRollover, rolloverFactoryScanTargets, rolloverScanTargets } from "../config-remote.ts";
+import { resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
@@ -318,13 +318,16 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
       // block, and each row's `emitter`/`factory` says which generation produced it.
       const { rollover } = await resolveRollover(chainId);
       if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId}`, ctx);
-      const targets = rolloverScanTargets(rollover);
       if (kind === "fills") {
         const topics: Array<`0x${string}`[] | null> = [ROLLOVER_FILL_TOPICS];
         if (filters.orderDigest) topics.push([filters.orderDigest]);
+        // filters.settler scopes the scan the same way filters.factory scopes clones: a digest
+        // binds to one settler, and the unscoped walk starves the windowed no-token fallback's
+        // range budget on generations that cannot hold the fill.
+        const settlerTargets = rolloverDigestScanTargets(rollover, filters.settler);
         spec = {
-          fromBlock: targets.fromBlock,
-          address: targets.settlers,
+          fromBlock: settlerTargets.fromBlock,
+          address: settlerTargets.addresses,
           topics,
           decode: decodeRolloverFillRows,
           postFilter: (rows) => (filters.filler ? rows.filter((f) => String(f.filler).toLowerCase() === filters.filler!.toLowerCase()) : rows),
@@ -341,15 +344,11 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
           address: factoryTargets.addresses,
           topics: [[CLONE_DEPLOYED_TOPIC]],
           decode: decodeCloneRows,
-          postFilter: (rows) => {
-            let out = rows;
-            if (filters.account) out = out.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase());
-            // Same disambiguator the venue grew in rc.2: one wallet can own one clone PER
-            // factory generation. The address scope above already excludes other generations;
-            // this row filter stays as the belt for the unknown-factory verbatim scan.
-            if (filters.factory) out = out.filter((c) => String(c.factory).toLowerCase() === filters.factory!.toLowerCase());
-            return out;
-          },
+          // No factory row-filter here: the ADDRESS scope above is the mechanism — every log's
+          // emitter IS row.factory, so a row the filter could exclude cannot exist (a retained
+          // "belt" filter here was dead code teaching a wrong mental model; the source stub in
+          // the fake now honors the address scope like real HyperSync does).
+          postFilter: (rows) => (filters.account ? rows.filter((c) => String(c.owner).toLowerCase() === filters.account!.toLowerCase()) : rows),
           key: (c) => `clone:${String(c.rolloverContract).toLowerCase()}`,
           cache: "rollover-clones",
         };
@@ -534,7 +533,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
             traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
           } else {
-            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.settler ? { settler: filters.settler.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
           }
         } else if (kind === "fills") {
           traversal = await collectVenuePages(paging, (cursor) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));

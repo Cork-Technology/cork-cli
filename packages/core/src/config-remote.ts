@@ -75,44 +75,46 @@ export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
  *  fills and retired factories' clones stay on-chain, so history reads span active + legacy
  *  addresses from the earliest seed block. One derivation for every scan site (query's
  *  full-decentralized feeds, track's digest event-history leg). */
-/** Scan targets for ONE digest's event history. A digest binds to exactly one settler (the
- *  EIP-712 domain's verifyingContract), so when the settler is known the scan scopes to that
- *  address and ITS generation's seed block — a full-span scan (~9M extra blocks on 42161)
- *  trips ordinary endpoints' range caps for history that is guaranteed empty. An unknown or
- *  unnamed settler falls back to the full generation span. */
+/** ONE generation-scoping mechanism for every rollover event scan (the digest and factory
+ *  wrappers below are its two vocabularies — an earlier near-verbatim copy per wrapper meant a
+ *  matching-rule change had to land twice). Given an address and which addresses each
+ *  generation owns: a configured owner scopes the scan to that address from ITS generation's
+ *  seed block (a full-span scan re-opens the multi-million-block range that trips ordinary
+ *  endpoints and starves the windowed no-token fallback); no address = the full generation
+ *  span; an address the config does not know scans verbatim across the full window. */
+function generationScanTargets(
+  dep: CorkRolloverDeployment,
+  address: string | undefined,
+  addressesOf: (g: CorkRolloverDeployment | CorkRolloverGeneration) => string[],
+  fullAddresses: `0x${string}`[],
+): { addresses: `0x${string}`[]; fromBlock: number } {
+  const full = rolloverScanTargets(dep);
+  if (!address) return { addresses: fullAddresses, fromBlock: full.fromBlock };
+  const lc = address.toLowerCase();
+  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
+    if (addressesOf(g).some((a) => a.toLowerCase() === lc)) {
+      return { addresses: [address as `0x${string}`], fromBlock: g.seededAtBlock };
+    }
+  }
+  return { addresses: [address as `0x${string}`], fromBlock: full.fromBlock };
+}
+
+/** Scan targets for ONE digest's event history: a digest binds to exactly one settler (the
+ *  EIP-712 domain's verifyingContract). */
 export function rolloverDigestScanTargets(
   dep: CorkRolloverDeployment,
   settler?: string,
 ): { addresses: `0x${string}`[]; fromBlock: number } {
-  const full = rolloverScanTargets(dep);
-  if (!settler) return { addresses: full.settlers, fromBlock: full.fromBlock };
-  const lc = settler.toLowerCase();
-  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
-    if (lc === g.exactSettler.toLowerCase() || lc === g.partialSettler.toLowerCase()) {
-      return { addresses: [settler as `0x${string}`], fromBlock: g.seededAtBlock };
-    }
-  }
-  // A settler the config does not recognize: scan it verbatim across the full window.
-  return { addresses: [settler as `0x${string}`], fromBlock: full.fromBlock };
+  return generationScanTargets(dep, settler, (g) => [g.exactSettler, g.partialSettler], rolloverScanTargets(dep).settlers);
 }
 
-/** Scan targets for the CLONE feed when `filters.factory` names one generation: a clone binds
- *  to exactly one factory, so the scan scopes to that factory and ITS seed block — the
- *  full-span walk from the EARLIEST seed makes the windowed no-token fallback spend its whole
- *  range budget on generations the filter excludes (observed live: a 20-window walk stopped
- *  ~10M blocks short of the rc.2 clone it was asked for). An unknown factory scans verbatim
- *  across the full window — the caller asked about an address the config does not know. */
+/** Scan targets for the CLONE feed: a clone binds to exactly one factory (observed live: the
+ *  unscoped 20-window walk stopped ~10M blocks short of the rc.2 clone it was asked for). */
 export function rolloverFactoryScanTargets(
   dep: CorkRolloverDeployment,
   factory?: string,
 ): { addresses: `0x${string}`[]; fromBlock: number } {
-  const full = rolloverScanTargets(dep);
-  if (!factory) return { addresses: full.factories, fromBlock: full.fromBlock };
-  const lc = factory.toLowerCase();
-  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
-    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: g.seededAtBlock };
-  }
-  return { addresses: [factory as `0x${string}`], fromBlock: full.fromBlock };
+  return generationScanTargets(dep, factory, (g) => [g.factory], rolloverScanTargets(dep).factories);
 }
 
 export function rolloverScanTargets(dep: CorkRolloverDeployment): {

@@ -50,6 +50,113 @@ export const X_UNITS = {
   premiumPerShare: "{qPremiumTok/cST}",
 } as const;
 
+
+// ── Warning-code families — the machine-readable registry behind topic:"warnings" ─────────────
+// The envelope's `warnings[].code` vocabulary is the tool surface's fastest-growing part
+// (95 codes as of 2026-08-20). The registry teaches the FAMILY contract once — which envelope
+// state a family rides, what a member means structurally — instead of re-documenting every code
+// at every surface; per-code detail lives in each warning's own message, by design (a message is
+// a prompt-engineering surface). Zero drift by construction, twice over: the warnings topic's
+// table below is GENERATED from this constant, and packages/core/test/warning-registry.test.ts
+// extracts every code literal the handlers emit and requires exact set-equality with this
+// registry — an undocumented new code, or a dead registry entry, fails offline.
+
+/** Which envelope state a family's codes ride: `ok` = informational on a served result;
+ *  `unavailable` = the call was honestly not servable; `conflict` = the tool executed and found
+ *  a disagreement (chain outranks indexer [K7]); `mixed` = the same code serves more than one
+ *  state and its row says how. */
+export type WarningEnvelopeClass = "ok" | "unavailable" | "conflict" | "mixed";
+
+export interface WarningFamily {
+  family: string;
+  envelope: WarningEnvelopeClass;
+  /** One-line family contract — what ANY member means for the caller's next move. */
+  contract: string;
+  codes: readonly string[];
+}
+
+export const WARNING_FAMILIES: readonly WarningFamily[] = [
+  {
+    family: "availability",
+    envelope: "mixed",
+    contract:
+      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
+    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "no_lop"],
+  },
+  {
+    family: "gates",
+    envelope: "unavailable",
+    contract:
+      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, or the deprecation gate; deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
+    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice"],
+  },
+  {
+    family: "scan honesty",
+    envelope: "ok",
+    contract:
+      "an event/log traversal served PARTIAL or fallback-grade evidence and says so precisely — never treat absence in a partial scan as absence in the world (pagination_incomplete escalates to conflict only on a self-contradicting venue cursor)",
+    codes: ["logs_unavailable", "logs_range_limited", "logs_windowed_fallback", "live_tail_merged", "live_tail_unavailable", "pagination_incomplete", "verification_budget"],
+  },
+  {
+    family: "venue transport",
+    envelope: "mixed",
+    contract:
+      "the venue's own answer, classified: 4xx = venue_rejected (unavailable, do not retry unchanged), 5xx/unreachable = venue_unreachable (unavailable, retry same clientRequestId), 429 = venue_rate_limited, same-id-different-payload 409 = venue_conflict (conflict), in-band notices relayed verbatim as venue_notice / venue_deprecated_path (info); venue_reported and invalid_service_response mark venue-sourced data this tool could not independently verify or parse",
+    codes: ["venue_rejected", "venue_unreachable", "venue_rate_limited", "venue_conflict", "venue_notice", "venue_deprecated_path", "venue_reported", "invalid_service_response"],
+  },
+  {
+    family: "verification mismatch",
+    envelope: "conflict",
+    contract:
+      "a local recomputation disagreed with a supplied or venue-claimed value [K3/K7] — the payload was NOT relayed / the row was not trusted; the code names WHICH verification failed so callers can branch",
+    codes: [
+      "artifact_digest_mismatch", "intent_hash_mismatch", "venue_digest_mismatch", "order_hash_mismatch",
+      "marketid_mismatch", "create2_mismatch", "chainid_mismatch", "status_mismatch", "extension_salt_mismatch",
+      "signature_or_reconstruction_mismatch", "prepared_context_mismatch", "listing_traits_mismatch",
+      "band_parity_mismatch", "adapter_binding_mismatch", "premium_scale_mismatch",
+    ],
+  },
+  {
+    family: "honest absence",
+    envelope: "mixed",
+    contract:
+      "the thing asked about does not exist where authority was consulted — a NORMAL outcome, not an error (order_not_found also rides ok as info when track's chain sweep reconstructs a venue-archived digest; unknown_target is decode's do-not-broadcast-unidentified caution)",
+    codes: ["order_not_found", "receipt_not_found", "rfq_not_found", "pool_not_found", "asset_not_found", "recipe_not_found", "denomination_not_found", "feed_not_found", "unknown_target", "unknown_topic"],
+  },
+  {
+    family: "domain terms",
+    envelope: "unavailable",
+    contract:
+      "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead",
+    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused"],
+  },
+  {
+    family: "jit & prediction",
+    envelope: "ok",
+    contract:
+      "build-and-warn guards on predicted identity (pool id, oracle, shares, roles): the artifact IS returned; a member says which prediction is unverified, would revert at fill time, or needs re-signing — implementation_not_approved escalates the same posture to trusted-role code drift",
+    codes: [
+      "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "oracle_not_deployable",
+      "oracle_not_deployed", "stale_share_prediction", "share_prediction_unavailable", "rate_drift_notice",
+      "constraint_window_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
+    ],
+  },
+  {
+    family: "bundle guards",
+    envelope: "ok",
+    contract:
+      "prepare pre-flight findings on live pool/account state: the bundle IS returned, labelled (paused, expired, not whitelisted, sweep-back accounting, why funding legs were omitted) — degrading to silence when a view is unavailable",
+    codes: ["pool_expired", "pool_paused", "not_whitelisted", "sweep_back", "sweep_back_skipped", "funding_needs_rpc", "manual_funding", "owner_managed_funding"],
+  },
+  {
+    family: "artifact life",
+    envelope: "ok",
+    contract:
+      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), or a defaulted/ignored input the caller should know about",
+    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect"],
+  },
+] as const;
+
 export const DOC_TOPICS: Record<string, DocTopic> = {
   signing: {
     name: "signing",
@@ -291,6 +398,38 @@ plausible nonsense rather than failing.
   (\`Date.now()\`) is rejected with teaching rather than accepted as an immortal deadline.`,
     searchText:
       "units unit scale scales scaling decimals decimal precision wad 1e18 fixed point ray percent percentage fraction basis points bps what scale is this field is this wad how many decimals do i multiply by 1e18 premium percent or fraction rate bump base 1e7 token amount base units smallest unit convert amount 18 decimals usdc 6 decimals off by 100 scale mismatch",
+  },
+  warnings: {
+    name: "warnings",
+    aliases: ["warning-codes", "codes", "envelope", "states"],
+    summary:
+      "Every result is { state, data, warnings[], provenance }: check state before trusting data. ok = use data (warnings are labels, not errors); unavailable = honestly not servable, warnings[0].code says why — do not retry unchanged; conflict = the tool executed and found a disagreement, and chain outranks indexer. The ~95 warning codes are branchable contracts grouped into ten families; per-code detail lives in each warning's own message.",
+    body: `# The envelope and its warning families
+
+Every tool returns \`{ state, data, warnings[], provenance, schemaVersion }\`. **Check \`state\`
+before trusting \`data\`:** \`ok\` = use data, and any warnings are LABELS on a served result;
+\`unavailable\` = honestly not servable (do not retry the same call unchanged — \`warnings[0].code\`
+says why); \`conflict\` = the tool executed and found a disagreement — surface it, never paper
+over it, chain outranks indexer [K7].
+
+\`warnings[].code\` is a BRANCHABLE CONTRACT: codes are stable identifiers, messages are teaching
+prose. Branch on the code; read the message for the fix (each message names concrete values and
+the corrected form — per-code documentation lives THERE, not in this table).
+
+| family | rides on | any member means |
+|---|---|---|
+${WARNING_FAMILIES.map((f) => `| ${f.family} | ${f.envelope} | ${f.contract} — codes: ${f.codes.map((c) => `\`${c}\``).join(", ")} |`).join("\n")}
+
+Two codes live OUTSIDE the envelope, at the MCP error layer: \`invalid_input\` (schema-invalid
+call — the teaching names the path, the expected shape, and a corrected example that itself
+validates) and \`internal_error\` (unexpected exception). On the CLI these are exit 2 and exit 1;
+envelope states map to exit 0 (ok), 3 (unavailable), 4 (conflict).
+
+The registry behind this table is a single constant (\`WARNING_FAMILIES\`, packages/schemas);
+this table is generated from it, and a test extracts every code the handlers emit and requires
+exact set-equality — an undocumented code, or a documented-but-never-emitted one, fails offline.`,
+    searchText:
+      "warning warnings code codes envelope state states ok unavailable conflict error handling branch on warning code what does this warning mean retry do not retry mismatch not found gated info label exit code families",
   },
 };
 

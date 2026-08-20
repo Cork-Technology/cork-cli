@@ -155,8 +155,13 @@ const SIGNED_ROLLOVER_BUILT = buildRolloverIntent({
   fillDeadline: 1_795_604_800n,
   clientRequestId: "eval-rollsub-fixture",
 });
+// ONLY the three keys the cork_submit rollover-order action takes (strictObject): spreading the
+// whole venuePost leaked chainId+envelope into the prompt payload, making "relay exactly as
+// given" schema-invalid verbatim. venuePost.signature is a placeholder instruction by design —
+// replaced here with the real signature over the real digest.
 export const SIGNED_ROLLOVER_POST = {
-  ...SIGNED_ROLLOVER_BUILT.venuePost,
+  order: SIGNED_ROLLOVER_BUILT.venuePost.order,
+  intent: SIGNED_ROLLOVER_BUILT.venuePost.intent,
   signature: await ROLLOVER_USER.sign({ hash: SIGNED_ROLLOVER_BUILT.orderDigest }),
 };
 export const SIGNED_ROLLOVER_DIGEST = SIGNED_ROLLOVER_BUILT.orderDigest;
@@ -166,14 +171,17 @@ export const SIGNED_ROLLOVER_DIGEST = SIGNED_ROLLOVER_BUILT.orderDigest;
 // so the task grades commitment-building, not pool-id guessing.
 export const JIT_TASK_CONSTRAINT = { rateMin: "1", rateMax: "1600000000000000000", rateChangePerDayMax: "800000000000000000", rateChangeCapacityMax: "2400000000000000000" };
 export const JIT_TASK_EXPIRY = 1_900_000_000n;
+export const JIT_TASK_PAIR = { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" } as const;
+// Derived FROM the constraint constant above (never a second hand-written copy: a tuned string
+// twin with a stale bigint twin makes DERIVED_JIT_POOL the id of a DIFFERENT pool than the
+// constraint the prompt carries — the pinned-literal rot class, in duplicate-value form).
 export const DERIVED_JIT_POOL = computeMarketId({
-  collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2",
-  referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610",
+  ...JIT_TASK_PAIR,
   expiryTimestamp: JIT_TASK_EXPIRY,
-  rateMin: 1n,
-  rateMax: 1_600_000_000_000_000_000n,
-  rateChangePerDayMax: 800_000_000_000_000_000n,
-  rateChangeCapacityMax: 2_400_000_000_000_000_000n,
+  rateMin: BigInt(JIT_TASK_CONSTRAINT.rateMin),
+  rateMax: BigInt(JIT_TASK_CONSTRAINT.rateMax),
+  rateChangePerDayMax: BigInt(JIT_TASK_CONSTRAINT.rateChangePerDayMax),
+  rateChangeCapacityMax: BigInt(JIT_TASK_CONSTRAINT.rateChangeCapacityMax),
   rateOracle: ORACLE,
 });
 

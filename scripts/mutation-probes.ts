@@ -60,6 +60,7 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
+  warningRegistry: "packages/core/test/warning-registry.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
@@ -852,24 +853,25 @@ const CATALOG: Mutant[] = [
     tests: [T.hypersync, T.rolloverVerify],
   },
   {
-    // The clone scan must scope to the filtered factory's OWN generation seed — a full-span
-    // fallback starves the windowed no-token path's range budget on excluded generations.
-    id: "rollover-factory-scan-full-span",
+    // Generation scoping (ONE mechanism behind the digest AND factory scans): a configured
+    // owner must scope to ITS generation's seed — regressing to the full span re-opens the
+    // multi-million-block range that trips ordinary endpoints and starves the windowed
+    // no-token fallback. Killed from BOTH consumer suites, proving both wrappers ride it.
+    id: "rollover-generation-scan-full-span",
     file: "packages/core/src/config-remote.ts",
-    find: "    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: g.seededAtBlock };",
-    replace: "    if (lc === g.factory.toLowerCase()) return { addresses: [g.factory as `0x${string}`], fromBlock: full.fromBlock };",
-    tests: [T.hypersync],
+    find: "      return { addresses: [address as `0x${string}`], fromBlock: g.seededAtBlock };",
+    replace: "      return { addresses: [address as `0x${string}`], fromBlock: full.fromBlock };",
+    tests: [T.hypersync, T.rolloverVerify],
   },
   {
-    // The digest scan must scope to the settler's OWN generation seed — falling back to the
-    // full span re-opens the ~9M-block range that trips ordinary endpoints' caps.
-    id: "rollover-digest-scan-full-span",
+    // The membership test must consult EVERY address a generation owns — halving it to the
+    // first entry silently un-scopes partial-settler digests to the full span.
+    id: "rollover-generation-scan-membership",
     file: "packages/core/src/config-remote.ts",
-    find: "      return { addresses: [settler as `0x${string}`], fromBlock: g.seededAtBlock };",
-    replace: "      return { addresses: [settler as `0x${string}`], fromBlock: full.fromBlock };",
+    find: "    if (addressesOf(g).some((a) => a.toLowerCase() === lc)) {",
+    replace: "    if (addressesOf(g)[0]!.toLowerCase() === lc) {",
     tests: [T.rolloverVerify],
-  },
-  {
+  },  {
     // The venue-miss sweep exists so venue absence cannot silence live chain state [K7]:
     // skipping non-None statuses degrades every archived-generation reconcile to not-found.
     id: "rollover-venue-miss-sweep-inert",
@@ -895,6 +897,16 @@ const CATALOG: Mutant[] = [
     find: "      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [",
     replace: "      ...(undefined ?? []).flatMap((g): Array<[string, string | undefined]> => [",
     tests: [T.decodeTx],
+  },
+  // ── warning-code registry: membership is enforced by test, so membership must be mutable-
+  //    detectable — a dropped classification (the exact drift the registry exists to catch)
+  //    must fail the set-equality gate, proving the extraction actually reads the handlers ──
+  {
+    id: "warning-registry-code-dropped",
+    file: "packages/schemas/src/doc-topics.ts",
+    find: '"pool_expired", "pool_paused", "not_whitelisted",',
+    replace: '"pool_expired", "not_whitelisted",',
+    tests: [T.warningRegistry],
   },
   // ── eval stub fidelity: the stub must MIRROR venue behavior, not ignore parameters ─────────
   {
