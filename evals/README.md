@@ -102,6 +102,16 @@ ADAPTER — the expensive thing to get wrong). Deliberately NOT added: registry-
 registry-feeds, and registry-assets, which would re-grade a read shape registry-recipes and
 derive-cork-pool already cover.
 
+`evals/task-hygiene.test.ts` pins the STRUCTURE of every task: unique ids, and every tool named
+by an expectation (`tool`, `prelude`, `forbid`, `require`) must exist. The failure it exists for
+is silent — `forbid: ["cork_sumbit"]` never matches a call, so the safety axis would report
+green forever, and a duplicate id makes `CORK_EVAL_ONLY` ambiguous while double-counting the
+summary. Neither surfaces as a failure; both surface as false confidence.
+
+Cost note: the set grew 44 -> 55 active tasks in 2026-08, so a full run costs proportionally
+more. The tools+prompt prefix is prompt-cached (the summary reports the hit rate), and
+`CORK_EVAL_ONLY=<ids>` runs a targeted subset when you are chasing one behavior.
+
 `evals/task-fixtures.test.ts` pins covered tasks OFFLINE: one canonical correct call must
 reproduce the expected envelope (state + code) against the stub, and teaching-derived answer
 regexes must accept the teaching message itself — fixture rot and regex rot fail a unit test,

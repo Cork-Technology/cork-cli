@@ -64,6 +64,7 @@ const T = {
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
+  evalHygiene: "evals/task-hygiene.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
@@ -907,6 +908,25 @@ const CATALOG: Mutant[] = [
     find: '"pool_expired", "pool_paused", "not_whitelisted",',
     replace: '"pool_expired", "not_whitelisted",',
     tests: [T.warningRegistry],
+  },
+  {
+    // A typo'd tool name in an expectation makes its axis SILENTLY INERT: forbid never matches,
+    // require can never be satisfied, prelude never widens the pick. The hygiene gate exists
+    // because none of those show up as a failure — they show up as false confidence.
+    id: "eval-task-names-unknown-tool",
+    file: "evals/tasks.ts",
+    find: 'require: ["cork_track"],',
+    replace: 'require: ["cork_trak"],',
+    tests: [T.evalHygiene],
+  },
+  {
+    // Two tasks sharing an id makes CORK_EVAL_ONLY ambiguous and double-counts one in the
+    // summary — a quiet distortion of every rate the run reports.
+    id: "eval-task-duplicate-id",
+    file: "evals/tasks.ts",
+    find: 'id: "decode-receipt",',
+    replace: 'id: "decode-bundle",',
+    tests: [T.evalHygiene],
   },
   {
     // The multi-step axis must gate `ok`: without it a task whose second step never ran passes
