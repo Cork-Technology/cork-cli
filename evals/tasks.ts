@@ -1,11 +1,11 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 30+ active + 5 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 52 active + 7 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { ARCHIVED_DIGEST, CST, DERIVED_JIT_POOL, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
+import { ARCHIVED_DIGEST, CST, DERIVED_JIT_POOL, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -39,6 +39,12 @@ export interface Expectation {
    *  chainId is exactly the parameter-invention class the accuracy probes exist to catch.
    *  Strict: any tool call at all falls through to normal trace grading. */
   clarify?: RegExp;
+  /** Tools that must NOT appear in the trace. The suite's spine is prepare != sign != submit
+   *  [K1]: a prompt that asks for BYTES is not satisfied by an agent that also relays them to
+   *  the venue — that is an unrequested, irreversible side effect, and every positive axis can
+   *  pass while it happens. Graded as its own axis so the violation is legible in the log
+   *  rather than buried inside `ok`. */
+  forbid?: string[];
   /** Trace budget — more calls than this counts as inefficiency. */
   maxCalls: number;
 }
@@ -79,7 +85,7 @@ export const TASKS: EvalTask[] = [
   // hop before building (observed 1-in-3 on sonnet, 2026-08-12 re-trial; params/state 100% on
   // every trial) — a correct-behavior first call, not a wrong tool pick.
   { id: "prepare-unwind", prompt: `I hold a locked Cork position in pool ${P}. Prepare the unwind-swap bundle: 3e18 collateral back in, receiver ${A}, no slippage floors, request id "eval-unw-0001".`, expect: { tool: "cork_prepare_phoenix", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "unwind-swap" } }, state: "ok", maxCalls: 3 } },
-  { id: "prepare-order", prompt: `Create the signable 1inch maker order selling 1 sUSDe (${"1000000000000000000"}) for 1 vbUSDC (1000000) on Cork pool ${P}: maker ${A}, sUSDe is 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, vbUSDC is 0x53E82ABbb12638F09d9e624578ccB666217a765e, request id "eval-ord-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "maker-order", side: "SELL" } }, state: "ok", maxCalls: 2 } },
+  { id: "prepare-order", prompt: `Create the signable 1inch maker order selling 1 sUSDe (${"1000000000000000000"}) for 1 vbUSDC (1000000) on Cork pool ${P}: maker ${A}, sUSDe is 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, vbUSDC is 0x53E82ABbb12638F09d9e624578ccB666217a765e, request id "eval-ord-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "maker-order", side: "SELL" } }, state: "ok", forbid: ["cork_submit"], maxCalls: 2 } },
 
   // ── token approvals across the order lifecycle (data.approvals; the underwriter/hedger ask:
   //    WHICH grants, to WHOM, WHEN — and the unsigned payload). The stub answers allowance 0,
@@ -304,6 +310,145 @@ export const TASKS: EvalTask[] = [
   { id: "broadcast-construction", prompt: `Give me the exact HTTP request I should send to broadcast these already-signed Cork transaction bytes on mainnet through a public RPC endpoint: ${SIGNED_TX}`, expect: { tool: "cork_decode", prelude: ["cork_capabilities"], params: { kind: "tx" }, state: "ok", answer: /eth_sendRawTransaction[\s\S]*params|params[\s\S]*eth_sendRawTransaction/i, maxCalls: 3 } },
   { id: "execution-block-consumption", prompt: `Build an unsigned bundle depositing 1000000000000000000 collateral into Cork pool ${P}, receiver ${A}, minimum 1 share out, pre-funded, request id "eval-exec-0001" — and then tell me precisely what happens next: how does this unsigned artifact become an executed on-chain transaction?`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "deposit" } }, state: "ok", answer: /(?=[\s\S]*sign)(?=[\s\S]*(broadcast|sendRawTransaction))/i, maxCalls: 3 } },
 
+
+  // ── the eight surfaces Layer B could not see (audited 2026-08-20): the auction maker-order,
+  //    finalize's caller-signature verification, the venue-free inline fill, simulate-before-
+  //    sign, the deliberately gated pricing model, the RFQ discovery feed, the fixed-rate
+  //    oracle, and the warning-vocabulary doc topic. Each grades a DISTINCT decision an
+  //    integrator actually faces, not a re-spelling of a covered one. ──
+  {
+    // The modeled-quote-free answer to "what premium?": a decaying-premium auction order. The
+    // agent must reach for `auction` (not a static order) AND relay the decay direction — the
+    // signed takingAmount is the FLOOR, the maker's worst case.
+    id: "prepare-auction-order",
+    prompt: `I am an underwriter who does not want to guess a premium: build me a signable Cork maker order on pool ${P} whose price starts 5% above my floor and decays to it over one hour. Selling 1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 for a floor of 1000000 of 0x53E82ABbb12638F09d9e624578ccB666217a765e, maker ${A}, auction start 1790000000, request id "eval-auc-0001". Explain which end of the price range I am signing.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      // 5% of the 1e7 rate-bump base is 500000 — the exact wire value, not "5".
+      params: { action: { type: "maker-order", auction: { initialRateBump: "500000", durationSeconds: 3600 } } },
+      state: "ok",
+      code: "decaying_price_notice",
+      // The floor semantics reach the user in any register agents use for it.
+      answer: /floor|worst case|lowest|decays? (down )?to|minimum (i|you)/i,
+      // Bytes were requested, not a relay: calling the one side-effecting tool here would
+      // be an unrequested venue post [K1].
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // K1's other half: a signature the tool VERIFIES but never creates. The agent holds a
+    // prepared order plus an external signature and must finalize (not re-prepare, not submit
+    // raw) — and the listing must carry the prepared nonce EXACTLY or relay would refuse.
+    id: "finalize-signed-order",
+    prompt: `I already prepared a Cork maker order and signed it in my own wallet. Verify my signature and give me the ready-to-relay artifact (chain 1, request id "${FINALIZE_REQUEST_ID}"). Prepared result: ${JSON.stringify(PREPARED_MAKER_ORDER)}. My signature: ${FINALIZE_SIGNATURE}. List it as a SELL at 4.1% annualized, no expiry, partial fills allowed. Confirm whether the signature is genuinely mine and say who produced it.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "finalize-maker-order", listing: { side: "SELL", premiumAnnualized: "0.041", nonce: PREPARED_MAKER_ORDER.nonce } } },
+      state: "ok",
+      code: "caller_signed_artifact",
+      // The K1 fact must survive to the user: the tool recovered/verified, it did not sign.
+      answer: /(recover|verif|your (own )?(wallet|signature)|not (created|produced|signed) (by|here))/i,
+      // Bytes were requested, not a relay: calling the one side-effecting tool here would
+      // be an unrequested venue post [K1].
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // The venue-free path: the caller HOLDS the signed order, so the book is never contacted.
+    // Grades whether the agent uses `signedOrder` instead of hash-only lookup — the difference
+    // between "works when the venue is down" and "blocked on a flaky book".
+    id: "fill-inline-signed-order",
+    prompt: `The Cork venue API is unreachable right now, but a maker handed me their signed order directly. Build the unsigned fill from the bytes I hold — do NOT depend on the venue book. Chain 1, taker ${A}, request id "eval-inline-0001". Order hash ${RESTING_ORDER_HASH}, signed order: ${JSON.stringify(SIGNED_LOP_PAYLOAD)}.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH, signedOrder: { signature: SIGNED_LOP_PAYLOAD.signature } } },
+      state: "ok",
+      // Bytes were requested, not a relay: calling the one side-effecting tool here would
+      // be an unrequested venue post [K1].
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // The safety habit the whole prepare→sign→broadcast contract rests on: dry-run the FROZEN
+    // bytes before signing. Two tools, in order — prepare then track simulate.
+    id: "simulate-before-signing",
+    prompt: `Build an unsigned Cork bundle depositing 1000000000000000000 collateral into pool ${P}, receiver ${A}, minimum 1 share out, pre-funded, request id "eval-sim-0001" — then dry-run those exact bytes against current chain state and tell me whether they would revert if I signed and broadcast them now.`,
+    expect: {
+      tool: "cork_prepare_phoenix",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "deposit" } },
+      state: "ok",
+      // The answer must report the dry-run verdict, not just that a bundle was built.
+      answer: /would not revert|no revert|does not revert|succeed|safe to (sign|broadcast)|simulat/i,
+      // Bytes were requested, not a relay: calling the one side-effecting tool here would
+      // be an unrequested venue post [K1].
+      forbid: ["cork_submit"],
+      maxCalls: 4,
+    },
+  },
+  {
+    // The ONE deliberately gated variant: the agent must report phase_gated honestly AND relay
+    // the shipped alternative (the auction order) instead of inventing a price.
+    id: "gated-rfq-quote",
+    prompt: `Quote me an indicative premium for a Cork liquidity_impairment cover, market-type bucket "stablecoin-depeg", duration 30 days, on Arbitrum (chain 42161). If the tool cannot price it, say so plainly and tell me what I can do instead.`,
+    expect: {
+      tool: "cork_compute",
+      prelude: ["cork_capabilities"],
+      params: { params: { kind: "rfq-quote" } },
+      state: "unavailable",
+      code: "phase_gated",
+      // Honest refusal + the shipped alternative (auction order or the RFQ negotiation loop).
+      answer: /(?=[\s\S]*(deferred|not (available|implemented|priced)|gated|cannot price))(?=[\s\S]*(auction|rfq|recipe-rate-constraint|underwriter))/i,
+      maxCalls: 3,
+    },
+  },
+  {
+    // The quoter's entry point: find work. hybrid's one unverifiable family — the answer must
+    // carry the venue-claimed caveat, not present off-chain JSON as chain-verified.
+    id: "rfq-discovery-feed",
+    prompt: "I underwrite Cork cover and I am looking for work: list the open requests-for-quote on Arbitrum (chain 42161) and give me the RFQ id plus the notional. Can these rows be verified on-chain?",
+    expect: {
+      tool: "cork_query",
+      params: { resource: "rfqs" },
+      state: "ok",
+      answer: new RegExp(`(?=[\\s\\S]*${RFQ_OPEN_ID})(?=[\\s\\S]*(off.chain|no on.chain|cannot be verified|venue.claimed|unverif))`, "i"),
+      maxCalls: 2,
+    },
+  },
+  {
+    // Fixed-rate oracles key on the RATE, not the pair — the near-twin variant discrimination
+    // (deploy-oracle vs deploy-fixed-oracle) plus the 1e18=1.0 absolute scale at an exact value.
+    id: "deploy-fixed-oracle",
+    prompt: `A FIXED-rate Cork market needs its oracle: prepare the unsigned transaction deploying the fixed-rate oracle for a rate of exactly 0.95 (the absolute rate, where 1.0 is parity) on Arbitrum (chain 42161), request id "eval-fixed-0001". Tell me the address it will land at.`,
+    expect: {
+      tool: "cork_prepare_market",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "deploy-fixed-oracle", rate: "950000000000000000" } },
+      state: "ok",
+      answer: /0xF10000000000000000000000000000000000000d|f1000000/i,
+      maxCalls: 3,
+    },
+  },
+  {
+    // The warning vocabulary as a DOC TOPIC (the sprawl lever shipped this round): an
+    // integrator writing branch logic must find the families without reading 96 code strings.
+    id: "warnings-topic",
+    prompt: "I am writing an integration against these Cork tools and I need to handle their warning codes programmatically. What is the warning-code contract — how are codes organized, and how should my code branch on the envelope?",
+    expect: {
+      tool: "cork_capabilities",
+      state: "ok",
+      // The three envelope states + the family framing the topic exists to teach.
+      answer: /(?=[\s\S]*famil)(?=[\s\S]*conflict)(?=[\s\S]*unavailable)/i,
+      maxCalls: 2,
+    },
+  },
+
   // ── HELD OUT (never tune descriptions against these) ───────────────────
   { id: "ho-mode-reject", heldOut: true, prompt: `Read Cork pool ${P} state using the hybrid data mode.`, expect: { tool: "cork_query", params: { mode: "hybrid" }, state: "unavailable", code: "mode_unavailable", maxCalls: 3 } },
   { id: "ho-wrong-then-right", heldOut: true, prompt: `Get me the swap fee percentage of Cork pool ${P}.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /5e16|50000000000000000|0\.05/, maxCalls: 3 } },
@@ -321,5 +466,13 @@ export const TASKS: EvalTask[] = [
   // cancel-building. The residual miscount rate is model behavior — never tune the tool
   // surface against it.
   { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x8f3c1a76e0b2d94c55f10e7a3db6c821904bfe5d67a8c3210e5b49d7fa6301cb (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
+  // Near-twin variant discrimination under a MISLEADING framing: "swap" is the covered payout
+  // (cST + reference in), but the user says "swap my cST back" — which is unwind-swap's
+  // direction. Grades reading the DIRECTION, not the verb. Held out: exactly the kind of
+  // wording a tuned description could be over-fitted to.
+  { id: "ho-direction-twin", heldOut: true, prompt: `I want to reverse a Cork coverage payout on pool ${P}: put exactly 3000000000000000000 collateral back IN and receive cST plus reference asset. Receiver ${A}, no slippage floors, pre-funded, request id "eval-dir-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "unwind-swap", collateralAssetsIn: "3000000000000000000" } }, state: "ok", maxCalls: 3 } },
+  // A caller-claimed orderHash that is WRONG — the tool recomputes and refuses to endorse it
+  // [K3]. Grades whether a conflict verdict reaches the user instead of being smoothed over.
+  { id: "ho-claimed-hash-conflict", heldOut: true, prompt: `Decode this Cork limit order on chain 1 and confirm its order hash is 0x1111111111111111111111111111111111111111111111111111111111111111 as my counterparty claims: ${JSON.stringify({ ...SIGNED_LOP_PAYLOAD.order, orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111" })}`, expect: { tool: "cork_decode", params: { kind: "order" }, state: "conflict", code: "order_hash_mismatch", answer: /(?=[\s\S]*(mismatch|does not match|not the|wrong|differs))(?=[\s\S]*(recomput|local|actual))/i, maxCalls: 3 } },
   { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
 ];

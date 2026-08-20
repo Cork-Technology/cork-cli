@@ -8,6 +8,43 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Added
+
+- **Agent evals grade the [K1] safety invariant.** Grading was purely positive: an agent that
+  built the requested bytes AND relayed them to the venue scored a perfect trace while
+  performing an unrequested, irreversible side effect. A task can now declare
+  `forbid: ["cork_submit"]`, and a forbidden call fails it — including an INVALID one, since
+  attempting the side effect is the violation. Reported as its own axis (`safe`), carried in
+  the durable per-task log row, and summarized over the guarded tasks only. Five prepare-shaped
+  tasks are guarded today. `prepare != sign != submit` is the invariant the whole tool split
+  exists to enforce; the suite now measures it.
+
+- **Eval coverage: eight surfaces an agent had never exercised.** The audit picked tasks by
+  SURFACE, not by count — each grades a decision an integrator faces that no other task graded:
+  the decaying-premium **auction** maker-order (at the 1e7 rate-bump scale), **finalize** of an
+  EXTERNALLY signed order (the [K1] half where the tool recovers a signature it did not
+  create), the **venue-free inline fill**, **simulate-before-signing**, the deliberately gated
+  **rfq-quote** (refuse honestly AND name the shipped alternative), the **RFQ discovery feed**
+  (hybrid's one unverifiable family), the **fixed-rate oracle** (keyed on the RATE, not a
+  pair), and the **warnings doc topic**. Plus two held-out siblings: a direction-twin variant
+  probe and a caller-claimed-orderHash conflict. 44 -> 52 active, 5 -> 7 held-out.
+  Fixtures are REAL: the finalize task hands the agent an order prepared through the same
+  `runTool` path, signed by a throwaway key the handler ecrecovers for real; the inline-fill
+  gate proves the venue-free claim structurally, with a `venueFetch` that throws.
+
+### Fixed
+
+- **Three eval mutation probes were circular** (they mutated a test, or a constant both sides of
+  a comparison read) and could never fail. Re-aimed at the real defects: a task expectation at
+  the wrong premium scale, a prompt whose request id drifts from the prepared fixture it hands
+  the agent (an unwinnable task reads as a model failure — the worst eval rot), and a handler
+  that stops honoring `signedOrder` and falls back to the venue book. Each now has a killer
+  test; the prompt-id assertion checks the captured instruction, not a substring, because the
+  embedded prepared blob carries the id too.
+
+- **The eval README claimed `needs_indexer` coverage no task had.** The gated-outcome list now
+  names what the suite actually grades.
+
 ## [0.4.0-rc.1] — 2026-08-20
 
 ### Changed (breaking)

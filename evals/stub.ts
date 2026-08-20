@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEMO_POOL_ID } from "@cork/schemas";
 
@@ -110,6 +110,8 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 100n * WAD;
     case "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE":
       return 300n * WAD;
+    case "predictFixedRateOracle":
+      return "0xF10000000000000000000000000000000000000d"; // CREATE2-predicted, not yet deployed (getCode answers "0x")
     case "lookupWrapper":
       return ORACLE; // pair oracle deployed; its rate() is served above
     case "resolve":
@@ -129,6 +131,9 @@ function readContract(args: { address: string; functionName: string; args?: unkn
 /** A rollover orderDigest the venue no longer serves (its generation is archived) but whose
  *  state survives on-chain at the retired settler — the track venue-miss sweep fixture. */
 export const ARCHIVED_DIGEST = `0x${"5e".repeat(32)}`;
+
+/** The one open RFQ on the venue stub's discovery feed (the rfq-read task's ground truth). */
+export const RFQ_OPEN_ID = "rfq_open7";
 
 /** One rc.2 rollover clone on the venue's contracts feed (the factory-filter task). */
 export const RC2_CLONE = "0x96f126A8503145201A60Bf9BdB29fE26E40cCA14";
@@ -263,6 +268,13 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     return r(200, { items, nextCursor: null, hasMore: false });
   }
   if (url.includes("/rollover/")) return r(200, { items: [] });
+  if (/\/rfqs\/v1(\?|$)/.test(url)) {
+    // The discovery feed: ONE open RFQ. The venue filters state server-side (default open);
+    // the stub mirrors that — a state the row doesn't match answers empty, not unfiltered.
+    const state = new URL(url).searchParams.get("state") ?? "open";
+    const row = { rfq_id: RFQ_OPEN_ID, state: "open", chain_id: 42161, requester: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, version: 3 };
+    return r(200, { items: state === "open" ? [row] : [], nextCursor: null, hasMore: false });
+  }
   if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });
@@ -280,6 +292,10 @@ export function stubContext(): HandlerContext {
       client: {
         readContract: async (a: never) => readContract(a, chainId),
         getCode: async () => "0x", // every fixture account is an EOA
+        // track simulate's eth_call dry-run: every frozen artifact simulates viable here (the
+        // task grades the simulate-before-sign habit, not revert forensics).
+        call: async () => ({ data: "0x" }),
+        estimateGas: async () => 100_000n,
         getBlockNumber: async () => 23_000_000n,
         getBlock: async () => ({ timestamp: NOW }),
         getTransactionReceipt: async () => ({ status: "success", blockNumber: 23_000_000n, gasUsed: 21_000n, logs: [] }),
@@ -287,3 +303,30 @@ export function stubContext(): HandlerContext {
     }),
   };
 }
+
+// ── finalize-maker-order fixture: a REAL prepared order + a REAL external signature ─────────
+// Built through the SAME runTool path an agent would call (never a hand-assembled twin — the
+// duplicate-value rot class), then signed by a throwaway key that IS the order's maker. The
+// finalize handler ecrecovers it against its own reconstruction for real; the exported nonce is
+// the prepared result's own derived value (the listing must carry it exactly).
+/** The prepare AND finalize request id: finalization is the SAME request as its prepare [K2],
+ *  so the handler refuses a prepared context whose clientRequestId differs (prepared_context_
+ *  mismatch). Exported so the task prompt cannot drift from the fixture it hands the agent. */
+export const FINALIZE_REQUEST_ID = "eval-fin-0001";
+const FINALIZE_MAKER = privateKeyToAccount(`0x${"0b".repeat(32)}`);
+const preparedEnv = await runTool(
+  "cork_prepare_orders",
+  {
+    chainId: 1,
+    account: FINALIZE_MAKER.address,
+    clientRequestId: FINALIZE_REQUEST_ID,
+    action: { type: "maker-order", poolId: DEMO_POOL_ID, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000" },
+  },
+  stubContext(),
+);
+if (preparedEnv.state !== "ok") throw new Error(`finalize fixture: maker-order prepare answered ${preparedEnv.state} — fixture rot`);
+/** The exact `data` object maker-order returned (finalize takes it verbatim; the wire schema
+ *  strips the round-tripped extras itself). */
+export const PREPARED_MAKER_ORDER = preparedEnv.data as { orderHash: string; nonce: string };
+/** The maker's REAL signature over the prepared order hash — external to the tools [K1]. */
+export const FINALIZE_SIGNATURE = await FINALIZE_MAKER.sign({ hash: PREPARED_MAKER_ORDER.orderHash as `0x${string}` });

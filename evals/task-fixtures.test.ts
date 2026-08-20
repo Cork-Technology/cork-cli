@@ -5,8 +5,10 @@
 // the 0.3.3 redeploy), and no LLM tokens should be spent discovering that. The LLM half (tool
 // selection, phrasing, unit translation) stays Layer B's. COVERAGE IS PARTIAL and grows with
 // the task set: the six rc.2 tasks, the five highest-value earlier tasks (real signed fill,
-// oracle deploy, rfq-open, rollover prepare, constraint resolve), and a read canary — extend
-// this file when adding tasks whose outcome depends on stub fixtures.
+// oracle deploy, rfq-open, rollover prepare, constraint resolve), the eight 2026-08-20
+// surface-gap tasks (auction, finalize, inline fill, simulate, the gated quote, the RFQ feed,
+// the fixed-rate oracle, the warnings topic) plus their two held-out siblings, and a read
+// canary — extend this file when adding tasks whose outcome depends on stub fixtures.
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
@@ -14,6 +16,10 @@ import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
 import { stubContext } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
+  FINALIZE_REQUEST_ID,
+  FINALIZE_SIGNATURE,
+  PREPARED_MAKER_ORDER,
+  RFQ_OPEN_ID,
   DERIVED_JIT_POOL,
   JIT_TASK_CONSTRAINT,
   LIQUIDITY_RECIPE,
@@ -181,6 +187,125 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     );
     expect(env.state).toBe("ok");
     expect(JSON.stringify(env.data)).toContain("1600000000000000000");
+  });
+
+
+  // ── the 2026-08-20 surface-gap tasks ──────────────────────────────────────────────────────
+  it("prepare-auction-order: the decaying-premium order builds and says the signed amount is the FLOOR", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-auc-0001", action: { type: "maker-order", poolId: DEMO_POOL_ID, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000", auction: { startTime: "1790000000", durationSeconds: 3600, initialRateBump: "500000" } } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    const notice = env.warnings.find((w) => w.code === "decaying_price_notice");
+    expect(notice).toBeDefined();
+    // regex<->teaching bind: the task's answer regex must accept the notice agents relay.
+    const auctionTask = TASKS.find((t) => t.id === "prepare-auction-order")!;
+    expect(auctionTask.expect.answer!.test(notice!.message)).toBe(true);
+    // SCALE BIND: 5% at the rate-bump base of 1e7 is "500000". A task whose expectation drifted
+    // to "5" would grade an agent's wrong-scale answer as correct — the percent-vs-fraction
+    // collision class, one layer up (in the grader instead of the wire).
+    const expectedBump = ((auctionTask.expect.params as { action: { auction: { initialRateBump: string } } }).action).auction.initialRateBump;
+    expect(expectedBump).toBe("500000");
+  });
+
+  it("finalize-signed-order: the REAL external signature verifies and the artifact is caller-signed [K1]", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      {
+        chainId: 1,
+        account: DEMO_ACCOUNT,
+        // Finalization is the SAME request as its prepare [K2] — a different id is refused
+        // prepared_context_mismatch, so the fixture and the task prompt share ONE constant.
+        clientRequestId: FINALIZE_REQUEST_ID,
+        action: { type: "finalize-maker-order", prepared: PREPARED_MAKER_ORDER, signature: FINALIZE_SIGNATURE, listing: { side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: PREPARED_MAKER_ORDER.nonce, allowsPartialFills: true } },
+      },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "caller_signed_artifact")).toBe(true);
+    // PROMPT BIND: the task must INSTRUCT the agent to use the id the prepared fixture was
+    // built with. A drifted instruction makes the task unpassable for EVERY agent
+    // (prepared_context_mismatch) — an unwinnable task reads as a model failure, the worst kind
+    // of eval rot. Checked on the captured instruction, not by substring: the prepared blob in
+    // the prompt carries the id too, so `toContain` stays true while the instruction says
+    // something else (a mutant proved exactly that, 2026-08-20).
+    const finalizePrompt = TASKS.find((t) => t.id === "finalize-signed-order")!.prompt;
+    expect(/request id "([^"]+)"/.exec(finalizePrompt)?.[1]).toBe(FINALIZE_REQUEST_ID);
+    // The relay artifact must be present and carry the maker's own signature verbatim.
+    expect(JSON.stringify(env.data)).toContain(FINALIZE_SIGNATURE);
+  });
+
+  it("fill-inline-signed-order: the venue is NOT contacted — the held bytes alone produce fill calldata", async () => {
+    // A venueFetch that THROWS proves the claim structurally: if the inline path touched the
+    // book, this test would fail rather than quietly passing on a stub that happened to answer.
+    const ctx = { ...stubContext(), venueFetch: () => { throw new Error("venue must not be contacted on the inline path"); } };
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-inline-0001", action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH, signedOrder: SIGNED_LOP_PAYLOAD } },
+      ctx,
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "unsigned_artifact")).toBe(true);
+  });
+
+  it("simulate-before-signing: the prepared bundle's frozen bytes dry-run without reverting", async () => {
+    const prepared = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-sim-0001", fundingMode: "pre-funded", action: { type: "deposit", poolId: DEMO_POOL_ID, collateralAssetsIn: "1000000000000000000", receiver: DEMO_ACCOUNT, minCptAndCstSharesOut: "1" } },
+      stubContext(),
+    );
+    expect(prepared.state).toBe("ok");
+    const sim = await runTool("cork_track", { chainId: 1, mode: "simulate", subject: { kind: "artifact", artifact: prepared.data as Record<string, unknown> } }, stubContext());
+    expect(sim.state).toBe("ok");
+    expect((sim.data as { wouldRevert: boolean }).wouldRevert).toBe(false);
+  });
+
+  it("gated-rfq-quote: the one gated variant refuses phase_gated and names the shipped alternative", async () => {
+    const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "rfq-quote", marketTypeBucket: "stablecoin-depeg", durationSeconds: 2_592_000 } }, stubContext());
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("phase_gated");
+    expect(TASKS.find((t) => t.id === "gated-rfq-quote")!.expect.answer!.test(env.warnings[0]!.message)).toBe(true);
+  });
+
+  it("rfq-discovery-feed: the open RFQ is served and labeled venue-claimed (hybrid's unverifiable family)", async () => {
+    const env = await runTool("cork_query", { resource: "rfqs", chainId: 42161 }, stubContext());
+    expect(env.state).toBe("ok");
+    expect(JSON.stringify(env.data)).toContain(RFQ_OPEN_ID);
+    // The note is what the task's answer regex grades the agent for relaying.
+    expect((env.data as { note?: string }).note ?? "").toMatch(/off-chain|venue-claimed/i);
+    // The stub mirrors the venue's SERVER-SIDE state filter: a non-open state answers empty,
+    // never the unfiltered row (the parameter-ignored green no-op, class C13).
+    const closed = await runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { state: "expired" } }, stubContext());
+    expect((closed.data as { count: number }).count).toBe(0);
+  });
+
+  it("deploy-fixed-oracle: keyed on the RATE (1e18 = 1.0), predicting the CREATE2 address", async () => {
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "eval-fixed-0001", action: { type: "deploy-fixed-oracle", rate: "950000000000000000" } }, stubContext());
+    expect(env.state).toBe("ok");
+    expect(TASKS.find((t) => t.id === "deploy-fixed-oracle")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
+  });
+
+  it("warnings-topic: the doc topic answers with the family framing the task grades", async () => {
+    const env = await runTool("cork_capabilities", { topic: "warnings" }, stubContext());
+    expect(env.state).toBe("ok");
+    expect(TASKS.find((t) => t.id === "warnings-topic")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
+  });
+
+  it("ho-claimed-hash-conflict [held-out]: a wrong caller-claimed orderHash is refused, not endorsed [K3]", async () => {
+    const env = await runTool("cork_decode", { chainId: 1, kind: "order", data: { ...SIGNED_LOP_PAYLOAD.order, orderHash: `0x${"11".repeat(32)}` } }, stubContext());
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.some((w) => w.code === "order_hash_mismatch")).toBe(true);
+  });
+
+  it("ho-direction-twin [held-out]: the reverse-payout direction builds as unwind-swap", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-dir-0001", fundingMode: "pre-funded", action: { type: "unwind-swap", poolId: DEMO_POOL_ID, collateralAssetsIn: "3000000000000000000", receiver: DEMO_ACCOUNT, minReferenceAssetsOut: "0", minCstSharesOut: "0" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
   });
 
   it("the demo-pool read the oldest task grades still answers (fixture canary)", async () => {
