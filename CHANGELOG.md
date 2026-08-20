@@ -19,6 +19,13 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   tasks are guarded today. `prepare != sign != submit` is the invariant the whole tool split
   exists to enforce; the suite now measures it.
 
+- **Agent evals grade multi-step tasks as traces, not prose.** `tool`/`params`/`state` grade
+  exactly ONE tool, so a two-step task ("build the bundle, then dry-run those bytes") could
+  only grade its second step through the answer regex — a fluent "I simulated it, no revert"
+  passed on a trace containing no simulation. A task can now declare `require: ["cork_track"]`;
+  a missing step fails it, and a schema-refused call does not count as having run. Reported as
+  its own axis (`stepsRan`), in the log row, summarized over the multi-step tasks only.
+
 - **Eval coverage: eight surfaces an agent had never exercised.** The audit picked tasks by
   SURFACE, not by count — each grades a decision an integrator faces that no other task graded:
   the decaying-premium **auction** maker-order (at the 1e7 rate-bump scale), **finalize** of an

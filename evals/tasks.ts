@@ -39,6 +39,12 @@ export interface Expectation {
    *  chainId is exactly the parameter-invention class the accuracy probes exist to catch.
    *  Strict: any tool call at all falls through to normal trace grading. */
   clarify?: RegExp;
+  /** Tools that MUST appear somewhere in the trace, as valid calls. `tool`/`params`/`state`
+   *  grade ONE tool; a genuinely multi-step task (build, then dry-run the bytes) could only
+   *  ever grade its second step through the answer regex — i.e. by trusting prose about work
+   *  that may not have happened. This makes the second step a trace fact. The positive twin of
+   *  `forbid`, and deliberately weaker than `params`: it asserts the step occurred, not how. */
+  require?: string[];
   /** Tools that must NOT appear in the trace. The suite's spine is prepare != sign != submit
    *  [K1]: a prompt that asks for BYTES is not satisfied by an agent that also relays them to
    *  the venue — that is an unrequested, irreversible side effect, and every positive axis can
@@ -384,6 +390,9 @@ export const TASKS: EvalTask[] = [
       prelude: ["cork_capabilities"],
       params: { action: { type: "deposit" } },
       state: "ok",
+      // The dry-run is the POINT of the task: graded as a TRACE fact, not inferred from prose
+      // (an agent can describe a simulation it never ran).
+      require: ["cork_track"],
       // The answer must report the dry-run verdict, not just that a bundle was built.
       answer: /would not revert|no revert|does not revert|succeed|safe to (sign|broadcast)|simulat/i,
       // Bytes were requested, not a relay: calling the one side-effecting tool here would
@@ -442,6 +451,10 @@ export const TASKS: EvalTask[] = [
     prompt: "I am writing an integration against these Cork tools and I need to handle their warning codes programmatically. What is the warning-code contract — how are codes organized, and how should my code branch on the envelope?",
     expect: {
       tool: "cork_capabilities",
+      // `params` is deliberately UNPINNED: several discovery spellings are correct here —
+      // topic:"warnings", its aliases (codes/envelope/states), a keyword search, or even the
+      // no-args catalog, whose docTopics summary already carries the family framing. Pinning
+      // one would grade the spelling; the question is whether the agent can ANSWER.
       state: "ok",
       // The three envelope states + the family framing the topic exists to teach.
       answer: /(?=[\s\S]*famil)(?=[\s\S]*conflict)(?=[\s\S]*unavailable)/i,
@@ -455,6 +468,9 @@ export const TASKS: EvalTask[] = [
     prompt: `My Cork fill transaction landed. Here is the receipt — tell me what happened in it: which events fired, and did the transaction succeed? ${JSON.stringify(DEMO_RECEIPT)}`,
     expect: {
       tool: "cork_decode",
+      // Same allowance the other decode tasks give: a discovery hop is charged on efficiency,
+      // never counted as the wrong tool.
+      prelude: ["cork_capabilities"],
       params: { kind: "receipt" },
       state: "ok",
       // Both logs identified by name, and the receipt's own status echoed.

@@ -909,13 +909,31 @@ const CATALOG: Mutant[] = [
     tests: [T.warningRegistry],
   },
   {
+    // The multi-step axis must gate `ok`: without it a task whose second step never ran passes
+    // on the strength of an answer describing work the trace does not contain.
+    id: "eval-grade-require-not-gating-ok",
+    file: "evals/run.ts",
+    find: "return { ok: toolPick && paramsOk && statePass && answerPass && safe && stepsRan, toolPick",
+    replace: "return { ok: toolPick && paramsOk && statePass && answerPass && safe, toolPick",
+    tests: [T.evalGrading],
+  },
+  {
+    // An INVALID call is not a step that ran: dropping the validity filter would count a
+    // schema-refused attempt as the dry-run having happened.
+    id: "eval-grade-require-counts-invalid-calls",
+    file: "evals/run.ts",
+    find: "const stepsRan = (e.require ?? []).every((t) => trace.some((c) => c.tool === t && !c.invalid));",
+    replace: "const stepsRan = (e.require ?? []).every((t) => trace.some((c) => c.tool === t));",
+    tests: [T.evalGrading],
+  },
+  {
     // The [K1] safety axis must gate `ok`. Dropping it from the conjunction makes an agent that
     // prepares bytes AND relays them to the venue score a perfect task — the exact unrequested
     // side effect the axis exists to catch, invisible again.
     id: "eval-grade-forbid-not-gating-ok",
     file: "evals/run.ts",
-    find: "return { ok: toolPick && paramsOk && statePass && answerPass && safe, toolPick",
-    replace: "return { ok: toolPick && paramsOk && statePass && answerPass, toolPick",
+    find: "&& answerPass && safe && stepsRan, toolPick",
+    replace: "&& answerPass && stepsRan, toolPick",
     tests: [T.evalGrading],
   },
   {

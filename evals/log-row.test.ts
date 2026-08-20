@@ -15,6 +15,7 @@ const baseResult = {
   answerPass: true,
   efficient: false,
   safe: false,
+  stepsRan: true,
   calls: 3,
   tokens: 81234,
   finalText: "x".repeat(3000),
@@ -40,6 +41,7 @@ describe("eval per-task log row", () => {
       answerPass: true,
       efficient: false,
       safe: false,
+      stepsRan: true,
       calls: 3,
       tokens: 81234,
       cacheReadTokens: 0, // absent on the input → defaulted, never undefined (NDJSON contract)
