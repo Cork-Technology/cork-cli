@@ -191,9 +191,16 @@ jobs:
           COMMIT="$(git rev-parse HEAD)"
           test -n "$COMMIT" || { echo "::error::could not resolve HEAD — refusing to build without the expected-commit pin"; exit 1; }
           export COMMIT
-          yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .pipeline[0].with.tag = strenv(TAG) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
+          yq -i '.package.version = strenv(VERSION) | .vars.commit = strenv(COMMIT) | .vars.tag = strenv(TAG) | .pipeline[0].with.tag = strenv(TAG) | .pipeline[0].with.expected-commit = strenv(COMMIT)' \
             packaging/melange.yaml
-          yq '.package.version, .vars.commit, .pipeline[0].with.tag' packaging/melange.yaml
+          # Specs from tags before 2026-08-20 compile with "v" + the melange package.version —
+          # the apk spelling, which compile-binaries.mjs rejects (v0.4.0-rc.1 run 32416116529:
+          # "got: v0.4.0_rc1"). Rewrite that literal to the tag so a manual re-run of an older
+          # tag builds; a current spec reads vars.tag and has no such literal.
+          yq -i '(.pipeline[] | select(has("runs")) | .runs) |= sub("--version \"v\$\{\{package.version\}\}\"", "--version \"" + strenv(TAG) + "\"")' \
+            packaging/melange.yaml
+          grep -q 'package.version}}" --commit' packaging/melange.yaml && { echo "::error::the apk spelling still reaches compile-binaries.mjs"; exit 1; }
+          yq '.package.version, .vars.commit, .vars.tag, .pipeline[0].with.tag' packaging/melange.yaml
 
       - name: Pub-key tripwire — the environment key must match the committed public half
         env:

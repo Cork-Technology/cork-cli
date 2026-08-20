@@ -174,7 +174,7 @@ jobs:
 
           SDK: the \`cork-*.tgz\` assets are the npm-installable \`@cork/schemas\` + \`@cork/core\` + \`@cork/mcp\` packages, attested and checksummed like every other asset. Add the schemas AND core tarball URLs to your \`dependencies\` (core's dependency on schemas resolves to the sibling tarball; your lockfile pins the sha512). Install guide: docs/sdk.md.
 
-          Changes: the \`${{ github.ref_name }}\` section of CHANGELOG.md in this tag's tree. Covered surface (versioning policy R11): JSON output, tool names, input schemas, exit codes. A \`-rc\` tag is a release candidate: pre-release flagged, not a production cut." \
+          Changes: the \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md in this tag's tree. Covered surface (versioning policy R11): JSON output, tool names, input schemas, exit codes. A \`-rc\` tag is a release candidate: pre-release flagged, not a production cut." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt
 
   # apk-repository + OCI + Phala channel, called for EVERY release. Called DIRECTLY rather than
