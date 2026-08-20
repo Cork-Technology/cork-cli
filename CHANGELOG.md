@@ -8,6 +8,8 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+## [0.4.0-rc.1] — 2026-08-20
+
 ### Changed (breaking)
 
 - **Rollover speaks the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**

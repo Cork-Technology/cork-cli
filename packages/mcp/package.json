@@ -1,6 +1,6 @@
 {
   "name": "@cork/mcp",
-  "version": "0.3.0-rc.1",
+  "version": "0.4.0-rc.1",
   "description": "Standard-input/output Model Context Protocol projection of the Cork helper core.",
   "license": "UNLICENSED",
   "private": false,

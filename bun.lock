@@ -28,7 +28,7 @@
     },
     "packages/cli": {
       "name": "@cork/cli",
-      "version": "0.3.0-rc.1",
+      "version": "0.4.0-rc.1",
       "bin": {
         "ch": "src/bin.ts",
       },
@@ -42,7 +42,7 @@
     },
     "packages/core": {
       "name": "@cork/core",
-      "version": "0.3.0-rc.1",
+      "version": "0.4.0-rc.1",
       "dependencies": {
         "@cork/schemas": "workspace:*",
         "viem": "2.55.2",
@@ -51,7 +51,7 @@
     },
     "packages/mcp": {
       "name": "@cork/mcp",
-      "version": "0.3.0-rc.1",
+      "version": "0.4.0-rc.1",
       "bin": {
         "cork-mcp": "./dist/packages/mcp/src/bin.js",
       },
@@ -64,7 +64,7 @@
     },
     "packages/schemas": {
       "name": "@cork/schemas",
-      "version": "0.3.0-rc.1",
+      "version": "0.4.0-rc.1",
       "dependencies": {
         "viem": "2.55.2",
         "zod": "4.4.3",
