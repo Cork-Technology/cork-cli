@@ -55,26 +55,29 @@ pipeline:
 
   - name: build the single binary (native arch)
     runs: |
+      # The native install brings exactly this arch's HyperSync binding, which the build embeds.
       bun install --frozen-lockfile
       case "${{build.arch}}" in
         x86_64)  target=bun-linux-x64 ;;
         aarch64) target=bun-linux-arm64 ;;
         *) echo "unmapped arch ${{build.arch}}" >&2; exit 1 ;;
       esac
-      # No --target flag: the native build IS that target on wolfi (glibc). The define must still
-      # carry it so `ch version` reports identity and self-update knows its asset — though an
-      # apk-installed /usr/bin/ch is root-owned, so self-update correctly defers to `apk upgrade`.
-      bun build --compile \
-        --define 'process.env.CH_BUILD_VERSION="v${{package.version}}"' \
-        --define 'process.env.CH_BUILD_COMMIT="${{vars.commit}}"' \
-        --define "process.env.CH_BUILD_TARGET=\"$target\"" \
-        packages/cli/src/bin.ts --outfile ch
-      install -Dm755 ch "${{targets.destdir}}/usr/bin/ch"
+      # --native: no --target flag — the native build IS that target on wolfi (glibc), built by
+      # wolfi's own bun. The release script owns the define set (build identity + the embedded
+      # HyperSync binding for this target) so the apk cannot drift from the release binaries;
+      # the target name still stamps identity, so `ch version` and self-update know the asset —
+      # though an apk-installed /usr/bin/ch is root-owned, so self-update defers to `apk upgrade`.
+      bun scripts/compile-binaries.mjs --native --targets "$target" \
+        --version "v${{package.version}}" --commit "${{vars.commit}}" --outdir out
+      install -Dm755 "out/ch-${target#bun-}" "${{targets.destdir}}/usr/bin/ch"
 
   - name: smoke
     runs: |
       CORK_CONFIG_NO_FETCH=1 "${{targets.destdir}}/usr/bin/ch" version
       CORK_CONFIG_NO_FETCH=1 "${{targets.destdir}}/usr/bin/ch" capabilities >/dev/null
+      # The binary must KNOW its HyperSync binding (the define reached it); whether that binding
+      # loads is proven by the release smoke and the live-smoke test, which have network.
+      CORK_CONFIG_NO_FETCH=1 "${{targets.destdir}}/usr/bin/ch" version --json | grep -F '"hyperSyncBinding": "@envio-dev/hypersync-client-linux-'
 
 update:
   enabled: false # versions land via the release workflow, not a bot

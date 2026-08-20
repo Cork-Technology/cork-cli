@@ -76,5 +76,13 @@
     "@cork/schemas": "workspace:*",
     "viem": "2.55.2",
     "zod": "4.4.3"
+  },
+  "optionalDependencies": {
+    "@envio-dev/hypersync-client": "1.4.0",
+    "@envio-dev/hypersync-client-darwin-arm64": "1.4.0",
+    "@envio-dev/hypersync-client-darwin-x64": "1.4.0",
+    "@envio-dev/hypersync-client-linux-arm64-gnu": "1.4.0",
+    "@envio-dev/hypersync-client-linux-x64-gnu": "1.4.0",
+    "@envio-dev/hypersync-client-linux-x64-musl": "1.4.0"
   }
 }

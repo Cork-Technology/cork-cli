@@ -58,6 +58,7 @@ const T = {
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
+  release: "packages/cli/test/release.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
@@ -2533,6 +2534,42 @@ const CATALOG: Mutant[] = [
 `,
     replace: "",
     tests: [T.apiSurface],
+  },
+  {
+    // The embedded HyperSync binding is chosen by the BUILD, not by napi-rs's runtime libc
+    // heuristics — swapping the gnu/musl mapping ships a binding that cannot dlopen on the target.
+    id: "hypersync-binding-gnu-musl-swapped",
+    file: "scripts/compile-binaries.mjs",
+    find: "  else if (os === \"linux\") slug = musl ? (arch === \"x64\" ? \"linux-x64-musl\" : null) : `linux-${arch}-gnu`;",
+    replace: "  else if (os === \"linux\") slug = musl ? `linux-${arch}-gnu` : (arch === \"x64\" ? \"linux-x64-musl\" : null);",
+    tests: [T.release],
+  },
+  {
+    // macOS assets must embed too — dropping the darwin mapping silently regresses them to the
+    // bare-image failure (a source-style import with no node_modules inside the binary).
+    id: "hypersync-binding-darwin-dropped",
+    file: "scripts/compile-binaries.mjs",
+    find: "  if (os === \"darwin\") slug = `darwin-${arch}`;",
+    replace: "  if (os === \"darwin\") slug = null;",
+    tests: [T.release],
+  },
+  {
+    // Without the define the one require in hypersync.ts stays dynamic and nothing is embedded:
+    // every compiled binary regresses to the bare-image failure while building green.
+    id: "hypersync-binding-define-dropped",
+    file: "scripts/compile-binaries.mjs",
+    find: "    \"--define\", `process.env.CH_HYPERSYNC_BINDING=${binding ? JSON.stringify(binding) : \"undefined\"}`,",
+    replace: "",
+    tests: [T.release],
+  },
+  {
+    // A compiled target without a binding must say so; inverting the guard silences the gap
+    // (and reports one where a binding IS embedded).
+    id: "hypersync-binding-gap-silenced",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "  if (!target || embedded) return null;",
+    replace: "  if (!target || !embedded) return null;",
+    tests: [T.hypersync],
   },
 ];
 

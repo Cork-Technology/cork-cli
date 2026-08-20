@@ -5,11 +5,20 @@
 // rollover fills (RolloverLegFilled/PremiumLegFilled/reclaims), per-user clone discovery
 // (RolloverContractDeployed), and LOP fills (OrderFilled).
 //
-// The napi client (@envio-dev/hypersync-client) is an OPTIONAL dependency loaded dynamically:
-// it has per-platform native bindings (no linux-arm64-musl build exists — see
-// experiments/hypersync-spike/README.md), and a host that cannot load it gets an honest
-// `hypersync_unavailable`, never a crash. Tests inject a fake source.
+// The napi client (@envio-dev/hypersync-client) is OPTIONAL: a host that cannot load it gets an
+// honest `hypersync_unavailable`, never a crash, and tests inject a fake source. Two ways in:
+//  - a compiled release binary EMBEDS its target's native binding — scripts/compile-binaries.mjs
+//    stamps the platform package's `.node` specifier as the build-time constant
+//    CH_HYPERSYNC_BINDING and Bun bundles that one file (extracted to the OS temp dir and
+//    dlopen'd on first load). Targets without a binding (Envio deprecated Windows at client
+//    1.1.0 — commit dcdab8f, 2026-02-25 — and has never built linux-arm64-musl) leave it
+//    undefined and answer with a target-specific reason. Before 0.4.1 the
+//    bare image could never serve full-decentralized mode: the package was imported by name
+//    and no node_modules exists inside a compiled binary (found by ops, 2026-08-20).
+//  - a source run imports the package by NAME; its own loader picks the binding at runtime
+//    (setting CH_HYPERSYNC_BINDING to a `.node` path in the environment overrides that).
 import { decodeEventLog, parseAbi, toEventSelector } from "viem";
+import { BUILD_TARGET, HYPERSYNC_BINDING } from "../version.ts";
 import { hyperSyncUrl } from "./envio.ts";
 
 type Hex = `0x${string}`;
@@ -133,28 +142,51 @@ export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
   };
 }
 
+// Structural view of the napi module. Client 1.x exposes HypersyncClient as a CONSTRUCTOR whose
+// config field is `apiToken` (the 0.x API was a static `.new({ bearerToken })` — different on both
+// counts). LIVE-verified against the real 1.4.0 client (glibc container, 2026-07-27): `LogField`
+// is a TYPE-only string union in 1.4.0 (`module.exports.LogField` is an empty napi object at
+// runtime), so field selection must use the literal strings from index.d.ts — the old
+// `F.Address`-style lookups silently produced `[undefined…]`. One cast at the import boundary —
+// the module is untyped to us (an optional dep; the platform `.node` exports the same surface
+// the package's index.js re-exports).
+interface HyperSyncNapiModule {
+  HypersyncClient: new (cfg: { url: string; apiToken: string }) => {
+    get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
+  };
+}
+
+/**
+ * Why a compiled binary cannot serve HyperSync at all — null when it can, and null for a source
+ * run (there the package's own loader decides at import time). Pure: `target` is the build
+ * target, `embedded` the embedded binding's specifier (HYPERSYNC_BINDING; null when none).
+ */
+export function hyperSyncBindingGap(target: string, embedded: string | null): string | null {
+  if (!target || embedded) return null;
+  return `this ${target} build carries no HyperSync binding — Envio deprecated its Windows bindings at client 1.1.0 and has never built linux-arm64-musl; use a glibc Linux, musl x64, or macOS build for full-decentralized reads`;
+}
+
+async function importNapiModule(): Promise<HyperSyncNapiModule> {
+  // The literal `process.env.CH_HYPERSYNC_BINDING` is the define boundary: the bundler
+  // substitutes it in BOTH places below, which makes the require static and the binding
+  // embedded. Do not hoist it into a shared constant — a cross-module const is not guaranteed to
+  // fold before the bundler resolves the specifier.
+  if (process.env.CH_HYPERSYNC_BINDING) return require(process.env.CH_HYPERSYNC_BINDING) as HyperSyncNapiModule;
+  const name = "@envio-dev/hypersync-client";
+  return (await import(name)) as HyperSyncNapiModule;
+}
+
 export async function loadHyperSync(chainId: number, token: string | undefined): Promise<HyperSyncLoad> {
   const url = hyperSyncUrl(chainId);
   if (!url) return { error: `no HyperSync endpoint for chainId ${chainId}` };
   if (!token) return { error: "ENVIO_HYPERSYNC_TOKEN (or shared ENVIO_API_TOKEN) is not set — HyperSync needs one (https://app.envio.dev/api-tokens); tokenless access has been rejected since 2025-11" };
-  // Structural view of the napi module. Client 1.x exposes HypersyncClient as a CONSTRUCTOR whose
-  // config field is `apiToken` (the 0.x API was a static `.new({ bearerToken })` — different on both
-  // counts). LIVE-verified against the real 1.4.0 client (glibc container, 2026-07-27): `LogField`
-  // is a TYPE-only string union in 1.4.0 (`module.exports.LogField` is an empty napi object at
-  // runtime), so field selection must use the literal strings from index.d.ts — the old
-  // `F.Address`-style lookups silently produced `[undefined…]`. One cast at the import boundary —
-  // the module is untyped to us as an optional dep imported by bare name.
-  interface HyperSyncNapiModule {
-    HypersyncClient: new (cfg: { url: string; apiToken: string }) => {
-      get: (q: unknown) => Promise<{ data: { logs: Array<Record<string, unknown>> }; archiveHeight?: number; nextBlock?: number }>;
-    };
-  }
+  const gap = hyperSyncBindingGap(BUILD_TARGET, HYPERSYNC_BINDING);
+  if (gap) return { error: gap };
   let mod: HyperSyncNapiModule;
   try {
-    const name = "@envio-dev/hypersync-client";
-    mod = (await import(name)) as HyperSyncNapiModule;
+    mod = await importNapiModule();
   } catch (err) {
-    return { error: `the @envio-dev/hypersync-client native binding could not load on this host (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — see experiments/hypersync-spike/README.md for platform coverage` };
+    return { error: `the @envio-dev/hypersync-client native binding could not load on this host (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — a compiled binary extracts its embedded binding to the OS temp dir (TMPDIR) on first load; Envio ships bindings for glibc Linux x64/arm64, musl Linux x64, and macOS` };
   }
   const client = new mod.HypersyncClient({ url, apiToken: token });
   // Literal LogField union members per the shipped 1.4.0 index.d.ts.

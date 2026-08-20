@@ -277,6 +277,10 @@
       "kind": "type"
     },
     {
+      "name": "HYPERSYNC_BINDING",
+      "kind": "value"
+    },
+    {
       "name": "HYPERSYNC_MAX_PAGES",
       "kind": "value"
     },
@@ -1389,6 +1393,10 @@
       "kind": "value"
     },
     {
+      "name": "hyperSyncBindingGap",
+      "kind": "value"
+    },
+    {
       "name": "hyperSyncUrl",
       "kind": "value"
     },
@@ -2219,6 +2227,10 @@
       "kind": "value"
     },
     {
+      "name": "HYPERSYNC_BINDING",
+      "kind": "value"
+    },
+    {
       "name": "ImagePinCheck",
       "kind": "type"
     },
@@ -2486,6 +2498,10 @@
     },
     {
       "name": "hyperRpcHost",
+      "kind": "value"
+    },
+    {
+      "name": "hyperSyncBindingGap",
       "kind": "value"
     },
     {

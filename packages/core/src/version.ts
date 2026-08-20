@@ -15,6 +15,13 @@
 export const BUILD_VERSION: string = process.env.CH_BUILD_VERSION ?? "dev";
 export const BUILD_COMMIT: string = process.env.CH_BUILD_COMMIT ?? "unknown";
 export const BUILD_TARGET: string = process.env.CH_BUILD_TARGET ?? "";
+/**
+ * The HyperSync native binding this binary embeds, as the platform package's `.node` specifier
+ * (stamped by compile-binaries.mjs; the require that loads it lives in datasources/hypersync.ts).
+ * Null in a source run, and on a target Envio ships no binding for — `ch version` reports it so
+ * an operator can see at a glance whether an image can serve full-decentralized reads.
+ */
+export const HYPERSYNC_BINDING: string | null = process.env.CH_HYPERSYNC_BINDING ?? null;
 
 /**
  * Compare two release versions ("v1.2.3", "1.2.3", "v1.2.3-rc.1"). Returns <0 | 0 | >0.

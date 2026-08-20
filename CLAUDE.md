@@ -48,6 +48,28 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
   - `--explain` prints a plain-English contract ($refs resolved, variants unfolded) and exits; JSON
     schema via `--json` or `CORK_EXPLAIN_JSON=1` (`packages/cli/src/explain.ts`).
   - `--rpc-url <url>` overrides RPC resolution for chain-backed commands.
+- **Compiled binaries embed the HyperSync native binding** (2026-08-20, after ops found the bare
+  image could never serve full-decentralized mode: a bare-name `import()` has no node_modules
+  inside a `bun --compile` binary). `scripts/compile-binaries.mjs` → `hyperSyncBindingForTarget`
+  maps each target to Envio's platform package `.node` specifier and stamps it as
+  `--define process.env.CH_HYPERSYNC_BINDING` (the literal `undefined` for linux-arm64-musl /
+  windows — Envio deprecated Windows at client 1.1.0, commit dcdab8f, and never built arm64-musl;
+  release.test.ts holds the map to the client's own declared platform set); `datasources/hypersync.ts` has the ONE `require` of that
+  literal — Bun resolves `require()` specifiers BEFORE dead-code elimination (verified 1.3.14), so
+  per-target branches in source are impossible and a constant specifier is the mechanism. The five
+  bindings AND the client are exact-pinned `optionalDependencies` of `@cork/core` — the package
+  that imports it (isolated linker: resolved from there, never hoisted; nothing at the root); cross-compiling needs `bun install --frozen-lockfile --os='*' --cpu='*'`
+  (the script refuses a target whose binding is absent). melange builds via the script with
+  `--native` (host bun, no `--target`). `ch version --json` → `hyperSyncBinding`. Acceptance:
+  `packages/cli/test/compiled-binding-live.test.ts` (CORK_RPC_LIVE=1, in `live-smoke`) compiles
+  the host binary and proves it gets past the native loader; release smoke checks every asset.
+  Verified 2026-08-20 in a bare OFFICIAL wolfi container (glibc, no ldd/bun/node_modules) as uid
+  65532: binding embedded, dlopen'd, Envio reached (401 on a dummy token), extraction cleaned at
+  exit. Caveat: the napi client retries a 401 twelve times with backoff (~48 s) — Envio's default.
+  A musl dev host stamps musl into same-OS cross-targets (Bun quirk, see release.yml), so verify
+  glibc assets from a glibc build — `--native` inside wolfi is the faithful path.
+  A source run still imports the package by name (its loader decides); `CH_HYPERSYNC_BINDING` in
+  the env overrides with a `.node` path.
 - Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip) ·
   `bun run test:unit` (offline) · `bun run test:live` (vnet/live; needs `CORK_TEST_RPC` /
   `CORK_RPC_LIVE=1`) · `bun run test:mutation` (scripts/mutation-probes.ts: applies catalogued
@@ -165,7 +187,7 @@ Warning codes:
 | `status_mismatch` | conflict: venue lifecycle disagrees with the chain — chain outranks indexer [K7]. Track reconcile (settler `orderStatus()`) and taker-fill's liveness pre-flight (a row the LOP invalidator says is dead yields NO fill bytes). Best-effort without an RPC. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / range refused. |
 | `logs_windowed_fallback` | Info on ok full-decentralized reads: no Envio token — served via windowed eth_getLogs over the resolved RPC (bounded ranges; a capped walk discloses `pagination_incomplete`). Set `ENVIO_HYPERSYNC_TOKEN` for the archive index. Never used for whitelisted-addresses (replay needs FULL history). |
-| `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, or the napi client can't load. `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
+| `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, a compiled target Envio ships no binding for (linux-arm64-musl, windows — message names the target), or the napi binding can't load (message carries the dlopen error; a compiled binary extracts its EMBEDDED binding to TMPDIR first). `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
 | `live_tail_merged` / `live_tail_unavailable` | Info on ok full-decentralized reads: recent events merged from a live RPC tail (`data.liveTail`) / the tail scan couldn't run — archive-only results. Non-fatal. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Fraction-vs-percent tripwires ("0.041" vs 4.1) on premiumAnnualized: suspicious canonical premium (sub-0.1%, or a fraction parsing above 1 = >100% annualized — warned, relayed) / declared premium outside the cited quote_ref's 10x band (conflict, NOT relayed) — the venue's STRICT float gate replicated op-for-op (parseFloat, fraction ×100 canonicalization, ratio >10 or <0.1, both premiums >0): the pre-flight lands exactly where the venue lands, ulps included. |
 | `premium_fields_disagree` | RETIRED with the percent field's removal (venue 0.3.15, 2026-08-17): the two-spelling disagreement it policed can no longer reach the wire — the removed `premium` now refuses as `invalid_order_terms` before relay. |

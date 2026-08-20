@@ -18,7 +18,7 @@
 // 3 unavailable, 4 conflict, 1 unexpected error.
 import { Command } from "commander";
 import { REGISTRY, RENAMED_VALUES, SCHEMA_VERSION, inputJsonSchema, type ToolDef } from "@cork/schemas";
-import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, DIGIT_FILTER_KEYS, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { BUILD_COMMIT, BUILD_TARGET, BUILD_VERSION, DIGIT_FILTER_KEYS, HYPERSYNC_BINDING, KNOWN_FILTER_KEYS, runTool, ToolInputError, type HandlerContext } from "@cork/core";
 import { envFlag } from "./env.ts";
 import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
 import { colorEnabled, makeStyle } from "./ansi.ts";
@@ -878,11 +878,15 @@ export async function runCli(
         target: BUILD_TARGET || null,
         schemaVersion: SCHEMA_VERSION,
         runtime: (globalThis as { Bun?: { version: string } }).Bun ? `bun ${(globalThis as { Bun?: { version: string } }).Bun!.version}` : `node ${process.versions.node}`,
+        // The embedded HyperSync native binding — the one fact that decides whether THIS binary
+        // can serve full-decentralized reads (null: source run, or a target without a binding).
+        hyperSyncBinding: HYPERSYNC_BINDING,
       };
+      const hyperSyncLine = info.hyperSyncBinding ?? (info.target ? "none embedded for this target" : "(source run: package loader)");
       out +=
         opts.json || envWantsJson
           ? `${JSON.stringify(info, null, 2)}\n`
-          : `ch ${info.version} (commit ${info.commit})\n  target   ${info.target ?? "(source run)"}\n  schema   ${info.schemaVersion}\n  runtime  ${info.runtime}\n`;
+          : `ch ${info.version} (commit ${info.commit})\n  target     ${info.target ?? "(source run)"}\n  schema     ${info.schemaVersion}\n  runtime    ${info.runtime}\n  hypersync  ${hyperSyncLine}\n`;
     });
 
   program

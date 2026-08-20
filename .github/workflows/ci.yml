@@ -100,6 +100,13 @@ jobs:
           CORK_RPC_LIVE: "1"
         run: bunx vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts
 
+      # Compiles `ch` for this (glibc x64) host with the release script and proves the embedded
+      # HyperSync binding gets past the native loader — the bare-image finding of 2026-08-20.
+      - name: Compiled binary embeds + loads its HyperSync binding
+        env:
+          CORK_RPC_LIVE: "1"
+        run: bunx vitest run packages/cli/test/compiled-binding-live.test.ts
+
   # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when credentials resolve;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   # Preferred auth is Claude Platform on AWS via GitHub OIDC → SigV4 (no stored secret, nothing

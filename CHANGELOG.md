@@ -8,7 +8,39 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Fixed
+
+- **Compiled binaries (and therefore the apk and the container image) now carry the HyperSync
+  native binding, so `full-decentralized` mode works from the bare image.** Found by ops on
+  2026-08-20 deploying the MCP endpoint: with a valid `ENVIO_API_TOKEN` every HyperSync read
+  answered `hypersync_unavailable`, because `@envio-dev/hypersync-client` was imported by bare
+  name and no `node_modules` exists inside a `bun --compile` binary — on every architecture. The
+  release script now stamps each target's platform binding (`@envio-dev/hypersync-client-<os>-<arch>[-libc]`,
+  the package's own `.node`) as the build-time constant `CH_HYPERSYNC_BINDING`; the one `require`
+  in the datasource takes that constant and Bun embeds exactly that file (+16–19 MB per binary,
+  extracted to the OS temp dir on first load). The five bindings Envio publishes are exact-pinned
+  `optionalDependencies` of `@cork/core`; the cross-compiling release job installs them all
+  (`bun install --os='*' --cpu='*'`), and the script refuses a target whose binding is missing.
+  Targets without a binding — Envio deprecated Windows at client 1.1.0 and has never built
+  `linux-arm64-musl` — embed nothing and answer with a target-specific reason instead of a
+  resolution failure; a unit test holds the map to the client's own declared platform set, so a
+  change on upgrade is loud. `@envio-dev/hypersync-client` itself moves from the workspace root
+  into `@cork/core`'s `optionalDependencies` (the package that imports it — SDK consumers of
+  `/indexer` now get the client installed). The napi-rs runtime libc heuristics
+  (`ldd`, `process.report`) are bypassed entirely in a compiled binary: the build knows its libc.
+  A source run is unchanged — the package's own loader decides — and `CH_HYPERSYNC_BINDING` set
+  in the environment to a `.node` path overrides it. `ch version` (and `--json`
+  `hyperSyncBinding`) now report the embedded binding, so an operator can see whether an image
+  can serve full-decentralized reads without running one. Guarded by a unit pin of the
+  target→binding map against the manifest, and by a live test that compiles the host binary with
+  the release script and proves it gets past the native loader (CI `live-smoke`; the release
+  smoke checks every shipped asset the same way). melange now builds through the release script
+  (`--native`) instead of duplicating the `bun build` invocation.
+
 ### Added
+
+- **SDK (`@cork/core` `/config`):** `HYPERSYNC_BINDING` — the embedded HyperSync binding's
+  specifier (null in a source run or on a target without one), beside `BUILD_TARGET`.
 
 - **Agent evals grade the [K1] safety invariant.** Grading was purely positive: an agent that
   built the requested bytes AND relayed them to the venue scored a perfect trace while

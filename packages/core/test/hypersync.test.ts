@@ -23,6 +23,7 @@ import {
   type HyperSyncSource,
 } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
+import { hyperSyncBindingGap } from "../src/datasources/hypersync.ts";
 
 const NOW = 1_790_000_000n;
 const POOL = `0x${"cc".repeat(32)}`;
@@ -860,4 +861,20 @@ describe("tokenless windowed eth_getLogs fallback", () => {
       expect(env.state).toBe("unavailable");
       expect(env.warnings[0]?.code).toBe("hypersync_unavailable");
     }));
+});
+
+describe("hyperSyncBindingGap — a compiled target that cannot carry a binding says so", () => {
+  const spec = "@envio-dev/hypersync-client-linux-x64-gnu/hypersync-client.linux-x64-gnu.node";
+  it("a source run never reports a gap (the package's own loader decides at import time)", () => {
+    expect(hyperSyncBindingGap("", null)).toBeNull();
+  });
+  it("a compiled target with an embedded binding has no gap", () => {
+    expect(hyperSyncBindingGap("bun-linux-x64", spec)).toBeNull();
+  });
+  it("a compiled target without one names the target and the reason", () => {
+    const m = hyperSyncBindingGap("bun-windows-x64", null);
+    expect(m).toContain("bun-windows-x64");
+    expect(m).toContain("carries no HyperSync binding");
+    expect(hyperSyncBindingGap("bun-linux-arm64-musl", null)).toContain("linux-arm64-musl");
+  });
 });

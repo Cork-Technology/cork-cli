@@ -7,7 +7,9 @@ import { compareVersions } from "@cork/core";
 import { assetForTarget, parseChecksums } from "../src/self-update.ts";
 import { updateDecision, type UpdateCache } from "../src/update-notify.ts";
 // The compile script must name assets exactly as self-update expects to find them.
-import { assetForTarget as scriptAssetForTarget } from "../../../scripts/compile-binaries.mjs";
+import { assetForTarget as scriptAssetForTarget, compileDefines, hyperSyncBindingForTarget } from "../../../scripts/compile-binaries.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 describe("compareVersions", () => {
   it("orders releases numerically, not lexically", () => {
@@ -42,6 +44,66 @@ describe("release asset naming", () => {
     expect(assetForTarget("")).toBeNull();
     expect(assetForTarget("linux-x64")).toBeNull();
     expect(assetForTarget("bun-freebsd-x64")).toBeNull();
+  });
+});
+
+describe("embedded HyperSync binding per release target", () => {
+  // What Envio publishes (npm, 1.4.0): five bindings. linux-arm64-musl and windows get none,
+  // and the binary must say so rather than carry a binding that cannot load.
+  const spec = (slug: string) => `@envio-dev/hypersync-client-${slug}/hypersync-client.${slug}.node`;
+  const expected: Array<[string, string | null]> = [
+    ["bun-linux-x64", spec("linux-x64-gnu")],
+    ["bun-linux-arm64", spec("linux-arm64-gnu")],
+    ["bun-linux-x64-musl", spec("linux-x64-musl")],
+    ["bun-linux-arm64-musl", null],
+    ["bun-darwin-arm64", spec("darwin-arm64")],
+    ["bun-darwin-x64", spec("darwin-x64")],
+    ["bun-windows-x64", null],
+  ];
+  it("maps every release target to the binding Envio publishes — null where it publishes none", () => {
+    for (const [target, binding] of expected) expect(hyperSyncBindingForTarget(target), target).toBe(binding);
+  });
+  it("rejects unknown shapes", () => {
+    expect(hyperSyncBindingForTarget("")).toBeNull();
+    expect(hyperSyncBindingForTarget("linux-x64")).toBeNull();
+    expect(hyperSyncBindingForTarget("bun-freebsd-x64")).toBeNull();
+    expect(hyperSyncBindingForTarget("bun-linux-x64-baseline")).toBeNull();
+  });
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  const core = JSON.parse(readFileSync(`${root}/packages/core/package.json`, "utf8")) as { optionalDependencies: Record<string, string> };
+  const clientPin = core.optionalDependencies["@envio-dev/hypersync-client"];
+
+  it("every binding names a package @cork/core declares as an optionalDependency, at the client's own pin", () => {
+    // The bundler resolves the specifier from @cork/core — the package that imports the client
+    // and requires the binding (isolated linker: nothing is hoisted) — so a binding the manifest
+    // does not declare cannot be embedded. Bind mapping to manifest, all six at ONE pin.
+    expect(clientPin).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const [, binding] of expected) {
+      if (!binding) continue;
+      const pkg = binding.split("/").slice(0, 2).join("/");
+      expect(core.optionalDependencies[pkg], pkg).toBe(clientPin);
+    }
+  });
+  it("the map agrees with the platform set the pinned client itself declares (an Envio change on upgrade is loud)", () => {
+    // The client's package.json optionalDependencies IS Envio's published platform set for that
+    // version (napi-rs writes it). Every declared package that corresponds to a release target
+    // must be mapped, and nothing may be mapped that the client does not declare — so if Envio
+    // re-adds Windows or adds linux-arm64-musl, or drops a platform, the pin bump fails here.
+    const client = JSON.parse(readFileSync(`${root}/packages/core/node_modules/@envio-dev/hypersync-client/package.json`, "utf8")) as { version: string; optionalDependencies: Record<string, string> };
+    expect(client.version).toBe(clientPin);
+    const declared = new Set(Object.keys(client.optionalDependencies));
+    const mapped = new Set(expected.flatMap(([, b]) => (b ? [b.split("/").slice(0, 2).join("/")] : [])));
+    expect([...mapped].sort()).toEqual([...declared].sort());
+  });
+  it("compileDefines stamps identity plus the binding — the literal `undefined` where there is none", () => {
+    const withBinding = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-linux-x64" });
+    expect(withBinding.filter((a) => a === "--define")).toHaveLength(4);
+    expect(withBinding).toContain('process.env.CH_BUILD_VERSION="v1.2.3"');
+    expect(withBinding).toContain('process.env.CH_BUILD_COMMIT="abc"');
+    expect(withBinding).toContain('process.env.CH_BUILD_TARGET="bun-linux-x64"');
+    expect(withBinding).toContain(`process.env.CH_HYPERSYNC_BINDING="${spec("linux-x64-gnu")}"`);
+    const without = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-windows-x64" });
+    expect(without).toContain("process.env.CH_HYPERSYNC_BINDING=undefined");
   });
 });
 
