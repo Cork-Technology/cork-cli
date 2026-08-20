@@ -8,6 +8,55 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Fixed
+
+- **LOP liveness read the wrong invalidator word, so filled or cancelled bit-invalidator orders
+  looked live (COR-175).** `OrderMixin.bitInvalidatorForOrder(maker, slot)` forwards its argument
+  to `BitInvalidatorLib.checkSlot(nonce)`, which shifts by 8 itself; only the
+  `BitInvalidatorUpdated` event carries the pre-shifted slot index. The taker-fill liveness
+  pre-flight, `cork_track` reconcile, and the hybrid order-book verification all passed the
+  slot index and therefore read `_raw[nonce >> 16]`, an empty word — a cancelled order whose bit
+  was set on chain prepared as fillable (Base fork, 2026-08-20). Every read now goes through one
+  helper (`readLopInvalidator`) that owns the view's argument, and the tests drive a faithful
+  in-memory model of the invalidator libraries (shift inside the view) instead of stubs that
+  answered the same word for any argument.
+- **EOA makers no longer draw a spurious `chain_read_failed` from finalize-maker-order and
+  taker-fill.** viem's `getCode` returns `undefined` for an account without code; the ladder
+  read that as "could not read code" and warned "no RPC resolved" on every EOA maker even with
+  an RPC configured. The probe outcome is tracked separately from its value; the warning now
+  fires only when there truly was no RPC or the read failed, and says which.
+- **The taker-fill cap bound matches `TakerTraitsLib._AMOUNT_MASK`: 184 low bits, not 185.** A
+  cap with bit 184 set was accepted and would have been narrowed on-chain silently.
+
+### Added
+
+- **`cork_decode` labels 1inch LOP v4 fills and cancels (COR-174).** kind `tx` and kind
+  `calldata` now decode `fillOrder`, `fillOrderArgs`, `fillContractOrder`,
+  `fillContractOrderArgs`, and `cancelOrder` into a `lop` leg — the order's eight fields, the
+  fill amount and decoded taker traits (amount denomination, threshold, receiver/extension/
+  interaction lengths), the args split the way `OrderMixin._parseArgs` splits them, the maker
+  signature (compact r/vs or ERC-1271 bytes) — plus a chain-specific label: the EIP-712
+  `orderHash`, the maker-traits breakdown, and the same `jit` / `fusion` extension labels kind
+  `order` gives the resting order. The summary line names the trade ("fill 1inch limit order
+  0x… from maker …: take … of …, paying at most … of … [maker extension: Cork just-in-time
+  market via adapter …]"), so the tool's own fill and cancel bytes no longer decode as
+  UNREADABLE. kind `calldata` also accepts a single recognized call (Cork adapter action,
+  ERC-20 leg, ForSelf call, LOP fill/cancel), not only a Bundler3 multicall; unrecognized bytes
+  stay invalid input, now naming the selector. SDK (`@cork/core`, `/orders`): `decodeLopCall`,
+  `decodeTakerTraits`, `splitTakerArgs`, `orderFromUintTuple`, `lopFillAbi`, `lopCancelAbi`,
+  `readLopInvalidator`, `classifyInvalidatorWord`, `ContractReader`; `labelOrderExtension`,
+  `labelLopLegs`, `LopLegLabel` on the root.
+
+### Changed
+
+- **JIT prepares tell the caller to pin the constraint before the permit re-prepare (COR-176).**
+  A maker-side JIT order needs two prepares (the second embeds the permit over the predicted
+  cST). The constraint is part of the pool's identity, so an oracle tick between the two
+  re-derived a different pool and cST than the permit covered (`jit_side_mismatch`, observed on
+  a NAV pair where the rate moves every block). `jit.permitNote`, the permit entry in
+  `data.approvals`, and the `jit_side_mismatch` message now say to pass
+  `jitMarket.constraint = jit.constraint` on the re-prepare.
+
 ## [0.4.0-rc.1] — 2026-08-20
 
 ### Changed (breaking)
@@ -168,12 +217,13 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   `cork_capabilities` with no arguments now also returns the doc-topic catalog (`docTopics`).
   The advertised surface did not grow.
 
-- **Terminal prose gets color and glyphs.** Human-readable output shows state badges
+- **Terminal prose gets color and glyphs.** Human-readable output (results, errors,
+  `--explain`) shows state badges
   (`✔ OK` green, `⚠ UNAVAILABLE` yellow, `✖ CONFLICT` red), colored keys, and dimmed
   provenance, on a TTY only. Precedence: `FORCE_COLOR`, then `NO_COLOR`
   (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. No new dependency
   (`packages/cli/src/ansi.ts`). Tests pin two rules: stripped output equals plain output byte
-  for byte, and JSON never carries an escape. Not covered surface (policy R11).
+  for byte, and `--json` output never carries an escape. Not covered surface (policy R11).
 
 ## [0.3.0-rc.1] — 2026-08-17
 
