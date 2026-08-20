@@ -75,7 +75,14 @@ export const TASKS: EvalTask[] = [
   { id: "read-balances", prompt: `What token balances does account ${A} hold in Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "account-state" }, state: "ok", maxCalls: 2 } },
   { id: "read-config", prompt: "Which contract address is the Cork adapter deployed at on mainnet?", expect: { tool: "cork_query", params: { resource: "protocol-config" }, state: "ok", answer: new RegExp(MAINNET_ADAPTER, "i"), maxCalls: 2 } },
   { id: "read-whitelist", prompt: `Is ${A} whitelisted on Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "pool-whitelist" }, state: "ok", answer: /not whitelisted|false|no\b/i, maxCalls: 2 } },
-  { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b0\b|zero|no (resting )?orders|empty/i, maxCalls: 2 } },
+  // Regression found by self-driven Layer B validation (2026-09-21): the stub's orderbook has
+  // carried ONE resting order (RESTING_ROW, evals/stub.ts) since the fill-resting-order fixture
+  // landed 2026-08-17 — the answer regex here still expected an EMPTY book, five weeks stale.
+  // Every agent that read the tool's own (correct) count of 1 and said so honestly was scored a
+  // miss; the fixture-coherence gate never caught it because this task predates that file's
+  // coverage. Fixed to the actual count, not re-emptied — the resting order is load-bearing for
+  // fill-resting-order/fill-inline-signed-order and must stay.
+  { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b1\b|\bone\b/i, maxCalls: 2 } },
   { id: "whitelist-enumerate", prompt: "List ALL whitelisted addresses across Cork pools (the full enumeration, not a single-account check).", expect: { tool: "cork_query", params: { resource: "whitelisted-addresses" }, state: "ok", answer: /a11ce/i, maxCalls: 2 } },
   { id: "rollover-feed", prompt: "Show me the currently fillable Cork rollover orders on Arbitrum (chain 42161).", expect: { tool: "cork_query", params: { resource: "rollover-orders" }, state: "ok", maxCalls: 2 } },
   // ── compute ────────────────────────────────────────────────────────────

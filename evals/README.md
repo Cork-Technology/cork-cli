@@ -135,3 +135,28 @@ EVAL_GATE=1 EVAL_GATE_THRESHOLD=0.8 bun run eval  # CI gate: exit 1 below thresh
 
 Without credentials the runner self-skips (prints why, exits 0), so `bun run eval` is safe in any
 environment.
+
+### Keyless self-drive — validating the suite with no LLM credentials
+
+`evals/self-drive.ts` answers a different question than Layer B: not "how does an agent perform
+against this surface" but "is the suite itself coherent" — is every task actually winnable, do
+the answer regexes accept realistic prose, is every expectation reachable. Execution, trace
+semantics, and grading are the suite's own (`runTool` + `stubContext` + `gradeTask`), so a
+failure here is a suite defect, never a harness approximation. It is NOT a model baseline — the
+sonnet gate exists precisely so Layer B scores stay comparable across runs, and self-drive
+doesn't touch that number.
+
+A human or agent plays every task's tool calls against a JSON spec (`{id, calls, finalText}`),
+in two passes so answers are composed from ground truth rather than guessed:
+
+```sh
+CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts record spec.json   # execute calls, print REAL envelopes
+CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts grade  spec.json   # execute again + grade with finalText filled in
+```
+
+This caught a real regression on first use (2026-09-21): `venue-orderbook`'s answer regex still
+expected an empty book five weeks after the `fill-resting-order` fixture gave the stub's
+orderbook one permanent resting order — every honestly-correct answer was scored a miss. Run
+this whenever `bun run eval` is unavailable and the task set has changed; it will not catch
+phrasing/tool-selection weaknesses a real model can have (that needs Layer B), but it will catch
+every unwinnable task before any LLM tokens are spent discovering one.

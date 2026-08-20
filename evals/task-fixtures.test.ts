@@ -7,7 +7,8 @@
 // the task set: the six rc.2 tasks, the five highest-value earlier tasks (real signed fill,
 // oracle deploy, rfq-open, rollover prepare, constraint resolve), the eight 2026-08-20
 // surface-gap tasks (auction, finalize, inline fill, simulate, the gated quote, the RFQ feed,
-// the fixed-rate oracle, the warnings topic) plus their two held-out siblings, and a read
+// the fixed-rate oracle, the warnings topic) plus their two held-out siblings, the
+// venue-orderbook regression found by self-driven Layer B validation (2026-09-21), and a read
 // canary — extend this file when adding tasks whose outcome depends on stub fixtures.
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
@@ -350,6 +351,18 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     // The costly wrong answer would be the Cork adapter or Permit2; the artifact must send the
     // caller to the integrator's adapter, and the task's regex grades exactly that.
     expect(TASKS.find((t) => t.id === "prepare-forself-exercise")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
+  });
+
+  it("venue-orderbook: the actual resting-order count matches what the task's answer regex accepts", async () => {
+    // The regression this guards: the stub's orderbook fixture (RESTING_ROW) drifted from the
+    // task's answer regex for five weeks — every honest agent that reported the real count was
+    // scored a miss (found 2026-09-21 via self-driven Layer B validation). Pin the two together
+    // so a future fixture change that doesn't also update the task fails HERE, offline.
+    const env = await runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { poolId: DEMO_POOL_ID } }, stubContext());
+    expect(env.state).toBe("ok");
+    const count = (env.data as { count: number }).count;
+    const task = TASKS.find((t) => t.id === "venue-orderbook")!;
+    expect(task.expect.answer!.test(`the orderbook has ${count} resting order(s)`)).toBe(true);
   });
 
   it("the demo-pool read the oldest task grades still answers (fixture canary)", async () => {

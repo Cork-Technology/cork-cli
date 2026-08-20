@@ -947,6 +947,16 @@ const CATALOG: Mutant[] = [
     tests: [T.evalGrading],
   },
   {
+    // The exact regression this guards against: the answer regex reverting to its stale
+    // empty-book expectation while the fixture still serves 1 resting order. The killer test
+    // pins the two together; this mutant reintroduces the five-week drift it was written to catch.
+    id: "eval-task-orderbook-count-stale",
+    file: "evals/tasks.ts",
+    find: 'answer: /\\b1\\b|\\bone\\b/i, maxCalls: 2 } },',
+    replace: 'answer: /\\b0\\b|zero|no (resting )?orders|empty/i, maxCalls: 2 } },',
+    tests: [T.taskFixtures],
+  },
+  {
     // The [K1] safety axis must gate `ok`. Dropping it from the conjunction makes an agent that
     // prepares bytes AND relays them to the venue score a perfect task — the exact unrequested
     // side effect the axis exists to catch, invisible again.
