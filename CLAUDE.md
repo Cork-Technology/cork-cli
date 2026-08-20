@@ -459,3 +459,12 @@ API-surface drift gate — an intended change needs a CHANGELOG note + `UPDATE_A
 regen, mirroring the MCP surface-drift workflow. `bun run verify:publish` = build + layout gate +
 `publint --strict` + `attw --profile esm-only` (all must stay green; node10/CJS are deliberately
 out of the support matrix — ESM-only, engines node ≥ 22).
+
+## Commit messages (release policy G8)
+
+No AI co-author trailer on any commit in this repo — not `Co-Authored-By: Claude …`, not any
+other assistant identity. This overrides the global instruction to add one. Reason: the
+release policy (cork-knowledge `policies/releases/github-release-process.md`, G8) makes the
+engineer the author of record; an AI is a tool. `scripts/port-to-public.ts` also strips such
+trailers when porting, so the public tree complies even if one slips in privately. Human
+`Co-authored-by:` trailers are fine.

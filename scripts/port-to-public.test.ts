@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { EXCLUDED_PREFIXES, isExcluded, portCommits, REPOINTS, transformTree } from "./port-to-public.ts";
+import { EXCLUDED_PREFIXES, isExcluded, portCommits, REPOINTS, stripAiTrailers, transformTree } from "./port-to-public.ts";
 
 let repo: string;
 
@@ -87,6 +87,23 @@ describe("port-to-public: the transform is a pure function of the private tree",
     const priv = git(["log", "-1", "--format=%an|%ae|%aI|%cI", "main"]).trim();
     const pub = git(["log", "-1", "--format=%an|%ae|%aI|%cI", "public"]).trim();
     expect(pub).toBe(priv);
+  });
+
+  it("drops an AI co-author trailer from the ported message, keeps human trailers (policy G8)", () => {
+    write("README.md", "public readme, revised for the trailer case\n");
+    const c = commitAll("feat: something\n\nbody line\n\nCo-authored-by: Pat Human <pat@example.test>\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>");
+    const { head } = portCommits(repo, [c], "public", false);
+    const msg = git(["log", "-1", "--format=%B", head]);
+    expect(msg).toContain("Co-authored-by: Pat Human <pat@example.test>");
+    expect(msg).not.toMatch(/claude|anthropic/i);
+    expect(msg.trimEnd().endsWith("Co-authored-by: Pat Human <pat@example.test>")).toBe(true);
+    git(["branch", "-f", "public", head]);
+  });
+
+  it("stripAiTrailers is a pure function: no trailer → message unchanged, trailing blank run collapsed", () => {
+    expect(stripAiTrailers("subject\n\nbody\n")).toBe("subject\n\nbody\n");
+    expect(stripAiTrailers("subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")).toBe("subject\n");
+    expect(stripAiTrailers("subject\n\nCo-authored-by: Dev <d@x.test>\nCo-authored-by: GitHub Copilot <copilot@github.com>\n")).toBe("subject\n\nCo-authored-by: Dev <d@x.test>\n");
   });
 
   it("skips an excluded-only commit instead of minting an empty one", () => {

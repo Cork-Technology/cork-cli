@@ -148,6 +148,17 @@ function noteLeakWarnings(repo: string, parentTree: string, tree: string): strin
   return added.length > 0 ? [`new notes/-reference line(s) entering the public tree — keep deliberately or strip:\n  ${added.join("\n  ")}`] : [];
 }
 
+/** Release policy G8 (cork-knowledge policies/releases/github-release-process.md): no AI
+ *  co-author trailer on a public commit. A private commit may still carry one (older tooling
+ *  added it); the port drops those lines so the public history complies mechanically. Human
+ *  co-authors are kept. */
+export const AI_COAUTHOR_TRAILER = /^co-authored-by:\s*.*\b(claude|anthropic|copilot|chatgpt|openai|gemini|cursor)\b.*$/i;
+export function stripAiTrailers(message: string): string {
+  const lines = message.split("\n").filter((l) => !AI_COAUTHOR_TRAILER.test(l.trim()));
+  // Collapse the blank run a removed trailer block leaves at the end; keep one final newline.
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
 export function portCommits(repo: string, commits: string[], base: string, sign: boolean): { head: string; ported: Array<{ from: string; to: string }>; skipped: string[] } {
   const indexFile = join(mkdtempSync(join(tmpdir(), "port-index-")), "index");
   try {
@@ -164,7 +175,7 @@ export function portCommits(repo: string, commits: string[], base: string, sign:
       }
       for (const w of noteLeakWarnings(repo, parentTree, tree)) console.warn(`WARN ${commit.slice(0, 7)}: ${w}`);
       const fmt = (f: string) => git(repo, ["log", "-1", `--format=${f}`, commit]).trim();
-      const message = git(repo, ["log", "-1", "--format=%B", commit]);
+      const message = stripAiTrailers(git(repo, ["log", "-1", "--format=%B", commit]));
       const newCommit = git(repo, ["commit-tree", tree, "-p", parent, ...(sign ? ["-S"] : [])], {
         input: message,
         env: {
