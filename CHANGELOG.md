@@ -8,29 +8,9 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.0] — 2026-08-20
 
-- **`ch mcp` exits on SIGTERM and SIGINT.** In the container `ch` is PID 1, and the kernel
-  gives PID 1 no default signal action. The server ignored SIGTERM, so every `docker stop`
-  waited out its timeout and sent SIGKILL: 10.5 s on the v0.4.0-rc.1 image, 0.5 s behind an
-  init. Both transports now stop their transport and exit 0 on SIGTERM or SIGINT. A test
-  spawns the real entry and signals it; a mutation probe guards the handler. The v0.4.0-rc.1
-  image still needs `--init` for a prompt stop.
-
-### Changed
-
-- **The container image carries OCI annotations** (title, description, source, documentation,
-  vendor, licenses in the apko spec; version and revision stamped at publish). A verifier can
-  read them without pulling the SBOM.
-- **Deployment docs state the image's one runtime need.** HyperSync reads extract the
-  embedded binding to the temp dir and `dlopen` it, so the temp dir must be writable and
-  exec-mappable (`TMPDIR` is honored; `noexec` fails with `failed to map segment`). The README
-  shows a locked-down `docker run` (read-only root, tmpfs, all capabilities dropped). Audit of
-  the v0.4.0-rc.1 image: 7 packages, no shell, no package manager, no setuid binary, uid 65532,
-  one layer; 122 MB is the Bun runtime (89 MB) plus the binding (16.6 MB) — `--minify` saves 1%,
-  so the image is as small as this runtime allows.
-
-## [0.4.0-rc.1] — 2026-08-20
+First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the fixes below.
 
 ### Changed (breaking)
 
@@ -61,6 +41,12 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ### Fixed
 
+- **`ch mcp` exits on SIGTERM and SIGINT.** In the container `ch` is PID 1, and the kernel
+  gives PID 1 no default signal action. The server ignored SIGTERM, so every `docker stop`
+  waited out its timeout and sent SIGKILL: 10.5 s on the v0.4.0-rc.1 image, 0.5 s behind an
+  init. Both transports now stop their transport and exit 0 on SIGTERM or SIGINT. A test
+  spawns the real entry and signals it; a mutation probe guards the handler. The v0.4.0-rc.1
+  image still needs `--init` for a prompt stop.
 - **Compiled binaries carry the HyperSync native binding, so `full-decentralized` mode works
   from the bare image.** Our ops team found this on 2026-08-20 while they deployed the MCP
   endpoint: with a valid `ENVIO_API_TOKEN`, every HyperSync read answered
@@ -235,6 +221,16 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ### Changed
 
+- **The container image carries OCI annotations** (title, description, source, documentation,
+  vendor, licenses in the apko spec; version and revision stamped at publish). A verifier can
+  read them without pulling the SBOM.
+- **Deployment docs state the image's one runtime need.** HyperSync reads extract the
+  embedded binding to the temp dir and `dlopen` it, so the temp dir must be writable and
+  exec-mappable (`TMPDIR` is honored; `noexec` fails with `failed to map segment`). The README
+  shows a locked-down `docker run` (read-only root, tmpfs, all capabilities dropped). Audit of
+  the v0.4.0-rc.1 image: 7 packages, no shell, no package manager, no setuid binary, uid 65532,
+  one layer; 122 MB is the Bun runtime (89 MB) plus the binding (16.6 MB) — `--minify` saves 1%,
+  so the image is as small as this runtime allows.
 - **JIT prepares tell the caller to pin the constraint before the permit re-prepare (COR-176).**
   A maker-side JIT order needs two prepares. The second embeds the permit over the predicted
   cST. The constraint is part of the pool identity. An oracle tick between the two prepares
@@ -242,7 +238,6 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   We saw this on a NAV pair, where the rate moves every block. `jit.permitNote`, the permit
   entry in `data.approvals`, and the `jit_side_mismatch` message now say: pass
   `jitMarket.constraint = jit.constraint` on the re-prepare.
-
 
 ## [0.3.0-rc.1] — 2026-08-17
 
