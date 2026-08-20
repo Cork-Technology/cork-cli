@@ -50,3 +50,10 @@ evals/.*.jsonl
 
 # Slack-thread drafts are working files, never repo content (owner rule 2026-08-11)
 notes/*slack*
+
+# local demo workspace from notes/demo-rundown-cork-defi-mcp-base.md (holds RPC URLs + demo addresses)
+cork-demo/
+
+# local credential env files (bun auto-loads these into `bun run eval` — a key here must never reach git)
+.env
+.env.*
