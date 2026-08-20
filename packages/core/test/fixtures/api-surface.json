@@ -89,6 +89,10 @@
       "kind": "type"
     },
     {
+      "name": "ContractReader",
+      "kind": "type"
+    },
+    {
       "name": "CorkActionName",
       "kind": "type"
     },
@@ -173,7 +177,15 @@
       "kind": "type"
     },
     {
+      "name": "DecodedLopCall",
+      "kind": "type"
+    },
+    {
       "name": "DecodedMakerTraits",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedTakerTraits",
       "kind": "type"
     },
     {
@@ -402,6 +414,10 @@
     },
     {
       "name": "LopExtensionFields",
+      "kind": "type"
+    },
+    {
+      "name": "LopFillFunction",
       "kind": "type"
     },
     {
@@ -777,6 +793,10 @@
       "kind": "type"
     },
     {
+      "name": "SplitTakerArgs",
+      "kind": "type"
+    },
+    {
       "name": "StoredCache",
       "kind": "type"
     },
@@ -1065,6 +1085,10 @@
       "kind": "value"
     },
     {
+      "name": "classifyInvalidatorWord",
+      "kind": "value"
+    },
+    {
       "name": "classifyRemainingRaw",
       "kind": "value"
     },
@@ -1173,6 +1197,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeLopCall",
+      "kind": "value"
+    },
+    {
       "name": "decodeLopFillRows",
       "kind": "value"
     },
@@ -1202,6 +1230,10 @@
     },
     {
       "name": "decodeSingleCall",
+      "kind": "value"
+    },
+    {
+      "name": "decodeTakerTraits",
       "kind": "value"
     },
     {
@@ -1453,7 +1485,19 @@
       "kind": "value"
     },
     {
+      "name": "lopCallName",
+      "kind": "value"
+    },
+    {
+      "name": "lopCancelAbi",
+      "kind": "value"
+    },
+    {
       "name": "lopDomain",
+      "kind": "value"
+    },
+    {
+      "name": "lopFillAbi",
       "kind": "value"
     },
     {
@@ -1506,6 +1550,10 @@
     },
     {
       "name": "oracleModeForSource",
+      "kind": "value"
+    },
+    {
+      "name": "orderFromUintTuple",
       "kind": "value"
     },
     {
@@ -1610,6 +1658,10 @@
     },
     {
       "name": "readForeignSharePool",
+      "kind": "value"
+    },
+    {
+      "name": "readLopInvalidator",
       "kind": "value"
     },
     {
@@ -1754,6 +1806,10 @@
     },
     {
       "name": "spenderRoleOf",
+      "kind": "value"
+    },
+    {
+      "name": "splitTakerArgs",
       "kind": "value"
     },
     {
@@ -2781,6 +2837,10 @@
       "kind": "type"
     },
     {
+      "name": "ContractReader",
+      "kind": "type"
+    },
+    {
       "name": "CorkSettlerDomain",
       "kind": "type"
     },
@@ -2789,7 +2849,15 @@
       "kind": "type"
     },
     {
+      "name": "DecodedLopCall",
+      "kind": "type"
+    },
+    {
       "name": "DecodedMakerTraits",
+      "kind": "type"
+    },
+    {
+      "name": "DecodedTakerTraits",
       "kind": "type"
     },
     {
@@ -2886,6 +2954,10 @@
     },
     {
       "name": "LopExtensionFields",
+      "kind": "type"
+    },
+    {
+      "name": "LopFillFunction",
       "kind": "type"
     },
     {
@@ -3005,6 +3077,10 @@
       "kind": "type"
     },
     {
+      "name": "SplitTakerArgs",
+      "kind": "type"
+    },
+    {
       "name": "TakerFillArgs",
       "kind": "type"
     },
@@ -3077,6 +3153,10 @@
       "kind": "value"
     },
     {
+      "name": "classifyInvalidatorWord",
+      "kind": "value"
+    },
+    {
       "name": "classifyRemainingRaw",
       "kind": "value"
     },
@@ -3109,11 +3189,19 @@
       "kind": "value"
     },
     {
+      "name": "decodeLopCall",
+      "kind": "value"
+    },
+    {
       "name": "decodeMakerTraits",
       "kind": "value"
     },
     {
       "name": "decodeOrderTuple",
+      "kind": "value"
+    },
+    {
+      "name": "decodeTakerTraits",
       "kind": "value"
     },
     {
@@ -3205,7 +3293,19 @@
       "kind": "value"
     },
     {
+      "name": "lopCallName",
+      "kind": "value"
+    },
+    {
+      "name": "lopCancelAbi",
+      "kind": "value"
+    },
+    {
       "name": "lopDomain",
+      "kind": "value"
+    },
+    {
+      "name": "lopFillAbi",
       "kind": "value"
     },
     {
@@ -3221,6 +3321,10 @@
       "kind": "value"
     },
     {
+      "name": "orderFromUintTuple",
+      "kind": "value"
+    },
+    {
       "name": "parseAuctionGetterData",
       "kind": "value"
     },
@@ -3230,6 +3334,10 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "readLopInvalidator",
       "kind": "value"
     },
     {
@@ -3250,6 +3358,10 @@
     },
     {
       "name": "settlerStatusAbi",
+      "kind": "value"
+    },
+    {
+      "name": "splitTakerArgs",
       "kind": "value"
     },
     {

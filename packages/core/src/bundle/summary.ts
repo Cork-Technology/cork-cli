@@ -6,6 +6,7 @@
 // entirely from being trustworthy when it matters.
 import type { DecodedLeg } from "./decode.ts";
 import { U256_MAX } from "../math/fixed.ts";
+import { lopInvalidatorPlan } from "../orders.ts";
 
 const MAX_UINT = U256_MAX;
 
@@ -78,6 +79,35 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
       const pool = p && typeof p.poolId === "string" ? ` for pool ${short(p.poolId)}` : "";
       const deadline = p && typeof p.deadline === "bigint" ? `, deadline ${p.deadline}` : "";
       return `run '${leg.action}' on the ForSelf adapter ${who(leg.to, o)}${pool}${deadline} — inputs are pulled from the caller, every output goes back to the CALLER (no receiver parameter exists); verify the adapter address is your integrator's deployment`;
+    }
+    case "lop": {
+      const c = leg.call;
+      // The calldata-kind decode has no target; the tx-kind decode names the real LOP address.
+      const target = /^0x0{40}$/i.test(leg.to) ? "the 1inch LOP" : `the 1inch LOP ${short(leg.to)}`;
+      if (c.fn === "cancelOrder") {
+        const plan = lopInvalidatorPlan(c.makerTraits);
+        const how = plan.mode === "bit" ? `sets its bit in your bit invalidator (nonce ${plan.nonceOrEpoch})` : "marks it fully filled in your remaining invalidator";
+        return `cancel 1inch limit order ${short(c.orderHash)} on ${target} — ${how}; nothing moves, the order just can never fill`;
+      }
+      const t = c.takerTraits;
+      const od = c.order;
+      const terms = t.amountIsMakerAsset
+        ? `take ${amount(c.amount)} of ${who(od.makerAsset, o)}, paying at most ${t.threshold === 0n ? "the order's own rate in" : `${amount(t.threshold)} of`} ${who(od.takerAsset, o)}`
+        : `pay ${amount(c.amount)} of ${who(od.takerAsset, o)}, receiving at least ${t.threshold === 0n ? "the order's own rate in" : `${amount(t.threshold)} of`} ${who(od.makerAsset, o)}`;
+      const delivered = c.args.receiver ? `, maker asset delivered to ${who(c.args.receiver, o)}` : "";
+      const hooks: string[] = [];
+      if (c.args.extension) {
+        const j = leg.label?.jit;
+        hooks.push(
+          j
+            ? `maker extension: Cork just-in-time market via adapter ${short(j.adapter)} — ${short(j.collateralAsset)}/${short(j.referenceAsset)} expiring ${j.expiryTimestamp}, ${"recipe" in j ? `recipe ${short(j.recipe)}` : `legacy mode '${j.mode}'`}, ${j.enableJitMint ? "mints the cST from the maker's collateral" : "market creation only"}, ${j.permits} embedded permit${j.permits === 1 ? "" : "s"}`
+            : `${(c.args.extension.length - 2) / 2}-byte maker extension${leg.label?.fusion ? ` (${leg.label.fusion.classification === "legacy" ? "legacy Fusion" : "Fusion auction"} amount getter)` : ""}`,
+        );
+      }
+      if (c.args.interaction) hooks.push(`${(c.args.interaction.length - 2) / 2}-byte taker interaction on ${short(c.args.interaction.slice(0, 42))}`);
+      if (c.fn === "fillContractOrder" || c.fn === "fillContractOrderArgs") hooks.push("contract-maker signature (ERC-1271)");
+      const hash = leg.label?.orderHash ? ` ${short(leg.label.orderHash)}` : "";
+      return `fill 1inch limit order${hash} from maker ${who(od.maker, o)} on ${target}: ${terms}${delivered}${hooks.length ? ` [${hooks.join("; ")}]` : ""}`;
     }
     case "bundle":
       return `a nested bundle on ${who(leg.to, o)} (${leg.legs.length} leg${leg.legs.length === 1 ? "" : "s"}):`;

@@ -19,7 +19,7 @@
 // yet — chain existence rides as an `exists` annotation, not a liveness verdict.
 import { zeroAddress } from "viem";
 import { poolManagerAbi } from "../chain/abis.ts";
-import { classifyBitInvalidator, classifyRemainingRaw, hashLopOrder, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan } from "../orders.ts";
+import { classifyInvalidatorWord, hashLopOrder, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
@@ -124,7 +124,12 @@ export async function verifyVenueRows(a: {
     if (!lop) return allUnverified(rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` });
     // Phase 1 — parse every row and collect the UNIQUE invalidator reads it needs. One bit
     // word covers 256 orders of the same (maker, slot), so rows dedupe onto shared reads.
-    type BookRef = { row: Row; verdict?: "unparseable" | "hash-lie"; readKey?: string; classify?: (word: bigint) => { status: string } };
+    // A read is keyed on the WORD it fetches (bit mode: maker + slot index, since 256 nonces
+    // share one word; remaining mode: maker + orderHash) and carries one representative
+    // (plan, maker, hash) to perform it with — readLopInvalidator owns the view's arguments.
+    type InvalidatorRead = { plan: LopInvalidatorPlan; maker: `0x${string}`; orderHash: `0x${string}` };
+    type BookRef = { row: Row; verdict?: "unparseable" | "hash-lie"; readKey?: string; plan?: LopInvalidatorPlan };
+    const reads = new Map<string, InvalidatorRead>();
     const refs: BookRef[] = inBudget.map((row) => {
       const parsed = parseSignedLopOrder(row);
       if (!parsed.ok) return { row, verdict: "unparseable" as const };
@@ -135,22 +140,17 @@ export async function verifyVenueRows(a: {
         return { row, verdict: "hash-lie" as const };
       }
       const plan = lopInvalidatorPlan(order.makerTraits);
-      return plan.mode === "bit"
-        ? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}`, classify: (word: bigint) => classifyBitInvalidator(word, plan.mask) }
-        : { row, readKey: `raw:${order.maker.toLowerCase()}:${localHash.toLowerCase()}`, classify: classifyRemainingRaw };
+      const maker = order.maker.toLowerCase() as `0x${string}`;
+      const readKey = plan.mode === "bit" ? `bit:${maker}:${plan.slot.toString()}` : `raw:${maker}:${localHash.toLowerCase()}`;
+      if (!reads.has(readKey)) reads.set(readKey, { plan, maker: order.maker, orderHash: localHash });
+      return { row, readKey, plan };
     });
     // Phase 2 — the deduped reads run CONCURRENTLY (the default mode's latency is this leg).
     const words = new Map<string, bigint | "error">();
     await Promise.all(
-      [...new Set(refs.flatMap((r) => (r.readKey !== undefined ? [r.readKey] : [])))].map(async (key) => {
-        const [mode, maker, slotOrHash] = key.split(":") as [string, `0x${string}`, string];
+      [...reads].map(async ([key, r]) => {
         try {
-          const word = (await client.readContract(
-            mode === "bit"
-              ? { address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, BigInt(slotOrHash)] }
-              : { address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, slotOrHash as `0x${string}`] },
-          )) as bigint;
-          words.set(key, word);
+          words.set(key, await readLopInvalidator(client, r.plan, lop, r.maker, r.orderHash));
         } catch {
           words.set(key, "error");
         }
@@ -163,7 +163,7 @@ export async function verifyVenueRows(a: {
       else {
         const word = words.get(ref.readKey!);
         if (word === undefined || word === "error") keep(ref.row, "unverified", true);
-        else if (ref.classify!(word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
+        else if (classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
         else keep(ref.row, "confirmed");
       }
     }

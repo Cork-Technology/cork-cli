@@ -8,16 +8,22 @@ import { describe, expect, it } from "vitest";
 import {
   buildMakerOrder,
   classifyBitInvalidator,
+  classifyInvalidatorWord,
   classifyRemainingRaw,
+  LOP_ADDRESSES,
   lopInvalidatorPlan,
+  readLopInvalidator,
   runTool,
+  type ContractReader,
   type HandlerContext,
 } from "@cork/core";
 import { stubResolved } from "./helpers.ts";
+import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const U256_MAX = (1n << 256n) - 1n;
-const HASH = `0x${"7".repeat(64)}`;
-const MAKER = "0x00000000000000000000000000000000000000a1";
+const HASH = `0x${"7".repeat(64)}` as const;
+const MAKER = "0x00000000000000000000000000000000000000a1" as const;
+const LOP = LOP_ADDRESSES[1]!;
 
 describe("lopInvalidatorPlan (MakerTraitsLib layout)", () => {
   const mk = (clientRequestId: string) =>
@@ -70,6 +76,33 @@ describe("lopInvalidatorPlan (MakerTraitsLib layout)", () => {
     const traits = (1n << 255n) | (nonce << 120n);
     const plan = lopInvalidatorPlan(traits);
     expect(plan).toMatchObject({ mode: "bit", slot: 1n, mask: 1n << 0xb3n, nonceOrEpoch: nonce });
+  });
+
+  it("readLopInvalidator passes the NONCE to bitInvalidatorForOrder — the view shifts by 8 itself", async () => {
+    // OrderMixin.bitInvalidatorForOrder(maker, slot) forwards to BitInvalidatorLib.checkSlot(nonce),
+    // which reads _raw[nonce >> 8]. Passing the pre-shifted slot index reads _raw[nonce >> 16]: an
+    // empty word, so a cancelled order looked live (2026-08-20). The fake below keeps storage the
+    // way the library does, so only the right argument sees the spent bit.
+    const nonce = 0x1b3n;
+    const traits = (1n << 255n) | (nonce << 120n);
+    const plan = lopInvalidatorPlan(traits);
+    const chain = new FakeLopInvalidators();
+    chain.spendNonce(MAKER, nonce);
+    const word = await readLopInvalidator(chain as unknown as ContractReader, plan, LOP, MAKER, HASH);
+    expect(chain.calls).toEqual([{ functionName: "bitInvalidatorForOrder", args: [MAKER, nonce] }]);
+    expect(word).toBe(1n << 0xb3n);
+    expect(classifyInvalidatorWord(plan, word)).toEqual({ status: "filled-or-cancelled" });
+    // The same order before anything spent it: live.
+    expect(classifyInvalidatorWord(plan, await readLopInvalidator(new FakeLopInvalidators() as unknown as ContractReader, plan, LOP, MAKER, HASH))).toEqual({ status: "live-untouched" });
+  });
+
+  it("readLopInvalidator reads the RAW remaining view by orderHash for multiple-fill orders", async () => {
+    const plan = lopInvalidatorPlan(1n << 254n);
+    const chain = new FakeLopInvalidators();
+    chain.setRemaining(MAKER, HASH, 250n);
+    const word = await readLopInvalidator(chain as unknown as ContractReader, plan, LOP, MAKER, HASH);
+    expect(chain.calls).toEqual([{ functionName: "rawRemainingInvalidatorForOrder", args: [MAKER, HASH] }]);
+    expect(classifyInvalidatorWord(plan, word)).toEqual({ status: "live-partially-filled", remaining: 250n });
   });
   it("partial+multiple-fill orders use the remaining invalidator", () => {
     const traits = 1n << 254n; // ALLOW_MULTIPLE_FILLS set, NO_PARTIAL_FILLS unset
@@ -137,6 +170,20 @@ describe("track reconcile: LOP invalidator leg [K7]", () => {
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("status_mismatch");
     expect((env.data as { chainStatus: string }).chainStatus).toBe("filled-or-cancelled");
+  });
+
+  it("against a faithful invalidator model, a cancelled order with a NON-ZERO nonce reconciles dead", async () => {
+    // Nonce 0x1b3 lives in slot 1. A read keyed on the slot index would ask the contract for
+    // nonce 1 → slot 0 → an empty word → "live". The faithful fake makes that mistake visible.
+    const nonce = 0x1b3n;
+    const traits = ((1n << 255n) | (nonce << 120n)).toString();
+    const chain = new FakeLopInvalidators();
+    chain.spendNonce(MAKER, nonce);
+    const ctx = { ...stubCtx({ bookRow: { orderHash: HASH, maker: MAKER, makerTraits: traits } }), resolveRpc: chain.resolveRpc() };
+    const env = await track(ctx);
+    expect(env.state).toBe("conflict");
+    expect((env.data as { chainStatus: string }).chainStatus).toBe("filled-or-cancelled");
+    expect(chain.calls.map((c) => c.args[1])).toEqual([nonce]);
   });
 
   it("remaining-mode order partially filled → remaining amount surfaced, still cancellable", async () => {

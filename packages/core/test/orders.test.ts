@@ -155,7 +155,7 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
     const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
     const traits = BigInt(fill.takerTraits);
     expect(traits & (1n << 255n)).toBe(1n << 255n);
-    expect(traits & ((1n << 185n) - 1n)).toBe(200n); // full-fill taking amount
+    expect(traits & ((1n << 184n) - 1n)).toBe(200n); // full-fill taking amount (TakerTraitsLib._AMOUNT_MASK)
     expect(fill.requiredTakingAmount).toBe("200");
   });
 
@@ -193,8 +193,12 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
     expect(BigInt(fill.takerTraits) & (1n << 251n)).toBe(0n);
   });
 
-  it("rejects a taking cap that overflows the 185-bit threshold field", () => {
-    expect(() => buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 185n })).toThrow(/185-bit/);
+  it("the taking cap is bounded by TakerTraitsLib._AMOUNT_MASK: 184 low bits, not 185", () => {
+    // _AMOUNT_MASK = 0x000000000000000000ffff…ff (46 f-nibbles = 184 bits). A cap with bit 184
+    // set must be refused here: on-chain `threshold()` would mask it away silently.
+    const maxCap = (1n << 184n) - 1n;
+    expect(BigInt(buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: maxCap }).takerTraits) & maxCap).toBe(maxCap);
+    expect(() => buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 184n })).toThrow(/184-bit/);
   });
 });
 

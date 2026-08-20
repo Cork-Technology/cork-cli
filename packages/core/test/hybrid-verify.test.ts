@@ -9,6 +9,7 @@ import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { HYBRID_VERIFY_BUDGET } from "../src/handlers/hybrid-verify.ts";
 import { runTool } from "../src/handlers.ts";
 import { stubRpc } from "./helpers.ts";
+import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const NOW = 1_790_000_000n;
 const LOP = LOP_ADDRESSES[1]!;
@@ -73,6 +74,25 @@ describe("hybrid verification — orderbook liveness", () => {
     expect(d.items[0]!.verification).toBe("confirmed");
     expect(d.verification).toMatchObject({ confirmed: 1, dropped: 1 });
     expect(env.warnings.some((w) => w.code === "status_mismatch" && w.message.includes("DROPPED"))).toBe(true);
+  });
+
+  it("reads the bit invalidator with the nonce, so a dead order in a non-zero slot DROPS", async () => {
+    // Two orders from one maker in slot 4 (nonces 0x401 and 0x402): one spent, one live. The
+    // faithful model shifts inside the view; a read keyed on the slot index would see an empty
+    // word for both and confirm the dead row (the 2026-08-20 bug).
+    const liveNonce = 0x401n;
+    const deadNonce = 0x402n;
+    const traitsOf = (n: bigint) => (1n << 255n) | (n << 120n);
+    const live = await bookRow(11n, { makerTraits: traitsOf(liveNonce) });
+    const dead = await bookRow(12n, { makerTraits: traitsOf(deadNonce) });
+    const chain = new FakeLopInvalidators();
+    chain.spendNonce(maker.address, deadNonce);
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [live, dead]), resolveRpc: chain.resolveRpc() });
+    const d = env.data as VerifiedData;
+    expect(d.verification).toMatchObject({ confirmed: 1, dropped: 1 });
+    expect(d.items[0]!.orderHash).toBe(live.orderHash);
+    // One word serves both rows (same maker, same slot): exactly one read, asked with a nonce.
+    expect(chain.calls.filter((c) => c.functionName === "bitInvalidatorForOrder").map((c) => c.args[1])).toEqual([liveNonce]);
   });
 
   it("a transport failure keeps the row, labeled 'unverified' (the split rule's indeterminate half)", async () => {

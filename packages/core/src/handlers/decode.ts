@@ -2,12 +2,13 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
-import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type LopOrder } from "../orders.ts";
+import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type DecodedMakerTraits, type LopOrder } from "../orders.ts";
 import { decodeJitExtension, type ResolvedConstraint } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
 import { decodeBundle, type DecodedLeg, decodeSingleCall } from "../bundle/decode.ts";
+import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
@@ -101,6 +102,111 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
 }
 
 
+/** Best-effort labels for an order's extension bytes — what filling the order DOES beyond the
+ *  plain swap. Decode only, never a guess [K3]: a non-Fusion / non-JIT / malformed extension
+ *  simply yields no label while the raw fields still decode. The two labels are NOT exclusive —
+ *  a Cork-native auction order composes both (amount getters + JIT preInteraction in one blob)
+ *  and a taker needs to see both commitments. Shared by kind:"order" and by the fill legs of
+ *  kind:"tx" / kind:"calldata", so a signed fill reads exactly like the order it fills. */
+export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | undefined, chainId: ChainId): { fusion?: FusionLabel; jit?: JitLabel } {
+  if (extension === undefined || extension === "0x") return {};
+  // Fusion: when the extension carries an auction amount-getter, summarize it.
+  let fusion: FusionLabel | undefined;
+  try {
+    const f = decodeFusionOrder(order, extension, chainId);
+    fusion = {
+      settlement: f.settlement,
+      classification: f.classification,
+      auction: { startTime: f.auction.startTime, duration: f.auction.duration, initialRateBump: f.auction.initialRateBump, points: f.auction.points.length },
+      postInteractionGated: f.postInteraction !== null,
+      scales: { initialRateBump: "1e7 = +100% above the signed takingAmount (the floor)" },
+      note: "auction-priced order — current price via cork_compute dutch-auction-price",
+    };
+  } catch (err) {
+    if (err instanceof NotAFusionOrder && /LEGACY/.test(err.message)) {
+      fusion = { classification: "legacy", note: err.message };
+    }
+    /* not an auction order (or malformed auction bytes) — no label */
+  }
+  // JIT: when the extension's preInteraction field carries a Cork JIT payload, unpack it so a
+  // taker can see which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it
+  // commits to, and whether permits ride along. Tried 2.1.0-first; the legacy shape is labeled.
+  let jit: JitLabel | undefined;
+  try {
+    const d = decodeJitExtension(extension);
+    jit = {
+      generation: "2.1.0",
+      adapter: d.adapter,
+      collateralAsset: d.params.collateralAsset,
+      referenceAsset: d.params.referenceAsset,
+      expiryTimestamp: d.params.expiryTimestamp,
+      recipe: d.params.recipe,
+      rateOverride: d.params.rateOverride,
+      constraint: { ...d.params.constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" },
+      additionalData: d.params.additionalData,
+      swapFeePercentage: d.params.swapFeePercentage,
+      unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
+      enableJitMint: d.params.enableJitMint,
+      permits: d.permits.length,
+      scales: { ...JIT_FEE_SCALES, rateOverride: "ABSOLUTE, 1e18 = 1.0 (FIXED recipes only; 0 = none)" },
+      note: "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
+    };
+  } catch {
+    try {
+      const d = legacyRegistry.decodeJitExtension(extension);
+      jit = {
+        generation: "legacy (pre-2.1.0)",
+        adapter: d.adapter,
+        collateralAsset: d.params.collateralAsset,
+        referenceAsset: d.params.referenceAsset,
+        expiryTimestamp: d.params.expiryTimestamp,
+        mode: d.params.mode,
+        swapFeePercentage: d.params.swapFeePercentage,
+        unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
+        enableJitMint: d.params.enableJitMint,
+        permits: d.permits.length,
+        scales: { ...JIT_FEE_SCALES },
+        note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
+      };
+    } catch {
+      /* not a JIT extension either — no label */
+    }
+  }
+  return { ...(fusion ? { fusion } : {}), ...(jit ? { jit } : {}) };
+}
+
+/** What the decode handler attaches to a 1inch fill/cancel leg once the chain is known: the
+ *  EIP-712 orderHash (chain-specific), the maker-traits breakdown, and the extension labels a
+ *  fill carries — the same labels kind:"order" gives the resting order. */
+export interface LopLegLabel {
+  orderHash: `0x${string}` | null;
+  makerTraits: DecodedMakerTraits;
+  fusion?: FusionLabel;
+  jit?: JitLabel;
+}
+
+/** Attach LopLegLabel to every 1inch leg in a decoded tree (nested bundles included). Pure:
+ *  returns new leg objects, never mutates the decoder's output. */
+export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId): DecodedLeg[] {
+  const lop = LOP_ADDRESSES[chainId];
+  return legs.map((leg): DecodedLeg => {
+    if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId) };
+    if (leg.kind !== "lop") return leg;
+    if (leg.call.fn === "cancelOrder") {
+      return { ...leg, label: { orderHash: leg.call.orderHash, makerTraits: decodeMakerTraits(leg.call.makerTraits) } };
+    }
+    const { order, args } = leg.call;
+    return {
+      ...leg,
+      label: {
+        orderHash: lop ? hashLopOrder(chainId, lop, order) : null,
+        makerTraits: decodeMakerTraits(order.makerTraits),
+        ...labelOrderExtension(order, args.extension, chainId),
+      },
+    };
+  });
+}
+
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
  *  breakdown + locally recomputed orderHash; any caller-claimed hash is cross-checked, never
  *  trusted [K3]. */
@@ -139,77 +245,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
     // Arbitrum order is plausible-looking and wrong, with nothing downstream to catch it.
     warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash is CHAIN-SPECIFIC (the same order bytes hash differently per chain); pass chainId if this order rests on another chain (e.g. 42161)" });
   }
-  // Fusion labeling (best-effort): when the extension carries an auction amount-getter, summarize
-  // it — decode only, never a guess; a non-Fusion or unparseable extension just skips the label.
-  let fusion: FusionLabel | undefined;
-  if (extension !== undefined && extension !== "0x") {
-    try {
-      const f = decodeFusionOrder(order, extension, chainId);
-      fusion = {
-        settlement: f.settlement,
-        classification: f.classification,
-        auction: { startTime: f.auction.startTime, duration: f.auction.duration, initialRateBump: f.auction.initialRateBump, points: f.auction.points.length },
-        postInteractionGated: f.postInteraction !== null,
-        scales: { initialRateBump: "1e7 = +100% above the signed takingAmount (the floor)" },
-        note: "auction-priced order — current price via cork_compute dutch-auction-price",
-      };
-    } catch (err) {
-      if (err instanceof NotAFusionOrder && /LEGACY/.test(err.message)) {
-        fusion = { classification: "legacy", note: err.message };
-      }
-      /* not an auction order (or malformed auction bytes) — no label; the raw fields still decode */
-    }
-  }
-  // JIT labeling (best-effort, same decode-only rule): when the extension's preInteraction field
-  // carries a Cork JIT payload, unpack it so a taker can see what filling this order DOES —
-  // which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it commits to, and
-  // whether permits ride along. Tried 2.1.0-first; the legacy shape is labeled as such. A
-  // non-JIT extension just skips the label [K3: reconstructed from the bytes, never guessed].
-  // NOT exclusive with the fusion label: a Cork-native auction order composes BOTH (amount
-  // getters + JIT preInteraction in one blob) and a taker needs to see both commitments.
-  let jit: JitLabel | undefined;
-  if (extension !== undefined && extension !== "0x") {
-    try {
-      const d = decodeJitExtension(extension);
-      jit = {
-        generation: "2.1.0",
-        adapter: d.adapter,
-        collateralAsset: d.params.collateralAsset,
-        referenceAsset: d.params.referenceAsset,
-        expiryTimestamp: d.params.expiryTimestamp,
-        recipe: d.params.recipe,
-        rateOverride: d.params.rateOverride,
-        constraint: { ...d.params.constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" },
-        additionalData: d.params.additionalData,
-        swapFeePercentage: d.params.swapFeePercentage,
-        unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
-        enableJitMint: d.params.enableJitMint,
-        permits: d.permits.length,
-        scales: { ...JIT_FEE_SCALES, rateOverride: "ABSOLUTE, 1e18 = 1.0 (FIXED recipes only; 0 = none)" },
-        note: "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
-      };
-    } catch {
-      try {
-        const d = legacyRegistry.decodeJitExtension(extension);
-        jit = {
-          generation: "legacy (pre-2.1.0)",
-          adapter: d.adapter,
-          collateralAsset: d.params.collateralAsset,
-          referenceAsset: d.params.referenceAsset,
-          expiryTimestamp: d.params.expiryTimestamp,
-          mode: d.params.mode,
-          swapFeePercentage: d.params.swapFeePercentage,
-          unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
-          enableJitMint: d.params.enableJitMint,
-          permits: d.permits.length,
-          scales: { ...JIT_FEE_SCALES },
-          note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
-        };
-      } catch {
-        /* not a JIT extension either — no label; the raw fields still decode */
-      }
-    }
-  }
+  const { fusion, jit } = labelOrderExtension(order, extension, chainId);
   const base = {
     kind: "order" as const,
     chainId,
@@ -396,11 +432,7 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   const data = parsed.data;
   let legs: DecodedLeg[] | undefined;
   if (data !== undefined && data !== "0x") {
-    try {
-      legs = decodeBundle(data);
-    } catch {
-      legs = [decodeSingleCall({ to: to ?? ZERO_ADDR, data, value: parsed.value ?? 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })];
-    }
+    legs = labelLopLegs(decodeCallOrBundle(data, to ?? ZERO_ADDR, parsed.value ?? 0n), chainId);
   }
   // Same summarizer options as kind:"calldata" ({adapter} only) so the documented parity is
   // UNCONDITIONAL. Passing the signer as `account` would render legs paying the signer as
@@ -462,16 +494,29 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
   if (typeof input.data !== "string") {
     throw new ToolInputError("cork_decode", "calldata decode requires a hex string");
   }
-  let legs;
-  try {
-    legs = decodeBundle(input.data as `0x${string}`);
-  } catch (err) {
-    // Malformed top-level bytes are invalid INPUT (exit 2, teachable) — not an internal error.
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: err instanceof Error ? err.message : "calldata does not decode as a Bundler3 multicall" }]);
+  const data = input.data as `0x${string}`;
+  // A Bundler3 multicall unwraps recursively; a single recognized call (a Cork adapter action,
+  // an ERC-20 leg, a ForSelf adapter call, a 1inch fill or cancel) labels on its own. Bytes that
+  // are neither are invalid INPUT (exit 2, teachable) — not an internal error, and never a
+  // "decoded" result that hides what they are.
+  const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n), chainId);
+  if (legs.length === 1 && legs[0]!.kind === "unknown") {
+    const u = legs[0]!;
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `calldata is neither a Bundler3 multicall nor a recognized single call (selector ${u.selector}${u.note ? ` — ${u.note}` : ""}); kind:"calldata" labels Cork adapter actions, ERC-20 legs, ForSelf adapter calls, and 1inch LOP v4 fills/cancels` }]);
+  }
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (input.chainId === undefined && legs.some((l) => l.kind === "lop")) {
+    warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash on a 1inch fill/cancel leg is CHAIN-SPECIFIC; pass chainId if these bytes are for another chain (e.g. 8453)" });
   }
   // Plain-English rendering alongside the structured legs: these bytes usually arrive from
   // somewhere else, and "what will this DO" is the question being asked of them.
   const adapter = (await getDep(ctx, chainId)).dep?.corkAdapter;
   // Summary before the leg dump: a reader scanning the prose output wants the intent first.
-  return envelope({ state: "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", ctx });
+  return envelope({ state: "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", warnings, ctx });
+}
+
+/** A Bundler3 multicall → its legs; any other bytes → the one call they are (labeled or raw). */
+function decodeCallOrBundle(data: `0x${string}`, to: `0x${string}`, value: bigint): DecodedLeg[] {
+  if (isBundlerMulticall(data)) return decodeBundle(data);
+  return [decodeSingleCall({ to, data, value, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })];
 }

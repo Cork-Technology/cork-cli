@@ -5,12 +5,17 @@ import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
 import { bundlerLegAbi } from "./legs.ts";
 import { forSelfAbi } from "../forself.ts";
+import { decodeLopCall, lopCallName, type DecodedLopCall } from "../orders.ts";
+import type { LopLegLabel } from "../handlers/decode.ts";
 import { decodeMulticall, isBundlerMulticall, type Call } from "./bundler3.ts";
 
 export type DecodedLeg =
   | { kind: "cork"; to: `0x${string}`; action: string; params: unknown; value: bigint; skipRevert: boolean }
   | { kind: "forself"; to: `0x${string}`; action: string; params: unknown; value: bigint; skipRevert: boolean }
   | { kind: "leg"; to: `0x${string}`; fn: string; args: readonly unknown[]; value: bigint; skipRevert: boolean }
+  /** A 1inch LOP v4 fill or cancel. `label` (orderHash, maker-traits breakdown, JIT/Fusion
+   *  extension labels) is chain-specific, so the decode handler attaches it afterwards. */
+  | { kind: "lop"; to: `0x${string}`; call: DecodedLopCall; value: bigint; skipRevert: boolean; label?: LopLegLabel }
   | { kind: "bundle"; to: `0x${string}`; legs: DecodedLeg[]; value: bigint; skipRevert: boolean }
   | { kind: "unknown"; to: `0x${string}`; selector: `0x${string}`; data: `0x${string}`; value: bigint; skipRevert: boolean; note?: string };
 
@@ -57,8 +62,14 @@ function decodeCall(c: Call, depth: number): DecodedLeg {
       const { functionName, args } = decodeFunctionData({ abi: forSelfAbi, data: c.data });
       return { kind: "forself", to: c.to, action: functionName, params: args[0], value: c.value, skipRevert: c.skipRevert };
     }
+    // The 1inch LOP fill/cancel surface this tool's own taker-fill and cancel produce: labeled
+    // by selector so the validate-before-broadcast decode of those bytes names the order, the
+    // amounts, and the hooks instead of calling the tool's own output UNREADABLE.
+    if (lopCallName(selector) !== undefined) {
+      return { kind: "lop", to: c.to, call: decodeLopCall(c.data), value: c.value, skipRevert: c.skipRevert };
+    }
   } catch (err) {
-    return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
+    return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? lopCallName(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
   }
   return { kind: "unknown", to: c.to, selector, data: c.data, value: c.value, skipRevert: c.skipRevert };
 }

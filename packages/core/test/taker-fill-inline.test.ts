@@ -12,6 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
 import { stubRpc } from "./helpers.ts";
+import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const MAKER_PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const; // throwaway
@@ -177,6 +178,23 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     const env = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: deadChain });
     expect(env.state).toBe("conflict");
     expect(env.warnings.some((w) => w.code === "status_mismatch")).toBe(true);
+  });
+
+  it("liveness reads the invalidator the way the contract does: a cancelled order in a non-zero slot is dead", async () => {
+    // The stub above answers the same word for ANY argument, so it could not tell a right read
+    // from a wrong one. This model keeps BitInvalidatorLib storage and shifts inside the view —
+    // a read with the pre-shifted slot index (the 2026-08-20 bug) would see an empty word here.
+    const nonce = 0x4d2n; // slot 4, bit 0xd2
+    const { order, orderHash, signature } = await signedInline({ makerTraits: (1n << 255n) | (nonce << 120n) });
+    const chain = new FakeLopInvalidators();
+    chain.spendNonce(order.maker, nonce);
+    const env = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: chain.resolveRpc() });
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.some((w) => w.code === "status_mismatch")).toBe(true);
+    expect(chain.calls.find((c) => c.functionName === "bitInvalidatorForOrder")?.args[1]).toBe(nonce);
+    // ...and the same order, never spent, builds fill bytes.
+    const live = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: new FakeLopInvalidators().resolveRpc() });
+    expect(live.state).toBe("ok");
   });
 
   it("verifies a CONTRACT maker via the ERC-1271 staticcall (magic value → ok)", async () => {

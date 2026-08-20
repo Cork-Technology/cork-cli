@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyBitInvalidator, classifyRemainingRaw, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorAbi, lopInvalidatorPlan, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
+import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -62,25 +62,42 @@ interface MakerAuctionPlan {
  *  the fill performs; an EOA maker verifies offline by ecrecover. Returns a VERDICT, not an
  *  envelope: the call sites refuse with legitimately different consequences ("NOT finalized"
  *  vs "no fill bytes were built"), so message construction stays with each caller. */
+/** How the maker-code probe went. "no-code" is a positive answer (an EOA); only the other two
+ *  leave the account type genuinely unknown. viem's getCode returns `undefined` for an
+ *  account WITHOUT code, so the read's outcome is tracked separately from its value —
+ *  conflating the two reported every EOA maker as "could not be checked" (2026-08-20). */
+type MakerCodeProbe = "has-code" | "no-code" | "no-rpc" | "read-failed";
+
 type MakerSignatureVerdict =
-  | { kind: "eoa"; recoveredSigner: `0x${string}`; codeUnknown: boolean }
+  | { kind: "eoa"; recoveredSigner: `0x${string}`; codeProbe: Exclude<MakerCodeProbe, "has-code"> }
   | { kind: "erc1271" }
   | { kind: "erc1271_transport"; reason: string }
   | { kind: "erc1271_rejected"; isValidSignatureAnswer: string | null }
   | { kind: "eoa_mismatch"; recoveredSigner: `0x${string}` }
   | { kind: "unparseable"; reason: string };
 
+/** The disclosure an EOA verdict carries when the account type could not be established —
+ *  one sentence per cause, shared by finalize and the inline taker-fill path. `consequence`
+ *  names what the caller did with the order anyway. */
+function makerCodeUnknownWarning(probe: Exclude<MakerCodeProbe, "has-code">, consequence: string): { code: string; message: string } | null {
+  if (probe === "no-code") return null;
+  const cause = probe === "no-rpc" ? "no RPC resolved to check whether the maker has code" : "the maker's code could not be read (the RPC call failed)";
+  return { code: "chain_read_failed", message: `${cause} — the signature ecrecovers to the maker, so ${consequence}; if the maker is actually a contract account, retry with an RPC available` };
+}
+
 async function verifyMakerSignatureLadder(a: { ctx: HandlerContext; chainId: PrepareOrdersInput["chainId"]; maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}` }): Promise<MakerSignatureVerdict> {
   const resolved = await getRpc(a.ctx, a.chainId);
-  let makerCode: string | undefined;
+  let probe: MakerCodeProbe = "no-rpc";
   if (resolved) {
     try {
-      makerCode = await resolved.client.getCode({ address: a.maker });
+      // `undefined` and "0x" both mean "no code" — only a throw means the read failed.
+      const code = await resolved.client.getCode({ address: a.maker });
+      probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";
     } catch {
-      makerCode = undefined; // code unknowable (transport or a client without getCode) — the EOA branch discloses it
+      probe = "read-failed"; // transport failure or a client without getCode — the EOA branch discloses it
     }
   }
-  if (makerCode !== undefined && makerCode !== "0x") {
+  if (probe === "has-code") {
     let magic: unknown;
     try {
       magic = await resolved!.client.readContract({ address: a.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [a.orderHash, a.signature] });
@@ -102,7 +119,7 @@ async function verifyMakerSignatureLadder(a: { ctx: HandlerContext; chainId: Pre
     return { kind: "unparseable", reason: err instanceof Error ? err.message : "the signature could not be parsed" };
   }
   if (!isAddressEqual(recoveredSigner, a.maker)) return { kind: "eoa_mismatch", recoveredSigner };
-  return { kind: "eoa", recoveredSigner, codeUnknown: makerCode === undefined };
+  return { kind: "eoa", recoveredSigner, codeProbe: probe };
 }
 
 export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
@@ -173,9 +190,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         makerAccountType = "ERC1271";
       } else {
         recoveredSigner = verdict.recoveredSigner;
-        if (verdict.codeUnknown) {
-          finalizeWarnings.push({ code: "chain_read_failed", message: "no RPC resolved to check whether the maker has code — the signature ecrecovers to the maker, so it is finalized as an EOA order; if the maker is actually a contract account, resubmit with an RPC available" });
-        }
+        const w = makerCodeUnknownWarning(verdict.codeProbe, "it is finalized as an EOA order");
+        if (w) finalizeWarnings.push(w);
       }
       const finalized = { order: orderArgs.order, orderHash: reconstructedHash, signature: action.signature, extension: p.extension };
       const submitInput = {
@@ -339,10 +355,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
                 warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1/state overrides unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
               }
               if (cst) {
-                jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull" };
+                jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint (same clientRequestId): the constraint is part of the pool's identity, and a single oracle tick between the two prepares otherwise re-derives a different pool and cST than the permit was signed over (jit_side_mismatch)" };
                 const cstLc = cst.toLowerCase();
                 if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
-                  warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST` });
+                  warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST. If that side came from an EARLIER prepare, the oracle rate has moved since and the constraint re-derived a different pool: pass that prepare's jit.constraint in jitMarket.constraint to pin the identity the permit was signed over` });
                   await diagnoseStaleSidePrediction(client, [["makerAsset", action.makerAsset], ["takerAsset", action.takerAsset]], derived.poolId, warnings, "Re-run derive-cork-pool and set the order side to the FRESH predicted cST before signing.");
                 }
               }
@@ -725,8 +741,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         });
       }
       const acquisitionWarnings: Array<{ code: string; message: string }> = [];
-      if (verdict.kind === "eoa" && verdict.codeUnknown) {
-        acquisitionWarnings.push({ code: "chain_read_failed", message: "no RPC resolved to check whether the maker has code — the signature ecrecovers to the maker, so it is treated as an EOA order; if the maker is actually a contract account, rebuild with an RPC available" });
+      if (verdict.kind === "eoa") {
+        const w = makerCodeUnknownWarning(verdict.codeProbe, "it is treated as an EOA order");
+        if (w) acquisitionWarnings.push(w);
       }
       const signed: SignedLopOrder = { order, signature: so.signature, extension: so.extension, makerAccountType: verdict.kind === "erc1271" ? "ERC1271" : "EOA" };
       return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed, localOrderHash, acquisitionWarnings, artifactSource: verdict.kind === "erc1271" ? "chain" : "config" });
@@ -822,10 +839,7 @@ async function buildTakerFillArtifact(a: {
     if (resolved) {
       try {
         const plan = lopInvalidatorPlan(signed.order.makerTraits);
-        const status =
-          plan.mode === "bit"
-            ? classifyBitInvalidator((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [signed.order.maker, plan.slot] })) as bigint, plan.mask)
-            : classifyRemainingRaw((await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [signed.order.maker, localOrderHash] })) as bigint);
+        const status = classifyInvalidatorWord(plan, await readLopInvalidator(resolved.client, plan, lop, signed.order.maker, localOrderHash));
         if (status.status === "filled-or-cancelled") {
           return envelope({
             state: "conflict",

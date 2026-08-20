@@ -67,6 +67,8 @@ const T = {
   evalGrading: "evals/grading.test.ts",
   evalHygiene: "evals/task-hygiene.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
+  decodeLop: "packages/core/test/decode-lop-call.test.ts",
+  makerCode: "packages/core/test/maker-code-probe.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
   evalConfigPin: "evals/config-pin.test.ts",
@@ -375,8 +377,8 @@ const CATALOG: Mutant[] = [
     // guard hides the JIT commitment on exactly the rows where a taker most needs it.
     id: "decode-order-labels-exclusive-again",
     file: "packages/core/src/handlers/decode.ts",
-    find: '  let jit: JitLabel | undefined;\n  if (extension !== undefined && extension !== "0x") {',
-    replace: '  let jit: JitLabel | undefined;\n  if (extension !== undefined && extension !== "0x" && fusion === undefined) {',
+    find: '  let jit: JitLabel | undefined;\n  try {\n    const d = decodeJitExtension(extension);',
+    replace: '  let jit: JitLabel | undefined;\n  try {\n    if (fusion !== undefined) throw new Error("mutant: labels exclusive");\n    const d = decodeJitExtension(extension);',
     tests: [T.fusion],
   },
   // ── type-sweep behavior gates (2026-08-09): runtime narrowing that replaced casts ─────────
@@ -485,7 +487,7 @@ const CATALOG: Mutant[] = [
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.
     id: "hybrid-dead-row-drop-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'else if (ref.classify!(word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
+    find: 'else if (classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
     replace: 'else if (false) drop("on-chain invalidator says filled-or-cancelled");',
     tests: [T.hybridVerify],
   },
@@ -546,8 +548,8 @@ const CATALOG: Mutant[] = [
     // invalidator read — the default mode's RPC cost multiplies silently.
     id: "hybrid-bit-read-dedup-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: "? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}`, classify:",
-    replace: "? { row, readKey: `bit:${order.maker.toLowerCase()}:${plan.slot.toString()}:${localHash}`, classify:",
+    find: "const readKey = plan.mode === \"bit\" ? `bit:${maker}:${plan.slot.toString()}` :",
+    replace: "const readKey = plan.mode === \"bit\" ? `bit:${maker}:${plan.slot.toString()}:${localHash}` :",
     tests: [T.hybridVerify],
   },
   {
@@ -755,8 +757,8 @@ const CATALOG: Mutant[] = [
   {
     id: "invalidator-slot-shift",
     file: "packages/core/src/orders.ts",
-    find: 'return { mode: "bit", slot: nonceOrEpoch >> 8n, mask: 1n << (nonceOrEpoch & 0xffn), nonceOrEpoch };',
-    replace: 'return { mode: "bit", slot: nonceOrEpoch >> 7n, mask: 1n << (nonceOrEpoch & 0xffn), nonceOrEpoch };',
+    find: 'return { mode: "bit", nonceOrEpoch, slot: nonceOrEpoch >> 8n, mask: 1n << (nonceOrEpoch & 0xffn) };',
+    replace: 'return { mode: "bit", nonceOrEpoch, slot: nonceOrEpoch >> 7n, mask: 1n << (nonceOrEpoch & 0xffn) };',
     tests: [T.invalidator],
   },
   {
@@ -2331,8 +2333,8 @@ const CATALOG: Mutant[] = [
     // unfillable through this tool.
     id: "ladder-code-detection-lost",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: 'if (makerCode !== undefined && makerCode !== "0x") {',
-    replace: "if (false) {",
+    find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
+    replace: 'probe = "no-code";',
     tests: [T.inlineFill],
   },
   {
@@ -2570,6 +2572,88 @@ const CATALOG: Mutant[] = [
     find: "  if (!target || embedded) return null;",
     replace: "  if (!target || !embedded) return null;",
     tests: [T.hypersync],
+  },
+  // ── LOP invalidator READ: the view takes the nonce and shifts itself (COR-175) ───────────
+  {
+    // The 2026-08-20 bug reinstated: pass the pre-shifted slot index to bitInvalidatorForOrder.
+    // The contract shifts again, reads an empty word, and every dead order looks live.
+    id: "invalidator-read-preshifted-slot",
+    file: "packages/core/src/orders.ts",
+    find: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.nonceOrEpoch] }',
+    replace: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] }',
+    tests: [T.invalidator, T.inlineFill, T.hybridVerify],
+  },
+  {
+    // Classification through the shared helper: a bit-mode plan classified as remaining-mode
+    // turns a spent bit into "partially filled", never "dead".
+    id: "invalidator-classify-mode-swapped",
+    file: "packages/core/src/orders.ts",
+    find: 'return plan.mode === "bit" ? classifyBitInvalidator(word, plan.mask) : classifyRemainingRaw(word);',
+    replace: 'return plan.mode === "remaining" ? classifyBitInvalidator(word, 1n) : classifyRemainingRaw(word);',
+    tests: [T.invalidator, T.inlineFill, T.hybridVerify],
+  },
+  // ── Maker-code probe: "no code" is an answer, not a failed read (COR-175) ─────────────────
+  {
+    // Treat viem's `undefined` (no code) as a failed read again — every EOA maker would carry
+    // the spurious chain_read_failed.
+    id: "maker-code-undefined-is-failure",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
+    replace: 'probe = code === undefined ? "read-failed" : code !== "0x" ? "has-code" : "no-code";',
+    tests: [T.makerCode],
+  },
+  // ── TakerTraitsLib._AMOUNT_MASK is 184 bits, not 185 ────────────────────────────────────
+  {
+    id: "taker-threshold-185-bits",
+    file: "packages/core/src/orders.ts",
+    find: "const TAKER_THRESHOLD_MAX = (1n << 184n) - 1n;",
+    replace: "const TAKER_THRESHOLD_MAX = (1n << 185n) - 1n;",
+    tests: [T.orders],
+  },
+  // ── 1inch fill/cancel decode (COR-174): the inverse must be bit-exact ────────────────────
+  {
+    // Receiver flag read from the wrong bit: args would be split without the 20-byte receiver
+    // prefix and the extension would be mis-sliced.
+    id: "taker-traits-receiver-flag-bit",
+    file: "packages/core/src/orders.ts",
+    find: "argsHasReceiver: (t & TAKER_ARGS_HAS_RECEIVER_FLAG) !== 0n,",
+    replace: "argsHasReceiver: (t & TAKER_USE_PERMIT2_FLAG) !== 0n,",
+    tests: [T.decodeLop],
+  },
+  {
+    // Extension and interaction lengths swapped: the JIT payload would be sliced at the wrong
+    // offset and its label lost.
+    id: "taker-args-lengths-swapped",
+    file: "packages/core/src/orders.ts",
+    find: "extensionLength: Number((t >> TAKER_ARGS_EXTENSION_LENGTH_OFFSET) & TAKER_ARGS_LENGTH_MASK),",
+    replace: "extensionLength: Number((t >> TAKER_ARGS_INTERACTION_LENGTH_OFFSET) & TAKER_ARGS_LENGTH_MASK),",
+    tests: [T.decodeLop],
+  },
+  {
+    // Amount semantics inverted: the summary would call a maker-denominated fill taker-denominated.
+    id: "taker-traits-amount-flag-inverted",
+    file: "packages/core/src/orders.ts",
+    find: "amountIsMakerAsset: (t & TAKER_MAKER_AMOUNT_FLAG) !== 0n,",
+    replace: "amountIsMakerAsset: (t & TAKER_MAKER_AMOUNT_FLAG) === 0n,",
+    tests: [T.decodeLop],
+  },
+  {
+    // The fill-arg positions differ between EOA and contract fills; picking the EOA layout for
+    // both reads the contract fill's takerTraits as its amount.
+    id: "lop-decode-contract-arg-positions",
+    file: "packages/core/src/orders.ts",
+    find: "const amount = (contract ? args[2] : args[3]) as bigint;",
+    replace: "const amount = args[3] as bigint;",
+    tests: [T.decodeLop],
+  },
+  {
+    // The label pass skipped inside nested bundles: a fill wrapped in a multicall would lose
+    // its orderHash and JIT label.
+    id: "lop-label-skips-nested-bundles",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId) };',
+    replace: 'if (leg.kind === "bundle") return leg;',
+    tests: [T.decodeLop],
   },
 ];
 

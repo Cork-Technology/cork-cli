@@ -5,7 +5,7 @@ import { Envelope, TrackInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { computeMarketId } from "../marketid.ts";
 import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
-import { classifyBitInvalidator, classifyRemainingRaw, LOP_ADDRESSES, lopInvalidatorAbi, lopInvalidatorPlan, type LopOnChainStatus } from "../orders.ts";
+import { classifyInvalidatorWord, LOP_ADDRESSES, lopInvalidatorPlan, type LopOnChainStatus, readLopInvalidator } from "../orders.ts";
 import { JIT_EVENTS } from "../market-registry.ts";
 import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
@@ -321,15 +321,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           if (maker && lop && resolved && traitsStr !== undefined) {
             try {
               const plan = lopInvalidatorPlan(BigInt(String(traitsStr)));
-              const onChain =
-                plan.mode === "bit"
-                  ? classifyBitInvalidator(
-                      await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] }),
-                      plan.mask,
-                    )
-                  : classifyRemainingRaw(
-                      await resolved.client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, hash as `0x${string}`] }),
-                    );
+              const onChain = classifyInvalidatorWord(plan, await readLopInvalidator(resolved.client, plan, lop, maker, hash as `0x${string}`));
               chainVerification = {
                 leg: `LOP ${plan.mode}-invalidator (live RPC)`,
                 lop,

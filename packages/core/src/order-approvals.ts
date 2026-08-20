@@ -101,7 +101,7 @@ export function makerApprovalRequirements(a: {
       role: "maker", stage: "with-order-signature", holder: a.maker, token: a.makerAsset,
       tokenRole: "makerAsset (predicted cST)", spender: a.lop, spenderRole: "1inch LOP",
       mechanism: "erc2612-permit", amount, kind: "exact", wallets: "eoa-only",
-      note: "the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits. A CONTRACT maker cannot produce this ECDSA signature; it must approve the cST to the LOP once the pool exists, or grant it from a pre-interaction.",
+      note: "the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits, together with jitMarket.constraint = the constraint this prepare resolved (the pool's identity; without the pin an oracle tick re-derives a different cST than the permit covers). A CONTRACT maker cannot produce this ECDSA signature; it must approve the cST to the LOP once the pool exists, or grant it from a pre-interaction.",
       unsignedTx: null,
     });
   } else if (a.usePermit2) {
