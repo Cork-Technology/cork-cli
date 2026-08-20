@@ -8,57 +8,6 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
-### Fixed
-
-- **LOP liveness checks read the wrong invalidator word (COR-175).** A filled or cancelled
-  bit-invalidator order looked live. `OrderMixin.bitInvalidatorForOrder(maker, slot)` passes
-  its argument to `BitInvalidatorLib.checkSlot(nonce)`, and `checkSlot` shifts by 8 itself.
-  Only the `BitInvalidatorUpdated` event carries the shifted slot index. Three call sites
-  passed the slot index: the taker-fill liveness pre-flight, `cork_track` reconcile, and the
-  hybrid order-book verification. Each one read `_raw[nonce >> 16]`, an empty word. We saw the
-  result on a Base fork on 2026-08-20: a cancelled order, with its bit set on chain, prepared
-  as fillable. Now one helper, `readLopInvalidator`, owns the view argument, and every call
-  site uses it. The tests drive an in-memory model of the invalidator libraries that shifts
-  inside the view. The old stubs answered the same word for any argument and could not see the
-  defect.
-- **EOA makers no longer get a false `chain_read_failed` from finalize-maker-order and
-  taker-fill.** viem's `getCode` returns `undefined` for an account without code. The ladder
-  read that as a failed read and warned "no RPC resolved" for every EOA maker, even with an RPC
-  configured. The probe now records its outcome apart from its value. The warning fires only
-  when no RPC resolved or the read failed, and it says which.
-- **The taker-fill cap bound matches `TakerTraitsLib._AMOUNT_MASK`: 184 low bits, not 185.**
-  Before, a cap with bit 184 set passed validation, and the chain narrowed it without notice.
-
-### Added
-
-- **`cork_decode` labels 1inch LOP v4 fills and cancels (COR-174).** kind `tx` and kind
-  `calldata` decode `fillOrder`, `fillOrderArgs`, `fillContractOrder`, `fillContractOrderArgs`,
-  and `cancelOrder` into a `lop` leg. The leg carries the eight order fields, the fill amount,
-  the decoded taker traits (amount denomination, threshold, receiver, extension and
-  interaction lengths), the args split the way `OrderMixin._parseArgs` splits them, and the
-  maker signature (compact r/vs or ERC-1271 bytes). A chain-specific label adds the EIP-712
-  `orderHash`, the maker-traits breakdown, and the same `jit` and `fusion` extension labels
-  that kind `order` gives a resting order. The summary line names the trade: "fill 1inch limit
-  order 0x… from maker …: take … of …, paying at most … of … [maker extension: Cork
-  just-in-time market via adapter …]". The tool's own fill and cancel bytes no longer decode as
-  UNREADABLE. kind `calldata` also accepts one recognized call, not only a Bundler3 multicall:
-  a Cork adapter action, an ERC-20 leg, a ForSelf call, or a LOP fill or cancel. Unrecognized
-  bytes stay invalid input, and the message now names the selector. SDK additions
-  (`@cork/core` and `/orders`): `decodeLopCall`, `decodeTakerTraits`, `splitTakerArgs`,
-  `orderFromUintTuple`, `lopFillAbi`, `lopCancelAbi`, `readLopInvalidator`,
-  `classifyInvalidatorWord`, `ContractReader`. Root only: `labelOrderExtension`,
-  `labelLopLegs`, `LopLegLabel`.
-
-### Changed
-
-- **JIT prepares tell the caller to pin the constraint before the permit re-prepare (COR-176).**
-  A maker-side JIT order needs two prepares. The second embeds the permit over the predicted
-  cST. The constraint is part of the pool identity. An oracle tick between the two prepares
-  derived a different pool and a different cST than the permit covered (`jit_side_mismatch`).
-  We saw this on a NAV pair, where the rate moves every block. `jit.permitNote`, the permit
-  entry in `data.approvals`, and the `jit_side_mismatch` message now say: pass
-  `jitMarket.constraint = jit.constraint` on the re-prepare.
-
 ## [0.4.0-rc.1] — 2026-08-20
 
 ### Changed (breaking)
@@ -124,6 +73,24 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 - **The eval README claimed `needs_indexer` coverage that no task had.** The list now names
   what the suite grades.
+- **LOP liveness checks read the wrong invalidator word (COR-175).** A filled or cancelled
+  bit-invalidator order looked live. `OrderMixin.bitInvalidatorForOrder(maker, slot)` passes
+  its argument to `BitInvalidatorLib.checkSlot(nonce)`, and `checkSlot` shifts by 8 itself.
+  Only the `BitInvalidatorUpdated` event carries the shifted slot index. Three call sites
+  passed the slot index: the taker-fill liveness pre-flight, `cork_track` reconcile, and the
+  hybrid order-book verification. Each one read `_raw[nonce >> 16]`, an empty word. We saw the
+  result on a Base fork on 2026-08-20: a cancelled order, with its bit set on chain, prepared
+  as fillable. Now one helper, `readLopInvalidator`, owns the view argument, and every call
+  site uses it. The tests drive an in-memory model of the invalidator libraries that shifts
+  inside the view. The old stubs answered the same word for any argument and could not see the
+  defect.
+- **EOA makers no longer get a false `chain_read_failed` from finalize-maker-order and
+  taker-fill.** viem's `getCode` returns `undefined` for an account without code. The ladder
+  read that as a failed read and warned "no RPC resolved" for every EOA maker, even with an RPC
+  configured. The probe now records its outcome apart from its value. The warning fires only
+  when no RPC resolved or the read failed, and it says which.
+- **The taker-fill cap bound matches `TakerTraitsLib._AMOUNT_MASK`: 184 low bits, not 185.**
+  Before, a cap with bit 184 set passed validation, and the chain narrowed it without notice.
 
 ### Added
 
@@ -226,6 +193,34 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. No new dependency
   (`packages/cli/src/ansi.ts`). Tests pin two rules: stripped output equals plain output byte
   for byte, and `--json` output never carries an escape. Not covered surface (policy R11).
+- **`cork_decode` labels 1inch LOP v4 fills and cancels (COR-174).** kind `tx` and kind
+  `calldata` decode `fillOrder`, `fillOrderArgs`, `fillContractOrder`, `fillContractOrderArgs`,
+  and `cancelOrder` into a `lop` leg. The leg carries the eight order fields, the fill amount,
+  the decoded taker traits (amount denomination, threshold, receiver, extension and
+  interaction lengths), the args split the way `OrderMixin._parseArgs` splits them, and the
+  maker signature (compact r/vs or ERC-1271 bytes). A chain-specific label adds the EIP-712
+  `orderHash`, the maker-traits breakdown, and the same `jit` and `fusion` extension labels
+  that kind `order` gives a resting order. The summary line names the trade: "fill 1inch limit
+  order 0x… from maker …: take … of …, paying at most … of … [maker extension: Cork
+  just-in-time market via adapter …]". The tool's own fill and cancel bytes no longer decode as
+  UNREADABLE. kind `calldata` also accepts one recognized call, not only a Bundler3 multicall:
+  a Cork adapter action, an ERC-20 leg, a ForSelf call, or a LOP fill or cancel. Unrecognized
+  bytes stay invalid input, and the message now names the selector. SDK additions
+  (`@cork/core` and `/orders`): `decodeLopCall`, `decodeTakerTraits`, `splitTakerArgs`,
+  `orderFromUintTuple`, `lopFillAbi`, `lopCancelAbi`, `readLopInvalidator`,
+  `classifyInvalidatorWord`, `ContractReader`. Root only: `labelOrderExtension`,
+  `labelLopLegs`, `LopLegLabel`.
+
+### Changed
+
+- **JIT prepares tell the caller to pin the constraint before the permit re-prepare (COR-176).**
+  A maker-side JIT order needs two prepares. The second embeds the permit over the predicted
+  cST. The constraint is part of the pool identity. An oracle tick between the two prepares
+  derived a different pool and a different cST than the permit covered (`jit_side_mismatch`).
+  We saw this on a NAV pair, where the rate moves every block. `jit.permitNote`, the permit
+  entry in `data.approvals`, and the `jit_side_mismatch` message now say: pass
+  `jitMarket.constraint = jit.constraint` on the re-prepare.
+
 
 ## [0.3.0-rc.1] — 2026-08-17
 
