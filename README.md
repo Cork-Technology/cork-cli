@@ -80,6 +80,38 @@ apk update && apk add cork-cli
 </details>
 
 <details>
+<summary><b>Run it from the container image (Docker or Podman)</b></summary>
+
+Every release also publishes a minimal Wolfi image with the same `ch` binary, for
+`linux/amd64` and `linux/arm64`. It runs as a non-root user and its entrypoint is `ch`, so
+the image takes the same arguments as the binary. Pick the tag from the
+[package page](https://github.com/Cork-Technology/cork-cli/pkgs/container/cork-cli); `latest`
+appears with the first production (non-rc) release.
+
+```sh
+docker pull ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1
+docker run --rm ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 capabilities     # lists 9 tools
+```
+
+The image caches RPC and config state under `/home/nonroot/.cache`. Mount a volume there to
+keep it between runs:
+
+```sh
+docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 query protocol-config
+```
+
+Verify the image the same way as a binary — by digest, against this repository's workflow:
+
+```sh
+docker buildx imagetools inspect ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 --format '{{.Manifest.Digest}}'
+gh attestation verify oci://ghcr.io/cork-technology/cork-cli@sha256:<digest> --repo Cork-Technology/cork-cli
+```
+
+The image is composed from the signed apk channel above, so an image and an `apk add` install
+carry the same package bytes.
+</details>
+
+<details>
 <summary><b>No binary for your platform, or you want the source?</b></summary>
 
 The repository runs directly from source under Bun — see [Develop](#develop-run-from-source)
@@ -123,6 +155,25 @@ it available in every project. **Avoid `-s project` with the `-e CORK_RPC_URL=�
 project scope writes a *committed* `.mcp.json`, and the RPC endpoint value must never enter
 git. Share via `-s project` with variant A only; let each teammate set their own endpoint
 locally.
+
+<details>
+<summary><b>Run the MCP server from the container instead of a local binary</b></summary>
+
+The server speaks MCP over stdio, so `docker run -i` (interactive stdin, no `-t`) is the whole
+transport. Register the container as the server command:
+
+```sh
+# A) built-in RPC defaults
+claude mcp add cork-defi -- "$(which docker)" run -i --rm ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 mcp
+
+# B) your own RPC endpoint — pass it to the container, not to claude
+claude mcp add cork-defi -- "$(which docker)" run -i --rm -e CORK_RPC_URL=https://your-rpc-endpoint ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 mcp
+```
+
+`"$(which docker)"` for the same reason as `"$(which ch)"` above: the subprocess may not see
+your `PATH`. Podman works the same way (`"$(which podman)"`). The `-s project` warning applies
+unchanged — variant B puts the endpoint in the command line, so never commit it.
+</details>
 
 ### 2. Check it works
 
@@ -234,6 +285,20 @@ ch compute --explain                # every parameter, unions unfolded
 ch compute cst-swap-rate --explain  # scoped to one variant
 ch compute --explain --json         # the same contract as JSON Schema
 ```
+
+<details>
+<summary><b>The same commands through the container</b></summary>
+
+A shell alias makes the image behave like an installed `ch`:
+
+```sh
+alias ch='docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1'
+ch query registry-assets --chain-id 42161
+```
+
+Flags, positionals, `--json`, and `--rpc-url` work as documented. Environment variables such
+as `CORK_RPC_URL` or `ENVIO_API_TOKEN` go to the container with `-e NAME=value`.
+</details>
 
 **Full command reference:** [`docs/cli.md`](docs/cli.md) — every command with a one-liner,
 grouped by workflow.
@@ -412,6 +477,8 @@ re-probing. When a read falls back to a community RPC, the result envelope carri
   across a horizon matrix (conservative-safe: the floor is never optimistic).
 - **Release binaries** are double-built: two independent CI builds must be byte-identical, and
   every asset carries a GitHub attestation you can verify (see Install).
+- **The container image** is built from the signed apk channel, and its digest carries the same
+  GitHub attestation (`gh attestation verify oci://…`, see Install).
 
 ## Develop (run from source)
 
