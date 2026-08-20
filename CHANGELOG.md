@@ -8,6 +8,28 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ch mcp` exits on SIGTERM and SIGINT.** In the container `ch` is PID 1, and the kernel
+  gives PID 1 no default signal action. The server ignored SIGTERM, so every `docker stop`
+  waited out its timeout and sent SIGKILL: 10.5 s on the v0.4.0-rc.1 image, 0.5 s behind an
+  init. Both transports now stop their transport and exit 0 on SIGTERM or SIGINT. A test
+  spawns the real entry and signals it; a mutation probe guards the handler. The v0.4.0-rc.1
+  image still needs `--init` for a prompt stop.
+
+### Changed
+
+- **The container image carries OCI annotations** (title, description, source, documentation,
+  vendor, licenses in the apko spec; version and revision stamped at publish). A verifier can
+  read them without pulling the SBOM.
+- **Deployment docs state the image's one runtime need.** HyperSync reads extract the
+  embedded binding to the temp dir and `dlopen` it, so the temp dir must be writable and
+  exec-mappable (`TMPDIR` is honored; `noexec` fails with `failed to map segment`). The README
+  shows a locked-down `docker run` (read-only root, tmpfs, all capabilities dropped). Audit of
+  the v0.4.0-rc.1 image: 7 packages, no shell, no package manager, no setuid binary, uid 65532,
+  one layer; 122 MB is the Bun runtime (89 MB) plus the binding (16.6 MB) — `--minify` saves 1%,
+  so the image is as small as this runtime allows.
+
 ## [0.4.0-rc.1] — 2026-08-20
 
 ### Changed (breaking)

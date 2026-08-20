@@ -59,6 +59,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
+  mcpSignals: "packages/cli/test/mcp-signals.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
@@ -2654,6 +2655,15 @@ const CATALOG: Mutant[] = [
     find: 'if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId) };',
     replace: 'if (leg.kind === "bundle") return leg;',
     tests: [T.decodeLop],
+  },
+  {
+    // PID 1 gets no default signal action: registering the handler for the wrong signal leaves
+    // SIGTERM ignored again and every container stop back at the SIGKILL timeout.
+    id: "mcp-sigterm-handler-dropped",
+    file: "packages/cli/src/bin.ts",
+    find: '    for (const sig of ["SIGTERM", "SIGINT"] as const) {',
+    replace: '    for (const sig of ["SIGUSR2"] as const) {',
+    tests: [T.mcpSignals],
   },
 ];
 

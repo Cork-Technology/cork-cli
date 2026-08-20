@@ -100,6 +100,24 @@ keep it between runs:
 docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 query protocol-config
 ```
 
+The image has no shell, no package manager, and no setuid binary, and it runs as uid 65532.
+Run it locked down. It needs one thing: a **writable, exec-mappable temp dir**. HyperSync
+reads (`full-decentralized` mode) extract the embedded native binding there on first load and
+`dlopen` it, and remove it at exit. A `noexec` temp dir fails with `failed to map segment`;
+`TMPDIR` is honored. Docker's `--read-only` mounts no tmpfs by itself, so pass one:
+
+```sh
+# ENVIO_API_TOKEN is passed through from your shell, never written on the command line.
+docker run --rm --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/nonroot:rw,nosuid,nodev,size=64m \
+  --cap-drop=ALL --security-opt=no-new-privileges --user 65532 \
+  -e ENVIO_API_TOKEN ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 \
+  query whitelisted-addresses --chain-id 42161 --mode full-decentralized
+```
+
+`ch` is PID 1 in the container and handles SIGTERM itself, so `docker stop` is immediate. The
+v0.4.0-rc.1 image predates that handler: give it `--init` for a prompt stop.
+
 Verify the image the same way as a binary — by digest, against this repository's workflow:
 
 ```sh
@@ -227,6 +245,9 @@ The same server also speaks **Streamable HTTP** — the shape a hosted deploymen
 ```sh
 ch mcp --http                # serves on :8080 — endpoint /mcp, health /healthz, docs /docs/signing
 ch mcp --http --port 9090    # custom port
+# in a container: bind all interfaces and publish the port — /healthz and /readyz answer 200,
+# GET /mcp answers 405 by design (Streamable HTTP is POST):
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cork-technology/cork-cli:v0.4.0-rc.1 mcp --http --host 0.0.0.0
 
 # connect a client to a running HTTP deployment:
 claude mcp add --transport http cork-defi http://localhost:8080/mcp

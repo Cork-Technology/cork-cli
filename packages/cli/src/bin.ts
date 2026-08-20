@@ -44,6 +44,20 @@ if (argv[0] === "mcp") {
     );
     process.exit(0);
   }
+  // A container runs `ch` as PID 1, and the kernel delivers no default-action signal to PID 1:
+  // without a handler SIGTERM is simply ignored and every `docker stop` waits out its timeout
+  // and SIGKILLs (measured on the v0.4.0-rc.1 image: 10.5 s, vs 0.5 s behind an init). Handle
+  // SIGTERM/SIGINT ourselves for both transports: stop the transport, then exit 0 — a stop is
+  // not a failure. Test: packages/cli/test/mcp-signals.test.ts (spawns the real entry).
+  const exitOnSignal = (stop: () => void): void => {
+    for (const sig of ["SIGTERM", "SIGINT"] as const) {
+      process.once(sig, () => {
+        process.stderr.write(`cork-mcp: ${sig} — shutting down\n`);
+        stop();
+        process.exit(0);
+      });
+    }
+  };
   if (argv.includes("--http")) {
     // `ch mcp --http [--port 8080] [--host 0.0.0.0]` — the Streamable HTTP projection (container
     // entrypoint is /usr/bin/ch; the compose command passes --host 0.0.0.0 because a mapped port
@@ -69,12 +83,17 @@ if (argv[0] === "mcp") {
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
     const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
+    // Register BEFORE announcing readiness: an orchestrator may stop the container the moment
+    // it sees the ready line, and a signal that lands before the handler exists takes the
+    // default action (found by the spawn test under load).
+    exitOnSignal(() => server.stop());
     process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
     const { createCorkServer } = await import("../../mcp/src/server.ts");
     const server = createCorkServer(ctx);
+    exitOnSignal(() => void server.close());
     await server.connect(new StdioServerTransport());
     // The open stdin stream keeps the process alive until the client closes it.
   }

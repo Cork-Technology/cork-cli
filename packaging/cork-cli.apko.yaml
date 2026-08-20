@@ -23,6 +23,16 @@ contents:
 entrypoint:
   command: /usr/bin/ch
 
+# OCI annotations: what a verifier reads without pulling the SBOM. The static ones live here;
+# apk-repo.yml stamps org.opencontainers.image.version and .revision at publish time (yq).
+annotations:
+  org.opencontainers.image.title: cork-cli
+  org.opencontainers.image.description: Cork Phoenix CLI (ch) and MCP server, one self-contained binary
+  org.opencontainers.image.source: https://github.com/Cork-Technology/cork-cli
+  org.opencontainers.image.documentation: https://github.com/Cork-Technology/cork-cli#readme
+  org.opencontainers.image.vendor: Cork Technology
+  org.opencontainers.image.licenses: NOASSERTION
+
 # The remote-config cache wants a writable HOME; run as nonroot with one.
 accounts:
   groups:

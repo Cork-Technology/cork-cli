@@ -349,6 +349,11 @@ jobs:
           PIN="cork-cli=${APKVER}-r0" \
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
+          # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
+          # spec; version and revision are this run's.
+          ANN_VERSION="${{ needs.plan.outputs.tag }}" ANN_REVISION="${{ github.sha }}" \
+          yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
+          yq '.annotations' packaging/cork-cli.apko.yaml
 
       - name: Build + push the image (candidate — never :latest)
         env:
@@ -510,6 +515,11 @@ jobs:
           PIN="cork-cli=${APKVER}-r0" \
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
+          # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
+          # spec; version and revision are this run's.
+          ANN_VERSION="${{ needs.plan.outputs.tag }}" ANN_REVISION="${{ github.sha }}" \
+          yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
+          yq '.annotations' packaging/cork-cli.apko.yaml
 
       - name: Build + push the image (production — moves :latest)
         env:

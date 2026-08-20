@@ -70,6 +70,17 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
   glibc assets from a glibc build — `--native` inside wolfi is the faithful path.
   A source run still imports the package by name (its loader decides); `CH_HYPERSYNC_BINDING` in
   the env overrides with a `.node` path.
+- **`ch mcp` handles SIGTERM/SIGINT itself** (both transports, `packages/cli/src/bin.ts`
+  `exitOnSignal`): as PID 1 in the container the kernel delivers no default-action signal, so
+  without the handler every `docker stop` waited out its timeout and SIGKILLed (measured on the
+  v0.4.0-rc.1 image: 10.5 s vs 0.5 s behind `--init`). Test spawns the real entry:
+  `packages/cli/test/mcp-signals.test.ts`; mutation-probed (`mcp-sigterm-handler-dropped`).
+  Image audit 2026-08-20 (v0.4.0-rc.1 under podman): 7 apk packages, no shell/pkg-manager/setuid,
+  uid 65532, single layer; `ch` NEEDs only libc/ld-linux/libm, the dlopen'd binding needs
+  libgcc_s/libdl/libpthread (glibc depends on libgcc anyway); the 122 MB is the Bun runtime
+  (89 MB) + binding (16.6 MB) + ~2.4 MB app — `--minify` saves ~1 %, so no binary-level slimming
+  is on the table. OCI annotations ride `packaging/cork-cli.apko.yaml` (+ version/revision
+  stamped by apk-repo.yml).
 - Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip) ·
   `bun run test:unit` (offline) · `bun run test:live` (vnet/live; needs `CORK_TEST_RPC` /
   `CORK_RPC_LIVE=1`) · `bun run test:mutation` (scripts/mutation-probes.ts: applies catalogued
@@ -187,7 +198,7 @@ Warning codes:
 | `status_mismatch` | conflict: venue lifecycle disagrees with the chain — chain outranks indexer [K7]. Track reconcile (settler `orderStatus()`) and taker-fill's liveness pre-flight (a row the LOP invalidator says is dead yields NO fill bytes). Best-effort without an RPC. |
 | `venue_reported` / `logs_unavailable` / `logs_range_limited` | Track verification gaps: no RPC for the status leg / no logs endpoint (set `ENVIO_API_TOKEN` or `CORK_LOGS_RPC_URL`) / range refused. |
 | `logs_windowed_fallback` | Info on ok full-decentralized reads: no Envio token — served via windowed eth_getLogs over the resolved RPC (bounded ranges; a capped walk discloses `pagination_incomplete`). Set `ENVIO_HYPERSYNC_TOKEN` for the archive index. Never used for whitelisted-addresses (replay needs FULL history). |
-| `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, a compiled target Envio ships no binding for (linux-arm64-musl, windows — message names the target), or the napi binding can't load (message carries the dlopen error; a compiled binary extracts its EMBEDDED binding to TMPDIR first). `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
+| `hypersync_unavailable` | full-decentralized: no HyperSync token, unsupported chain, a compiled target Envio ships no binding for (linux-arm64-musl, windows — message names the target), or the napi binding can't load (message carries the dlopen error; a compiled binary extracts its EMBEDDED binding to TMPDIR first — that dir must be writable AND exec-mappable: a `noexec` tmpfs fails `failed to map segment`, a read-only root with no tmpfs fails `cannot open`; verified on the v0.4.0-rc.1 image under podman). `ENVIO_HYPERSYNC_TOKEN` + `ENVIO_HYPERRPC_TOKEN`; `ENVIO_API_TOKEN` as shared fallback (interchangeable in practice). |
 | `live_tail_merged` / `live_tail_unavailable` | Info on ok full-decentralized reads: recent events merged from a live RPC tail (`data.liveTail`) / the tail scan couldn't run — archive-only results. Non-fatal. |
 | `premium_scale_suspect` / `premium_scale_mismatch` | Fraction-vs-percent tripwires ("0.041" vs 4.1) on premiumAnnualized: suspicious canonical premium (sub-0.1%, or a fraction parsing above 1 = >100% annualized — warned, relayed) / declared premium outside the cited quote_ref's 10x band (conflict, NOT relayed) — the venue's STRICT float gate replicated op-for-op (parseFloat, fraction ×100 canonicalization, ratio >10 or <0.1, both premiums >0): the pre-flight lands exactly where the venue lands, ulps included. |
 | `premium_fields_disagree` | RETIRED with the percent field's removal (venue 0.3.15, 2026-08-17): the two-spelling disagreement it policed can no longer reach the wire — the removed `premium` now refuses as `invalid_order_terms` before relay. |
