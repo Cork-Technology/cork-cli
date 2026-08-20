@@ -73,7 +73,7 @@ tokens (which still count all context processed, so run totals stay comparable).
 
 ### Task set (`evals/tasks.ts`)
 
-52 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
+55 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
 auction, fills of a REAL signed resting order both from the book and from held bytes, market
 and fixed-rate oracle txs, rc.2 rollover intents incl. a just-in-time market commitment),
 token-approval reporting, the caller-signature path (finalize verifies an EXTERNALLY signed
@@ -87,10 +87,14 @@ honestly, and name the shipped alternative, instead of inventing data), plus **7
 tasks**.
 
 Coverage is chosen by SURFACE, not by count: a task earns its place by grading a decision an
-integrator actually faces that no other task grades. The 2026-08-20 audit added eight — the
-auction order, finalize, the venue-free inline fill, simulate, the deliberately gated quote,
-the RFQ feed, the fixed-rate oracle, and the warnings topic — each of which was reachable
-through the advertised surface but had never been exercised by an agent.
+integrator actually faces that no other task grades. The 2026-08-20 audit added eleven, each
+reachable through the advertised surface but never exercised by an agent — the auction order,
+finalize, the venue-free inline fill, simulate-before-signing, the deliberately gated quote,
+the RFQ feed and the underwriter's answer to it, the fixed-rate oracle, the warnings topic,
+receipt decoding, and the ForSelf shape (a direct adapter call whose allowances target the
+ADAPTER — the expensive thing to get wrong). Deliberately NOT added: registry-denominations,
+registry-feeds, and registry-assets, which would re-grade a read shape registry-recipes and
+derive-cork-pool already cover.
 
 `evals/task-fixtures.test.ts` pins covered tasks OFFLINE: one canonical correct call must
 reproduce the expected envelope (state + code) against the stub, and teaching-derived answer

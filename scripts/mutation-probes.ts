@@ -929,6 +929,50 @@ const CATALOG: Mutant[] = [
   },
   // ── eval stub fidelity: the stub must MIRROR venue behavior, not ignore parameters ─────────
   {
+    // The receipt fixture's logs must be GENUINELY encoded from the decoder's own signatures.
+    // A drifted topic0 decodes to `raw`/unknown — the task would then grade an agent's honest
+    // "I cannot identify these events" as a miss, and the ABI drift would go unnoticed.
+    id: "eval-stub-receipt-topic-drift",
+    file: "evals/stub.ts",
+    // The drift must be in a TYPE (or the event name): topic0 hashes the signature, so renaming
+    // a parameter is inert — a first attempt at this probe mutated `remainingAmount` and
+    // survived, which is the probe being wrong, not the suite (2026-08-20).
+    find: 'const ORDER_FILLED = parseAbiItem("event OrderFilled(bytes32 orderHash, uint256 remainingAmount)");',
+    replace: 'const ORDER_FILLED = parseAbiItem("event OrderFilled(bytes32 orderHash, uint128 remainingAmount)");',
+    tests: [T.taskFixtures],
+  },
+  {
+    // getCode is ADDRESS-AWARE on purpose: the ForSelf adapter is a contract, every other
+    // fixture account an EOA. A blanket-EOA stub refuses the adapter (no contract there) and
+    // makes the whole ForSelf surface untestable — which is how it went uncovered until now.
+    id: "eval-stub-forself-adapter-codeless",
+    file: "evals/stub.ts",
+    find: 'String(a?.address ?? "").toLowerCase() === FORSELF_ADAPTER.toLowerCase() ? FORSELF_ADAPTER_CODE : "0x",',
+    replace: '"0x",',
+    tests: [T.taskFixtures],
+  },
+  {
+    // The ForSelf pre-flight compares CORK() against the POOL MANAGER; answering the Cork
+    // adapter instead is the exact confusion that makes an integrator grant an allowance to a
+    // contract bound to another stack. The stub must model the real binding, not a plausible one.
+    id: "eval-stub-forself-cork-binding-wrong",
+    file: "evals/stub.ts",
+    find: 'return (corkDefaults as { deployments: Record<string, { poolManager: string }> }).deployments["1"]!.poolManager;',
+    replace: 'return (corkDefaults as { deployments: Record<string, { corkAdapter: string }> }).deployments["1"]!.corkAdapter;',
+    tests: [T.taskFixtures],
+  },
+  {
+    // The venue answers an ANSWER id on /answers; serving the RFQ id instead leaves the
+    // handler's `answer_id ?? null` null while the relay still looks accepted — the one field
+    // the underwriter needs, quietly absent.
+    id: "eval-stub-rfq-answer-id-shape",
+    file: "evals/stub.ts",
+    find: 'if (url.includes("/answers")) return r(201, { answer_id: RFQ_ANSWER_ID, rfq_id: RFQ_OPEN_ID });',
+    replace: 'if (url.includes("/answers")) return r(201, { rfq_id: RFQ_OPEN_ID });',
+    tests: [T.taskFixtures],
+  },
+
+  {
     // The stub's factory filter mirrors the venue's server-side filtering; a stub that ignores
     // the parameter grades a task that never exercised the filter (a green no-op, class C13).
     id: "eval-stub-factory-filter-ignored",

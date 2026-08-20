@@ -3,7 +3,8 @@
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
 import { buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
-import { DEMO_POOL_ID } from "@cork/schemas";
+import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
+import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
 
 const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
 const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
@@ -110,6 +111,20 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 100n * WAD;
     case "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE":
       return 300n * WAD;
+    // ── ForSelf adapter bindings (the Zyfai shape): the pre-flight verifies these on-chain
+    //    before the caller grants the adapter an allowance, so they must answer the CONFIGURED
+    //    addresses — a mismatch is a conflict, by design.
+    case "CORK":
+      // The ForSelf adapter binds the POOL MANAGER (not the Cork adapter) — the pre-flight
+      // compares against exactly that, because an adapter pinned to another stack would route
+      // the caller's allowance to the wrong protocol.
+      return (corkDefaults as { deployments: Record<string, { poolManager: string }> }).deployments["1"]!.poolManager;
+    case "LOP":
+      return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
+    case "WHITELIST":
+      // A pre-caller-gate adapter has no such view. A REVERT here is explicitly not a conflict
+      // (the pre-flight adapts) — serving it proves that branch instead of the happy one.
+      throw Object.assign(new Error("execution reverted"), { shortMessage: 'The contract function "WHITELIST" reverted.' });
     case "predictFixedRateOracle":
       return "0xF10000000000000000000000000000000000000d"; // CREATE2-predicted, not yet deployed (getCode answers "0x")
     case "lookupWrapper":
@@ -134,6 +149,14 @@ export const ARCHIVED_DIGEST = `0x${"5e".repeat(32)}`;
 
 /** The one open RFQ on the venue stub's discovery feed (the rfq-read task's ground truth). */
 export const RFQ_OPEN_ID = "rfq_open7";
+/** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
+export const RFQ_ANSWER_ID = "ans_eval1";
+
+/** An integrator-deployed Cork ForSelf adapter (the Zyfai parameter-blind session-key shape).
+ *  NOT a Cork deployment — the tool verifies its CORK()/LOP() bindings on-chain precisely
+ *  because the caller is about to grant IT the token allowances. */
+export const FORSELF_ADAPTER = "0x5ea500000000000000000000000000000000aDa0"; // EIP-55 checksummed: the Address schema enforces it
+const FORSELF_ADAPTER_CODE = "0x60806040523480156100";
 
 /** One rc.2 rollover clone on the venue's contracts feed (the factory-filter task). */
 export const RC2_CLONE = "0x96f126A8503145201A60Bf9BdB29fE26E40cCA14";
@@ -255,6 +278,10 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   if (init?.method === "POST") {
     if (url.includes("/rollover/v1/orders")) return r(201, {}); // handler fills the digest from its local recomputation
     if (url.includes("/limit-orders")) return r(201, { orderHash: "0x" });
+    // /rfqs/v1/{id}/answers answers with an ANSWER id; the open endpoint with an RFQ id. A
+    // stub that returned rfq_id for both would let the handler's `answer_id ?? null` read null
+    // and still look accepted — the field the underwriter needs, quietly absent.
+    if (url.includes("/answers")) return r(201, { answer_id: RFQ_ANSWER_ID, rfq_id: RFQ_OPEN_ID });
     if (url.includes("/rfqs")) return r(201, { rfq_id: "rfq_eval1", state: "open" });
   }
   if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
@@ -291,7 +318,12 @@ export function stubContext(): HandlerContext {
       source: "explicit" as const,
       client: {
         readContract: async (a: never) => readContract(a, chainId),
-        getCode: async () => "0x", // every fixture account is an EOA
+        // Code is ADDRESS-AWARE, not blanket: the ForSelf adapter is a CONTRACT (its bindings
+        // are verified before a caller grants it an allowance, and a codeless address is
+        // correctly refused adapter_binding_mismatch), while every other fixture account stays
+        // an EOA so the maker-signature ladder takes its ecrecover branch rather than ERC-1271.
+        getCode: async (a: { address?: string } | undefined) =>
+          String(a?.address ?? "").toLowerCase() === FORSELF_ADAPTER.toLowerCase() ? FORSELF_ADAPTER_CODE : "0x",
         // track simulate's eth_call dry-run: every frozen artifact simulates viable here (the
         // task grades the simulate-before-sign habit, not revert forensics).
         call: async () => ({ data: "0x" }),
@@ -330,3 +362,27 @@ if (preparedEnv.state !== "ok") throw new Error(`finalize fixture: maker-order p
 export const PREPARED_MAKER_ORDER = preparedEnv.data as { orderHash: string; nonce: string };
 /** The maker's REAL signature over the prepared order hash — external to the tools [K1]. */
 export const FINALIZE_SIGNATURE = await FINALIZE_MAKER.sign({ hash: PREPARED_MAKER_ORDER.orderHash as `0x${string}` });
+
+// ── decode receipt fixture: GENUINE encoded logs, never hand-pasted hex ──────────────────────
+// Two logs from one plausible fill transaction: the LOP's own OrderFilled and the cST transfer
+// it caused. Encoded here with viem from the same event signatures the decoder's ABI set
+// declares, so a signature change breaks the fixture loudly instead of decoding to "raw".
+const ORDER_FILLED = parseAbiItem("event OrderFilled(bytes32 orderHash, uint256 remainingAmount)");
+const ERC20_TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+export const DEMO_RECEIPT = {
+  status: "success",
+  blockNumber: 23_000_000,
+  gasUsed: 210_000,
+  logs: [
+    {
+      address: LOP_ADDRESSES[1]!,
+      topics: encodeEventTopics({ abi: [ORDER_FILLED] }),
+      data: encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [RESTING_ORDER_HASH, 0n]),
+    },
+    {
+      address: CST,
+      topics: encodeEventTopics({ abi: [ERC20_TRANSFER], args: { from: RESTING_MAKER.address, to: DEMO_ACCOUNT_ADDR } }),
+      data: pad("0xde0b6b3a7640000", { size: 32 }),
+    },
+  ],
+};

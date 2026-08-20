@@ -28,9 +28,17 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   (hybrid's one unverifiable family), the **fixed-rate oracle** (keyed on the RATE, not a
   pair), and the **warnings doc topic**. Plus two held-out siblings: a direction-twin variant
   probe and a caller-claimed-orderHash conflict. 44 -> 52 active, 5 -> 7 held-out.
+  A second pass added three more: **receipt decoding** ("what happened in my transaction?"),
+  the underwriter's **rfq-answer** (completing the negotiation loop whose read half is the RFQ
+  feed, and grading the fraction premium at the OPTION level), and the **ForSelf** shape — a
+  direct call to an integrator-deployed adapter where every allowance targets the ADAPTER, the
+  expensive thing to get wrong. 44 -> 55 active.
   Fixtures are REAL: the finalize task hands the agent an order prepared through the same
   `runTool` path, signed by a throwaway key the handler ecrecovers for real; the inline-fill
-  gate proves the venue-free claim structurally, with a `venueFetch` that throws.
+  gate proves the venue-free claim structurally, with a `venueFetch` that throws; the receipt's
+  logs are encoded with viem from the decoder's own event signatures, never pasted hex; and the
+  chain stub's `getCode` became address-aware so a ForSelf adapter is a CONTRACT while every
+  other fixture account stays an EOA (a blanket-EOA stub is why that surface stayed uncovered).
 
 ### Fixed
 

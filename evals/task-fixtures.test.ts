@@ -16,6 +16,9 @@ import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
 import { stubContext } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
+  DEMO_RECEIPT,
+  FORSELF_ADAPTER,
+  RFQ_ANSWER_ID,
   FINALIZE_REQUEST_ID,
   FINALIZE_SIGNATURE,
   PREPARED_MAKER_ORDER,
@@ -306,6 +309,47 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
       stubContext(),
     );
     expect(env.state).toBe("ok");
+  });
+
+  it("decode-receipt: both genuine encoded logs are IDENTIFIED, not labeled raw", async () => {
+    const env = await runTool("cork_decode", { chainId: 1, kind: "receipt", data: DEMO_RECEIPT }, stubContext());
+    expect(env.state).toBe("ok");
+    // The fixture's logs are encoded from the SAME signatures the decoder declares, so an ABI
+    // drift must show up as an unknown log here rather than as a mysterious eval miss.
+    const rows = (env.data as { logs: Array<{ known: boolean; event?: string }> }).logs;
+    expect(rows.map((r) => r.event)).toEqual(["OrderFilled", "Transfer"]);
+    expect(rows.every((r) => r.known)).toBe(true);
+    expect(TASKS.find((t) => t.id === "decode-receipt")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
+  });
+
+  it("submit-rfq-answer: the option's FRACTION premium relays, and a percent number is refused", async () => {
+    const answer = (premium: string, id: string) =>
+      runTool(
+        "cork_submit",
+        { chainId: 42161, clientRequestId: id, action: { type: "rfq-answer", rfqId: RFQ_OPEN_ID, underwriter: DEMO_ACCOUNT, status: "quoted", options: [{ option_id: "opt1", premium_annualized: premium }], signature: `0x${"ab".repeat(65)}` } },
+        stubContext(),
+      );
+    const ok = await answer("0.038", "eval-ans-0001");
+    expect(ok.state).toBe("ok");
+    expect(JSON.stringify(ok.data)).toContain(RFQ_ANSWER_ID);
+    // 3.8 is the percent spelling of the same premium — the venue's gate refuses it, and so
+    // must we, BEFORE the POST burns a request id. This is the task's whole unit lesson.
+    const bad = await answer("3.8", "eval-ans-0002");
+    expect(bad.state).toBe("unavailable");
+    expect(bad.warnings[0]?.code).toBe("invalid_order_terms");
+  });
+
+  it("prepare-forself-exercise: a direct adapter call whose allowances target the ADAPTER", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-fs-0001", forSelf: { adapter: FORSELF_ADAPTER }, action: { type: "exercise", poolId: DEMO_POOL_ID, cstSharesIn: "1000000000000000000", receiver: DEMO_ACCOUNT, minCollateralAssetsOut: "1", maxReferenceAssetsIn: "2000000" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "for_self_artifact")).toBe(true);
+    // The costly wrong answer would be the Cork adapter or Permit2; the artifact must send the
+    // caller to the integrator's adapter, and the task's regex grades exactly that.
+    expect(TASKS.find((t) => t.id === "prepare-forself-exercise")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
   });
 
   it("the demo-pool read the oldest task grades still answers (fixture canary)", async () => {

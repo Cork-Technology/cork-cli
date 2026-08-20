@@ -1,11 +1,11 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 52 active + 7 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 55 active + 7 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { ARCHIVED_DIGEST, CST, DERIVED_JIT_POOL, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
+import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -446,6 +446,55 @@ export const TASKS: EvalTask[] = [
       // The three envelope states + the family framing the topic exists to teach.
       answer: /(?=[\s\S]*famil)(?=[\s\S]*conflict)(?=[\s\S]*unavailable)/i,
       maxCalls: 2,
+    },
+  },
+  {
+    // Post-broadcast: "what actually happened in my transaction?" Pure local log labeling
+    // against the source-verified ABI set — the question every integrator asks once a tx lands.
+    id: "decode-receipt",
+    prompt: `My Cork fill transaction landed. Here is the receipt — tell me what happened in it: which events fired, and did the transaction succeed? ${JSON.stringify(DEMO_RECEIPT)}`,
+    expect: {
+      tool: "cork_decode",
+      params: { kind: "receipt" },
+      state: "ok",
+      // Both logs identified by name, and the receipt's own status echoed.
+      answer: /(?=[\s\S]*OrderFilled)(?=[\s\S]*Transfer)(?=[\s\S]*(success|succeeded))/i,
+      maxCalls: 2,
+    },
+  },
+  {
+    // The underwriter's WRITE half of the negotiation loop whose read half is rfq-discovery-feed.
+    // The premium unit bites again in a different shape: an answer option's premium_annualized
+    // is a decimal FRACTION string ("0.038" = 3.8%), and the venue's own gate refuses anything
+    // else — so this grades the unit translation at the option level, not the listing level.
+    id: "submit-rfq-answer",
+    prompt: `I underwrite Cork cover and I want to quote RFQ ${RFQ_OPEN_ID} on Arbitrum (chain 42161) as underwriter ${A}: one option, id "opt1", at an annualized premium of 3.8%. My signature is 0x${"ab".repeat(65)}, request id "eval-ans-0001". Report the answer id the venue assigned.`,
+    expect: {
+      tool: "cork_submit",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "rfq-answer", rfqId: RFQ_OPEN_ID, status: "quoted" } },
+      state: "ok",
+      answer: new RegExp(RFQ_ANSWER_ID, "i"),
+      maxCalls: 3,
+    },
+  },
+  {
+    // The ForSelf shape (a parameter-blind session-key wallet, the Zyfai integration): a DIRECT
+    // call to an integrator-deployed adapter — no Bundler3, outputs structurally forced to the
+    // caller, and every allowance to the ADAPTER rather than the Cork adapter. Getting the
+    // allowance target wrong is the expensive mistake this task grades.
+    id: "prepare-forself-exercise",
+    prompt: `My wallet is behind a session-key policy that can only call fixed (contract, selector) pairs, so I cannot use a Bundler3 bundle. Build the Cork coverage payout as a DIRECT call to my integrator's ForSelf adapter ${FORSELF_ADAPTER}: exercise 1000000000000000000 cST on pool ${P}, at least 1 collateral out, at most 2000000 reference in, account ${A}, request id "eval-fs-0001". Which contract must I approve my tokens to?`,
+    expect: {
+      tool: "cork_prepare_phoenix",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { forSelf: { adapter: FORSELF_ADAPTER }, action: { type: "exercise" } },
+      state: "ok",
+      code: "for_self_artifact",
+      // The allowance goes to the ADAPTER — naming the Cork adapter or Permit2 here would be
+      // the costly wrong answer, so the address must appear (6-hex prefix survives ellipsis).
+      answer: new RegExp(`(?=[\\s\\S]*${FORSELF_ADAPTER.slice(2, 8)})(?=[\\s\\S]*(approv|allowance))`, "i"),
+      maxCalls: 3,
     },
   },
 
