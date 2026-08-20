@@ -12,212 +12,168 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ### Changed (breaking)
 
-- **Rollover speaks the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
-  `RolloverParams` gained a trailing `bytes32 jitMarketHash` on-chain (zero = the order does
-  not authorize just-in-time market creation), changing both EIP-712 typehashes and the
-  OrderData static ABI length (832 → 864). Every digest this tool computes, signs over,
-  verifies, and relays now uses the rc.2 types; pre-rc.2 digests no longer verify on any
-  deployed settler and the venue rejects them. `cork_prepare_orders rollover-intent` accepts
-  an optional `jitMarketHash` (pre-computed commitment) or `jitMarket` (the negotiated
-  instruction — collateral/reference/expiry/recipe/constraint/fees — hashed locally via the
-  BaseFiller `hashJITMarketParams` mirror, golden-vectored against the release's own Solidity
-  libraries); `cork_submit rollover-order` takes `rolloverParams.jitMarketHash` with a
-  zero-hash default, so an omitted field re-hashes to exactly what the wallet signed.
-  Config: the rc.2 generation (identical CREATE2 addresses on Arbitrum One AND Base — Base is
-  new rollover coverage) replaces the July 2026 set, which moves to
-  `rollover.<chain>.legacyGenerations` — retired at the venue but kept for event-history
-  scans and precise teaching. A retired settler now refuses with the new `settler_retired`
-  code at prepare AND submit instead of building an unfillable artifact.
+- **Rollover uses the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
+  `RolloverParams` gained a trailing `bytes32 jitMarketHash`. Zero means the order does not
+  permit just-in-time market creation. Both EIP-712 typehashes changed, and the OrderData ABI
+  length grew from 832 to 864 bytes. Every digest this tool computes, verifies, and relays now
+  uses the rc.2 types. Pre-rc.2 digests do not verify on any deployed settler, and the venue
+  rejects them. `cork_prepare_orders rollover-intent` accepts `jitMarketHash` (a pre-computed
+  commitment) or `jitMarket` (the negotiated instruction: collateral, reference, expiry,
+  recipe, constraint, fees). The tool hashes `jitMarket` locally with a mirror of BaseFiller
+  `hashJITMarketParams`; the golden vectors come from the release's own Solidity libraries.
+  `cork_submit rollover-order` takes `rolloverParams.jitMarketHash` and defaults it to zero,
+  so an omitted field hashes to what the wallet signed. Config: the rc.2 contracts have the
+  same CREATE2 addresses on Arbitrum One and Base, and Base is new rollover coverage. The
+  July 2026 contracts move to `rollover.<chain>.legacyGenerations`: the venue retired them,
+  but event-history scans still need them. A retired settler now refuses with
+  `settler_retired` at prepare and at submit. Before, the tool built an artifact that no
+  filler could fill.
 
-- **The removed percent `premium` listing field is refused, not relayed.** The venue completed
-  its scheduled sunset on 2026-08-17 (cork-api 0.3.15) and answers a pointed 400 on presence;
-  `cork_submit lop-order` and `finalize-maker-order` now refuse a percent-bearing listing
-  before relay with the same teaching (including the exact fraction spelling to use).
-  `premiumAnnualized` is the one premium field. The schema keeps `premium` only so legacy
-  callers get teaching instead of a bare shape error. The `premium_fields_disagree` and
-  percent-path `deprecation_notice` warnings retire with the field.
+- **The percent `premium` listing field is refused, not relayed.** The venue removed the
+  field on 2026-08-17 (cork-api 0.3.15) and answers 400 when it is present.
+  `cork_submit lop-order` and `finalize-maker-order` now refuse such a listing before relay,
+  and the message shows the fraction to send instead. `premiumAnnualized` is the one premium
+  field. The schema keeps `premium` only to teach; a bare shape error would not. The
+  `premium_fields_disagree` warning and the percent-path `deprecation_notice` are gone with
+  the field.
 
 ### Fixed
 
-- **Compiled binaries (and therefore the apk and the container image) now carry the HyperSync
-  native binding, so `full-decentralized` mode works from the bare image.** Found by ops on
-  2026-08-20 deploying the MCP endpoint: with a valid `ENVIO_API_TOKEN` every HyperSync read
-  answered `hypersync_unavailable`, because `@envio-dev/hypersync-client` was imported by bare
-  name and no `node_modules` exists inside a `bun --compile` binary — on every architecture. The
-  release script now stamps each target's platform binding (`@envio-dev/hypersync-client-<os>-<arch>[-libc]`,
-  the package's own `.node`) as the build-time constant `CH_HYPERSYNC_BINDING`; the one `require`
-  in the datasource takes that constant and Bun embeds exactly that file (+16–19 MB per binary,
-  extracted to the OS temp dir on first load). The five bindings Envio publishes are exact-pinned
-  `optionalDependencies` of `@cork/core`; the cross-compiling release job installs them all
-  (`bun install --os='*' --cpu='*'`), and the script refuses a target whose binding is missing.
-  Targets without a binding — Envio deprecated Windows at client 1.1.0 and has never built
-  `linux-arm64-musl` — embed nothing and answer with a target-specific reason instead of a
-  resolution failure; a unit test holds the map to the client's own declared platform set, so a
-  change on upgrade is loud. `@envio-dev/hypersync-client` itself moves from the workspace root
-  into `@cork/core`'s `optionalDependencies` (the package that imports it — SDK consumers of
-  `/indexer` now get the client installed). The napi-rs runtime libc heuristics
-  (`ldd`, `process.report`) are bypassed entirely in a compiled binary: the build knows its libc.
-  A source run is unchanged — the package's own loader decides — and `CH_HYPERSYNC_BINDING` set
-  in the environment to a `.node` path overrides it. `ch version` (and `--json`
-  `hyperSyncBinding`) now report the embedded binding, so an operator can see whether an image
-  can serve full-decentralized reads without running one. Guarded by a unit pin of the
-  target→binding map against the manifest, and by a live test that compiles the host binary with
-  the release script and proves it gets past the native loader (CI `live-smoke`; the release
-  smoke checks every shipped asset the same way). melange now builds through the release script
-  (`--native`) instead of duplicating the `bun build` invocation.
+- **Compiled binaries carry the HyperSync native binding, so `full-decentralized` mode works
+  from the bare image.** Our ops team found this on 2026-08-20 while they deployed the MCP
+  endpoint: with a valid `ENVIO_API_TOKEN`, every HyperSync read answered
+  `hypersync_unavailable`. The cause: the tool imported `@envio-dev/hypersync-client` by
+  name, and a `bun --compile` binary has no `node_modules`. This failed on every
+  architecture. Now the release script stamps each target's binding
+  (`@envio-dev/hypersync-client-<os>-<arch>[-libc]`, the package's own `.node` file) as the
+  build-time constant `CH_HYPERSYNC_BINDING`. One `require` reads that constant, and Bun
+  embeds that one file. Each binary grows by 16–19 MB. The binary extracts the file to the
+  OS temp dir on first load and removes it at exit. The client and its five bindings are
+  exact-pinned `optionalDependencies` of `@cork/core`, the package that imports them, so SDK
+  users of `/indexer` now get the client installed. The release job installs all five
+  (`bun install --os='*' --cpu='*'`), and the script stops when a target's binding is
+  missing. Envio deprecated its Windows bindings at client 1.1.0 and never built
+  `linux-arm64-musl`; those builds embed nothing and say so in the error. A unit test holds
+  our map to the platform set the client declares, so a change in a future client version
+  fails loudly. A compiled binary no longer runs the napi-rs libc detection (`ldd`,
+  `process.report`): the build knows its libc. A source run is unchanged, and
+  `CH_HYPERSYNC_BINDING` in the environment can point at a `.node` file. `ch version` and
+  `ch version --json` (`hyperSyncBinding`) show the embedded binding. A live test compiles
+  the host binary with the release script and proves that it loads the binding (CI
+  `live-smoke`); the release smoke checks every shipped asset the same way. melange now
+  builds through the release script (`--native`) instead of its own `bun build` call.
 
+- **Three eval mutation probes could never fail.** They mutated a test, or a constant that
+  both sides of a comparison read. We aimed them at real defects: a task expectation at the
+  wrong premium scale; a prompt whose request id drifted from its prepared fixture (an
+  unwinnable task looks like a model failure); and a handler that stopped honoring
+  `signedOrder` and fell back to the venue book. Each now has a test that kills it. The
+  prompt-id check reads the captured instruction, not a substring, because the embedded blob
+  carries the id too.
 
-- **Three eval mutation probes were circular** (they mutated a test, or a constant both sides of
-  a comparison read) and could never fail. Re-aimed at the real defects: a task expectation at
-  the wrong premium scale, a prompt whose request id drifts from the prepared fixture it hands
-  the agent (an unwinnable task reads as a model failure — the worst eval rot), and a handler
-  that stops honoring `signedOrder` and falls back to the venue book. Each now has a killer
-  test; the prompt-id assertion checks the captured instruction, not a substring, because the
-  embedded prepared blob carries the id too.
-
-- **The eval README claimed `needs_indexer` coverage no task had.** The gated-outcome list now
-  names what the suite actually grades.
+- **The eval README claimed `needs_indexer` coverage that no task had.** The list now names
+  what the suite grades.
 
 ### Added
 
-- **SDK (`@cork/core` `/config`):** `HYPERSYNC_BINDING` — the embedded HyperSync binding's
-  specifier (null in a source run or on a target without one), beside `BUILD_TARGET`.
+- **SDK (`@cork/core` `/config`):** `HYPERSYNC_BINDING`, the embedded binding's specifier
+  (null in a source run, or on a target without one), beside `BUILD_TARGET`.
 
-- **Agent evals grade the [K1] safety invariant.** Grading was purely positive: an agent that
-  built the requested bytes AND relayed them to the venue scored a perfect trace while
-  performing an unrequested, irreversible side effect. A task can now declare
-  `forbid: ["cork_submit"]`, and a forbidden call fails it — including an INVALID one, since
-  attempting the side effect is the violation. Reported as its own axis (`safe`), carried in
-  the durable per-task log row, and summarized over the guarded tasks only. Five prepare-shaped
-  tasks are guarded today. `prepare != sign != submit` is the invariant the whole tool split
-  exists to enforce; the suite now measures it.
+- **Agent evals grade the [K1] safety invariant.** Grading only rewarded what an agent did.
+  An agent that built the requested bytes and then relayed them to the venue scored a perfect
+  trace, and made an irreversible change that nobody asked for. A task can now declare
+  `forbid: ["cork_submit"]`. A forbidden call fails the task, even an invalid one: the attempt
+  is the violation. The result is its own axis (`safe`), stored per task, and summarized over
+  the guarded tasks. Five prepare tasks are guarded today. The tool split exists to enforce
+  prepare ≠ sign ≠ submit; the suite now measures it.
 
-- **Agent evals grade multi-step tasks as traces, not prose.** `tool`/`params`/`state` grade
-  exactly ONE tool, so a two-step task ("build the bundle, then dry-run those bytes") could
-  only grade its second step through the answer regex — a fluent "I simulated it, no revert"
-  passed on a trace containing no simulation. A task can now declare `require: ["cork_track"]`;
-  a missing step fails it, and a schema-refused call does not count as having run. Reported as
-  its own axis (`stepsRan`), in the log row, summarized over the multi-step tasks only.
+- **Agent evals grade multi-step tasks as traces, not prose.** `tool`, `params`, and `state`
+  grade one tool. A two-step task ("build the bundle, then dry-run those bytes") could grade
+  its second step only through the answer regex, so "I simulated it, no revert" passed with
+  no simulation in the trace. A task can now declare `require: ["cork_track"]`. A missing
+  step fails it, and a schema-refused call does not count as run. The result is its own axis
+  (`stepsRan`).
 
-- **Eval coverage: eight surfaces an agent had never exercised.** The audit picked tasks by
-  SURFACE, not by count — each grades a decision an integrator faces that no other task graded:
-  the decaying-premium **auction** maker-order (at the 1e7 rate-bump scale), **finalize** of an
-  EXTERNALLY signed order (the [K1] half where the tool recovers a signature it did not
-  create), the **venue-free inline fill**, **simulate-before-signing**, the deliberately gated
-  **rfq-quote** (refuse honestly AND name the shipped alternative), the **RFQ discovery feed**
-  (hybrid's one unverifiable family), the **fixed-rate oracle** (keyed on the RATE, not a
-  pair), and the **warnings doc topic**. Plus two held-out siblings: a direction-twin variant
-  probe and a caller-claimed-orderHash conflict. 44 -> 52 active, 5 -> 7 held-out.
-  A second pass added three more: **receipt decoding** ("what happened in my transaction?"),
-  the underwriter's **rfq-answer** (completing the negotiation loop whose read half is the RFQ
-  feed, and grading the fraction premium at the OPTION level), and the **ForSelf** shape — a
-  direct call to an integrator-deployed adapter where every allowance targets the ADAPTER, the
-  expensive thing to get wrong. 44 -> 55 active.
-  Fixtures are REAL: the finalize task hands the agent an order prepared through the same
-  `runTool` path, signed by a throwaway key the handler ecrecovers for real; the inline-fill
-  gate proves the venue-free claim structurally, with a `venueFetch` that throws; the receipt's
-  logs are encoded with viem from the decoder's own event signatures, never pasted hex; and the
-  chain stub's `getCode` became address-aware so a ForSelf adapter is a CONTRACT while every
-  other fixture account stays an EOA (a blanket-EOA stub is why that surface stayed uncovered).
-- **Self-review round (10 verified findings, all fixed).** A JIT rollover order now carries
-  `jit_market_notice` (the venue cannot admit it until the destination pool is indexed —
-  distribute venue-free meanwhile) and, whenever an RPC resolves, a best-effort
-  `jit_pool_mismatch` cross-check derives the pool the jitMarket instruction pins and compares
-  it to `dstPoolId` (a stale derivation signs an order every fill reverts
-  `BaseFiller__JitPoolMismatch`); the far-future-expiry warning now rides the rollover JIT path
-  too. `cork_track` reconcile scopes the digest event-history scan to the row's OWN settler and
-  its generation's seed block (a digest binds to one settler; the full span tripped ordinary
-  endpoints' range caps), and a venue-miss now runs a chain sweep over every configured settler
-  generation before claiming `order_not_found` — venue archival cannot silence live chain state
-  [K7]. `cork_decode` kind:'tx' names retired-generation settlers/factories ("retired july-2026
-  generation") instead of warning `unknown_target` on genuine Cork traffic. The removed-premium
-  teaching computes its fraction suggestion with exact string math (float division emitted
-  "0.040999999999999995"-class artifacts that failed the very gate being taught), the dead
-  `premium` schema field dropped its live-era 1000 cap so any legacy value reaches the pointed
-  teaching, the rollover signature-mismatch conflict names the omitted-jitMarketHash migration
-  mistake, and the retired-settler refusal is one shared string across prepare and submit.
+- **Eval coverage: eleven surfaces that no task had exercised.** We chose tasks by surface,
+  not by count. Each grades a decision an integrator faces: the decaying-premium auction
+  maker-order (1e7 rate-bump scale); finalize of an externally signed order (the tool
+  recovers a signature it did not create); the venue-free inline fill; simulate before
+  signing; the gated `rfq-quote` (refuse, and name the shipped alternative); the RFQ
+  discovery feed; the fixed-rate oracle (keyed on the rate, not a pair); the warnings doc
+  topic; receipt decoding; the underwriter's `rfq-answer` (graded at the option level); and
+  the ForSelf shape, where every allowance targets the adapter. Two held-out siblings: a
+  direction-twin variant and a caller-claimed-orderHash conflict. Active tasks 44 → 55,
+  held-out 5 → 7. The fixtures are real. The finalize task hands the agent an order prepared
+  through `runTool` and signed by a throwaway key that the handler recovers. The inline-fill
+  gate uses a `venueFetch` that throws. Receipt logs are encoded with viem from the decoder's
+  own event signatures. The chain stub's `getCode` is address-aware, so a ForSelf adapter is
+  a contract and every other account is an EOA.
 
-- **Venue admission, pre-flighted for rollover orders.** The deterministic subset of the
-  venue's POST admission battery (cork-api 0.3.16) runs locally at prepare AND submit through
-  one shared `checkRolloverOrderTerms`: deadline ordering and past-ness (openDeadline
-  included), positive `minPremiumPerShare`, non-zero and pairwise-distinct tokens
-  (premiumToken must be a third asset), distinct pool ids, `exclusiveFiller ≠ settler`,
-  `intent.deadline ≥ fillDeadline`, and the hook policy (delegatecall-only, zero-value,
-  non-optional). Chain-dependent admission (hook-target code existence, the settler
-  `resolveFor` preflight) deliberately stays venue-side; a live test replicates the
-  `resolveFor` probe against the deployed settlers on both chains.
+- **Self-review round: 10 findings, all fixed.** A JIT rollover order now carries
+  `jit_market_notice` (the venue cannot admit it until the destination pool is indexed; hand
+  it to a filler directly until then). When an RPC resolves, `jit_pool_mismatch` derives the
+  pool that the `jitMarket` instruction pins and compares it to `dstPoolId`; a stale
+  derivation signs an order that every fill reverts with `BaseFiller__JitPoolMismatch`. The
+  far-future-expiry warning covers the rollover JIT path. `cork_track` reconcile scans the
+  digest's own settler from its generation's seed block, and a venue miss sweeps every
+  configured settler generation before it reports `order_not_found` [K7]. `cork_decode` kind
+  `tx` names retired settlers and factories instead of warning `unknown_target`. The
+  removed-premium message computes its fraction with exact string math; float division gave
+  values like `0.040999999999999995`. The dead `premium` field lost its 1000 cap, so any
+  legacy value reaches the message. The rollover signature-mismatch conflict names the
+  omitted-`jitMarketHash` mistake. Prepare and submit share one retired-settler message.
 
-- **`filters.factory` on rollover contracts.** Mirrors the venue's rc.2 disambiguator (one
-  wallet owns one clone per factory generation) on the hybrid path, and scopes the
-  full-decentralized clone scan — which, like the fills scan, now covers ACTIVE + LEGACY
-  generations from the earliest seed block so retired-generation history stays visible.
+- **Venue admission, pre-flighted for rollover orders.** The deterministic part of the
+  venue's admission checks (cork-api 0.3.16) runs locally at prepare and submit through one
+  `checkRolloverOrderTerms`: deadline order and expiry, positive `minPremiumPerShare`,
+  non-zero and distinct tokens, distinct pool ids, `exclusiveFiller ≠ settler`,
+  `intent.deadline ≥ fillDeadline`, and the hook policy (delegatecall only, zero value, not
+  optional). Chain-dependent checks (hook code, settler `resolveFor`) stay at the venue. A
+  live test runs the `resolveFor` probe against the deployed settlers on both chains.
+
+- **`filters.factory` and `filters.settler` on rollover reads, with one scoping mechanism.**
+  `filters.factory` mirrors the venue's rc.2 disambiguator (one wallet owns one clone per
+  factory generation) and scopes the full-decentralized clone scan to that factory from its
+  seed block (`rolloverFactoryScanTargets`, SDK `/config`). Live: an 11.3M-block walk became
+  2.1M blocks. `filters.settler` passes to the venue on the hybrid path and scopes the fills
+  scan to that settler's generation. Both scopes share one private `generationScanTargets`;
+  the two former copies are gone. Without a filter, scans span active and legacy generations
+  from the earliest seed block, so retired history stays visible. The tokenless eth_getLogs
+  fallback stays partial on wide ranges; `logs_windowed_fallback` names the ENVIO token as
+  the complete answer.
 
 - **SDK (`@cork/core` `/orders`):** `JIT_MARKET_PARAMS_TYPEHASH`, `ZERO_JIT_MARKET_HASH`,
   `ORDER_DATA_ABI_LENGTH`, `encodeOrderData`, `hashJitMarketParams`, `JitMarketParamsStruct`,
   `checkRolloverOrderTerms`, `classifyRolloverSettler`, `RolloverSettlerClassification`,
-  `RolloverGenerationAddresses`; `/config` gains `CorkRolloverGeneration` and the
+  `RolloverGenerationAddresses`. `/config` gains `CorkRolloverGeneration` and the
   `legacyGenerations`/`contractsVersion` fields on `CorkRolloverDeployment`.
-  `RolloverParamsStruct` gains required `jitMarketHash` (breaking for direct struct
-  construction — deliberate: the field is signed either way). `rolloverScanTargets` derives
-  every event-scan site's generation-spanning address set + earliest seed block — used by the
-  full-decentralized rollover feeds AND `cork_track` reconcile's digest event-history leg,
-  which previously scanned only the active generation.
+  `RolloverParamsStruct` gains a required `jitMarketHash`; this breaks direct struct
+  construction on purpose, because the field is always signed. `rolloverScanTargets` derives
+  each scan site's generation-spanning addresses and earliest seed block.
 
-- **`filters.settler` on rollover orders/fills, and ONE generation-scoping mechanism.** The
-  hybrid order feed passes `settler` to the venue's own filter; the full-decentralized fills
-  scan scopes to that settler's generation seed — the same range-budget starvation fixed for
-  clones applied one branch up (a digest binds to one settler; the unscoped walk spent the
-  windowed fallback's budget on generations that cannot hold the fill). The digest and factory
-  scoped scans now share one private `generationScanTargets` mechanism (a review finding: the
-  two exported wrappers were near-verbatim copies — a matching-rule change had to land twice),
-  and the dead factory row-filter it exposed is gone: the eval/hypersync fake source now honors
-  the address scope like real HyperSync, which is what had masked it. A surviving mutant also
-  bought a sharper test: generation membership is proven with the rc.2 PARTIAL settler, whose
-  generation seed differs from the full-span floor (the July partial's does not — undetectable).
+- **Six rc.2 eval tasks and an offline fixture gate.** The tasks use real fixtures: real
+  ECDSA over real digests, and config-tracked addresses. They cover the JIT rollover
+  commitment, the retired-settler relay, the factory-filtered clone read, a signed rc.2
+  rollover through the full recompute-recover-admission path, the track venue-miss sweep,
+  and the fraction premium at the exact wire value ("4.1%" → `premiumAnnualized "0.041"`).
+  `evals/task-fixtures.test.ts` pins task envelopes offline: the canonical call must
+  reproduce state and code, and answer regexes must accept the teaching message. Fixture rot
+  fails a unit test before any model tokens are spent. Runs: 42/43 baseline, 47/49 expanded.
 
-- **A factory filter also SCOPES the full-decentralized clone scan.** A clone binds to one
-  factory, so `filters.factory` naming a configured generation narrows the event scan to that
-  factory from ITS seed block via the new `rolloverFactoryScanTargets` (SDK `/config`; verified
-  live: an 11.3M-block full-span walk became a 2.1M-block scoped one). Without the filter, generation-spanning scans keep the earliest seed — retired
-  history stays reachable. The windowed no-token eth_getLogs fallback remains honestly partial
-  on ranges wider than one walk (partial backfills are never cached, by design); the
-  `logs_windowed_fallback` warning teaches the ENVIO token as the archive-grade answer.
+- **`topic:"warnings"` and the warning-code registry.** The envelope has 96 warning codes. A
+  new doc topic (aliases `codes`, `envelope`, `states`) teaches them by family, and its table
+  is generated from `WARNING_FAMILIES` in packages/schemas. A test enforces the registry:
+  every code a handler emits belongs to one family, and every registered code is still
+  emitted. It caught its first omission, `unknown_topic`, on the first run.
+  `cork_capabilities` with no arguments now also returns the doc-topic catalog (`docTopics`).
+  The advertised surface did not grow.
 
-- **Agent-eval coverage grew to 44 active tasks (+5 held-out) with an offline fixture gate.**
-  Six new tasks close the rc.2 gap over realistic fixtures (real ECDSA over real digests,
-  config-tracked addresses): the JIT rollover commitment + venue-gap honesty, the
-  retired-settler teaching relay, the factory-filtered clone read, a REAL signed rc.2 rollover
-  relayed through the full recompute/recover/admission pipeline, the track venue-miss chain
-  sweep, and the fraction-premium unit graded at the exact wire value ("4.1%" →
-  `premiumAnnualized "0.041"`). `evals/task-fixtures.test.ts` pins covered task envelopes
-  offline (canonical call must reproduce state+code; answer regexes must accept the teaching
-  message itself; coverage: the rc.2 tasks, the highest-value earlier tasks, and a canary —
-  partial by design, extended with the set), so fixture rot and regex rot fail a unit test
-  before any LLM tokens are spent. Runs: 42/43 baseline, 47/49 expanded (misses: held-out clarify-variance).
-
-- **`topic:"warnings"` + the warning-code registry.** The envelope's warning vocabulary (96
-  codes — the surface's fastest-growing part) now teaches its contract ONCE, by family: a new
-  doc topic (aliases `codes`/`envelope`/`states`) whose table is GENERATED from
-  `WARNING_FAMILIES` (packages/schemas), stating which envelope state each family rides and what
-  any member means for the caller's next move; per-code detail stays in each warning's own
-  message, where the teaching lives. The registry is enforced by test: every code literal the
-  handlers emit must classify into exactly one family, and every registry entry must still be
-  emitted — an undocumented new code or dead documentation fails offline (it caught its first
-  omission, `unknown_topic`, on the first run). The no-args `cork_capabilities` manual now also
-  returns the doc-topic CATALOG (`docTopics`: name/aliases/summary), closing a discoverability
-  gap — topics were previously findable only by guessing a name or tripping `unknown_topic`.
-  Zero growth on the advertised surface: descriptions, schemas, and the instructions string are
-  unchanged (the drift gates never fired).
-
-- **Terminal prose gets SGR color and glyphs.** The CLI's human-readable output (results,
-  errors, `--explain`) now carries state badges (`✔ OK` green, `⚠ UNAVAILABLE` yellow,
-  `✖ CONFLICT` red), colored keys, and dimmed provenance — on a TTY only. The resolution
-  ladder is the conventional one: `FORCE_COLOR` strongest, then `NO_COLOR`
-  (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. Implemented
-  in-tree with zero new dependencies (`packages/cli/src/ansi.ts`). Two invariants are
-  test-pinned: stripping the escapes yields the plain output byte-for-byte, and JSON output
-  never carries an escape sequence. Not covered surface (policy R11 — human-readable text),
-  so no version-line impact.
+- **Terminal prose gets color and glyphs.** Human-readable output shows state badges
+  (`✔ OK` green, `⚠ UNAVAILABLE` yellow, `✖ CONFLICT` red), colored keys, and dimmed
+  provenance, on a TTY only. Precedence: `FORCE_COLOR`, then `NO_COLOR`
+  (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. No new dependency
+  (`packages/cli/src/ansi.ts`). Tests pin two rules: stripped output equals plain output byte
+  for byte, and JSON never carries an escape. Not covered surface (policy R11).
 
 ## [0.3.0-rc.1] — 2026-08-17
 
@@ -367,7 +323,7 @@ silently.
 ## [0.2.0-rc.2] — 2026-08-12
 
 This release aligns the tools with cork-api 0.3.3: module-scoped routing, the registry module,
-and the new premium convention (Raouf's 2026-08-12 API day). Nothing here breaks an rc.1 caller.
+and the new premium convention (the 2026-08-12 API day). Nothing here breaks an rc.1 caller.
 We accept both premium spellings through the venue's migration window. The old venue paths also
 still work through the venue's temporary rewrite; this release moves off that rewrite before the
 venue retires it.
