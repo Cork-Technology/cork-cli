@@ -8,6 +8,35 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+## [0.4.0-rc.1] — 2026-08-20
+
+### Changed (breaking)
+
+- **Rollover speaks the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
+  `RolloverParams` gained a trailing `bytes32 jitMarketHash` on-chain (zero = the order does
+  not authorize just-in-time market creation), changing both EIP-712 typehashes and the
+  OrderData static ABI length (832 → 864). Every digest this tool computes, signs over,
+  verifies, and relays now uses the rc.2 types; pre-rc.2 digests no longer verify on any
+  deployed settler and the venue rejects them. `cork_prepare_orders rollover-intent` accepts
+  an optional `jitMarketHash` (pre-computed commitment) or `jitMarket` (the negotiated
+  instruction — collateral/reference/expiry/recipe/constraint/fees — hashed locally via the
+  BaseFiller `hashJITMarketParams` mirror, golden-vectored against the release's own Solidity
+  libraries); `cork_submit rollover-order` takes `rolloverParams.jitMarketHash` with a
+  zero-hash default, so an omitted field re-hashes to exactly what the wallet signed.
+  Config: the rc.2 generation (identical CREATE2 addresses on Arbitrum One AND Base — Base is
+  new rollover coverage) replaces the July 2026 set, which moves to
+  `rollover.<chain>.legacyGenerations` — retired at the venue but kept for event-history
+  scans and precise teaching. A retired settler now refuses with the new `settler_retired`
+  code at prepare AND submit instead of building an unfillable artifact.
+
+- **The removed percent `premium` listing field is refused, not relayed.** The venue completed
+  its scheduled sunset on 2026-08-17 (cork-api 0.3.15) and answers a pointed 400 on presence;
+  `cork_submit lop-order` and `finalize-maker-order` now refuse a percent-bearing listing
+  before relay with the same teaching (including the exact fraction spelling to use).
+  `premiumAnnualized` is the one premium field. The schema keeps `premium` only so legacy
+  callers get teaching instead of a bare shape error. The `premium_fields_disagree` and
+  percent-path `deprecation_notice` warnings retire with the field.
+
 ### Fixed
 
 - **Compiled binaries (and therefore the apk and the container image) now carry the HyperSync
@@ -36,6 +65,18 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   the release script and proves it gets past the native loader (CI `live-smoke`; the release
   smoke checks every shipped asset the same way). melange now builds through the release script
   (`--native`) instead of duplicating the `bun build` invocation.
+
+
+- **Three eval mutation probes were circular** (they mutated a test, or a constant both sides of
+  a comparison read) and could never fail. Re-aimed at the real defects: a task expectation at
+  the wrong premium scale, a prompt whose request id drifts from the prepared fixture it hands
+  the agent (an unwinnable task reads as a model failure — the worst eval rot), and a handler
+  that stops honoring `signedOrder` and falls back to the venue book. Each now has a killer
+  test; the prompt-id assertion checks the captured instruction, not a substring, because the
+  embedded prepared blob carries the id too.
+
+- **The eval README claimed `needs_indexer` coverage no task had.** The gated-outcome list now
+  names what the suite actually grades.
 
 ### Added
 
@@ -78,51 +119,6 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
   logs are encoded with viem from the decoder's own event signatures, never pasted hex; and the
   chain stub's `getCode` became address-aware so a ForSelf adapter is a CONTRACT while every
   other fixture account stays an EOA (a blanket-EOA stub is why that surface stayed uncovered).
-
-### Fixed
-
-- **Three eval mutation probes were circular** (they mutated a test, or a constant both sides of
-  a comparison read) and could never fail. Re-aimed at the real defects: a task expectation at
-  the wrong premium scale, a prompt whose request id drifts from the prepared fixture it hands
-  the agent (an unwinnable task reads as a model failure — the worst eval rot), and a handler
-  that stops honoring `signedOrder` and falls back to the venue book. Each now has a killer
-  test; the prompt-id assertion checks the captured instruction, not a substring, because the
-  embedded prepared blob carries the id too.
-
-- **The eval README claimed `needs_indexer` coverage no task had.** The gated-outcome list now
-  names what the suite actually grades.
-
-## [0.4.0-rc.1] — 2026-08-20
-
-### Changed (breaking)
-
-- **Rollover speaks the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
-  `RolloverParams` gained a trailing `bytes32 jitMarketHash` on-chain (zero = the order does
-  not authorize just-in-time market creation), changing both EIP-712 typehashes and the
-  OrderData static ABI length (832 → 864). Every digest this tool computes, signs over,
-  verifies, and relays now uses the rc.2 types; pre-rc.2 digests no longer verify on any
-  deployed settler and the venue rejects them. `cork_prepare_orders rollover-intent` accepts
-  an optional `jitMarketHash` (pre-computed commitment) or `jitMarket` (the negotiated
-  instruction — collateral/reference/expiry/recipe/constraint/fees — hashed locally via the
-  BaseFiller `hashJITMarketParams` mirror, golden-vectored against the release's own Solidity
-  libraries); `cork_submit rollover-order` takes `rolloverParams.jitMarketHash` with a
-  zero-hash default, so an omitted field re-hashes to exactly what the wallet signed.
-  Config: the rc.2 generation (identical CREATE2 addresses on Arbitrum One AND Base — Base is
-  new rollover coverage) replaces the July 2026 set, which moves to
-  `rollover.<chain>.legacyGenerations` — retired at the venue but kept for event-history
-  scans and precise teaching. A retired settler now refuses with the new `settler_retired`
-  code at prepare AND submit instead of building an unfillable artifact.
-
-- **The removed percent `premium` listing field is refused, not relayed.** The venue completed
-  its scheduled sunset on 2026-08-17 (cork-api 0.3.15) and answers a pointed 400 on presence;
-  `cork_submit lop-order` and `finalize-maker-order` now refuse a percent-bearing listing
-  before relay with the same teaching (including the exact fraction spelling to use).
-  `premiumAnnualized` is the one premium field. The schema keeps `premium` only so legacy
-  callers get teaching instead of a bare shape error. The `premium_fields_disagree` and
-  percent-path `deprecation_notice` warnings retire with the field.
-
-### Added
-
 - **Self-review round (10 verified findings, all fixed).** A JIT rollover order now carries
   `jit_market_notice` (the venue cannot admit it until the destination pool is indexed —
   distribute venue-free meanwhile) and, whenever an RPC resolves, a best-effort
