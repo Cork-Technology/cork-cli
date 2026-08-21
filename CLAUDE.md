@@ -73,7 +73,11 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
 - **`ch mcp` handles SIGTERM/SIGINT itself** (both transports, `packages/cli/src/bin.ts`
   `exitOnSignal`): as PID 1 in the container the kernel delivers no default-action signal, so
   without the handler every `docker stop` waited out its timeout and SIGKILLed (measured on the
-  v0.4.0-rc.1 image: 10.5 s vs 0.5 s behind `--init`). Test spawns the real entry:
+  v0.4.0-rc.1 image: 10.5 s vs 0.5 s behind `--init`). The handler registers BEFORE the ready
+  line, stops the transport, DRAINS in-flight work (Bun's `server.stop()` resolves when open
+  requests finish — verified 1.3.14; `McpServer.close()` likewise), bounded at 5 s, then exits 0.
+  stdio prints `cork-mcp: stdio transport connected` on stderr as its readiness line. Test spawns
+  the real entry and waits for the readiness lines (no sleeps):
   `packages/cli/test/mcp-signals.test.ts`; mutation-probed (`mcp-sigterm-handler-dropped`).
   Image audit 2026-08-20 (v0.4.0-rc.1 under podman): 7 apk packages, no shell/pkg-manager/setuid,
   uid 65532, single layer; `ch` NEEDs only libc/ld-linux/libm, the dlopen'd binding needs

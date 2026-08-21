@@ -8,6 +8,13 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Changed
+
+- **`ch mcp` drains before it exits.** On SIGTERM or SIGINT the server now stops accepting,
+  waits for in-flight requests to finish (bounded at 5 s), and then exits 0. 0.4.0 exited at
+  once. The stdio transport prints `cork-mcp: stdio transport connected` on stderr when it is
+  ready; stdout stays the protocol stream.
+
 ## [0.4.0] — 2026-08-20
 
 First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the fixes below.

@@ -47,14 +47,22 @@ if (argv[0] === "mcp") {
   // A container runs `ch` as PID 1, and the kernel delivers no default-action signal to PID 1:
   // without a handler SIGTERM is simply ignored and every `docker stop` waits out its timeout
   // and SIGKILLs (measured on the v0.4.0-rc.1 image: 10.5 s, vs 0.5 s behind an init). Handle
-  // SIGTERM/SIGINT ourselves for both transports: stop the transport, then exit 0 — a stop is
-  // not a failure. Test: packages/cli/test/mcp-signals.test.ts (spawns the real entry).
-  const exitOnSignal = (stop: () => void): void => {
+  // SIGTERM/SIGINT ourselves for both transports: stop the transport, DRAIN what is in flight
+  // (Bun's server.stop() resolves once open requests finish; the MCP server's close() likewise),
+  // bounded so one stuck connection cannot hold the process past an orchestrator's grace
+  // period, then exit 0 — a stop is not a failure. A second signal during the drain takes the
+  // default action (`once`), which is the conventional "insist" escape hatch.
+  // Test: packages/cli/test/mcp-signals.test.ts (spawns the real entry).
+  const DRAIN_MS = 5_000;
+  const exitOnSignal = (stop: () => Promise<void> | void): void => {
     for (const sig of ["SIGTERM", "SIGINT"] as const) {
       process.once(sig, () => {
         process.stderr.write(`cork-mcp: ${sig} — shutting down\n`);
-        stop();
-        process.exit(0);
+        const drained = Promise.resolve().then(stop);
+        const bound = new Promise<void>((resolve) => setTimeout(resolve, DRAIN_MS).unref());
+        void Promise.race([drained, bound])
+          .catch((err: unknown) => process.stderr.write(`cork-mcp: stop failed: ${err instanceof Error ? err.message : String(err)}\n`))
+          .finally(() => process.exit(0));
       });
     }
   };
@@ -93,8 +101,11 @@ if (argv[0] === "mcp") {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
     const { createCorkServer } = await import("../../mcp/src/server.ts");
     const server = createCorkServer(ctx);
-    exitOnSignal(() => void server.close());
+    exitOnSignal(() => server.close());
     await server.connect(new StdioServerTransport());
+    // stderr only — stdout is the protocol stream. The line is the readiness signal for
+    // supervisors and for the signal test (no timing guesses).
+    process.stderr.write("cork-mcp: stdio transport connected\n");
     // The open stdin stream keeps the process alive until the client closes it.
   }
 } else if (argv[0] === "__update-check") {

@@ -127,12 +127,14 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
 
 // Minimal ambient Bun.serve surface — the repo compiles with plain TS (no bun-types); the
 // runtime is always Bun (mise-pinned), so the declaration only mirrors what we call.
-declare const Bun: { serve(opts: { port: number; hostname: string; fetch: (req: Request) => Promise<Response> }): { port: number; hostname?: string; stop(): void } };
+declare const Bun: { serve(opts: { port: number; hostname: string; fetch: (req: Request) => Promise<Response> }): { port: number; hostname?: string; stop(): Promise<void> } };
 
 /** Serve the handler with Bun.serve. Returns the Bun server (has .port, .hostname and .stop()).
- * Binds loopback unless opts.host widens it — Bun's own default is 0.0.0.0, which must never be
- * the accidental outcome of a bare `ch mcp --http`. */
-export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: () => void } {
+ * `stop()` stops accepting and resolves once in-flight requests have finished (Bun 1.3.14,
+ * verified) — the drain a graceful shutdown awaits. Binds loopback unless opts.host widens it —
+ * Bun's own default is 0.0.0.0, which must never be the accidental outcome of a bare
+ * `ch mcp --http`. */
+export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: () => Promise<void> } {
   const handler = createHttpHandler(opts);
   const hostname = opts.host ?? "127.0.0.1";
   const server = Bun.serve({ port, hostname, fetch: handler });

@@ -283,37 +283,35 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          if git fetch origin gh-pages 2>/dev/null; then
-            base="$(git rev-parse origin/gh-pages)"
-            git worktree add site origin/gh-pages
-          else
-            base="none"
-            git worktree add --detach site
-            git -C site checkout --orphan gh-pages
-            git -C site rm -rf --quiet . 2>/dev/null || true
-          fi
-          mkdir -p "site/apk/$ARCH"
-          for f in packages/"$ARCH"/*.apk packages/"$ARCH"/*.attest.tar.gz; do
-            name="$(basename "$f")"
-            if [ -e "site/apk/$ARCH/$name" ]; then
-              if cmp -s "$f" "site/apk/$ARCH/$name"; then
-                echo "already published byte-identical: $ARCH/$name — skipping (re-run)"
-                continue
-              fi
-              case "$name" in *.attest.tar.gz)
-                echo "already published provenance $ARCH/$name differs (fresh wall-clock fields) — keeping the FIRST-published attestation"
-                continue ;;
-              esac
-              echo "::error::REFUSING to overwrite already-published $ARCH/$name with DIFFERENT bytes — published apks are immutable (bump the epoch instead)"
-              exit 1
-            fi
-            cp "$f" "site/apk/$ARCH/$name"
-          done
+          # Three outcomes, told apart on purpose: the branch exists (merge against it), the
+          # branch does not exist yet (first publish: start an orphan), or the remote could not
+          # be queried (stop — guessing "first publish" here would let a network blip build an
+          # index that forgets every published apk). Explicit refspec: actions/checkout's
+          # single-ref fetch leaves `git fetch origin gh-pages` in FETCH_HEAD only, and
+          # origin/gh-pages unresolvable (verified on a depth-1 single-branch clone).
+          rc=0; git ls-remote --exit-code --heads origin gh-pages >/dev/null || rc=$?
+          case "$rc" in
+            0) git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+               base="$(git rev-parse origin/gh-pages)"
+               git worktree add site origin/gh-pages ;;
+            2) base="none"
+               git worktree add --detach site
+               git -C site checkout --orphan gh-pages
+               git -C site rm -rf --quiet . 2>/dev/null || true ;;
+            *) echo "::error::could not query origin for the gh-pages branch (git ls-remote exit $rc) — not building a cumulative index blind"; exit 1 ;;
+          esac
+          # The immutability rule lives in ONE tested script (packages/cli/test/apk-channel-merge.test.ts):
+          # identical bytes skip, differing provenance keeps the first, differing apk REFUSES
+          # before anything is copied. It writes the names it added.
+          sh scripts/apk-channel-merge.sh "site/apk/$ARCH" "packages/$ARCH" added.txt
           (cd "site/apk/$ARCH" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
-          rm -rf channel && mkdir -p channel && cp -a "site/apk/$ARCH/." channel/
-          printf '%s\n' "$base" > channel-base.sha
-          set -- channel/*.apk
-          echo "cumulative index: $# apk(s) for $ARCH, indexed against gh-pages $base"
+          # The slice the publish job places: ONLY what this merge added plus the re-signed
+          # index — never the whole channel, which would make every artifact grow with history.
+          rm -rf slice && mkdir -p slice
+          cp "site/apk/$ARCH/APKINDEX.tar.gz" slice/
+          while IFS= read -r name; do cp "site/apk/$ARCH/$name" slice/; done < added.txt
+          printf '%s\n' "$base" > slice-base.sha
+          echo "slice for $ARCH: $(wc -l < added.txt) added file(s) + signed index, indexed against gh-pages $base"
 
       - name: Scrub the signing key
         if: ${{ always() }}
@@ -335,16 +333,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # The production slice is the whole cumulative channel directory for the arch (every
-      # published apk + provenance + the ONE signed index) plus the base commit it was built on.
-      - name: Upload the production slice (cumulative channel + signed index + base commit)
+      # The production slice: the files this release ADDED to the arch's channel, the ONE signed
+      # cumulative index, and the gh-pages commit it was indexed against.
+      - name: Upload the production slice (added files + signed index + base commit)
         if: ${{ needs.plan.outputs.candidate == 'false' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: apk-${{ matrix.arch }}
           path: |
-            channel/*
-            channel-base.sha
+            slice/*
+            slice-base.sha
           if-no-files-found: error
           retention-days: 7
 
@@ -402,6 +400,7 @@ jobs:
       - name: Pin the apk version in the apko spec
         env:
           APKVER: ${{ needs.plan.outputs.apkver }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           # An independent `apko build` of this spec must resolve the SAME package as this run —
           # pin cork-cli to the exact version-revision instead of floating on the index head.
@@ -410,8 +409,13 @@ jobs:
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
           # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
-          # spec; version and revision are this run's.
-          ANN_VERSION="${{ needs.plan.outputs.tag }}" ANN_REVISION="${{ github.sha }}" \
+          # spec; version and revision are the RELEASE's. The revision is the tag's commit, not
+          # github.sha — on a backfill dispatched from main they differ, and the image must name
+          # the source it was built from.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+          rev="$(git rev-parse "$TAG^{commit}")"
+          ANN_VERSION="$TAG" ANN_REVISION="$rev" \
           yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
           yq '.annotations' packaging/cork-cli.apko.yaml
 
@@ -497,15 +501,21 @@ jobs:
           # after it fails "dubious ownership" (v0.4.0 backfill, run 32433639047). Trust it once,
           # as melange-build does; the site worktree under it needs no entry of its own (verified).
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          if git fetch origin gh-pages 2>/dev/null; then
-            now="$(git rev-parse origin/gh-pages)"
-            git worktree add site origin/gh-pages
-          else
-            now="none"
-            git worktree add --detach site
-            git -C site checkout --orphan gh-pages
-            git -C site rm -rf --quiet . 2>/dev/null || true
-          fi
+          # Same tri-state as melange-build's index step: branch present / absent (first publish)
+          # / remote unreachable (stop). Explicit refspec: on actions/checkout's single-ref clone
+          # a plain `git fetch origin gh-pages` leaves origin/gh-pages unresolvable (caught by the
+          # CI-shaped simulation, 2026-08-21).
+          rc=0; git ls-remote --exit-code --heads origin gh-pages >/dev/null || rc=$?
+          case "$rc" in
+            0) git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+               now="$(git rev-parse origin/gh-pages)"
+               git worktree add site origin/gh-pages ;;
+            2) now="none"
+               git worktree add --detach site
+               git -C site checkout --orphan gh-pages
+               git -C site rm -rf --quiet . 2>/dev/null || true ;;
+            *) echo "::error::could not query origin for the gh-pages branch (git ls-remote exit $rc)"; exit 1 ;;
+          esac
           echo "GHPAGES_NOW=$now" >> "$GITHUB_ENV"
           mkdir -p site/apk/x86_64 site/apk/aarch64
           # Pages serves this branch raw. Without .nojekyll, Pages runs Jekyll over the tree,
@@ -523,19 +533,21 @@ jobs:
 
       - name: Place the signed channel slices (staleness-guarded; no key here)
         run: |
-          # Each slice is the arch's whole cumulative channel directory as melange-build signed
-          # it, plus the gh-pages commit it was indexed against. Immutability was enforced
-          # there, against that commit — so merging is only correct if the branch has not moved.
+          # Each slice holds the files melange-build ADDED for the arch, the signed cumulative
+          # index it computed over the whole channel, and the gh-pages commit it indexed
+          # against. Immutability was enforced there, against that commit — so placing the slice
+          # is only correct if the branch has not moved since.
           for arch in x86_64 aarch64; do
-            base="$(cat "incoming/$arch/channel-base.sha")"
+            base="$(cat "incoming/$arch/slice-base.sha")"
             if [ "$base" != "$GHPAGES_NOW" ]; then
               echo "::error::gh-pages moved since melange-build indexed $arch against it (indexed at $base, branch now at $GHPAGES_NOW) — the cumulative index is stale; re-run the whole workflow, not this job"
               exit 1
             fi
+            test -f "incoming/$arch/slice/APKINDEX.tar.gz" || { echo "::error::the $arch slice carries no signed index"; exit 1; }
             mkdir -p "site/apk/$arch"
-            cp -a "incoming/$arch/channel/." "site/apk/$arch/"
+            cp -a "incoming/$arch/slice/." "site/apk/$arch/"
             set -- "site/apk/$arch"/*.apk
-            echo "$arch: $# apk(s) in the channel, index signed upstream"
+            echo "$arch: placed $(ls "incoming/$arch/slice" | wc -l) file(s); channel now holds $# apk(s)"
           done
           cp packaging/melange.rsa.pub site/melange.rsa.pub
 
@@ -570,6 +582,7 @@ jobs:
       - name: Pin the apk version in the apko spec
         env:
           APKVER: ${{ needs.plan.outputs.apkver }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           # An independent `apko build` of this spec must resolve the SAME package as this run —
           # pin cork-cli to the exact version-revision instead of floating on the index head.
@@ -578,8 +591,13 @@ jobs:
           yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
           yq '.contents.packages' packaging/cork-cli.apko.yaml
           # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
-          # spec; version and revision are this run's.
-          ANN_VERSION="${{ needs.plan.outputs.tag }}" ANN_REVISION="${{ github.sha }}" \
+          # spec; version and revision are the RELEASE's. The revision is the tag's commit, not
+          # github.sha — on a backfill dispatched from main they differ, and the image must name
+          # the source it was built from.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+          rev="$(git rev-parse "$TAG^{commit}")"
+          ANN_VERSION="$TAG" ANN_REVISION="$rev" \
           yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
           yq '.annotations' packaging/cork-cli.apko.yaml
 
