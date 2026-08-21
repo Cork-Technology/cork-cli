@@ -420,13 +420,15 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      # GNU coreutils/grep/sed/diffutils/tar: the steps below use `cmp -s`, `seq`, `tar -Oxz`,
-      # `grep -o`, `sed` — not a bet on which applets this busybox enables. curl: the Pages
-      # wait. nodejs + npm: the phala CLI (exact-pinned below). libgcc + libstdc++: the
-      # runner's own mounted node that executes the JS actions (see melange-build's note).
+      # GNU coreutils/grep/sed/diffutils: the steps below use `cmp -s`, `seq`, `grep -o`, `sed`
+      # — not a bet on which applets this busybox enables. tar is busybox's (Wolfi has no `tar`
+      # package; naming one aborts the whole `apk add` — learned on the v0.4.0 backfill), and
+      # its `-Oxz` extraction is verified in the official image. curl: the Pages wait. nodejs +
+      # npm: the phala CLI (exact-pinned below). libgcc + libstdc++: the runner's own mounted
+      # node that executes the JS actions (see melange-build's note).
       - name: Install the publish toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash apko coreutils curl diffutils git grep libgcc libstdc++ melange nodejs npm sed tar yq
+        run: apk add --no-cache bash apko coreutils curl diffutils git grep libgcc libstdc++ melange nodejs npm sed yq
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml,phala-compose.yml}
 
