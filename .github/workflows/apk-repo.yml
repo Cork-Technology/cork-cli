@@ -9,12 +9,12 @@
 #   3. apko composes the minimal Wolfi image FROM THE PUBLISHED Pages repo and pushes it to
 #      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
 #
-# Toolchain sourcing (the wolfi-dev/os shape, zero sudo anywhere): melange-build and
-# apko-publish run inside a digest-pinned cgr.dev/chainguard/wolfi-base job container and
-# `apk add` their tools from Wolfi's SIGNED repository — the supply chain for the whole build
-# toolchain is one image digest plus one signing key the image already trusts.
-# production-publish still installs via aqua; it migrates once a production tag can exercise
-# the change (workflow_dispatch validation only reaches the candidate path).
+# Toolchain sourcing (the wolfi-dev/os shape, zero sudo anywhere): every tool-running job —
+# melange-build, apko-publish, production-publish — runs inside a digest-pinned
+# cgr.dev/chainguard/wolfi-base job container and `apk add`s its tools from Wolfi's SIGNED
+# repository — the supply chain for the whole build toolchain is one image digest plus one
+# signing key the image already trusts. (production-publish was the last to migrate, after its
+# first real run on v0.4.0 failed inside the aqua shim — see the job's note.)
 #
 # One-time setup this expects:
 #   - `melange keygen` pair: private key stored as MELANGE_SIGNING_KEY in the `release`
@@ -46,6 +46,11 @@
 #   - workflow_dispatch — operator backfill/retry (safe: the publish step refuses to overwrite
 #     any already-published apk). Dispatch FROM THE TAG REF: the `release` environment rejects a
 #     run whose ref is a branch, so "Run workflow" must select the vX.Y.Z tag, not main.
+#     A dispatch runs THIS FILE AS IT IS AT THE CHOSEN REF. When a published tag carries a
+#     broken workflow (v0.4.0's production-publish), the tag cannot be fixed: temporarily add
+#     `main` to the environment's deployment rule, dispatch from main with the tag as input
+#     (melange still checks out the TAG's source, so the package bytes are the tag's), approve
+#     the gates, then remove `main` from the rule again.
 #   The candidate split (one discriminator everywhere: a `-` in the tag marks the candidate
 #   space, the same rule release.yml uses for the prerelease flag):
 #     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
@@ -75,12 +80,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  # production-publish only: the candidate-path jobs (melange-build, apko-publish) take their
-  # tools from the digest-pinned wolfi-base job container instead — production-publish follows
-  # once a production tag can exercise that migration (dispatch validation only covers rc tags).
-  AQUA_CONFIG: packaging/aqua.yaml
 
 jobs:
   # One resolution of tag → candidate? → apk version, consumed by every job below.
@@ -406,6 +405,14 @@ jobs:
     if: ${{ needs.plan.outputs.candidate == 'false' }}
     environment: release # resolves MELANGE_SIGNING_KEY (index re-sign) + PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
+    # Same digest-pinned toolchain image as melange-build and apko-publish, NO --privileged:
+    # nothing here needs bubblewrap (melange only re-signs an index; apko is daemonless).
+    # Migrated from aqua + setup-node after the first production run (v0.4.0, 2026-08-21):
+    # aqua's shim resolved the RELATIVE AQUA_CONFIG against the `cd site/apk/$arch` subshell
+    # and died before melange ever started. A tool on PATH from Wolfi's signed repo has no
+    # config to resolve — and the whole toolchain supply chain is one image digest + one key.
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
     timeout-minutes: 45
     permissions:
       contents: write # pushes the gh-pages branch
@@ -413,13 +420,15 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{aqua.yaml,melange.rsa.pub,cork-cli.apko.yaml,phala-compose.yml}
-      - uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5 (no bare v4 tag exists — the old @v4 could never resolve)
-        with:
-          aqua_version: v2.53.5
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
+      # GNU coreutils/grep/sed/diffutils/tar: the steps below use `cmp -s`, `seq`, `tar -Oxz`,
+      # `grep -o`, `sed` — not a bet on which applets this busybox enables. curl: the Pages
+      # wait. nodejs + npm: the phala CLI (exact-pinned below). libgcc + libstdc++: the
+      # runner's own mounted node that executes the JS actions (see melange-build's note).
+      - name: Install the publish toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash apko coreutils curl diffutils git grep libgcc libstdc++ melange nodejs npm sed tar yq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml,phala-compose.yml}
 
       - name: Check out (or initialize) the gh-pages apk repository
         run: |
