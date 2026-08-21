@@ -8,6 +8,8 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+## [0.4.1-rc.1] — 2026-08-21
+
 ### Changed
 
 - **`ch mcp` drains before it exits.** On SIGTERM or SIGINT the server now stops accepting,
