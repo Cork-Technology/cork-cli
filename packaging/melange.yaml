@@ -37,7 +37,10 @@ environment:
       - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
     packages:
       - busybox
-      - bun # wolfi's pin; asserted == mise.toml below
+      # CI rewrites this to `bun~<mise.toml pin>` (scripts/apk-spec-identity.sh): the resolver
+      # then accepts only a Wolfi bun of the pinned version, and the exact -rN it picks lands in
+      # the SLSA provenance. The assertion below re-checks the built-with version at build time.
+      - bun
       - ca-certificates-bundle
       # git arrives via the git-checkout builtin pipeline's own dependency injection
 
