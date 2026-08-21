@@ -434,6 +434,11 @@ jobs:
 
       - name: Check out (or initialize) the gh-pages apk repository
         run: |
+          # The workspace is bind-mounted from the runner (uid 1001) into a root container, and
+          # actions/checkout trusts it only inside its own temporary git config — every git call
+          # after it fails "dubious ownership" (v0.4.0 backfill, run 32433639047). Trust it once,
+          # as melange-build does; the site worktree under it needs no entry of its own (verified).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git fetch origin gh-pages && git worktree add site origin/gh-pages || {
             git worktree add --detach site
             git -C site checkout --orphan gh-pages
