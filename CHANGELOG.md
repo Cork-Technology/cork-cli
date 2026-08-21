@@ -8,6 +8,10 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Changed
+
+- apk channel: the melange build now pins its Wolfi `bun` package to the version in `mise.toml` (`bun~<pin>`, an apk version-prefix constraint). `scripts/apk-spec-identity.sh` writes the pin at release time; the resolver refuses any other Bun version, and the exact package it picks is recorded in the apk's SLSA provenance. `mise.toml` is the one place the Bun version lives.
+
 ## [0.4.1-rc.1] — 2026-08-21
 
 ### Changed

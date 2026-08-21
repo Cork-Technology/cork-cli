@@ -12,7 +12,8 @@
 #
 # Each arch is built on its NATIVE runner (ubuntu-latest / ubuntu-24.04-arm): bun under qemu is
 # slow and unproven, and native builds keep the determinism statement identical to the release
-# binaries (same source, same wolfi bun 1.3.14 — pin asserted against mise.toml below).
+# binaries (same source; wolfi's bun at the mise.toml pin — CI constrains the build package to
+# `bun~<pin>` via scripts/apk-spec-identity.sh, and the step below re-asserts it at build time).
 package:
   name: cork-cli
   version: 0.0.0-SUBSTITUTED-BY-CI
