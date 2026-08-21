@@ -8,17 +8,9 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
-## [0.4.1-rc.2] — 2026-08-21
+## [0.4.1] — 2026-08-21
 
-A release candidate: the first tag built with the Bun pin read from `mise.toml`.
-
-### Changed
-
-- CI now provisions Bun through `mise.toml` (jdx/mise-action), the same exact version the release binaries embed; it used to float on `setup-bun` `"1.3"`. `scripts/toolchain-pin.sh` is the one parser of `mise.toml`, shared by the apk identity script and the melange build-time assertion.
-- `scripts/release-tag.sh`: sign a release tag, verify the signature, and only then push. An untouched FIDO key produces a zero-filled signature with a clean exit, so `git tag -s` alone is not proof.
-- apk channel: the melange build now pins its Wolfi `bun` package to the version in `mise.toml` (`bun~<pin>`, an apk version-prefix constraint). `scripts/apk-spec-identity.sh` writes the pin at release time; the resolver refuses any other Bun version, and the exact package it picks is recorded in the apk's SLSA provenance. `mise.toml` is the one place the Bun version lives.
-
-## [0.4.1-rc.1] — 2026-08-21
+Supersedes 0.4.1-rc.1 and 0.4.1-rc.2. Covered surface is unchanged from 0.4.0.
 
 ### Changed
 
@@ -26,6 +18,10 @@ A release candidate: the first tag built with the Bun pin read from `mise.toml`.
   waits for in-flight requests to finish (bounded at 5 s), and then exits 0. 0.4.0 exited at
   once. The stdio transport prints `cork-mcp: stdio transport connected` on stderr when it is
   ready; stdout stays the protocol stream.
+
+- CI now provisions Bun through `mise.toml` (jdx/mise-action), the same exact version the release binaries embed; it used to float on `setup-bun` `"1.3"`. `scripts/toolchain-pin.sh` is the one parser of `mise.toml`, shared by the apk identity script and the melange build-time assertion.
+- `scripts/release-tag.sh`: sign a release tag, verify the signature, and only then push. An untouched FIDO key produces a zero-filled signature with a clean exit, so `git tag -s` alone is not proof.
+- apk channel: the melange build now pins its Wolfi `bun` package to the version in `mise.toml` (`bun~<pin>`, an apk version-prefix constraint). `scripts/apk-spec-identity.sh` writes the pin at release time; the resolver refuses any other Bun version, and the exact package it picks is recorded in the apk's SLSA provenance. `mise.toml` is the one place the Bun version lives.
 
 ## [0.4.0] — 2026-08-20
 
