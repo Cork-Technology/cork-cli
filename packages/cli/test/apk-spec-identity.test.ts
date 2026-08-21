@@ -62,8 +62,9 @@ describe.skipIf(!hasYq)("apk-spec-identity.sh — the compile step always reads 
     it(`${name}: the build's bun package becomes bun~<mise.toml pin> — one source of truth`, () => {
       const r = run(spec, "v1.2.3", "1.2.3");
       expect(r.status, r.stderr).toBe(0);
-      expect(r.text).toMatch(new RegExp(`^      - bun~${MISE_BUN_PIN.replace(/\\./g, "\\\\.")}$`, "m"));
-      expect(r.text).not.toMatch(/^      - bun$/m); // the bare, floating spelling is gone
+      // The pre-fix spec carries a trailing comment on the line; yq keeps it.
+      expect(r.text).toMatch(new RegExp(`^      - bun~${MISE_BUN_PIN.replace(/\\./g, "\\\\.")}( #.*)?$`, "m"));
+      expect(r.text).not.toMatch(/^      - bun( #.*)?$/m); // the bare, floating spelling is gone
       expect(r.stdout).toContain(`bun~${MISE_BUN_PIN}`); // echoed with the rest of the identity
     });
   }
@@ -82,7 +83,7 @@ describe.skipIf(!hasYq)("apk-spec-identity.sh — the compile step always reads 
     expect(r.status, r.stderr).toBe(0);
     const text = readFileSync(again, "utf8");
     expect(text.match(/^      - bun/gm)).toHaveLength(1);
-    expect(text).toMatch(/^      - bun~9\.8\.8$/m);
+    expect(text).toMatch(/^      - bun~9\.8\.8( #.*)?$/m);
   });
 
   it("refuses a mise.toml without a bun pin before touching the spec", () => {

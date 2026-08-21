@@ -64,5 +64,7 @@ if [ "$checkout" != "$tag" ] && [ "$checkout" != '${{vars.tag}}' ]; then
   echo "apk-spec-identity: git-checkout tag is $checkout, not the release tag" >&2
   exit 1
 fi
-grep -q "^      - bun~$bun_pin\$" "$spec" || { echo "apk-spec-identity: the spec's bun package was not pinned to bun~$bun_pin" >&2; exit 1; }
+# Exactly one bun entry, and it is the pin (yq, not grep: a trailing comment rides on the line).
+bun_entries="$(yq '[.environment.contents.packages[] | select(test("^bun"))] | join(",")' "$spec")"
+[ "$bun_entries" = "bun~$bun_pin" ] || { echo "apk-spec-identity: the spec's bun package was not pinned to bun~$bun_pin" >&2; exit 1; }
 yq '.package.version, .vars.commit, .vars.tag, .pipeline[0].with.tag, (.environment.contents.packages[] | select(test("^bun")))' "$spec"
