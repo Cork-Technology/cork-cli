@@ -76,12 +76,15 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
 
 - `.github/workflows/release.yml` — determinism gate (two independent byte-identical builds),
   immutable release from attested bytes.
-- `.github/workflows/apk-repo.yml` — `melange-build` (SLSA provenance, signed per-arch index),
-  then one `production-publish` job in strict order: Pages publish (immutable apks) → apko
-  publish (version-pinned, SBOM, digest attested) → **Phala deploy last** (digest substituted
-  into `packaging/phala-compose.yml`, `phala deploy -c … -n cork-mcp --wait`, name-keyed
-  in-place update; a deploy failure never blocks or undoes the publishes). Candidates take the
-  ungated `apko-publish` job instead (image only, no secrets).
+- `.github/workflows/apk-repo.yml` — `melange-build` (SLSA provenance; the only job that
+  holds the signing key — for a production tag it also merges the new apk into the cumulative
+  per-arch channel under the immutability rule and signs that index), then the key-free,
+  ungated `production-publish` job: Pages publish (the pre-signed slices, refused if
+  `gh-pages` moved since they were indexed) → apko publish (version-pinned, SBOM, digest
+  attested, `:latest`), then the separately gated `deploy-cvm` job: digest substituted into
+  `packaging/phala-compose.yml`, `phala deploy -c … -n cork-mcp --wait`, name-keyed in-place
+  update; a deploy failure never blocks or undoes the publishes, and that job can be re-run
+  alone. Candidates take the ungated `apko-publish` job instead (image only, no secrets).
 - Runtime secrets (`CORK_MCP_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 

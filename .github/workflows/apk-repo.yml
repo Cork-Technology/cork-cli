@@ -27,10 +27,11 @@
 #     workflow and ref asked. On the workflow_call path the declaration is NOT the transport:
 #     the caller must also pass `secrets: inherit` or the environment secrets resolve EMPTY
 #     (actions/runner#4453; proven live on v0.3.0-rc.1, 2026-08-18). A production
-#     release gates twice (melange-build, then production-publish), a candidate once
-#     (melange-build only — its signed per-arch index feeds the ungated candidate image job);
-#     `plan` is deliberately ungated so tag parsing fails fast
-#     before anyone is asked to approve.
+#     release gates once for signing (melange-build, the only job that holds the key; it also
+#     builds and signs the cumulative channel index) and once for the deploy (deploy-cvm: run
+#     this attested digest on the production machine); publishing in between holds no secret
+#     and asks nobody. A candidate gates once (melange-build). `plan` is deliberately ungated
+#     so tag parsing fails fast before anyone is asked to approve.
 #
 # Three triggers, one gate:
 #   - workflow_call from release.yml (the NORMAL path): a release published by the pipeline's own
@@ -56,8 +57,10 @@
 #     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
 #       never :latest), composed from the locally-built signed apks — partners can docker/podman
 #       pull a candidate without the apk repository ever carrying it.
-#     - production tags additionally publish the apk to the cumulative Pages repository, compose
-#       the image FROM that published channel, move :latest, and run the Phala CVM deploy.
+#     - production tags additionally publish the apk to the cumulative Pages repository
+#       (index built and signed in melange-build), compose the image FROM that published
+#       channel, move :latest, and then — in the separately gated deploy-cvm job — deploy the
+#       Phala CVM.
 #   apk version grammar has no hyphen: vX.Y.Z-rc.N maps to X.Y.Z_rcN (apk pre-release ordering
 #   keeps it below X.Y.Z); any OTHER hyphen suffix fails loudly instead of guessing.
 name: apk-repo
@@ -263,27 +266,85 @@ jobs:
             --signing-key melange.rsa \
             --generate-provenance \
             --out-dir packages
-          # No separate `melange index` call: `melange build` already generates AND signs the
-          # per-arch APKINDEX.tar.gz with the same key (observed in the v0.3.0-rc.1 backfill
-          # log, 2026-08-18 — "signed index packages/<arch>/APKINDEX.tar.gz with key
-          # melange.rsa"). The explicit call was redundant, and its `cd` subshell also broke
-          # aqua's relative AQUA_CONFIG. The candidate image job still needs no secret; the key
-          # never leaves this job. Production regenerates its own CUMULATIVE index in
-          # production-publish; this local one is candidate-only.
-          rm -f melange.rsa
+          # `melange build` already generates AND signs the per-arch APKINDEX.tar.gz with the
+          # same key (observed in the v0.3.0-rc.1 backfill log, 2026-08-18). That local index
+          # is what CANDIDATES ship; production builds its CUMULATIVE index in the next step.
           ls -l "packages/${{ matrix.arch }}/"
+
+      # PRODUCTION only: the new apk joins the cumulative per-arch channel HERE, where the key
+      # already is, so the publish job holds no secret and needs no reviewer click. Fetch the
+      # published channel, apply the immutability rule against it (a byte-identical re-run is
+      # skipped; different bytes REFUSE — published apks are immutable; first-published
+      # provenance wins, because melange stamps wall-clock fields into it), add the new files,
+      # and sign ONE index over everything. The gh-pages commit this indexed against is recorded
+      # beside the slice so the publish job can refuse a stale merge.
+      - name: Index cumulatively against the published channel, signed (production)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if git fetch origin gh-pages 2>/dev/null; then
+            base="$(git rev-parse origin/gh-pages)"
+            git worktree add site origin/gh-pages
+          else
+            base="none"
+            git worktree add --detach site
+            git -C site checkout --orphan gh-pages
+            git -C site rm -rf --quiet . 2>/dev/null || true
+          fi
+          mkdir -p "site/apk/$ARCH"
+          for f in packages/"$ARCH"/*.apk packages/"$ARCH"/*.attest.tar.gz; do
+            name="$(basename "$f")"
+            if [ -e "site/apk/$ARCH/$name" ]; then
+              if cmp -s "$f" "site/apk/$ARCH/$name"; then
+                echo "already published byte-identical: $ARCH/$name — skipping (re-run)"
+                continue
+              fi
+              case "$name" in *.attest.tar.gz)
+                echo "already published provenance $ARCH/$name differs (fresh wall-clock fields) — keeping the FIRST-published attestation"
+                continue ;;
+              esac
+              echo "::error::REFUSING to overwrite already-published $ARCH/$name with DIFFERENT bytes — published apks are immutable (bump the epoch instead)"
+              exit 1
+            fi
+            cp "$f" "site/apk/$ARCH/$name"
+          done
+          (cd "site/apk/$ARCH" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+          rm -rf channel && mkdir -p channel && cp -a "site/apk/$ARCH/." channel/
+          printf '%s\n' "$base" > channel-base.sha
+          set -- channel/*.apk
+          echo "cumulative index: $# apk(s) for $ARCH, indexed against gh-pages $base"
+
+      - name: Scrub the signing key
+        if: ${{ always() }}
+        run: rm -f melange.rsa tripwire.rsa
 
       # Three EXPLICIT patterns — the old `*.apk*` glob silently DROPPED the SLSA provenance
       # (cork-cli-…-r0.attest.tar.gz has no ".apk" substring), so every artifact carried 2 of
       # the 3 files melange wrote and "provenance beside each apk" was never true downstream
       # (found by unpacking the run-32227460341 artifact, 2026-08-19).
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Upload the candidate slice (local apks + their local signed index)
+        if: ${{ needs.plan.outputs.candidate == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: apk-${{ matrix.arch }}
           path: |
             packages/${{ matrix.arch }}/*.apk
             packages/${{ matrix.arch }}/*.attest.tar.gz
             packages/${{ matrix.arch }}/APKINDEX.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      # The production slice is the whole cumulative channel directory for the arch (every
+      # published apk + provenance + the ONE signed index) plus the base commit it was built on.
+      - name: Upload the production slice (cumulative channel + signed index + base commit)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: apk-${{ matrix.arch }}
+          path: |
+            channel/*
+            channel-base.sha
           if-no-files-found: error
           retention-days: 7
 
@@ -384,33 +445,30 @@ jobs:
           push-to-registry: true
 
   production-publish:
-    # PRODUCTION only — the whole publish wave as ONE gated job (one reviewer click), in strict
-    # order: add the apks to the cumulative Pages repository and re-sign its index, wait for
-    # Pages to serve them, compose the image FROM that published channel (so the image is a
-    # downstream consumer of the exact channel users `apk add` from), attest the digest, and
-    # deploy the Phala CVM LAST. The apk repository and the image are fully published before
-    # the deploy starts: a Phala failure marks the run red but blocks and undoes nothing.
+    # PRODUCTION only — publish what melange-build signed, holding NO secret and therefore
+    # needing NO reviewer click: place each arch's cumulative channel slice into the Pages
+    # repository, wait for Pages to serve it, compose the image FROM that published channel
+    # (so the image is a downstream consumer of the exact channel users `apk add` from), push
+    # :vX.Y.Z + :latest, and attest the digest. The CVM deploy is the separate deploy-cvm job
+    # below (the one gate of a production release). Before 2026-08-21 this job re-signed the
+    # index itself, which made it the second key-holding job and the second approval.
     #
-    # Re-runs after a deploy failure are safe end-to-end: an already-published byte-identical
-    # apk is skipped (different bytes still refuse — published apks stay immutable), an
-    # unchanged gh-pages tree skips the push, re-composing moves the tags to a fresh attested
-    # digest, and the CVM update is name-keyed.
-    #
-    # Phala notes (Phase 2b of the remote-MCP plan): the CVM runs the EXACT attested digest —
-    # the compose is digest-pinned (verification breaks on tags) and its runtime secrets live
-    # as encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
-    # Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
-    # quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
+    # The slices were indexed against a specific gh-pages commit; this job REFUSES to merge
+    # them if the branch has moved since (stale cumulative index) — re-run the whole workflow.
+    # A re-run after a FAILED publish is safe: the branch is unchanged, so the guard passes and
+    # every step is idempotent (unchanged tree → no push; re-composing moves the tags to a
+    # fresh attested digest).
     needs: [plan, melange-build]
     if: ${{ needs.plan.outputs.candidate == 'false' }}
-    environment: release # resolves MELANGE_SIGNING_KEY (index re-sign) + PHALA_CLOUD_API_KEY
+    outputs:
+      image-digest: ${{ steps.image.outputs.digest }}
     runs-on: ubuntu-latest
     # Same digest-pinned toolchain image as melange-build and apko-publish, NO --privileged:
-    # nothing here needs bubblewrap (melange only re-signs an index; apko is daemonless).
-    # Migrated from aqua + setup-node after the first production run (v0.4.0, 2026-08-21):
-    # aqua's shim resolved the RELATIVE AQUA_CONFIG against the `cd site/apk/$arch` subshell
-    # and died before melange ever started. A tool on PATH from Wolfi's signed repo has no
-    # config to resolve — and the whole toolchain supply chain is one image digest + one key.
+    # nothing here needs bubblewrap (apko is daemonless). Migrated from aqua + setup-node after
+    # the first production run (v0.4.0, 2026-08-21): aqua's shim resolved the RELATIVE
+    # AQUA_CONFIG against a `cd` subshell and died before the tool ever started. A tool on PATH
+    # from Wolfi's signed repo has no config to resolve — and the whole toolchain supply chain
+    # is one image digest + one key.
     container:
       image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
     timeout-minutes: 45
@@ -420,17 +478,17 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      # GNU coreutils/grep/sed/diffutils: the steps below use `cmp -s`, `seq`, `grep -o`, `sed`
-      # — not a bet on which applets this busybox enables. tar is busybox's (Wolfi has no `tar`
-      # package; naming one aborts the whole `apk add` — learned on the v0.4.0 backfill), and
-      # its `-Oxz` extraction is verified in the official image. curl: the Pages wait. nodejs +
-      # npm: the phala CLI (exact-pinned below). libgcc + libstdc++: the runner's own mounted
-      # node that executes the JS actions (see melange-build's note).
+      # GNU coreutils/grep/sed: `seq`, `grep -o`, `sed` — not a bet on which applets this busybox
+      # enables. tar is busybox's (Wolfi has no `tar` package; naming one aborts the whole
+      # `apk add` — learned on the v0.4.0 backfill), and its `-Oxz` extraction is verified in the
+      # official image. curl: the Pages wait. libgcc + libstdc++: the runner's own mounted node
+      # that executes the JS actions (see melange-build's note). No melange: nothing is signed
+      # here.
       - name: Install the publish toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash apko coreutils curl diffutils git grep libgcc libstdc++ melange nodejs npm sed yq
+        run: apk add --no-cache bash apko coreutils curl git grep libgcc libstdc++ sed yq
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml,phala-compose.yml}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml}
 
       - name: Check out (or initialize) the gh-pages apk repository
         run: |
@@ -439,11 +497,16 @@ jobs:
           # after it fails "dubious ownership" (v0.4.0 backfill, run 32433639047). Trust it once,
           # as melange-build does; the site worktree under it needs no entry of its own (verified).
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git fetch origin gh-pages && git worktree add site origin/gh-pages || {
+          if git fetch origin gh-pages 2>/dev/null; then
+            now="$(git rev-parse origin/gh-pages)"
+            git worktree add site origin/gh-pages
+          else
+            now="none"
             git worktree add --detach site
             git -C site checkout --orphan gh-pages
             git -C site rm -rf --quiet . 2>/dev/null || true
-          }
+          fi
+          echo "GHPAGES_NOW=$now" >> "$GITHUB_ENV"
           mkdir -p site/apk/x86_64 site/apk/aarch64
           # Pages serves this branch raw. Without .nojekyll, Pages runs Jekyll over the tree,
           # and Jekyll's Liquid pass rejects literal {% sequences in any markdown it finds.
@@ -458,39 +521,22 @@ jobs:
           name: apk-aarch64
           path: incoming/aarch64
 
-      - name: Add packages (immutably, re-run-safe) and re-sign the index
-        env:
-          MELANGE_SIGNING_KEY: ${{ secrets.MELANGE_SIGNING_KEY }}
+      - name: Place the signed channel slices (staleness-guarded; no key here)
         run: |
-          umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
+          # Each slice is the arch's whole cumulative channel directory as melange-build signed
+          # it, plus the gh-pages commit it was indexed against. Immutability was enforced
+          # there, against that commit — so merging is only correct if the branch has not moved.
           for arch in x86_64 aarch64; do
-            for f in incoming/$arch/*; do
-              base="$(basename "$f")"
-              # The artifact carries the per-arch candidate index — never published; the
-              # cumulative index below replaces it.
-              [ "$base" = "APKINDEX.tar.gz" ] && continue
-              if [ -e "site/apk/$arch/$base" ]; then
-                if cmp -s "$f" "site/apk/$arch/$base"; then
-                  echo "already published byte-identical: $arch/$base — skipping (re-run)"
-                  continue
-                fi
-                # Provenance is the one legitimately non-reproducible file: melange stamps
-                # wall-clock build times into the SLSA predicate, so a re-dispatch rebuilds a
-                # DIFFERENT .attest.tar.gz for byte-identical apks. First-published provenance
-                # wins; refusing here would brick every partial-publish retry.
-                case "$base" in *.attest.tar.gz)
-                  echo "already published provenance $arch/$base differs (re-run rebuilt it with fresh wall-clock fields) — keeping the FIRST-published attestation"
-                  continue ;;
-                esac
-                echo "REFUSING to overwrite already-published $arch/$base with DIFFERENT bytes — published apks are immutable (bump the epoch instead)" >&2
-                exit 1
-              fi
-              cp "$f" "site/apk/$arch/$base"
-            done
-            # Regenerate the signed index over EVERYTHING published for the arch (cumulative repo).
-            (cd "site/apk/$arch" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
+            base="$(cat "incoming/$arch/channel-base.sha")"
+            if [ "$base" != "$GHPAGES_NOW" ]; then
+              echo "::error::gh-pages moved since melange-build indexed $arch against it (indexed at $base, branch now at $GHPAGES_NOW) — the cumulative index is stale; re-run the whole workflow, not this job"
+              exit 1
+            fi
+            mkdir -p "site/apk/$arch"
+            cp -a "incoming/$arch/channel/." "site/apk/$arch/"
+            set -- "site/apk/$arch"/*.apk
+            echo "$arch: $# apk(s) in the channel, index signed upstream"
           done
-          rm -f melange.rsa
           cp packaging/melange.rsa.pub site/melange.rsa.pub
 
       - name: Publish (push gh-pages; Pages serves the branch)
@@ -538,6 +584,7 @@ jobs:
           yq '.annotations' packaging/cork-cli.apko.yaml
 
       - name: Build + push the image (production — moves :latest)
+        id: image
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           GH_OWNER: ${{ github.repository_owner }}
@@ -552,11 +599,13 @@ jobs:
           apko publish packaging/cork-cli.apko.yaml \
             "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
             --sbom-path sboms/ | tee digest.txt
-          # apko prints the pushed ref with digest as the last line: capture for attestation.
+          # apko prints the pushed ref with digest as the last line: capture for attestation
+          # (env, this job) and for the deploy job (step output → job output).
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
           test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest the image digest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
@@ -565,16 +614,46 @@ jobs:
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
 
-      # Everything above is published and attested; only the deploy remains. A failure from
-      # here on marks the run red WITHOUT touching the apk repo or the image.
+  deploy-cvm:
+    # The ONE reviewer gate of a production release. By the time this asks, the apk channel
+    # and the image are published and attested; approving means exactly "run this attested
+    # digest on the production CVM". A Phala failure marks the run red and undoes nothing —
+    # re-run THIS job alone to retry (the publish job need not repeat). Split out of
+    # production-publish on 2026-08-21 so the deploy credential lives in one small job.
+    #
+    # Phala notes (Phase 2b of the remote-MCP plan): the CVM runs the EXACT attested digest —
+    # the compose is digest-pinned (verification breaks on tags) and its runtime secrets live
+    # as encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
+    # Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
+    # quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
+    needs: [plan, production-publish]
+    if: ${{ needs.plan.outputs.candidate == 'false' }}
+    environment: release # PHALA_CLOUD_API_KEY
+    runs-on: ubuntu-latest
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # nodejs + npm: the phala CLI (exact-pinned below); GNU sed/grep for the digest
+      # substitution and its check; libgcc + libstdc++ for the runner's mounted node.
+      - name: Install the deploy toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash coreutils git grep libgcc libstdc++ nodejs npm sed
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/phala-compose.yml
+
       - name: Substitute the attested digest into the compose
+        env:
+          IMAGE_DIGEST: ${{ needs.production-publish.outputs.image-digest }}
         run: |
-          test -n "$IMAGE_DIGEST" || { echo "no image digest captured from apko publish" >&2; exit 1; }
+          test -n "$IMAGE_DIGEST" || { echo "::error::no image digest handed over from production-publish" >&2; exit 1; }
           sed "s|\${DIGEST}|$IMAGE_DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
           grep -q "@sha256:[0-9a-f]\{64\}" phala-compose.deploy.yml || { echo "compose image is not digest-pinned after substitution" >&2; exit 1; }
           grep "image:" phala-compose.deploy.yml
 
-      - name: Deploy the CVM (name-keyed in-place update, LAST by design)
+      - name: Deploy the CVM (name-keyed in-place update)
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
