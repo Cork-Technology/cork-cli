@@ -78,13 +78,15 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
   immutable release from attested bytes.
 - `.github/workflows/apk-repo.yml` — `melange-build` (SLSA provenance; the only job that
   holds the signing key — for a production tag it also merges the new apk into the cumulative
-  per-arch channel under the immutability rule and signs that index), then the key-free,
-  ungated `production-publish` job: Pages publish (the pre-signed slices, refused if
-  `gh-pages` moved since they were indexed) → apko publish (version-pinned, SBOM, digest
-  attested, `:latest`), then the separately gated `deploy-cvm` job: digest substituted into
-  `packaging/phala-compose.yml`, `phala deploy -c … -n cork-mcp --wait`, name-keyed in-place
-  update; a deploy failure never blocks or undoes the publishes, and that job can be re-run
-  alone. Candidates take the ungated `apko-publish` job instead (image only, no secrets).
+  per-arch channel under the immutability rule and signs that index; a candidate indexes an
+  empty channel, so its slice is a complete signed repository of its own), then the key-free,
+  ungated `publish` job — one job for both kinds: for production, Pages publish (the
+  pre-signed slices, refused if `gh-pages` moved since they were indexed) and `:latest`; for a
+  candidate, compose from the slices as a local repository, `:vX.Y.Z-rc.N` only; for both,
+  apko publish (version-pinned, SBOM, digest attested). Production then runs the separately
+  gated `deploy-cvm` job: digest substituted into `packaging/phala-compose.yml`,
+  `phala deploy -c … -n cork-mcp --wait`, name-keyed in-place update; a deploy failure never
+  blocks or undoes the publishes, and that job can be re-run alone.
 - Runtime secrets (`CORK_MCP_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 
@@ -98,8 +100,8 @@ tag. Before that can happen the owner must:
 3. Create the melange keypair: store `MELANGE_SIGNING_KEY` as a secret in the `release`
    environment (v*-tag deployment rule + required reviewers) + commit `packaging/melange.rsa.pub`.
    DONE 2026-08-12 for the secret; the committed public half is still missing — without it,
-   `production-publish` cannot serve the key from the Pages root and the candidate
-   `apko-publish` keyring swap fails.
+   the `publish` job cannot serve the key from the Pages root, and its candidate-path
+   keyring swap fails.
    The pub-key tripwire in `melange-build` covers both states: while the file is missing, the
    first approved run prints the public half derived from the environment key (commit it
    verbatim); once committed, every release fails loudly if the environment key stops matching

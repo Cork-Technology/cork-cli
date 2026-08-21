@@ -10,11 +10,12 @@
 #      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
 #
 # Toolchain sourcing (the wolfi-dev/os shape, zero sudo anywhere): every tool-running job —
-# melange-build, apko-publish, production-publish — runs inside a digest-pinned
-# cgr.dev/chainguard/wolfi-base job container and `apk add`s its tools from Wolfi's SIGNED
-# repository — the supply chain for the whole build toolchain is one image digest plus one
-# signing key the image already trusts. (production-publish was the last to migrate, after its
-# first real run on v0.4.0 failed inside the aqua shim — see the job's note.)
+# melange-build, publish, deploy-cvm — runs inside a digest-pinned cgr.dev/chainguard/wolfi-base
+# job container and `apk add`s its tools from Wolfi's SIGNED repository — the supply chain for
+# the whole build toolchain is one image digest plus one signing key the image already trusts.
+# (The production publish path was the last to migrate, after its first real run on v0.4.0
+# failed inside the aqua shim; on 2026-08-21 the candidate and production publish jobs became
+# ONE job, `publish`.)
 #
 # One-time setup this expects:
 #   - `melange keygen` pair: private key stored as MELANGE_SIGNING_KEY in the `release`
@@ -55,12 +56,12 @@
 #   The candidate split (one discriminator everywhere: a `-` in the tag marks the candidate
 #   space, the same rule release.yml uses for the prerelease flag):
 #     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
-#       never :latest), composed from the locally-built signed apks — partners can docker/podman
-#       pull a candidate without the apk repository ever carrying it.
-#     - production tags additionally publish the apk to the cumulative Pages repository
+#       never :latest), composed from the signed slices as a local repository — partners can
+#       docker/podman pull a candidate without the apk repository ever carrying it.
+#     - production tags additionally publish the slices to the cumulative Pages repository
 #       (index built and signed in melange-build), compose the image FROM that published
 #       channel, move :latest, and then — in the separately gated deploy-cvm job — deploy the
-#       Phala CVM.
+#       Phala CVM. Same `publish` job either way; the kind gates four steps and one tag.
 #   apk version grammar has no hyphen: vX.Y.Z-rc.N maps to X.Y.Z_rcN (apk pre-release ordering
 #   keeps it below X.Y.Z); any OTHER hyphen suffix fails loudly instead of guessing.
 name: apk-repo
@@ -271,35 +272,42 @@ jobs:
           # is what CANDIDATES ship; production builds its CUMULATIVE index in the next step.
           ls -l "packages/${{ matrix.arch }}/"
 
-      # PRODUCTION only: the new apk joins the cumulative per-arch channel HERE, where the key
-      # already is, so the publish job holds no secret and needs no reviewer click. Fetch the
-      # published channel, apply the immutability rule against it (a byte-identical re-run is
-      # skipped; different bytes REFUSE — published apks are immutable; first-published
-      # provenance wins, because melange stamps wall-clock fields into it), add the new files,
-      # and sign ONE index over everything. The gh-pages commit this indexed against is recorded
-      # beside the slice so the publish job can refuse a stale merge.
-      - name: Index cumulatively against the published channel, signed (production)
-        if: ${{ needs.plan.outputs.candidate == 'false' }}
+      # The new apk joins the per-arch channel HERE, where the key already is, so the publish job
+      # holds no secret and needs no reviewer click. Production merges against the PUBLISHED
+      # channel: fetch it, apply the immutability rule (a byte-identical re-run is skipped;
+      # different bytes REFUSE — published apks are immutable; first-published provenance wins,
+      # because melange stamps wall-clock fields into it), add the new files, and sign ONE index
+      # over everything; the gh-pages commit it indexed against rides beside the slice so the
+      # publish job can refuse a stale merge. A candidate never touches the channel: it merges
+      # into an EMPTY one, so its slice is a complete signed per-arch repository of its own —
+      # the same artifact shape, consumed by the same publish job.
+      - name: Index the channel slice, signed (cumulative for production; local for a candidate)
         env:
           ARCH: ${{ matrix.arch }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
         run: |
-          # Three outcomes, told apart on purpose: the branch exists (merge against it), the
-          # branch does not exist yet (first publish: start an orphan), or the remote could not
-          # be queried (stop — guessing "first publish" here would let a network blip build an
-          # index that forgets every published apk). Explicit refspec: actions/checkout's
-          # single-ref fetch leaves `git fetch origin gh-pages` in FETCH_HEAD only, and
-          # origin/gh-pages unresolvable (verified on a depth-1 single-branch clone).
-          rc=0; git ls-remote --exit-code --heads origin gh-pages >/dev/null || rc=$?
-          case "$rc" in
-            0) git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
-               base="$(git rev-parse origin/gh-pages)"
-               git worktree add site origin/gh-pages ;;
-            2) base="none"
-               git worktree add --detach site
-               git -C site checkout --orphan gh-pages
-               git -C site rm -rf --quiet . 2>/dev/null || true ;;
-            *) echo "::error::could not query origin for the gh-pages branch (git ls-remote exit $rc) — not building a cumulative index blind"; exit 1 ;;
-          esac
+          if [ "$CANDIDATE" = "true" ]; then
+            base="none"
+            mkdir -p "site/apk/$ARCH"
+          else
+            # Three outcomes, told apart on purpose: the branch exists (merge against it), the
+            # branch does not exist yet (first publish: start an orphan), or the remote could not
+            # be queried (stop — guessing "first publish" here would let a network blip build an
+            # index that forgets every published apk). Explicit refspec: actions/checkout's
+            # single-ref fetch leaves `git fetch origin gh-pages` in FETCH_HEAD only, and
+            # origin/gh-pages unresolvable (verified on a depth-1 single-branch clone).
+            rc=0; git ls-remote --exit-code --heads origin gh-pages >/dev/null || rc=$?
+            case "$rc" in
+              0) git fetch --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+                 base="$(git rev-parse origin/gh-pages)"
+                 git worktree add site origin/gh-pages ;;
+              2) base="none"
+                 git worktree add --detach site
+                 git -C site checkout --orphan gh-pages
+                 git -C site rm -rf --quiet . 2>/dev/null || true ;;
+              *) echo "::error::could not query origin for the gh-pages branch (git ls-remote exit $rc) — not building a cumulative index blind"; exit 1 ;;
+            esac
+          fi
           # The immutability rule lives in ONE tested script (packages/cli/test/apk-channel-merge.test.ts):
           # identical bytes skip, differing provenance keeps the first, differing apk REFUSES
           # before anything is copied. It writes the names it added.
@@ -317,26 +325,11 @@ jobs:
         if: ${{ always() }}
         run: rm -f melange.rsa tripwire.rsa
 
-      # Three EXPLICIT patterns — the old `*.apk*` glob silently DROPPED the SLSA provenance
-      # (cork-cli-…-r0.attest.tar.gz has no ".apk" substring), so every artifact carried 2 of
-      # the 3 files melange wrote and "provenance beside each apk" was never true downstream
-      # (found by unpacking the run-32227460341 artifact, 2026-08-19).
-      - name: Upload the candidate slice (local apks + their local signed index)
-        if: ${{ needs.plan.outputs.candidate == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: apk-${{ matrix.arch }}
-          path: |
-            packages/${{ matrix.arch }}/*.apk
-            packages/${{ matrix.arch }}/*.attest.tar.gz
-            packages/${{ matrix.arch }}/APKINDEX.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-
-      # The production slice: the files this release ADDED to the arch's channel, the ONE signed
-      # cumulative index, and the gh-pages commit it was indexed against.
-      - name: Upload the production slice (added files + signed index + base commit)
-        if: ${{ needs.plan.outputs.candidate == 'false' }}
+      # ONE artifact shape for both release kinds: the files this build ADDED to the arch's
+      # channel (apk + its SLSA provenance — listed explicitly by the merge script, so the
+      # `*.apk*` glob that once silently dropped the .attest.tar.gz cannot recur), the signed
+      # index, and the gh-pages commit it was indexed against ("none" for a candidate).
+      - name: Upload the slice (added files + signed index + base commit)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: apk-${{ matrix.arch }}
@@ -346,138 +339,33 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  apko-publish:
-    # CANDIDATES only: compose the OCI image from the locally-built signed apks (the Pages
-    # channel never carries candidates). This job holds NO secret and declares NO environment —
-    # melange-build already signed the per-arch APKINDEX, so the image composes and pushes
-    # without a second reviewer gate. Production images compose in production-publish instead,
-    # downstream of the published Pages channel.
-    needs: [plan, melange-build]
-    if: ${{ needs.plan.outputs.candidate == 'true' }}
-    runs-on: ubuntu-latest
-    # Same digest-pinned toolchain image as melange-build — but NO --privileged: apko is
-    # daemonless (it assembles the OCI image from apks directly and pushes over HTTPS), so
-    # this job runs with the default container confinement.
-    container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write # ghcr push
-      id-token: write
-      attestations: write
-    steps:
-      # grep + coreutils: the digest capture's `grep -o` and `tr` — GNU, not a bet on which
-      # applets this wolfi-base busybox build enables. libgcc + libstdc++: for the runner's
-      # own mounted node24 that executes the JS actions (see melange-build's note).
-      - name: Install the publish toolchain (Wolfi signed apk repo)
-        shell: sh
-        run: apk add --no-cache bash apko coreutils git grep libgcc libstdc++ yq
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: apk-x86_64
-          path: packages/x86_64
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: apk-aarch64
-          path: packages/aarch64
-      - name: Point the spec at the local signed repo
-        run: |
-          # The signed per-arch APKINDEX arrived in the build artifact (signed inside
-          # melange-build, where the key already lives). The image resolves cork-cli from
-          # ./packages instead of the Pages channel: swap the spec's published repo/keyring for
-          # the local pair (the wolfi repo stays as-is).
-          for arch in x86_64 aarch64; do
-            test -f "packages/$arch/APKINDEX.tar.gz" || { echo "::error::no signed APKINDEX for $arch in the build artifact — melange-build should have produced it"; exit 1; }
-          done
-          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./packages"' packaging/cork-cli.apko.yaml
-          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
-          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
-
-      - name: Pin the apk version in the apko spec
-        env:
-          APKVER: ${{ needs.plan.outputs.apkver }}
-          TAG: ${{ needs.plan.outputs.tag }}
-        run: |
-          # An independent `apko build` of this spec must resolve the SAME package as this run —
-          # pin cork-cli to the exact version-revision instead of floating on the index head.
-          # (epoch is 0 in melange.yaml; a future epoch bump must be mirrored here.)
-          PIN="cork-cli=${APKVER}-r0" \
-          yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
-          yq '.contents.packages' packaging/cork-cli.apko.yaml
-          # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
-          # spec; version and revision are the RELEASE's. The revision is the tag's commit, not
-          # github.sha — on a backfill dispatched from main they differ, and the image must name
-          # the source it was built from.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
-          rev="$(git rev-parse "$TAG^{commit}")"
-          ANN_VERSION="$TAG" ANN_REVISION="$rev" \
-          yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
-          yq '.annotations' packaging/cork-cli.apko.yaml
-
-      - name: Build + push the image (candidate — never :latest)
-        env:
-          TAG: ${{ needs.plan.outputs.tag }}
-          GH_OWNER: ${{ github.repository_owner }}
-        run: |
-          # pipefail is load-bearing: `| tee` otherwise reports TEE's exit status, and an apko
-          # failure sails through green (observed v0.3.0-rc.1 backfill, 2026-08-18 — apko died
-          # moving SBOMs into a sboms/ dir it does NOT create itself, the step stayed green,
-          # and the empty digest surfaced two steps later as a misleading attest error).
-          set -o pipefail
-          mkdir -p sboms
-          owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
-          # Candidates never move :latest (policy R7: the pointer tracks production only).
-          apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
-          apko publish packaging/cork-cli.apko.yaml "ghcr.io/$owner/cork-cli:$TAG" \
-            --sbom-path sboms/ | tee digest.txt
-          # apko prints the pushed ref with digest as the last line: capture for attestation.
-          digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
-          test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
-          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
-
-      - name: Attest the image digest
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ env.IMAGE_DIGEST }}
-          push-to-registry: true
-
-  production-publish:
-    # PRODUCTION only — publish what melange-build signed, holding NO secret and therefore
-    # needing NO reviewer click: place each arch's cumulative channel slice into the Pages
-    # repository, wait for Pages to serve it, compose the image FROM that published channel
-    # (so the image is a downstream consumer of the exact channel users `apk add` from), push
-    # :vX.Y.Z + :latest, and attest the digest. The CVM deploy is the separate deploy-cvm job
-    # below (the one gate of a production release). Before 2026-08-21 this job re-signed the
-    # index itself, which made it the second key-holding job and the second approval.
+  publish:
+    # ONE publish job for both release kinds, holding NO secret and no environment: melange-build
+    # already signed everything this job places or composes. The kinds differ in four `if`-gated
+    # steps and one tag: production places the slices into the Pages repository (staleness-
+    # guarded), pushes, waits for Pages, and adds :latest; a candidate composes from the slices
+    # as a local repository and pushes :vX.Y.Z-rc.N only, so the Pages channel never carries a
+    # candidate. Every other step is shared — so every rc rehearses the job production runs.
+    # (Until 2026-08-21 these were two jobs, apko-publish and production-publish, duplicating
+    # toolchain/pin/publish/attest; the second also re-signed the index, which made it the
+    # second key holder and the second reviewer gate.)
     #
-    # The slices were indexed against a specific gh-pages commit; this job REFUSES to merge
-    # them if the branch has moved since (stale cumulative index) — re-run the whole workflow.
-    # A re-run after a FAILED publish is safe: the branch is unchanged, so the guard passes and
-    # every step is idempotent (unchanged tree → no push; re-composing moves the tags to a
-    # fresh attested digest).
+    # Re-runs: production refuses to merge a slice if gh-pages moved since melange-build indexed
+    # it (stale cumulative index) — re-run the whole workflow. A re-run after a FAILED publish is
+    # safe: unchanged branch, idempotent steps (unchanged tree → no push; re-composing moves the
+    # tags to a fresh attested digest).
     needs: [plan, melange-build]
-    if: ${{ needs.plan.outputs.candidate == 'false' }}
     outputs:
       image-digest: ${{ steps.image.outputs.digest }}
     runs-on: ubuntu-latest
-    # Same digest-pinned toolchain image as melange-build and apko-publish, NO --privileged:
-    # nothing here needs bubblewrap (apko is daemonless). Migrated from aqua + setup-node after
-    # the first production run (v0.4.0, 2026-08-21): aqua's shim resolved the RELATIVE
-    # AQUA_CONFIG against a `cd` subshell and died before the tool ever started. A tool on PATH
-    # from Wolfi's signed repo has no config to resolve — and the whole toolchain supply chain
-    # is one image digest + one key.
+    # Same digest-pinned toolchain image as melange-build, NO --privileged: apko is daemonless
+    # (it assembles the OCI image from apks and pushes over HTTPS). Tools come from Wolfi's
+    # signed repo; nothing here has a config file to resolve.
     container:
       image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
     timeout-minutes: 45
     permissions:
-      contents: write # pushes the gh-pages branch
+      contents: write # gh-pages push — the production step; a candidate run never reaches it
       packages: write # ghcr push
       id-token: write
       attestations: write
@@ -494,13 +382,37 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml}
 
-      - name: Check out (or initialize) the gh-pages apk repository
+      - name: Trust the bind-mounted workspace
         run: |
-          # The workspace is bind-mounted from the runner (uid 1001) into a root container, and
-          # actions/checkout trusts it only inside its own temporary git config — every git call
-          # after it fails "dubious ownership" (v0.4.0 backfill, run 32433639047). Trust it once,
-          # as melange-build does; the site worktree under it needs no entry of its own (verified).
+          # The workspace belongs to the runner (uid 1001) and git runs as root in here;
+          # actions/checkout trusts it only inside its own temporary config, so every later git
+          # call fails "dubious ownership" (v0.4.0 backfill, run 32433639047). Once, up front;
+          # the site worktree under it needs no entry of its own (verified).
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: apk-x86_64
+          path: incoming/x86_64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: apk-aarch64
+          path: incoming/aarch64
+
+      - name: Check the slices
+        run: |
+          # Each slice: the files melange-build ADDED for the arch, the ONE signed index it
+          # computed (over the whole channel for production, over the slice for a candidate),
+          # and the gh-pages commit it indexed against ("none" for candidates and first publish).
+          for arch in x86_64 aarch64; do
+            test -f "incoming/$arch/slice/APKINDEX.tar.gz" || { echo "::error::the $arch slice carries no signed index"; exit 1; }
+            test -s "incoming/$arch/slice-base.sha" || { echo "::error::the $arch slice carries no base commit"; exit 1; }
+            echo "$arch: $(ls "incoming/$arch/slice" | wc -l) file(s), indexed against gh-pages $(cat "incoming/$arch/slice-base.sha")"
+          done
+
+      - name: Check out (or initialize) the gh-pages apk repository (production)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
+        run: |
           # Same tri-state as melange-build's index step: branch present / absent (first publish)
           # / remote unreachable (stop). Explicit refspec: on actions/checkout's single-ref clone
           # a plain `git fetch origin gh-pages` leaves origin/gh-pages unresolvable (caught by the
@@ -522,36 +434,25 @@ jobs:
           # and Jekyll's Liquid pass rejects literal {% sequences in any markdown it finds.
           touch site/.nojekyll
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: apk-x86_64
-          path: incoming/x86_64
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: apk-aarch64
-          path: incoming/aarch64
-
-      - name: Place the signed channel slices (staleness-guarded; no key here)
+      - name: Place the signed slices into the Pages repository (production; staleness-guarded)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
         run: |
-          # Each slice holds the files melange-build ADDED for the arch, the signed cumulative
-          # index it computed over the whole channel, and the gh-pages commit it indexed
-          # against. Immutability was enforced there, against that commit — so placing the slice
-          # is only correct if the branch has not moved since.
+          # Immutability was enforced in melange-build against the recorded commit — so placing
+          # the slice is only correct if the branch has not moved since.
           for arch in x86_64 aarch64; do
             base="$(cat "incoming/$arch/slice-base.sha")"
             if [ "$base" != "$GHPAGES_NOW" ]; then
               echo "::error::gh-pages moved since melange-build indexed $arch against it (indexed at $base, branch now at $GHPAGES_NOW) — the cumulative index is stale; re-run the whole workflow, not this job"
               exit 1
             fi
-            test -f "incoming/$arch/slice/APKINDEX.tar.gz" || { echo "::error::the $arch slice carries no signed index"; exit 1; }
-            mkdir -p "site/apk/$arch"
             cp -a "incoming/$arch/slice/." "site/apk/$arch/"
             set -- "site/apk/$arch"/*.apk
-            echo "$arch: placed $(ls "incoming/$arch/slice" | wc -l) file(s); channel now holds $# apk(s)"
+            echo "$arch: placed; channel now holds $# apk(s)"
           done
           cp packaging/melange.rsa.pub site/melange.rsa.pub
 
-      - name: Publish (push gh-pages; Pages serves the branch)
+      - name: Publish (push gh-pages; Pages serves the branch) (production)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
@@ -566,7 +467,8 @@ jobs:
             git push origin HEAD:gh-pages
           fi
 
-      - name: Wait for Pages to serve the new package
+      - name: Wait for Pages to serve the new package (production)
+        if: ${{ needs.plan.outputs.candidate == 'false' }}
         env:
           APKVER: ${{ needs.plan.outputs.apkver }}
         run: |
@@ -579,7 +481,20 @@ jobs:
           done
           echo "Pages never served ${APKVER}" >&2; exit 1
 
-      - name: Pin the apk version in the apko spec
+      - name: Point the spec at the local slices (candidate)
+        if: ${{ needs.plan.outputs.candidate == 'true' }}
+        run: |
+          # The Pages channel never carries a candidate: each slice IS a signed per-arch
+          # repository (apks + APKINDEX.tar.gz), so the image composes from them as a local repo.
+          # The wolfi repo stays as-is; only the cork-cli repo/keyring pair is swapped.
+          for arch in x86_64 aarch64; do
+            mkdir -p "local/$arch" && cp -a "incoming/$arch/slice/." "local/$arch/"
+          done
+          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./local"' packaging/cork-cli.apko.yaml
+          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
+          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
+
+      - name: Pin the apk version and stamp the annotations
         env:
           APKVER: ${{ needs.plan.outputs.apkver }}
           TAG: ${{ needs.plan.outputs.tag }}
@@ -594,29 +509,32 @@ jobs:
           # spec; version and revision are the RELEASE's. The revision is the tag's commit, not
           # github.sha — on a backfill dispatched from main they differ, and the image must name
           # the source it was built from.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
           rev="$(git rev-parse "$TAG^{commit}")"
           ANN_VERSION="$TAG" ANN_REVISION="$rev" \
           yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
           yq '.annotations' packaging/cork-cli.apko.yaml
 
-      - name: Build + push the image (production — moves :latest)
+      - name: Build + push the image
         id: image
         env:
           TAG: ${{ needs.plan.outputs.tag }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
-          # Same three guards as the candidate path (proven necessary on the v0.3.0-rc.1
-          # backfill): pipefail so an apko failure cannot hide behind tee, the sboms/ dir apko
-          # expects but never creates, and a loud stop on an empty captured digest.
+          # Three guards proven necessary on the v0.3.0-rc.1 backfill: pipefail so an apko failure
+          # cannot hide behind tee, the sboms/ dir apko expects but never creates, and a loud stop
+          # on an empty captured digest.
           set -o pipefail
           mkdir -p sboms
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
+          # Candidates never move :latest (policy R7: the pointer tracks production only).
+          tags="ghcr.io/$owner/cork-cli:$TAG"
+          [ "$CANDIDATE" = "true" ] || tags="$tags ghcr.io/$owner/cork-cli:latest"
+          echo "publishing: $tags"
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
-          apko publish packaging/cork-cli.apko.yaml \
-            "ghcr.io/$owner/cork-cli:$TAG" "ghcr.io/$owner/cork-cli:latest" \
-            --sbom-path sboms/ | tee digest.txt
+          # shellcheck disable=SC2086 # $tags is a deliberate word list
+          apko publish packaging/cork-cli.apko.yaml $tags --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation
           # (env, this job) and for the deploy job (step output → job output).
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
@@ -644,7 +562,7 @@ jobs:
     # as encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
     # Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
     # quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
-    needs: [plan, production-publish]
+    needs: [plan, publish]
     if: ${{ needs.plan.outputs.candidate == 'false' }}
     environment: release # PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
@@ -664,7 +582,7 @@ jobs:
 
       - name: Substitute the attested digest into the compose
         env:
-          IMAGE_DIGEST: ${{ needs.production-publish.outputs.image-digest }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image-digest }}
         run: |
           test -n "$IMAGE_DIGEST" || { echo "::error::no image digest handed over from production-publish" >&2; exit 1; }
           sed "s|\${DIGEST}|$IMAGE_DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
