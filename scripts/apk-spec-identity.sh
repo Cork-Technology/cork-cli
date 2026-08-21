@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016  # single-quoted `${{vars.tag}}` literals below are melange template text, not shell
 # Write one release identity into packaging/melange.yaml — the single place the apk build
 # learns WHICH tag it packages. Called by .github/workflows/apk-repo.yml; tested by
 # packages/cli/test/apk-spec-identity.test.ts against the current spec AND the spec of the
@@ -9,7 +10,7 @@
 # tag       the git tag, vX.Y.Z or vX.Y.Z-rc.N — the release identity compile-binaries.mjs stamps
 # apkver    the same version in apk grammar (X.Y.Z or X.Y.Z_rcN) — what the package is NAMED
 # commit    the tag's commit sha — pins git-checkout's expected-commit
-# mise.toml where the Bun version is pinned (default: the repo's). The spec's `bun` build
+# mise.toml where the Bun version is pinned (default: the repo's; read via toolchain-pin.sh). The spec's `bun` build
 #           package becomes `bun~<pin>` — an apk version-prefix constraint, honored by apk-tools
 #           and by go-apk (melange/apko's resolver; verified: bun~1.3.14 → 1.3.14-r5, bun~1.2.99
 #           disqualifies every candidate). The exact Wolfi package (-rN) the resolver picks is
@@ -26,14 +27,14 @@ spec="${1:?spec path}"; tag="${2:?tag}"; apkver="${3:?apk version}"; commit="${4
 mise="${5:-$(dirname "$0")/../mise.toml}"
 case "$tag" in v[0-9]*) ;; *) echo "apk-spec-identity: tag must start with v (got: $tag)" >&2; exit 2 ;; esac
 case "$commit" in ????????????????????????????????????????) ;; *) echo "apk-spec-identity: commit must be a 40-hex sha" >&2; exit 2 ;; esac
-[ -f "$mise" ] || { echo "apk-spec-identity: mise.toml not found: $mise" >&2; exit 2; }
-bun_pin="$(sed -n 's/^bun *= *"\([^"]*\)".*/\1/p' "$mise" | head -1)"
-[ -n "$bun_pin" ] || { echo "apk-spec-identity: no \`bun = \"X.Y.Z\"\` pin in $mise" >&2; exit 2; }
+# One parser for mise.toml (scripts/toolchain-pin.sh) — the melange spec's build-time assertion
+# reads the pin through the same script, so the two can never disagree about the file.
+bun_pin="$(sh "$(dirname "$0")/toolchain-pin.sh" bun "$mise")"
 
 # The Bun the sandbox builds with is the pinned version, as a resolver constraint — whatever
 # spelling the spec carried (bare `bun`, or a previous run's `bun~…`/`bun=…`).
 BUN="bun~$bun_pin" yq -i '
-  (.environment.contents.packages[] | select(. == "bun" or (. | test("^bun[=~<>]")))) = strenv(BUN)
+  (.environment.contents.packages[] | select(test("^bun([=~<>]|$)"))) = strenv(BUN)
 ' "$spec"
 
 TAG="$tag" APKVER="$apkver" COMMIT="$commit" yq -i '
@@ -65,6 +66,6 @@ if [ "$checkout" != "$tag" ] && [ "$checkout" != '${{vars.tag}}' ]; then
   exit 1
 fi
 # Exactly one bun entry, and it is the pin (yq, not grep: a trailing comment rides on the line).
-bun_entries="$(yq '[.environment.contents.packages[] | select(test("^bun"))] | join(",")' "$spec")"
+bun_entries="$(yq '[.environment.contents.packages[] | select(test("^bun([=~<>]|$)"))] | join(",")' "$spec")"
 [ "$bun_entries" = "bun~$bun_pin" ] || { echo "apk-spec-identity: the spec's bun package was not pinned to bun~$bun_pin" >&2; exit 1; }
-yq '.package.version, .vars.commit, .vars.tag, .pipeline[0].with.tag, (.environment.contents.packages[] | select(test("^bun")))' "$spec"
+yq '.package.version, .vars.commit, .vars.tag, .pipeline[0].with.tag, (.environment.contents.packages[] | select(test("^bun([=~<>]|$)")))' "$spec"

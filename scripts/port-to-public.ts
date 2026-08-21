@@ -188,9 +188,13 @@ export function portCommits(repo: string, commits: string[], base: string, sign:
         },
       }).trim();
       if (sign) {
-        const sig = git(repo, ["log", "--show-signature", "-1", newCommit]);
-        if (!sig.includes('Good "git" signature')) {
-          throw new Error(`signature on ${newCommit} did not verify as Good — refusing to continue (the FIDO middleware returns zero-filled signatures with a clean exit when untouched)`);
+        // The EXIT STATUS of verify-commit is the verdict. Text is not: for a signer outside the
+        // allowed-signers list git prints `Good "git" signature with …` and THEN `No principal
+        // matched.` — a grep for "Good" passes that (verified 2026-08-21, git 2.55).
+        try {
+          git(repo, ["verify-commit", newCommit]);
+        } catch {
+          throw new Error(`signature on ${newCommit} did not verify — refusing to continue (the FIDO middleware returns zero-filled signatures with a clean exit when untouched)`);
         }
       }
       ported.push({ from: commit, to: newCommit });

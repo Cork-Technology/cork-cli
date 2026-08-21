@@ -475,6 +475,18 @@ regen, mirroring the MCP surface-drift workflow. `bun run verify:publish` = buil
 `publint --strict` + `attw --profile esm-only` (all must stay green; node10/CJS are deliberately
 out of the support matrix — ESM-only, engines node ≥ 22).
 
+## Release tags and the toolchain pin
+
+Tags live only on the public remote (`cork-cli`) and are cut only on an explicit ask. Create
+them with `sh scripts/release-tag.sh vX.Y.Z[-rc.N] <public-sha>` — it signs, VERIFIES the
+signature (`git tag -v` must say Good), and only then pushes; an unverified tag is deleted, not
+pushed. Reason: an untouched FIDO key yields a zero-filled signature with a clean exit, so
+`git tag -s` alone proves nothing (three such tags on 2026-08-21). Tested with real keys in
+`packages/cli/test/release-tag.test.ts`. The Bun version has ONE home, `mise.toml`
+(`scripts/toolchain-pin.sh` is its one parser): mise/mise-action for dev, CI, and the release
+binaries; `apk-spec-identity.sh` turns it into the melange `bun~<pin>` constraint and the spec
+re-asserts it at build time through the same parser.
+
 ## Commit messages (release policy G8)
 
 No AI co-author trailer on any commit in this repo — not `Co-Authored-By: Claude …`, not any

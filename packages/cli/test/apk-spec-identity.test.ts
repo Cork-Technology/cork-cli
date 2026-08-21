@@ -70,7 +70,7 @@ describe.skipIf(!hasYq)("apk-spec-identity.sh — the compile step always reads 
   }
 
   it("a different mise.toml pin is honored, and a previous run's constraint is replaced, not doubled", () => {
-    const first = run(currentSpec, "v1.2.3", "1.2.3", COMMIT, 'bun = "9.8.7"\n');
+    const first = run(currentSpec, "v1.2.3", "1.2.3", COMMIT, '[tools]\nbun = "9.8.7"\n');
     expect(first.status, first.stderr).toBe(0);
     expect(first.text).toMatch(/^      - bun~9\.8\.7$/m);
     // Feed the already-pinned spec through again with another pin: exactly one bun entry remains.
@@ -78,7 +78,7 @@ describe.skipIf(!hasYq)("apk-spec-identity.sh — the compile step always reads 
     const again = join(dir, "melange.yaml");
     writeFileSync(again, first.text);
     const m = join(dir, "mise.toml");
-    writeFileSync(m, 'bun = "9.8.8"\n');
+    writeFileSync(m, '[tools]\nbun = "9.8.8"\n');
     const r = spawnSync("sh", [script, again, "v1.2.3", "1.2.3", COMMIT, m], { encoding: "utf8" });
     expect(r.status, r.stderr).toBe(0);
     const text = readFileSync(again, "utf8");

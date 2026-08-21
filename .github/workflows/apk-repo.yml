@@ -184,7 +184,8 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           VERSION: ${{ needs.plan.outputs.apkver }}
         run: |
-          # One script owns the spec's release identity (tag, apk version, commit) and is unit-
+          # One script owns the spec's release identity (tag, apk version, commit, and the Bun build
+          # package pinned from mise.toml) and is unit-
           # tested against the current spec and the last pre-fix spec. COMMIT is resolved as a
           # PLAIN assignment plus an explicit guard — the old env-prefix form
           # (`COMMIT="$(...)" yq ...`) swallows a git failure even under `sh -e`, and on run
@@ -407,7 +408,7 @@ jobs:
           for arch in x86_64 aarch64; do
             test -f "incoming/$arch/slice/APKINDEX.tar.gz" || { echo "::error::the $arch slice carries no signed index"; exit 1; }
             test -s "incoming/$arch/slice-base.sha" || { echo "::error::the $arch slice carries no base commit"; exit 1; }
-            echo "$arch: $(ls "incoming/$arch/slice" | wc -l) file(s), indexed against gh-pages $(cat "incoming/$arch/slice-base.sha")"
+            echo "$arch: $(find "incoming/$arch/slice" -type f | wc -l) file(s), indexed against gh-pages $(cat "incoming/$arch/slice-base.sha")"
           done
 
       - name: Check out (or initialize) the gh-pages apk repository (production)

@@ -54,7 +54,8 @@ pipeline:
 
   - name: assert the wolfi bun matches the repo's pinned toolchain
     runs: |
-      want="$(grep -E '^bun *= *"' mise.toml | head -1 | cut -d'"' -f2)"
+      # Same parser as the CI-side constraint (scripts/apk-spec-identity.sh): one reader of mise.toml.
+      want="$(sh scripts/toolchain-pin.sh bun mise.toml)"
       got="$(bun --version)"
       if [ "$want" != "$got" ]; then
         echo "wolfi bun $got != mise.toml pin $want — the runtime is embedded in the binary; refusing to drift" >&2

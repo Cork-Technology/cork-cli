@@ -22,9 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.3"
+      # Toolchain from mise.toml — the ONE place the Bun version is pinned, the same Bun the release
+      # builds embed (build-binaries.yml). A floating "1.3" here tested a runtime we do not ship.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -88,9 +88,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.3"
+      # Toolchain from mise.toml — the ONE place the Bun version is pinned, the same Bun the release
+      # builds embed (build-binaries.yml). A floating "1.3" here tested a runtime we do not ship.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -125,9 +125,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.3"
+      # Toolchain from mise.toml — the ONE place the Bun version is pinned, the same Bun the release
+      # builds embed (build-binaries.yml). A floating "1.3" here tested a runtime we do not ship.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
