@@ -295,11 +295,18 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     return r(200, { items, nextCursor: null, hasMore: false });
   }
   if (url.includes("/rollover/")) return r(200, { items: [] });
-  if (/\/rfqs\/v1(\?|$)/.test(url)) {
+  if (/\/rfqs\/v1(\/|\?|$)/.test(url)) {
     // The discovery feed: ONE open RFQ. The venue filters state server-side (default open);
     // the stub mirrors that — a state the row doesn't match answers empty, not unfiltered.
     const state = new URL(url).searchParams.get("state") ?? "open";
     const row = { rfq_id: RFQ_OPEN_ID, state: "open", chain_id: 42161, requester: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, version: 3 };
+    // GET /rfqs/v1/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
+    // then reads back as rfq_not_found, and an agent that verifies before it submits is told
+    // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
+    const single = /\/rfqs\/v1\/([^/?]+)/.exec(url)?.[1];
+    if (single !== undefined) {
+      return decodeURIComponent(single) === RFQ_OPEN_ID ? r(200, row) : r(404, { message: `unknown rfq ${single}` });
+    }
     return r(200, { items: state === "open" ? [row] : [], nextCursor: null, hasMore: false });
   }
   if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW] });
