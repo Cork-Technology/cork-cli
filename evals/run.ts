@@ -311,7 +311,7 @@ async function main() {
   if (process.env.EVAL_GATE) {
     // A zero-run gate is a FAILURE, not a pass (C13); a NaN threshold would silently disable
     // the comparison, so it is rejected the same way.
-    const threshold = Number(process.env.EVAL_GATE_THRESHOLD ?? 0.8);
+    const threshold = Number(process.env.EVAL_GATE_THRESHOLD ?? 0.96);
     if (n === 0 || !Number.isFinite(threshold)) {
       console.error(`\nEVAL GATE FAILED: ${n === 0 ? "zero runs graded" : `threshold '${process.env.EVAL_GATE_THRESHOLD}' is not a number`}`);
       process.exit(1);

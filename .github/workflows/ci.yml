@@ -148,5 +148,10 @@ jobs:
           # First-party alternative: a console.anthropic.com key.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_GATE: "1"
-          EVAL_GATE_THRESHOLD: "0.8"
+          # 96 %: at most 2 of the 55 graded tasks may fail. The gate trips when
+          # success/n < threshold, so the window that allows exactly 2 is
+          # (52/55, 53/55] = (0.9455, 0.9636]; 0.96 sits inside it with margin at both ends.
+          # NOTE: this is a RATIO. Adding tasks raises the failures it tolerates — at 80 tasks
+          # 0.96 permits 3. Re-derive it when the task count changes.
+          EVAL_GATE_THRESHOLD: "0.96"
         run: bun run eval

@@ -130,7 +130,7 @@ CORK_EVAL_MODEL=claude-opus-4-8 bun run eval   # heavier tier (default: claude-s
 CORK_EVAL_TRIALS=3 bun run eval                # stable numbers
 EVAL_HELD_OUT=1 bun run eval                   # include held-out set
 CORK_EVAL_ONLY=read-market bun run eval        # single task
-EVAL_GATE=1 EVAL_GATE_THRESHOLD=0.8 bun run eval  # CI gate: exit 1 below threshold
+EVAL_GATE=1 EVAL_GATE_THRESHOLD=0.96 bun run eval # CI gate: exit 1 below threshold
 ```
 
 Without credentials the runner self-skips (prints why, exits 0), so `bun run eval` is safe in any
