@@ -83,6 +83,7 @@ const T = {
   teaching: "packages/schemas/test/teaching.test.ts",
   docTopics: "packages/core/test/doc-topics.test.ts",
   http: "packages/mcp/test/http.test.ts",
+  httpAdmission: "packages/mcp/test/http-admission.test.ts",
   surfaceTier: "packages/mcp/test/surface-tier.test.ts",
 };
 
@@ -2813,6 +2814,51 @@ const CATALOG: Mutant[] = [
     find: '  for (let peels = 0; object.type === "tag"; peels++) {',
     replace: "  for (let peels = 0; false; peels++) {",
     tests: [T.selfUpdateIdentity],
+  },
+  {
+    // The per-principal bound stops applying: one caller can occupy every slot the server has,
+    // starving a room full of legitimate clients.
+    id: "admission-principal-bound-dropped",
+    file: "packages/mcp/src/admission.ts",
+    find: "    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests || forPrincipal >= MCP_HTTP_LIMITS.principalRequests) return null;",
+    replace: "    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests) return null;",
+    tests: [T.httpAdmission],
+  },
+  {
+    // Slots leak: a request that throws never gives its slot back, so the server bleeds capacity
+    // until it refuses everything.
+    id: "admission-slot-leak-on-throw",
+    file: "packages/mcp/src/admission.ts",
+    find: "    } finally {\n      permit.release();\n    }",
+    replace: "    } finally {\n      if (false) permit.release();\n    }",
+    tests: [T.httpAdmission],
+  },
+  {
+    // The decoded body bound goes away: only a self-declared content-length is checked, so a
+    // caller that lies about it can send anything.
+    id: "admission-actual-body-bound-dropped",
+    file: "packages/mcp/src/admission.ts",
+    find: "      if (bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
+    replace: "      if (false && bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
+    tests: [T.httpAdmission],
+  },
+  {
+    // A caller-supplied X-Forwarded-For is trusted with no ingress in front: anyone mints a
+    // fresh principal per request and the per-principal bound becomes decorative.
+    id: "admission-forwarded-for-always-trusted",
+    file: "packages/mcp/src/admission.ts",
+    find: "  if (opts.trustForwardedFor) {",
+    replace: "  if (true) {",
+    tests: [T.httpAdmission],
+  },
+  {
+    // The FIRST forwarded hop is used — the attacker-authored one — instead of the last, which
+    // is the only entry the proxy itself wrote.
+    id: "admission-forwarded-for-first-hop",
+    file: "packages/mcp/src/admission.ts",
+    find: "      const nearest = hops[hops.length - 1];",
+    replace: "      const nearest = hops[0];",
+    tests: [T.httpAdmission],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {

@@ -339,7 +339,18 @@ would deliver a caller-SIGNED relay body to wherever a redirect points before th
 seen. Reads follow the standard statuses; writes only 307/308 (which preserve method and body) —
 301/302/303 on a write is refused, as is a cross-origin hop, a non-http scheme, a URL carrying
 userinfo, and a chain longer than 3 hops. The timeout wraps the whole chain. The HTTP server exposes `/readyz` — always 200,
-degradation snapshot (endpoint HOSTS only — the committed default URLs embed tokens).
+degradation snapshot (endpoint HOSTS only — the committed default URLs embed tokens) plus an
+`admission` block (in-flight counts + the bounds).
+
+**HTTP ingress admission** (`packages/mcp/src/admission.ts`, audit MCP-NET-003). The endpoint is
+open by default and a bearer token stays optional — but open means BOUNDED: 1 MiB bodies (declared
+length AND decoded bytes), JSON depth 32, 50-message batches, 8 concurrent requests per client, 64
+server-wide (429 + `Retry-After: 1`), and a 30 s deadline whose `AbortSignal` rides `ctx.signal`
+into the venue transport (RPC/HyperSync keep their own per-call timeouts). The body is parsed ONCE
+and passed to the transport. Concurrency keys on the CLIENT: `X-Forwarded-For` is trusted only
+when an ingress is declared (`trustForwardedFor`, default = any non-loopback bind) and only its
+LAST hop — earlier entries are caller-authored, and an untrusted header would let anyone mint a
+fresh principal per request.
 
 So cork-pool/account-state/pool-whitelist, swap/unwind/impairment compute, and track marketRef
 **just work** on public chains. `requires_rpc` only when nothing resolves (offline, or the staging

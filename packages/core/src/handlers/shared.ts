@@ -47,10 +47,22 @@ export interface HandlerContext {
   logsFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** Inject a HyperSync source (tests / custom clients); default = the napi client via ENVIO_API_TOKEN. */
   hyperSync?: HyperSyncSource;
+  /**
+   * Cancellation for this call's outbound work. The HTTP projection sets it from the request's
+   * deadline, so a caller who walks away (or exceeds the budget) stops the venue traffic their
+   * request started rather than leaving it to finish into a response nobody will read.
+   * Propagated to the VENUE transport, which composes it with its own timeout; RPC and HyperSync
+   * clients keep their own per-call timeouts and are NOT wired to it yet.
+   */
+  signal?: AbortSignal;
 }
 
 export function venueDepsOf(ctx: HandlerContext): VenueDeps {
-  return { ...(ctx.venueFetch ? { fetch: ctx.venueFetch } : {}), ...(ctx.venueUrl ? { baseUrl: ctx.venueUrl } : {}) };
+  return {
+    ...(ctx.venueFetch ? { fetch: ctx.venueFetch } : {}),
+    ...(ctx.venueUrl ? { baseUrl: ctx.venueUrl } : {}),
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  };
 }
 
 /** Map a venue read failure to an honest envelope (transport vs HTTP-rejection distinguished).

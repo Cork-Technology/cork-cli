@@ -23,7 +23,9 @@
 // in Bun.serve for the real deployment (container entrypoint: `ch mcp --http`).
 //
 // Auth: when CORK_MCP_TOKEN is set the MCP endpoint requires `Authorization: Bearer <token>`;
-// unset = open (the deployment's ingress owns auth/rate-limits). The token is never logged.
+// unset = open — the deployed endpoint is public BY DESIGN (a workshop hands its URL to a room).
+// The token is never logged. Open does not mean unbounded: admission.ts enforces the body, depth,
+// batch, concurrency and deadline bounds an ingress cannot see, per CLIENT (audit MCP-NET-003).
 // Clients CANNOT override the RPC endpoint per-call — server reads run on server-side RPC
 // config only, and broadcasting is always client-side (cork_capabilities topic:"signing").
 import { timingSafeEqual } from "node:crypto";
@@ -31,6 +33,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
 import { BUILD_VERSION, configDiagnostics, rpcDiagnostics, venueDiagnostics, type HandlerContext } from "@cork/core";
 import { createCorkServer } from "./server.ts";
+import { AdmissionController, type DeadlineScheduler, MCP_HTTP_LIMITS, principalOf } from "./admission.ts";
 
 export interface CorkHttpOptions {
   ctx?: HandlerContext;
@@ -41,6 +44,14 @@ export interface CorkHttpOptions {
    * (`--host 0.0.0.0`), which is what the container deployment passes (packaging/phala-compose.yml)
    * because a mapped port needs a non-loopback bind and Phala's ingress fronts the CVM. */
   host?: string;
+  /** Trust `X-Forwarded-For` for per-client accounting. Set ONLY when a trusted ingress fronts
+   * this process (it does on the CVM); the header is caller-supplied, so trusting it without one
+   * lets anyone mint a fresh principal per request. Defaults on for a non-loopback bind. */
+  trustForwardedFor?: boolean;
+  /** Request deadline; tests inject a short one. */
+  deadlineMs?: number;
+  /** Deterministic deadline scheduler seam for tests. */
+  scheduleDeadline?: DeadlineScheduler;
 }
 
 /** Constant-time bearer check — a plain === would leak prefix length via timing. */
@@ -51,9 +62,15 @@ function bearerOk(header: string | null, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** The pure fetch handler — testable without a listening socket. */
-export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) => Promise<Response> {
-  return async (req: Request): Promise<Response> => {
+/** The pure fetch handler — testable without a listening socket. `peerAddress` is supplied by
+ *  the server wrapper (Bun knows the socket's peer; a bare Request does not). */
+export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, peerAddress?: string) => Promise<Response> {
+  const host = opts.host ?? "127.0.0.1";
+  const loopback = host === "127.0.0.1" || host === "::1" || host === "localhost";
+  const trustForwardedFor = opts.trustForwardedFor ?? !loopback;
+  // ONE controller per handler: the counters are the server's, not the request's.
+  const admission = new AdmissionController(opts.deadlineMs, opts.scheduleDeadline);
+  return async (req: Request, peerAddress?: string): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === "/healthz") {
       return new Response(`ok ${BUILD_VERSION}\n`, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -68,6 +85,7 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
         subsystems: {
           rpc: { ...rpc, degraded: rpc.breakers.some((b) => b.open) },
           venue: { ...venue, degraded: venue.breaker?.open === true || venue.lastOutcome?.ok === false },
+          admission: { ...admission.inFlight(), limits: MCP_HTTP_LIMITS, degraded: false },
           config: config ? { ...config } : { source: null, degraded: false, note: "no config resolution yet this process" },
         },
       };
@@ -111,15 +129,20 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
           headers: { "content-type": "application/json", allow: "POST" },
         });
       }
-      // Stateless mode: a fresh server + transport per request. tools/list and every handler are
-      // pure projections of the compiled registry, so per-request construction is cheap and the
-      // transport never accumulates session state.
-      const server = createCorkServer(opts.ctx ?? {});
-      // sessionIdGenerator undefined = stateless (the SDK types the field optional-but-not-
-      // undefined under exactOptionalPropertyTypes; spreading nothing expresses the same).
-      const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
-      await server.connect(transport);
-      return transport.handleRequest(req);
+      // Admission: bound the body/shape, take a per-client concurrency slot, and parse ONCE —
+      // the parsed body is handed to the transport so untrusted input is not read twice.
+      return admission.handle(req, principalOf(req, { trustForwardedFor, peerAddress }), async (parsedBody, signal) => {
+        // Stateless mode: a fresh server + transport per request. tools/list and every handler are
+        // pure projections of the compiled registry, so per-request construction is cheap and the
+        // transport never accumulates session state. The deadline signal rides in the context, so
+        // a request that outlives its budget stops its own in-flight upstream work.
+        const server = createCorkServer({ ...(opts.ctx ?? {}), signal });
+        // sessionIdGenerator undefined = stateless (the SDK types the field optional-but-not-
+        // undefined under exactOptionalPropertyTypes; spreading nothing expresses the same).
+        const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+        await server.connect(transport);
+        return transport.handleRequest(req, { parsedBody });
+      });
     }
     return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/<topic>\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   };
@@ -127,7 +150,14 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request) =>
 
 // Minimal ambient Bun.serve surface — the repo compiles with plain TS (no bun-types); the
 // runtime is always Bun (mise-pinned), so the declaration only mirrors what we call.
-declare const Bun: { serve(opts: { port: number; hostname: string; fetch: (req: Request) => Promise<Response> }): { port: number; hostname?: string; stop(): Promise<void> } };
+declare const Bun: {
+  serve(opts: {
+    port: number;
+    hostname: string;
+    maxRequestBodySize: number;
+    fetch: (req: Request, server: { requestIP?: (req: Request) => { address: string } | null }) => Promise<Response>;
+  }): { port: number; hostname?: string; stop(): Promise<void> };
+};
 
 /** Serve the handler with Bun.serve. Returns the Bun server (has .port, .hostname and .stop()).
  * `stop()` stops accepting and resolves once in-flight requests have finished (Bun 1.3.14,
@@ -135,8 +165,15 @@ declare const Bun: { serve(opts: { port: number; hostname: string; fetch: (req: 
  * Bun's own default is 0.0.0.0, which must never be the accidental outcome of a bare
  * `ch mcp --http`. */
 export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: () => Promise<void> } {
-  const handler = createHttpHandler(opts);
   const hostname = opts.host ?? "127.0.0.1";
-  const server = Bun.serve({ port, hostname, fetch: handler });
+  const handler = createHttpHandler({ ...opts, host: hostname });
+  const server = Bun.serve({
+    port,
+    hostname,
+    // Belt and braces: Bun refuses an oversized body at the socket, admission refuses it again
+    // for any caller that reaches the handler another way.
+    maxRequestBodySize: MCP_HTTP_LIMITS.bodyBytes,
+    fetch: (req, srv) => handler(req, srv.requestIP?.(req)?.address),
+  });
   return { port: server.port ?? port, hostname: server.hostname ?? hostname, stop: () => server.stop() };
 }
