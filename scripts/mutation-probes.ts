@@ -39,6 +39,7 @@ const T = {
   preview: "packages/core/test/preview.test.ts",
   constraint: "packages/core/test/constraint.test.ts",
   fusion: "packages/core/test/fusion.test.ts",
+  fusionTrust: "packages/core/test/fusion-getter-trust.test.ts",
   bundle: "packages/core/test/bundle.test.ts",
   encoders: "packages/core/test/action-encoders.test.ts",
   funding: "packages/core/test/funding.test.ts",
@@ -2702,6 +2703,25 @@ const CATALOG: Mutant[] = [
     find: "      if (out.state === \"ok\" && !agreed) {",
     replace: "      if (out.state === \"ok\" && !agreed && venueOrderHash === undefined) {",
     tests: [T.venue],
+  },
+  {
+    // The taking-side getter is classified only AFTER the equality invariant: an order whose
+    // taking getter alone is foreign degrades to "not a Fusion order" and the taker path falls
+    // through to a plain signed-ratio cap, trusting the getter it could not recognize.
+    id: "fusion-taking-getter-classified-late",
+    file: "packages/core/src/fusion.ts",
+    find: "  if (size(fields.takingAmountData) >= 20) {\n    const takingGetter = sliceHex(fields.takingAmountData, 0, 20);",
+    replace: "  if (size(fields.takingAmountData) >= 20 && false) {\n    const takingGetter = sliceHex(fields.takingAmountData, 0, 20);",
+    tests: [T.fusionTrust],
+  },
+  {
+    // The automatic cap is derived for an unrecognized getter again: a number invented for a
+    // charge nobody could read.
+    id: "fusion-unknown-getter-auto-cap",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "        if (action.maximumTakingAmount === undefined) {",
+    replace: "        if (false) {",
+    tests: [T.fusionTrust],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {

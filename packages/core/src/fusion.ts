@@ -328,7 +328,20 @@ export interface DecodedFusionOrder {
   saltBoundToExtension: boolean;
 }
 
-export class NotAFusionOrder extends Error {}
+export class NotAFusionOrder extends Error {
+  constructor(
+    message: string,
+    /** The amount getter that could not be trusted, when the shape named one. */
+    readonly settlement?: Hex,
+    /** Its classification, when it WAS classified — so a caller can say WHICH kind of
+     *  not-trusted this is (a legacy layout we do not implement vs a contract we do not know)
+     *  without re-deriving it. Absent when the bytes are simply not a Fusion order. */
+    readonly classification?: Exclude<SettlementClass, "current">,
+  ) {
+    super(message);
+    this.name = "NotAFusionOrder";
+  }
+}
 
 /**
  * Reconstruct the Fusion content of (order, extension) from the raw bytes. Structural rules
@@ -345,13 +358,35 @@ export function decodeFusionOrder(order: LopOrder, extension: Hex, chainId: numb
   if (size(fields.makingAmountData) < 20) {
     throw new NotAFusionOrder("extension.makingAmountData carries no 20-byte amount-getter address — not an auction-priced order");
   }
+  // Either direction can name its own amount getter, and the TAKING side is the one that decides
+  // what the taker pays. Classify it BEFORE the equality invariant: otherwise an order with a
+  // recognized making getter and a foreign taking getter fails the equality check, degrades to
+  // "not a Fusion order", and the taker path falls through to the plain signed-ratio cap —
+  // silently trusting the very getter we could not recognize (audit ARTIFACT-FUSION-003).
+  if (size(fields.takingAmountData) >= 20) {
+    const takingGetter = sliceHex(fields.takingAmountData, 0, 20);
+    const takingClass = classifySettlement(takingGetter, chainId);
+    if (takingClass !== "current") {
+      throw new NotAFusionOrder(
+        takingClass === "legacy"
+          ? `takingAmountData names a LEGACY Fusion deployment (${takingGetter}) — only the v3.1 layout is implemented, so what this getter charges cannot be derived here`
+          : `takingAmountData names ${takingGetter}, which is not a recognized Fusion deployment for chainId ${chainId} — the bytes after the address are caller-controlled data, not proof of what the contract charges`,
+        takingGetter,
+        takingClass,
+      );
+    }
+  }
   if (fields.takingAmountData.toLowerCase() !== fields.makingAmountData.toLowerCase()) {
     throw new NotAFusionOrder("takingAmountData differs from makingAmountData — Fusion orders use one settlement + one auction blob for both directions (fusion-sdk invariant)");
   }
   const settlement = sliceHex(fields.makingAmountData, 0, 20);
   const classification = classifySettlement(settlement, chainId);
   if (classification === "legacy") {
-    throw new NotAFusionOrder(`settlement ${settlement} is a LEGACY Fusion deployment (v2/v1 layouts, superseded by v3.1 in May 2025) — only the v3.1 layout is implemented; flag it if you hold a LIVE legacy order`);
+    throw new NotAFusionOrder(
+      `settlement ${settlement} is a LEGACY Fusion deployment (v2/v1 layouts, superseded by v3.1 in May 2025) — only the v3.1 layout is implemented; flag it if you hold a LIVE legacy order`,
+      settlement,
+      classification,
+    );
   }
   const { auction, fees } = parseAuctionGetterData(size(fields.makingAmountData) > 20 ? sliceHex(fields.makingAmountData, 20) : "0x");
   let postInteraction: FusionPostInteraction | null = null;

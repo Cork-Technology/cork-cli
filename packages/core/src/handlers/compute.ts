@@ -184,8 +184,21 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
     decoded = decodeFusionOrder(order, extension, chainId);
   } catch (err) {
     if (err instanceof NotAFusionOrder) {
-      // Well-formed bytes that are structurally not a (supported) Fusion order → domain envelope.
-      return unavailable(chainId, err.message.includes("LEGACY") ? "phase_gated" : "invalid_order_terms", err.message, ctx);
+      // A CLASSIFIED getter is consequential: the bytes name a contract we cannot price, so the
+      // classification rides in `data` for the caller (audit ARTIFACT-FUSION-003) — a legacy
+      // layout is phase-gated, an unrecognized contract is settler_not_recognized. Anything
+      // else is simply not an auction order → the plain domain envelope.
+      if (err.settlement !== undefined && err.classification !== undefined) {
+        return envelope({
+          state: "unavailable",
+          data: { kind: p.kind, settlement: err.settlement, classification: err.classification, order },
+          chainId,
+          source: "config",
+          warnings: [{ code: err.classification === "legacy" ? "phase_gated" : "settler_not_recognized", message: err.message }],
+          ctx,
+        });
+      }
+      return unavailable(chainId, "invalid_order_terms", err.message, ctx);
     }
     // Malformed extension/auction bytes → teachable invalid input (same split as decode calldata).
     throw new ToolInputError("cork_compute", [{ path: ["params", "order", "extension"], message: err instanceof Error ? err.message : "extension bytes do not decode" }]);
@@ -206,9 +219,6 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
       warnings: [{ code: "extension_salt_mismatch", message: "salt's low 160 bits are NOT keccak256(extension)'s low 160 bits — this order/extension pair would revert InvalidExtension at fill; the price of an unfillable pair is not quoted" }],
       ctx,
     });
-  }
-  if (decoded.classification === "unknown") {
-    warnings.push({ code: "settler_not_recognized", message: `settlement ${decoded.settlement} (decoded from the extension) is not in the known Fusion set for chainId ${chainId} — priced as the v3.1 layout since the bytes parse as one; verify the contract independently before acting on this quote` });
   }
 
   const pinned = input.at?.timestamp !== undefined;

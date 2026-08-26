@@ -729,6 +729,14 @@
       "kind": "value+type"
     },
     {
+      "name": "RpcChainVerificationError",
+      "kind": "value+type"
+    },
+    {
+      "name": "RpcChainVerificationFailure",
+      "kind": "type"
+    },
+    {
       "name": "RpcConfig",
       "kind": "type"
     },
@@ -2175,6 +2183,14 @@
     {
       "name": "RpcChainMismatchError",
       "kind": "value+type"
+    },
+    {
+      "name": "RpcChainVerificationError",
+      "kind": "value+type"
+    },
+    {
+      "name": "RpcChainVerificationFailure",
+      "kind": "type"
     },
     {
       "name": "RpcConfig",

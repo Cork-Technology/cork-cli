@@ -8,7 +8,7 @@ import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtensio
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
-import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted } from "../fusion.ts";
+import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
@@ -891,8 +891,30 @@ async function buildTakerFillArtifact(a: {
     let auctionDec: DecodedFusionOrder | undefined;
     try {
       auctionDec = decodeFusionOrder(signed.order, signed.extension, chainId);
-    } catch {
-      /* not auction-priced — the plain signed-ratio cap is correct */
+    } catch (err) {
+      // A CLASSIFIED getter means the order's price comes from a contract we cannot price
+      // (audit ARTIFACT-FUSION-003). We must not DERIVE a cap from its tail bytes — that would
+      // be inventing a number for a charge we do not understand. A taker who sets an explicit
+      // maximumTakingAmount still gets bytes: the LOP enforces that cap on-chain
+      // (TakingAmountTooHigh), so the unknown getter can only make the fill revert, never
+      // overcharge. Any other decode failure just means the extension is not auction-priced.
+      if (err instanceof NotAFusionOrder && err.settlement !== undefined && err.classification !== undefined) {
+        const code = err.classification === "legacy" ? "phase_gated" : "settler_not_recognized";
+        if (action.maximumTakingAmount === undefined) {
+          return envelope({
+            state: "unavailable",
+            data: { kind: "taker-fill", orderHash: localOrderHash, settlement: err.settlement, classification: err.classification },
+            chainId,
+            source: "config",
+            warnings: [
+              { code, message: `${err.message}. No fill bytes were emitted: the default slippage cap is DERIVED from the auction curve, and this getter's curve cannot be read. Pass an explicit maximumTakingAmount — the LOP enforces it on-chain — if you intend to fill at a price you set yourself` },
+              ...a.acquisitionWarnings,
+            ],
+            ctx,
+          });
+        }
+        jitWarnings.push({ code, message: `${err.message}. You set an explicit maximumTakingAmount, which the LOP enforces on-chain, so the fill is built — but what this getter charges below that cap was NOT derived here` });
+      }
     }
     if (auctionDec) {
       const nowSecs = nowSecondsOf(ctx);

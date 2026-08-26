@@ -209,9 +209,14 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     // rebind the salt to the mutated extension so ONLY the classification differs
     const { keccak256 } = await import("viem");
     const salt = ((1n << 200n) | (BigInt(keccak256(unknownSettlement)) & ((1n << 160n) - 1n))).toString();
-    const env = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: { ...EXAMPLE_ORDER, salt, extension: unknownSettlement } }, at: { timestamp: NOW.toString() }, format: "concise" }, { nowSeconds: 0n });
-    expect(env.state).toBe("ok");
+    // An unrecognized getter is no longer priced as if it were the v3.1 one: the tail bytes are
+    // caller-controlled data, not proof of what the contract charges. The classification is
+    // reported so a caller can act on it (audit ARTIFACT-FUSION-003).
+    const env = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: { ...EXAMPLE_ORDER, salt, extension: unknownSettlement } }, at: { timestamp: NOW.toString() } }, { nowSeconds: NOW });
+    expect(env.state).toBe("unavailable");
     expect(env.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
+    expect(env.data).toMatchObject({ classification: "unknown", settlement: "0x00000000000000000000000000000000000000aa" });
+    expect(env.data).not.toHaveProperty("price");
 
     const mismatch = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: { ...EXAMPLE_ORDER, salt: "12345" } }, at: { timestamp: NOW.toString() }, format: "concise" }, { nowSeconds: 0n });
     expect(mismatch.state).toBe("conflict");
