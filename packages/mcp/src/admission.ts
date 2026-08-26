@@ -42,6 +42,9 @@ const wallClockDeadline: DeadlineScheduler = (onDeadline, delayMs) => {
   return () => clearTimeout(timer);
 };
 
+/** The principal used when callers cannot be told apart (no forwarded header, no peer). */
+export const SHARED_PRINCIPAL = "shared";
+
 export interface AdmissionPermit {
   /** Aborts when the request's deadline elapses; handed to the tool context as `signal`. */
   readonly signal: AbortSignal;
@@ -86,14 +89,21 @@ export class AdmissionController {
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new Error("admission: deadlineMs must be a positive number of milliseconds");
   }
 
-  /** Snapshot for diagnostics (/readyz): how loaded the server is right now. */
-  inFlight(): { global: number; principals: number } {
-    return { global: this.activeGlobal, principals: this.activeByPrincipal.size };
+  /** Snapshot for diagnostics (/readyz): how loaded the server is right now, and whether
+   *  callers are being told apart (a `shared` bucket in use means the per-client bound is off). */
+  inFlight(): { global: number; principals: number; sharedBucketInUse: boolean } {
+    return { global: this.activeGlobal, principals: this.activeByPrincipal.size, sharedBucketInUse: this.activeByPrincipal.has(SHARED_PRINCIPAL) };
   }
 
   private tryAcquire(principal: string): AdmissionPermit | null {
     const forPrincipal = this.activeByPrincipal.get(principal) ?? 0;
-    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests || forPrincipal >= MCP_HTTP_LIMITS.principalRequests) return null;
+    // The per-principal bound is a FAIRNESS bound: it only means something when principals are
+    // distinct callers. When the deployment could not tell callers apart (`shared`), applying it
+    // would cap the whole server at one client's budget — so only the global bound applies, and
+    // /readyz shows the collapse. Failing toward availability here is deliberate: the global
+    // bound still holds, and a mis-forwarded ingress must not starve a room of eight.
+    const fairnessApplies = principal !== SHARED_PRINCIPAL;
+    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests || (fairnessApplies && forPrincipal >= MCP_HTTP_LIMITS.principalRequests)) return null;
     this.activeGlobal++;
     this.activeByPrincipal.set(principal, forPrincipal + 1);
     const controller = new AbortController();
@@ -164,5 +174,5 @@ export function principalOf(req: Request, opts: { trustForwardedFor: boolean; pe
       if (nearest !== undefined) return `ip:${nearest}`;
     }
   }
-  return opts.peerAddress !== undefined ? `ip:${opts.peerAddress}` : "shared";
+  return opts.peerAddress !== undefined ? `ip:${opts.peerAddress}` : SHARED_PRINCIPAL;
 }

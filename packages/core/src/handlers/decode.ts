@@ -18,7 +18,8 @@ import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_
 /** Best-effort Fusion label on decoded orders: the auction summary, or the legacy classification. */
 type FusionLabel =
   | { settlement: `0x${string}`; classification: string; auction: { startTime: bigint; duration: bigint; initialRateBump: bigint; points: number }; postInteractionGated: boolean; scales: Record<string, string>; note: string }
-  | { classification: "legacy"; note: string };
+  /** A getter this build will not price: the shape is reported, no auction is inferred. */
+  | { settlement: `0x${string}`; classification: "legacy" | "unknown"; note: string };
 
 /** Which JIT adapter each generation's hook is expected to call — from the same config the
  *  prepare paths build against. Absent = nothing to compare (chain without that generation). */
@@ -147,10 +148,12 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
       note: "auction-priced order — current price via cork_compute dutch-auction-price",
     };
   } catch (err) {
-    if (err instanceof NotAFusionOrder && /LEGACY/.test(err.message)) {
-      fusion = { classification: "legacy", note: err.message };
+    // A CLASSIFIED getter is worth reporting even though nothing can be priced from it: the
+    // reader sees which contract the order names and why no curve follows. Anything else is
+    // simply not an auction order (or malformed auction bytes) — no label.
+    if (err instanceof NotAFusionOrder && err.settlement !== undefined && err.classification !== undefined) {
+      fusion = { settlement: err.settlement, classification: err.classification, note: err.message };
     }
-    /* not an auction order (or malformed auction bytes) — no label */
   }
   // JIT: when the extension's preInteraction field carries a Cork JIT payload, unpack it so a
   // taker can see which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it

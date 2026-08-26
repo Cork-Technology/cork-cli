@@ -318,7 +318,8 @@ export function isGetterWhitelisted(fees: FusionGetterFees, taker: string): bool
 
 export interface DecodedFusionOrder {
   settlement: Hex;
-  classification: SettlementClass;
+  /** Always "current": any other classification throws NotAFusionOrder before a decode exists. */
+  classification: "current";
   auction: FusionAuction;
   fees: FusionGetterFees;
   /** null when the order carries no post-interaction pointed at the settlement (e.g. a
@@ -395,7 +396,7 @@ export function decodeFusionOrder(order: LopOrder, extension: Hex, chainId: numb
   }
   return {
     settlement,
-    classification,
+    classification: "current",
     auction,
     fees,
     postInteraction,
@@ -417,6 +418,9 @@ export function auctionPhase(a: { startTime: bigint; duration: bigint }, ts: big
  *  in the taker asset's base units. */
 export type AuctionPriceReport = {
   settlement: `0x${string}`;
+  /** Always "current": only the release-pinned getter is ever priced (a caller reading the
+   *  report should not have to know that rule to trust the numbers). */
+  classification: "current";
   phase: "pre-start" | "decaying" | "floor";
   currentTakerPays: string;
   ceilingTakerPays: string;

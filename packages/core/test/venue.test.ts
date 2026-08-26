@@ -414,7 +414,8 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     const venueOrderHash = `0x${"cc".repeat(32)}`;
     const mismatch = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: venueOrderHash } }]));
     expect(mismatch.state).toBe("conflict");
-    expect(mismatch.data).toMatchObject({ accepted: false, orderHash: local, localOrderHash: local, venueOrderHash });
+    // `accepted` stays TRUE — the venue did accept the relay; the conflict is about identity.
+    expect(mismatch.data).toMatchObject({ accepted: true, orderHash: local, localOrderHash: local, venueOrderHash });
     expect(mismatch.warnings.some((w) => w.code === "order_hash_mismatch")).toBe(true);
 
     // Hex case is not a disagreement.

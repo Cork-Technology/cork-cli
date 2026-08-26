@@ -4,7 +4,7 @@
 // tool call waiting on a slow upstream. These tests drive the REAL fetch handler (and, for the
 // per-client accounting, the controller itself), never a mock of it.
 import { describe, expect, it } from "vitest";
-import { AdmissionController, createHttpHandler, MCP_HTTP_LIMITS, principalOf } from "../src/index.ts";
+import { AdmissionController, createHttpHandler, MCP_HTTP_LIMITS, principalOf, SHARED_PRINCIPAL } from "../src/index.ts";
 
 type RpcError = { error: { code: number; message: string } };
 const rpcError = async (res: Response): Promise<RpcError> => (await res.json()) as RpcError;
@@ -110,7 +110,7 @@ describe("concurrency is accounted per principal", () => {
 
     for (const r of releases) r();
     await Promise.all(started);
-    expect(controller.inFlight()).toEqual({ global: 0, principals: 0 }); // slots always released
+    expect(controller.inFlight()).toEqual({ global: 0, principals: 0, sharedBucketInUse: false }); // slots always released
   });
 
   it("refuses beyond the GLOBAL bound however many principals ask", async () => {
@@ -129,10 +129,23 @@ describe("concurrency is accounted per principal", () => {
     expect(controller.inFlight().global).toBe(0);
   });
 
+  it("the SHARED bucket (callers indistinguishable) is bounded only globally — fairness cannot apply to one bucket", async () => {
+    // If the ingress does not forward client addresses, every attendee lands in one bucket.
+    // Capping that bucket at 8 would cap the whole server at one client's budget.
+    const controller = manual();
+    const { releases, started } = await occupy(controller, SHARED_PRINCIPAL, MCP_HTTP_LIMITS.principalRequests + 4);
+    expect(controller.inFlight()).toMatchObject({ global: MCP_HTTP_LIMITS.principalRequests + 4, sharedBucketInUse: true });
+    const more = await controller.handle(post(initialize), SHARED_PRINCIPAL, async () => new Response("served"));
+    expect(more.status).toBe(200);
+    for (const r of releases) r();
+    await Promise.all(started);
+    expect(controller.inFlight().sharedBucketInUse).toBe(false);
+  });
+
   it("releases the slot even when the dispatch throws", async () => {
     const controller = manual();
     await expect(controller.handle(post(initialize), "ip:1.1.1.1", async () => { throw new Error("boom"); })).rejects.toThrow("boom");
-    expect(controller.inFlight()).toEqual({ global: 0, principals: 0 });
+    expect(controller.inFlight()).toEqual({ global: 0, principals: 0, sharedBucketInUse: false });
   });
 });
 
@@ -174,7 +187,7 @@ describe("principalOf: a principal must not be mintable by the caller", () => {
 
   it("falls back to the peer, then to one shared bucket — failing toward MORE sharing, not less", () => {
     expect(principalOf(new Request("http://mcp.test/mcp"), { trustForwardedFor: true, peerAddress: "10.0.0.1" })).toBe("ip:10.0.0.1");
-    expect(principalOf(new Request("http://mcp.test/mcp"), { trustForwardedFor: true })).toBe("shared");
+    expect(principalOf(new Request("http://mcp.test/mcp"), { trustForwardedFor: true })).toBe(SHARED_PRINCIPAL);
   });
 });
 

@@ -1007,8 +1007,17 @@ const CATALOG: Mutant[] = [
     // makes the whole ForSelf surface untestable — which is how it went uncovered until now.
     id: "eval-stub-forself-adapter-codeless",
     file: "evals/stub.ts",
-    find: 'String(a?.address ?? "").toLowerCase() === FORSELF_ADAPTER.toLowerCase() ? FORSELF_ADAPTER_CODE : "0x",',
-    replace: '"0x",',
+    find: "          if (address === FORSELF_ADAPTER.toLowerCase()) return FORSELF_ADAPTER_CODE;",
+    replace: "",
+    tests: [T.taskFixtures],
+  },
+  {
+    // An implementation-role address answers "0x" instead of throwing: the guard then hashes
+    // an EMPTY account and warns implementation_not_approved on every prepare the evals grade.
+    id: "eval-stub-impl-role-answers-empty",
+    file: "evals/stub.ts",
+    find: "          if (IMPLEMENTATION_ROLE_ADDRESSES.has(address)) throw new Error(`eval stub holds no bytecode for ${address}`);",
+    replace: "",
     tests: [T.taskFixtures],
   },
   {
@@ -2859,8 +2868,8 @@ const CATALOG: Mutant[] = [
     // starving a room full of legitimate clients.
     id: "admission-principal-bound-dropped",
     file: "packages/mcp/src/admission.ts",
-    find: "    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests || forPrincipal >= MCP_HTTP_LIMITS.principalRequests) return null;",
-    replace: "    if (this.activeGlobal >= MCP_HTTP_LIMITS.globalRequests) return null;",
+    find: "(fairnessApplies && forPrincipal >= MCP_HTTP_LIMITS.principalRequests)) return null;",
+    replace: "(fairnessApplies && false)) return null;",
     tests: [T.httpAdmission],
   },
   {
@@ -2897,6 +2906,15 @@ const CATALOG: Mutant[] = [
     file: "packages/mcp/src/admission.ts",
     find: "      const nearest = hops[hops.length - 1];",
     replace: "      const nearest = hops[0];",
+    tests: [T.httpAdmission],
+  },
+  {
+    // The fairness bound applies to the shared bucket too: a deployment whose ingress does not
+    // forward client addresses caps the whole server at one client's budget.
+    id: "admission-shared-bucket-capped",
+    file: "packages/mcp/src/admission.ts",
+    find: "    const fairnessApplies = principal !== SHARED_PRINCIPAL;",
+    replace: "    const fairnessApplies = true;",
     tests: [T.httpAdmission],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───

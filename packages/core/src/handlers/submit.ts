@@ -558,18 +558,20 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         (_body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash, localOrderHash: orderHash, ...(venueOrderHash !== undefined ? { venueOrderHash } : {}) }),
         lopWarnings,
       );
-      // Only a SERVED result can disagree; a 4xx/5xx already carries its own verdict.
+      // Only a SERVED result can disagree; a 4xx/5xx already carries its own verdict. The relay
+      // WAS accepted — `accepted` reports that fact truthfully; the conflict is about which hash
+      // names the order, and the envelope state carries that verdict.
       if (out.state === "ok" && !agreed) {
         return envelope({
           state: "conflict",
-          data: { kind: "lop-order", accepted: false, replay: res.httpStatus === 200, orderHash, localOrderHash: orderHash, venueOrderHash },
+          data: { kind: "lop-order", accepted: true, replay: res.httpStatus === 200, orderHash, localOrderHash: orderHash, venueOrderHash },
           chainId,
           source: "service",
           warnings: [
             ...out.warnings,
             {
               code: "order_hash_mismatch",
-              message: `the venue accepted the relay but echoed orderHash ${venueOrderHash}, which contradicts the locally recomputed EIP-712 hash ${orderHash} — the LOCAL hash is what the maker signed and what the LOP computes at fill, so it stays authoritative. Do not use the venue's value to cancel or track this order; re-read the book and check what the venue actually stored`,
+              message: `the venue ACCEPTED the relay but echoed orderHash ${venueOrderHash}, which contradicts the locally recomputed EIP-712 hash ${orderHash} — the LOCAL hash is what the maker signed and what the LOP computes at fill, so it stays authoritative. The order may now rest on the book under a different identity: re-read the book, and do not use the venue's value to cancel or track it`,
             },
           ],
           ctx,

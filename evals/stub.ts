@@ -22,6 +22,16 @@ const NOW = 1_790_000_000n;
 // only because the eval log made the misses identifiable). Same for the recipe hints.
 import corkDefaults from "../cork-defaults.json";
 const MR_42161 = (corkDefaults as { marketRegistry: Record<string, { registry: string; recipes: Record<string, string> }> }).marketRegistry["42161"]!;
+// Every address the approved-implementations guard may fingerprint, from the same config the
+// guard resolves them from — so a redeploy cannot leave this set pointing at a stale literal.
+const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
+  Object.values(corkDefaults.deployments as Record<string, { corkAdapter?: string; whitelistManager?: string }>)
+    .flatMap((d) => [d.corkAdapter, d.whitelistManager])
+    .concat(Object.values((corkDefaults as { marketRegistry?: Record<string, { registry?: string; adapter?: string }> }).marketRegistry ?? {}).flatMap((m) => [m.registry, m.adapter]))
+    .concat(Object.values((corkDefaults as { marketRegistryLegacy?: Record<string, { registry?: string; adapter?: string }> }).marketRegistryLegacy ?? {}).flatMap((m) => [m.registry, m.adapter]))
+    .filter((a): a is string => typeof a === "string")
+    .map((a) => a.toLowerCase()),
+);
 // The rc.2 rollover deployment + its RETIRED July generation — read from config like the
 // registry above (the pinned-literal rot class): the retired-settler task's expected teaching
 // and the sweep fixture's settler identity must track config, not a copy.
@@ -332,8 +342,17 @@ export function stubContext(): HandlerContext {
         // are verified before a caller grants it an allowance, and a codeless address is
         // correctly refused adapter_binding_mismatch), while every other fixture account stays
         // an EOA so the maker-signature ladder takes its ecrecover branch rather than ERC-1271.
-        getCode: async (a: { address?: string } | undefined) =>
-          String(a?.address ?? "").toLowerCase() === FORSELF_ADAPTER.toLowerCase() ? FORSELF_ADAPTER_CODE : "0x",
+        getCode: async (a: { address?: string } | undefined) => {
+          const address = String(a?.address ?? "").toLowerCase();
+          if (address === FORSELF_ADAPTER.toLowerCase()) return FORSELF_ADAPTER_CODE;
+          // The implementation guard hashes the code behind each trusted role. This stub holds
+          // no real bytecode, so "0x" here would be a FALSE statement ("the adapter is an empty
+          // account") that warns implementation_not_approved on every prepare and skews
+          // grading. Throwing is the honest answer — unreadable — which the guard documents as
+          // silent degradation. The guard itself is covered by Layer A.
+          if (IMPLEMENTATION_ROLE_ADDRESSES.has(address)) throw new Error(`eval stub holds no bytecode for ${address}`);
+          return "0x";
+        },
         // track simulate's eth_call dry-run: every frozen artifact simulates viable here (the
         // task grades the simulate-before-sign habit, not revert forensics).
         call: async () => ({ data: "0x" }),

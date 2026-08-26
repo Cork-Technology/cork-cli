@@ -412,8 +412,10 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   // Summary derived from the BUILT BYTES [K3] — the same decoder+renderer every consumer of
   // this calldata sees — plus one allowance line from the (test-pinned) matrix. A hand-written
   // narration could drift from what the bytes actually do; a decoded one cannot.
+  // The adapter's bindings were verified above, so it IS the trusted target for this decode —
+  // without saying so, the summary of the tool's own artifact would read "UNVERIFIED target".
   const summary = summarizeBundle(
-    [decodeSingleCall({ to: forSelf.adapter, data: call.calldata, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })],
+    [decodeSingleCall({ to: forSelf.adapter, data: call.calldata, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }, { forSelf: forSelf.adapter })],
     {},
   );
   summary.push(`2. before signing, approve the adapter to spend: ${allowanceText}`);

@@ -489,6 +489,9 @@ describe("runTool: cork_prepare_phoenix forSelf", () => {
     // consumer sees), not narrated — so it must carry the decoded action, pool, deadline.
     const summary = (env.data as { summary: string[] }).summary;
     expect(summary[0]).toContain("run 'exerciseForSelf' on the ForSelf adapter");
+    // The adapter's bindings were verified by this very prepare, so its decode is TRUSTED — the
+    // tool must not label its own artifact as an unverified target.
+    expect(summary[0]).not.toMatch(/UNVERIFIED|MISMATCH/);
     expect(summary[0]).toContain(`deadline ${NOW + 900n}`);
     expect(summary[1]).toContain("approve the adapter to spend");
   });

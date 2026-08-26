@@ -243,13 +243,15 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // active or retired generation is called.
           const classification = settlerAddr && rollover ? classifyRolloverSettler(rollover, settlerAddr) : undefined;
           const configuredSettler = classification?.status === "active" || classification?.status === "retired" ? classification.status : undefined;
-          if (settlerAddr !== undefined && configuredSettler === undefined) {
+          // The one predicate every chain leg below consults; the mutation probe targets it.
+          const settlerReadable = settlerAddr !== undefined && configuredSettler !== undefined;
+          if (settlerAddr !== undefined && !settlerReadable) {
             warnings.push({
               code: "settler_not_recognized",
               message: `the venue row names settler ${settlerAddr}, which is not a configured active or retired Cork rollover generation for chainId ${chainId} — no orderStatus read and no log scan were issued against it, and this result stays venue-reported. A read against an unrecognized contract would let it answer a question we then treat as chain truth`,
             });
           }
-          const resolved = settlerAddr ? await getRpc(ctx, chainId) : null;
+          const resolved = settlerReadable ? await getRpc(ctx, chainId) : null;
           if (settlerAddr && configuredSettler && resolved) {
             try {
               const statusNum = (await resolved.client.readContract({
@@ -276,7 +278,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             } catch (err) {
               warnings.push({ code: "chain_read_failed", message: `orderStatus verification read failed (${firstLine(err)}) — result is venue-reported only` });
             }
-          } else if (settlerAddr === undefined || configuredSettler !== undefined) {
+          } else if (settlerAddr === undefined || settlerReadable) {
             // An unrecognized settler already has its own, more specific warning above.
             warnings.push(venueNote);
           }
@@ -284,7 +286,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // Event-history leg via a logs-capable endpoint (HyperRPC preferred; token sent as a
           // Bearer header by fetchDigestLogs, never in the URL).
           const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
-          if (logsEndpoint && rollover && settlerAddr !== undefined && configuredSettler !== undefined) {
+          if (logsEndpoint && rollover && settlerAddr !== undefined && settlerReadable) {
             try {
               // A digest binds to ONE settler (its EIP-712 domain), so the venue row's settler
               // scopes the scan to that address and its generation's seed block — retired
@@ -309,7 +311,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   : { code: "logs_unavailable", message: `event-history leg failed: ${firstLine(err)}` },
               );
             }
-          } else if (!logsEndpoint && (settlerAddr === undefined || configuredSettler !== undefined)) {
+          } else if (!logsEndpoint && (settlerAddr === undefined || settlerReadable)) {
             warnings.push({ code: "logs_unavailable", message: "no logs-capable endpoint configured (set ENVIO_API_TOKEN for HyperRPC, or CORK_LOGS_RPC_URL) — event history omitted; status leg above still applies when an RPC resolved" });
           }
 

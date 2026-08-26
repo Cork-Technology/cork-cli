@@ -933,6 +933,7 @@ async function buildTakerFillArtifact(a: {
       if (action.maximumTakingAmount === undefined) auctionCap = ceilingTakerPays;
       auctionData = {
         settlement: auctionDec.settlement,
+        classification: auctionDec.classification,
         phase: auctionPhase(auctionDec.auction, nowSecs),
         currentTakerPays: String(currentTakerPays),
         ceilingTakerPays: String(ceilingTakerPays),

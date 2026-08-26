@@ -40,7 +40,10 @@ if (argv[0] === "mcp") {
         "  --port <n>       HTTP port (default 8080)\n" +
         "  --host <addr>    bind address (default 127.0.0.1 — loopback only; containers/ingress\n" +
         "                   deployments pass --host 0.0.0.0 to accept external connections)\n" +
-        "Bearer auth: set CORK_MCP_TOKEN (unset = open; put auth/rate limits at the ingress).\n",
+        "Bearer auth: set CORK_MCP_TOKEN (unset = open, which is the public deployment's shape).\n" +
+        "Admission (always on): 1 MiB body, JSON depth 32, batch 50, 8 in-flight per client, 64 per\n" +
+        "server, 30 s deadline. Per-client accounting uses X-Forwarded-For only on a non-loopback\n" +
+        "bind (an ingress is assumed to front it); the ingress still owns rate and connection limits.\n",
     );
     process.exit(0);
   }

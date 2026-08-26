@@ -163,6 +163,19 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
   });
 
+  it("the stub never fingerprints an implementation role as an EMPTY account — a prepare carries no implementation_not_approved", async () => {
+    // The approved-implementations guard hashes eth_getCode behind every trusted role. The
+    // stub holds no bytecode, so its honest answer is UNREADABLE (throw → silent degradation),
+    // not "0x" — which would grade every prepare task with a false allowlist warning.
+    const env = await runTool(
+      "cork_prepare_market",
+      { chainId: 42161, clientRequestId: "eval-mkt-0002", action: { type: "deploy-oracle", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.warnings.map((w) => w.code)).not.toContain("implementation_not_approved");
+  });
+
   it("submit-rfq-open: the venue stub assigns rfq_eval1 (the answer regex's ground truth)", async () => {
     const env = await runTool(
       "cork_submit",

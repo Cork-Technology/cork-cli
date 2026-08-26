@@ -303,15 +303,14 @@ export async function verifyVenueRows(a: {
         keep(labeled, "unverified");
         continue;
       }
-      const row_ = labeled;
       const chain = statuses.get(k.key);
-      if (chain === undefined || chain === "error") keep(row_, "unverified", true);
-      else if (venueChainConsistent(venueStatus, chain)) keep(row_, "confirmed");
+      if (chain === undefined || chain === "error") keep(labeled, "unverified", true);
+      else if (venueChainConsistent(venueStatus, chain)) keep(labeled, "confirmed");
       else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {
         // Vocabulary neither side of the table knows is INDETERMINATE, never a refutation —
         // the venue grows status words (observed on the 0.3.3 migration) and a newer settler
         // grows enum members; dropping on either would delete valid rows.
-        keep(row_, "unverified");
+        keep(labeled, "unverified");
       } else drop(`settler orderStatus says ${chain}, contradicting the venue's ${venueStatus}`);
     }
     if (unknownSettlers.size > 0) {

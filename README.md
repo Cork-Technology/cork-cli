@@ -41,8 +41,9 @@ No runtime, no clone, no package manager.
    ch capabilities
    ```
 
-Later, update in place with `ch self-update`. It downloads the newest release, verifies it, and
-swaps the binary atomically.
+Later, update in place with `ch self-update`. It resolves the newest release, verifies its
+provenance, runs the staged binary's own `version --json` to confirm it is that build, and only
+then swaps atomically. It never installs an older release unless you pass `--allow-downgrade`.
 
 <details>
 <summary><b>Verify a download before you trust it</b></summary>
