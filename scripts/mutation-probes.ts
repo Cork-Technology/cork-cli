@@ -2677,6 +2677,23 @@ const CATALOG: Mutant[] = [
     replace: 'if [ "$push_repo" = "" ]; then',
     tests: [T.releaseTag],
   },
+  {
+    // The explicit endpoint goes back to best-effort: an endpoint that cannot prove its chain is
+    // exposed anyway, and every read through it wears the requested chain's label.
+    id: "rpc-explicit-verification-best-effort",
+    file: "packages/core/src/chain/rpc.ts",
+    find: 'if (!probe.ok) throw new RpcChainVerificationError(explicitUrl, chainId, "probe_failed");',
+    replace: 'if (!probe.ok) return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };',
+    tests: [T.rpc],
+  },
+  {
+    // A refusal is cached: one blip permanently poisons the endpoint for the process.
+    id: "rpc-explicit-failure-cached",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "      if (reported !== chainId) throw new RpcChainMismatchError(explicitUrl, chainId, reported);",
+    replace: "      if (reported !== chainId) { explicitVerified.set(key, { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: \"explicit\" }); throw new RpcChainMismatchError(explicitUrl, chainId, reported); }",
+    tests: [T.rpc],
+  },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {
     // The single-target comparator flips: a leg at the configured contract reads as a mismatch

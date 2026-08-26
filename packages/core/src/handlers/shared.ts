@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, stringToHex } from "viem";
 import { type ChainId, Envelope, SCHEMA_VERSION, type Teaching } from "@cork/schemas";
-import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcChainMismatchError } from "../chain/rpc.ts";
+import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcChainMismatchError, RpcChainVerificationError } from "../chain/rpc.ts";
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
@@ -77,7 +77,12 @@ export async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<Res
   try {
     return await (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
   } catch (err) {
-    if (err instanceof RpcChainMismatchError) {
+    // Both failures are about the endpoint the caller explicitly configured, so both surface as
+    // teachable input errors naming `rpcUrl` rather than degrading to "no RPC resolved" — which
+    // would tell an operator who HAS set CORK_RPC_URL to go and set it (audit MCP-NET-002).
+    // A mismatch is proven wrong-chain; a verification failure is an absence of proof and the
+    // message says so, so a retry after connectivity returns is the obvious next move.
+    if (err instanceof RpcChainMismatchError || err instanceof RpcChainVerificationError) {
       throw new ToolInputError("rpc-resolution", [{ path: ["rpcUrl"], message: err.message }]);
     }
     throw err;

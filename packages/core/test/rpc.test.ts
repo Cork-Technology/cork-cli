@@ -78,26 +78,80 @@ const okOn = (urls: string[], chainId = 1, latency: Record<string, number> = {})
   (url: string): ProbeResult => (urls.includes(url) ? { ok: true, chainId, latencyMs: latency[url] ?? 20 } : { ok: false, latencyMs: 999 });
 
 describe("resolveRpc precedence", () => {
-  it("explicit URL wins with no fallback; unreachable endpoints are still used verbatim (chainId probe is best-effort)", async () => {
+  it("explicit URL wins with no fallback, and is exposed only after ONE probe proves the chain", async () => {
     resetExplicitVerification();
-    const h = harness({ probe: () => ({ ok: false, latencyMs: 999 }) });
+    const h = harness({ probe: () => ({ ok: true, chainId: 1, latencyMs: 5 }) });
     const r = await resolveRpc(1, "https://my.explicit.rpc", CFG, h.deps);
     expect(r?.source).toBe("explicit");
     expect(r?.url).toBe("https://my.explicit.rpc");
-    // F21: exactly one eth_chainId verification probe — no fallback probing beyond it.
+    // Exactly one eth_chainId verification probe — no fallback probing beyond it.
+    expect(h.calls.probe).toHaveLength(1);
+    // The proven equality is memoized: the same client comes back without a second probe.
+    expect(await resolveRpc(1, "https://my.explicit.rpc", CFG, h.deps)).toBe(r);
     expect(h.calls.probe).toHaveLength(1);
   });
 
-  it("explicit URL answering with the WRONG chainId is refused (F21), and the verdict is memoized", async () => {
+  it.each([
+    ["a probe that answers not-ok", () => ({ ok: false, latencyMs: 999 }) as ProbeResult, "probe_failed"],
+    ["a probe that throws (transport/timeout)", () => { throw new Error("connection refused"); }, "probe_failed"],
+    ["an answer with no chainId", () => ({ ok: true, latencyMs: 5 }) as ProbeResult, "missing_or_malformed_chain_id"],
+    ["an answer whose chainId is NaN", () => ({ ok: true, chainId: Number.NaN, latencyMs: 5 }) as ProbeResult, "missing_or_malformed_chain_id"],
+    ["an answer whose chainId is negative", () => ({ ok: true, chainId: -1, latencyMs: 5 }) as ProbeResult, "missing_or_malformed_chain_id"],
+  ])("an explicit endpoint that cannot PROVE its chain (%s) exposes no client — fails closed", async (_label, probe, failure) => {
     resetExplicitVerification();
-    const h = harness({ probe: () => ({ ok: true, chainId: 42161, latencyMs: 5 }) });
-    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
-    // Memoized: a second resolution re-uses the verdict without another probe.
-    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
+    const h = harness({ probe: probe as () => ProbeResult });
+    await expect(resolveRpc(1, "https://unproven.explicit.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainVerificationError", failure });
+    expect(h.calls.probe).toHaveLength(1); // one probe, then a refusal — never a fallback
+  });
+
+  it("a FAILURE is never cached: a later call probes again and can recover", async () => {
+    resetExplicitVerification();
+    let healthy = false;
+    const h = harness({ probe: () => (healthy ? { ok: true, chainId: 1, latencyMs: 5 } : { ok: false, latencyMs: 999 }) });
+    await expect(resolveRpc(1, "https://recovering.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainVerificationError" });
+    healthy = true;
+    const recovered = await resolveRpc(1, "https://recovering.rpc", CFG, h.deps);
+    expect(recovered?.source).toBe("explicit");
+    expect(h.calls.probe).toHaveLength(2); // re-probed; a blip is not a sticky verdict
+    expect(await resolveRpc(1, "https://recovering.rpc", CFG, h.deps)).toBe(recovered); // now memoized
+    expect(h.calls.probe).toHaveLength(2);
+  });
+
+  it("concurrent resolutions of the same endpoint share ONE probe", async () => {
+    resetExplicitVerification();
+    const h = harness({ probe: () => ({ ok: true, chainId: 1, latencyMs: 5 }) });
+    const [a, b, c] = await Promise.all([
+      resolveRpc(1, "https://single.flight.rpc", CFG, h.deps),
+      resolveRpc(1, "https://single.flight.rpc", CFG, h.deps),
+      resolveRpc(1, "https://single.flight.rpc", CFG, h.deps),
+    ]);
     expect(h.calls.probe).toHaveLength(1);
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+  });
+
+  it("explicit URL answering with the WRONG chainId is refused, and the refusal is NOT cached", async () => {
+    resetExplicitVerification();
+    let reported = 42161;
+    const h = harness({ probe: () => ({ ok: true, chainId: reported, latencyMs: 5 }) });
+    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
+    await expect(resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps)).rejects.toMatchObject({ name: "RpcChainMismatchError" });
+    expect(h.calls.probe).toHaveLength(2); // re-probed: an endpoint can be repointed
     // The SAME endpoint serves the chain it actually reports.
     const ok = await resolveRpc(42161, "https://wrong.chain.rpc", CFG, h.deps);
     expect(ok?.source).toBe("explicit");
+    // …and once it reports the requested chain, that chain resolves too — the memo is per (chain, endpoint).
+    reported = 1;
+    expect((await resolveRpc(1, "https://wrong.chain.rpc", CFG, h.deps))?.source).toBe("explicit");
+  });
+
+  it("an unparseable endpoint is redacted from the refusal — it can carry a token", async () => {
+    resetExplicitVerification();
+    const h = harness({ probe: () => ({ ok: false, latencyMs: 999 }) });
+    const leaky = "https://user:SUPER_SECRET@[::1";
+    await expect(resolveRpc(1, leaky, CFG, h.deps)).rejects.toSatisfy(
+      (e: unknown) => e instanceof Error && !e.message.includes("SUPER_SECRET") && e.message.includes("redacted"),
+    );
   });
 
   it("uses the committed default when it probes healthy, and caches the choice", async () => {

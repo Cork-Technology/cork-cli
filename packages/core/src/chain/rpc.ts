@@ -1,8 +1,9 @@
 // RPC endpoint resolution with committed defaults, a per-endpoint circuit breaker (retry + backoff),
 // and a just-in-time chainlist.org fallback that picks the best-performing public RPC.
 //
-// Precedence: an explicit URL (CORK_RPC_URL / --rpc-url) always wins and is used verbatim — no
-// probing, no fallback (your config, your call). Otherwise: a committed default for the chain →
+// Precedence: an explicit URL (CORK_RPC_URL / --rpc-url) always wins — no fallback — but it FAILS
+// CLOSED: one eth_chainId probe must prove it serves the requested chain before any client is
+// exposed (audit MCP-NET-002). Otherwise: a committed default for the chain →
 // retried with backoff; if it stays down (breaker opens), fall back to chainlist for eligible public
 // chains, latency-probing candidates and verifying each reports the right chainId before use.
 //
@@ -237,7 +238,9 @@ export function hostOf(url: string): string {
   try {
     return new URL(url).host;
   } catch {
-    return url;
+    // A URL we cannot parse must not be echoed: an endpoint string can carry a token in its
+    // userinfo or path, and this value ends up in warnings and error messages.
+    return "[unparseable endpoint, redacted]";
   }
 }
 
@@ -279,13 +282,35 @@ export class RpcChainMismatchError extends Error {
   }
 }
 
-// eth_chainId verification results for explicit endpoints, memoized per process (one probe per
-// endpoint, not per call). The default/chainlist paths already verify inside their probes.
-const explicitVerified = new Map<string, number>();
+/** Why an explicitly configured endpoint could not be proven to serve the requested chain. */
+export type RpcChainVerificationFailure = "probe_failed" | "missing_or_malformed_chain_id";
+
+/** An explicit endpoint that never PROVED its chain. Distinct from RpcChainMismatchError, which
+ *  is a proven contradiction: this one is an absence of proof, so a later call probes again. */
+export class RpcChainVerificationError extends Error {
+  constructor(url: string, expected: number, readonly failure: RpcChainVerificationFailure) {
+    super(
+      `explicit RPC endpoint (${hostOf(url)}) could not prove it serves chainId ${expected} — ${
+        failure === "probe_failed" ? "its eth_chainId probe failed or timed out" : "its eth_chainId answer was missing or malformed"
+      }. No client was exposed: reads through an unverified endpoint would carry the requested chain's label whatever chain answered. Check connectivity and CORK_RPC_URL/--rpc-url, then retry`,
+    );
+    this.name = "RpcChainVerificationError";
+  }
+}
+
+// VERIFIED explicit endpoints, memoized per (chain, endpoint) — one probe per endpoint, not per
+// call. Only a proven equality is stored: a failed, timed-out, malformed or mismatched probe
+// caches NOTHING, so a later call re-probes instead of inheriting a verdict from a bad moment.
+// The default/chainlist paths already verify inside their own probes.
+const explicitVerified = new Map<string, ResolvedRpc>();
+// Concurrent resolutions of the same (chain, endpoint) share ONE probe — the same single-flight
+// the automatic path has, which the explicit path used to lack.
+const explicitInflight = new Map<string, Promise<ResolvedRpc>>();
 
 /** Test hook: forget explicit-endpoint verification results. */
 export function resetExplicitVerification(): void {
   explicitVerified.clear();
+  explicitInflight.clear();
 }
 
 // In-flight automatic resolutions, keyed by chainId. Deduplicates the cold-start stampede AND the
@@ -311,21 +336,36 @@ export async function resolveRpc(
   cfg: RpcConfig = DEFAULT_CONFIG,
   deps: RpcDeps = realDeps(),
 ): Promise<ResolvedRpc | null> {
-  // 1. explicit URL wins — no fallback, but its chainId IS verified (F21): the hand-configured
-  //    path was the only one skipping the check every automatic path performs. An endpoint that
-  //    doesn't answer the probe is still used verbatim (your config, your call — reads will fail
-  //    loudly on their own); an endpoint that answers with the WRONG chain is refused.
+  // 1. explicit URL wins — no fallback — but it FAILS CLOSED: no client is exposed until one
+  //    eth_chainId probe proves equality with the requested chain (audit MCP-NET-002; F21 made
+  //    the check best-effort, so an endpoint that simply did not answer was used verbatim and
+  //    every read through it carried the requested chain's label whatever chain answered).
+  //    Only the proven equality is memoized, so a blip does not become a sticky verdict.
   if (explicitUrl) {
-    let known = explicitVerified.get(explicitUrl);
-    if (known === undefined) {
-      const r = await deps.probe(explicitUrl, cfg.probeTimeoutMs).catch(() => null);
-      if (r?.ok && r.chainId !== undefined) {
-        explicitVerified.set(explicitUrl, r.chainId);
-        known = r.chainId;
+    const key = `${chainId} ${explicitUrl}`;
+    const verified = explicitVerified.get(key);
+    if (verified) return verified;
+    const pending = explicitInflight.get(key);
+    if (pending) return pending;
+    const verification = (async (): Promise<ResolvedRpc> => {
+      let probe: ProbeResult;
+      try {
+        probe = await deps.probe(explicitUrl, cfg.probeTimeoutMs);
+      } catch {
+        throw new RpcChainVerificationError(explicitUrl, chainId, "probe_failed");
       }
-    }
-    if (known !== undefined && known !== chainId) throw new RpcChainMismatchError(explicitUrl, chainId, known);
-    return { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
+      if (!probe.ok) throw new RpcChainVerificationError(explicitUrl, chainId, "probe_failed");
+      const reported = probe.chainId;
+      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported <= 0) {
+        throw new RpcChainVerificationError(explicitUrl, chainId, "missing_or_malformed_chain_id");
+      }
+      if (reported !== chainId) throw new RpcChainMismatchError(explicitUrl, chainId, reported);
+      const resolved: ResolvedRpc = { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: "explicit" };
+      explicitVerified.set(key, resolved);
+      return resolved;
+    })().finally(() => explicitInflight.delete(key));
+    explicitInflight.set(key, verification);
+    return verification;
   }
 
   const existing = inflight.get(chainId);

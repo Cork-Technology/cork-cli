@@ -315,8 +315,13 @@ token, spender=adapter) — both layers must be in place or the bundle reverts.
 
 ## RPC resolution (chain-backed tools work by default)
 
-Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`;
-`eth_chainId` verified once per process — a wrong-chain endpoint is refused as invalid input) → **built-in default** (committed mainnet + Arbitrum + Base endpoints, jittered backoff behind
+Chain reads pick an endpoint automatically: **explicit** (`CORK_RPC_URL` / `--rpc-url`) —
+FAIL-CLOSED since 2026-08-26 (audit MCP-NET-002): no client is exposed until one `eth_chainId`
+probe PROVES the endpoint serves the requested chain. A wrong-chain answer, a failed/timed-out
+probe, and a missing/malformed answer are all refused as invalid input naming `rpcUrl` (a
+best-effort probe used to mean an endpoint that simply did not answer was used anyway, and every
+read through it wore the requested chain's label). Only a proven equality is memoized — per
+(chain, endpoint), single-flighted — so a blip is not a sticky verdict and a retry re-probes → **built-in default** (committed mainnet + Arbitrum + Base endpoints, jittered backoff behind
 per-endpoint breakers) → **chainlist.org fallback** (chains 1/42161/8453/11155111:
 latency-probe, verify chainId, pick fastest; adds `rpc_fallback`). Endpoint + breaker state are
 cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_CACHE_FILE`;
