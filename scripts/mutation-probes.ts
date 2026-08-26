@@ -2723,6 +2723,24 @@ const CATALOG: Mutant[] = [
     replace: "        if (false) {",
     tests: [T.fusionTrust],
   },
+  {
+    // The hybrid gate stops filtering: an unknown venue-chosen settler is queried again, and its
+    // answer can confirm the row it came with.
+    id: "hybrid-settler-gate-dropped",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'if (digest === undefined || settler === undefined || generation === undefined || generation === "unknown") return undefined;',
+    replace: "if (digest === undefined || settler === undefined) return undefined;",
+    tests: [T.hybridVerify],
+  },
+  {
+    // The track gate stops filtering: an attacker-chosen settler is read and its answer becomes
+    // chain provenance for the venue row that named it.
+    id: "track-settler-gate-dropped",
+    file: "packages/core/src/handlers/track.ts",
+    find: "          if (settlerAddr && configuredSettler && resolved) {",
+    replace: "          if (settlerAddr && resolved) {",
+    tests: [T.rolloverVerify],
+  },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {
     // The single-target comparator flips: a leg at the configured contract reads as a mismatch

@@ -236,7 +236,10 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
   });
 
   it("rollover kind=orders: settler orderStatus contradicting the venue's status DROPS the row", async () => {
-    const settler = "0x983270ae48545665cee4d7ef61c65ff3fdc8222d";
+    // chainId 42161: the settler must be a CONFIGURED generation for its view to arbitrate
+    // anything — see the provenance-gate test below. (This case ran on chain 1, which has no
+    // rollover deployment at all, so it was reading an arbitrary venue-chosen address.)
+    const settler = "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D"; // retired July-2026 ExactSettler
     const rows = [
       { orderDigest: `0x${"11".repeat(32)}`, settler, status: "OPENED" },
       { orderDigest: `0x${"22".repeat(32)}`, settler, status: "OPENED" },
@@ -250,12 +253,41 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
       }
       throw new Error(`no stub for ${c.functionName}`);
     });
-    const env = await query("rollover-orders", { venueFetch: venueWith("rollover", rows), resolveRpc: chain });
+    const env = await query("rollover-orders", { venueFetch: venueWith("rollover", rows), resolveRpc: chain }, { chainId: 42161 });
     const d = env.data as VerifiedData;
     expect(d.count).toBe(2);
     expect(d.items[0]!.verification).toBe("confirmed");
+    expect(d.items[0]!.settlerGeneration).toBe("retired");
     expect(d.items[1]!.verification).toBe("unverified"); // unknown vocabulary kept, labeled
     expect(d.verification.dropped).toBe(1);
+  });
+
+  it("rollover kind=orders: a settler this build does not recognize gets ZERO reads and cannot gain chain provenance", async () => {
+    // The settler address comes from the venue row. Querying an arbitrary contract would let it
+    // answer a lifecycle question we then present as chain truth (audit STATE-003).
+    const attacker = "0x4444444444444444444444444444444444444444";
+    const active = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"; // configured ExactSettler
+    const rows = [
+      { orderDigest: `0x${"41".repeat(32)}`, settler: active, status: "OPENED" },
+      { orderDigest: `0x${"42".repeat(32)}`, settler: attacker, status: "OPENED" },
+    ];
+    const asked: string[] = [];
+    const chain = stubRpc((c) => {
+      if (c.functionName === "orderStatus") {
+        asked.push(c.address.toLowerCase());
+        return 1n; // "Opened" — consistent, so a queried attacker row WOULD have confirmed
+      }
+      throw new Error(`no stub for ${c.functionName}`);
+    });
+    const env = await query("rollover-orders", { venueFetch: venueWith("rollover", rows), resolveRpc: chain }, { chainId: 42161 });
+    const d = env.data as VerifiedData;
+    expect(asked).toEqual([active.toLowerCase()]); // the attacker was never called
+    const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active" });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "unverified", settlerGeneration: "unknown" });
+    expect(d.verification.dropped).toBe(0); // unverified is not refuted: the row still serves
+    const w = env.warnings.find((x) => x.code === "settler_not_recognized")!;
+    expect(w.message).toContain(attacker);
   });
 
   it("rfqs: hybrid's one unverifiable family — rows untouched, disclosure in data.note", async () => {

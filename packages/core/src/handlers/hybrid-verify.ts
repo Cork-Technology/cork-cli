@@ -20,10 +20,11 @@
 import { zeroAddress } from "viem";
 import { poolManagerAbi } from "../chain/abis.ts";
 import { classifyInvalidatorWord, hashLopOrder, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
+import { classifyRolloverSettler } from "../rollover.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
-import { resolveConfig } from "../config-remote.ts";
+import { resolveConfig, resolveRollover } from "../config-remote.ts";
 import { getRpc, type HandlerContext } from "./shared.ts";
 import type { ChainId } from "@cork/schemas";
 
@@ -259,11 +260,24 @@ export async function verifyVenueRows(a: {
     }
   } else {
     // rollover-orders kind=orders: the settler's own orderStatus view arbitrates each row's
-    // claimed lifecycle — the same read cork_track reconcile performs.
+    // claimed lifecycle — the same read cork_track reconcile performs. But the SETTLER ADDRESS
+    // comes from the venue row, which is untrusted discovery data (audit STATE-003): only a
+    // configured active or retired generation may be called or believed. An unknown address is
+    // never queried — a read against it is an attacker-chosen contract answering a question we
+    // would then treat as chain truth — and its row stays venue-provenance, labeled.
+    const { rollover } = await resolveRollover(chainId);
+    const generationOf = (row: Row): "active" | "retired" | "unknown" | undefined => {
+      const settler = str(row.settler);
+      if (settler === undefined) return undefined;
+      if (!rollover) return "unknown";
+      const c = classifyRolloverSettler(rollover, settler);
+      return c.status === "active" || c.status === "retired" ? c.status : "unknown";
+    };
     const readKeyOf = (row: Row): { key: string; settler: `0x${string}`; digest: `0x${string}` } | undefined => {
       const digest = str(row.orderDigest) ?? str((row as { order_digest?: unknown }).order_digest);
       const settler = str(row.settler);
-      if (digest === undefined || settler === undefined) return undefined;
+      const generation = generationOf(row);
+      if (digest === undefined || settler === undefined || generation === undefined || generation === "unknown") return undefined;
       return { key: `${settler.toLowerCase()}:${digest.toLowerCase()}`, settler: settler as `0x${string}`, digest: digest as `0x${string}` };
     };
     const statuses = new Map<string, string | "error">();
@@ -277,22 +291,34 @@ export async function verifyVenueRows(a: {
         }
       }),
     );
+    const unknownSettlers = new Set<string>();
     for (const row of inBudget) {
+      const generation = generationOf(row);
+      // The generation rides on the row: a reader can see WHY a row is unverified.
+      const labeled = generation === undefined ? row : { ...row, settlerGeneration: generation };
+      if (generation === "unknown") unknownSettlers.add(str(row.settler)!.toLowerCase());
       const k = readKeyOf(row);
       const venueStatus = str(row.status);
       if (k === undefined || venueStatus === undefined) {
-        keep(row, "unverified");
+        keep(labeled, "unverified");
         continue;
       }
+      const row_ = labeled;
       const chain = statuses.get(k.key);
-      if (chain === undefined || chain === "error") keep(row, "unverified", true);
-      else if (venueChainConsistent(venueStatus, chain)) keep(row, "confirmed");
+      if (chain === undefined || chain === "error") keep(row_, "unverified", true);
+      else if (venueChainConsistent(venueStatus, chain)) keep(row_, "confirmed");
       else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {
         // Vocabulary neither side of the table knows is INDETERMINATE, never a refutation —
         // the venue grows status words (observed on the 0.3.3 migration) and a newer settler
         // grows enum members; dropping on either would delete valid rows.
-        keep(row, "unverified");
+        keep(row_, "unverified");
       } else drop(`settler orderStatus says ${chain}, contradicting the venue's ${venueStatus}`);
+    }
+    if (unknownSettlers.size > 0) {
+      warnings.push({
+        code: "settler_not_recognized",
+        message: `${String(unknownSettlers.size)} venue row(s) name a settler that is not a configured active or retired Cork generation (${[...unknownSettlers].join(", ")}) — no orderStatus read was issued against it and those rows stay venue-provenance (verification:"unverified"). A read against an unrecognized contract would let it answer a question we then treat as chain truth`,
+      });
     }
   }
 

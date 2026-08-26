@@ -20,9 +20,9 @@ const NOW = 1_790_000_000n;
 const DIGEST = `0x${"4".repeat(64)}`;
 const EXACT = "0x983270ae48545665cee4d7ef61c65ff3fdc8222d";
 
-function venueRow(status: string) {
+function venueRow(status: string, settler: string = EXACT) {
   return {
-    order: { orderDigest: DIGEST, status, settler: EXACT, remainingSize: "0" },
+    order: { orderDigest: DIGEST, status, settler, remainingSize: "0" },
     fills: [],
     slots: [],
   };
@@ -33,21 +33,31 @@ function stubCtx(args: {
   chainStatus?: number; // orderStatus() return; undefined = no RPC resolves
   logs?: Array<{ topic0: string }>; // undefined = no logs endpoint
   logsError?: string;
+  /** The settler the VENUE row names — untrusted discovery data (audit STATE-003). */
+  settler?: string;
+  onOrderStatus?: (address: string) => void;
+  onLogsRequest?: () => void;
 }): HandlerContext {
   const ctx: HandlerContext = {
     nowSeconds: NOW,
     venueFetch: async (url) => {
-      if (url.includes(`/rollover/v1/orders/${DIGEST}`)) return new Response(JSON.stringify(venueRow(args.venueStatus)), { status: 200 });
+      if (url.includes(`/rollover/v1/orders/${DIGEST}`)) return new Response(JSON.stringify(venueRow(args.venueStatus, args.settler ?? EXACT)), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     },
     resolveRpc:
       args.chainStatus === undefined
         ? async () => null
-        : async () => stubResolved({ readContract: async () => args.chainStatus }),
+        : async () => stubResolved({
+            readContract: async ({ address }: { address: string }) => {
+              args.onOrderStatus?.(address.toLowerCase());
+              return args.chainStatus;
+            },
+          }),
   };
   if (args.logs !== undefined || args.logsError) {
     ctx.logsUrl = "https://stub-logs/rpc";
     ctx.logsFetch = async () => {
+      args.onLogsRequest?.();
       if (args.logsError) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: args.logsError } }), { status: 200 });
       return new Response(
         JSON.stringify({
@@ -64,6 +74,53 @@ function stubCtx(args: {
 
 const track = (ctx: HandlerContext) =>
   runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, ctx);
+
+describe("settler provenance gate [STATE-003]: only a configured generation may be read or believed", () => {
+  const ACTIVE = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"; // configured ExactSettler (rc.2)
+  const ATTACKER = "0x4444444444444444444444444444444444444444";
+
+  it("an unrecognized venue-chosen settler gets ZERO orderStatus reads and ZERO log requests", async () => {
+    const asked: string[] = [];
+    let logRequests = 0;
+    const env = await track(stubCtx({
+      venueStatus: "OPENED",
+      chainStatus: 1,
+      settler: ATTACKER,
+      logs: [],
+      onOrderStatus: (a) => asked.push(a),
+      onLogsRequest: () => { logRequests += 1; },
+    }));
+    // A read would have let the attacker's contract answer "Opened" and the row would have
+    // carried chain provenance for a lifecycle IT authored.
+    expect(asked).toEqual([]);
+    expect(logRequests).toBe(0);
+    expect(env.state).toBe("ok");
+    expect(env.provenance.source).toBe("indexer"); // venue-reported, not chain
+    expect((env.data as { chainVerification?: unknown }).chainVerification).toBeUndefined();
+    const w = env.warnings.find((x) => x.code === "settler_not_recognized")!;
+    expect(w.message).toContain(ATTACKER);
+    // The generic venue-reported note is NOT also emitted — one precise reason, not two.
+    expect(env.warnings.filter((x) => x.code === "venue_reported")).toHaveLength(0);
+  });
+
+  it.each([["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"], ["retired", EXACT]])(
+    "a configured %s settler IS read, and its generation rides on the verification",
+    async (generation, settler) => {
+      const asked: string[] = [];
+      const env = await track(stubCtx({ venueStatus: "OPENED", chainStatus: 1, settler, onOrderStatus: (a) => asked.push(a) }));
+      expect(asked).toEqual([settler.toLowerCase()]);
+      expect(env.state).toBe("ok");
+      expect(env.provenance.source).toBe("chain");
+      expect(env.data).toMatchObject({ chainVerification: { settler, settlerGeneration: generation, chainStatus: "Opened", consistent: true } });
+    },
+  );
+
+  it("the gate does not weaken the conflict rule: a CONFIGURED settler contradicting the venue still conflicts", async () => {
+    const env = await track(stubCtx({ venueStatus: "SETTLED", chainStatus: 1, settler: ACTIVE }));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("status_mismatch");
+  });
+});
 
 describe("status leg (settler orderStatus view)", () => {
   it("venue SETTLED + chain Settled → ok, chain-sourced, consistent", async () => {

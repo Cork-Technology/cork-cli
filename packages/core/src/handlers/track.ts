@@ -6,6 +6,7 @@ import { computeMarketId } from "../marketid.ts";
 import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
 import { classifyInvalidatorWord, LOP_ADDRESSES, lopInvalidatorPlan, type LopOnChainStatus, readLopInvalidator } from "../orders.ts";
+import { classifyRolloverSettler } from "../rollover.ts";
 import { JIT_EVENTS } from "../market-registry.ts";
 import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
@@ -19,6 +20,9 @@ import { collectVenuePages } from "./query.ts";
 type RolloverChainVerification = {
   leg?: string;
   settler?: `0x${string}`;
+  /** Which configured generation the settler belongs to — chain provenance is only ever
+   *  attached to a settler this build recognizes. */
+  settlerGeneration?: "active" | "retired";
   chainStatus?: ReturnType<typeof chainStatusName>;
   venueStatus?: string;
   consistent?: boolean;
@@ -206,8 +210,20 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           let chainVerification: RolloverChainVerification | undefined;
           const { rollover } = await resolveRollover(chainId);
           const settlerAddr = typeof order.settler === "string" ? (order.settler as `0x${string}`) : undefined;
+          // The venue row CHOSE this address. Reading `orderStatus` from an unrecognized contract
+          // would let it answer a lifecycle question we then treat as chain truth, and scanning
+          // its logs would let it author "chain evidence" (audit STATE-003). Only a configured
+          // active or retired generation is called.
+          const classification = settlerAddr && rollover ? classifyRolloverSettler(rollover, settlerAddr) : undefined;
+          const configuredSettler = classification?.status === "active" || classification?.status === "retired" ? classification.status : undefined;
+          if (settlerAddr !== undefined && configuredSettler === undefined) {
+            warnings.push({
+              code: "settler_not_recognized",
+              message: `the venue row names settler ${settlerAddr}, which is not a configured active or retired Cork rollover generation for chainId ${chainId} — no orderStatus read and no log scan were issued against it, and this result stays venue-reported. A read against an unrecognized contract would let it answer a question we then treat as chain truth`,
+            });
+          }
           const resolved = settlerAddr ? await getRpc(ctx, chainId) : null;
-          if (settlerAddr && resolved) {
+          if (settlerAddr && configuredSettler && resolved) {
             try {
               const statusNum = (await resolved.client.readContract({
                 address: settlerAddr,
@@ -217,7 +233,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               })) as number;
               const chainStatus = chainStatusName(statusNum);
               const consistent = venueChainConsistent(venueStatus, chainStatus);
-              chainVerification = { leg: "orderStatus (settler view, live RPC)", settler: settlerAddr, chainStatus, venueStatus, consistent };
+              chainVerification = { leg: "orderStatus (settler view, live RPC)", settler: settlerAddr, settlerGeneration: configuredSettler, chainStatus, venueStatus, consistent };
               if (!consistent) {
                 // Chain outranks the venue: disagreement is an explicit conflict, with the
                 // indexer's finality lag (~75 s on Arbitrum) noted for freshly-updated rows.
@@ -233,14 +249,15 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             } catch (err) {
               warnings.push({ code: "chain_read_failed", message: `orderStatus verification read failed (${firstLine(err)}) — result is venue-reported only` });
             }
-          } else {
+          } else if (settlerAddr === undefined || configuredSettler !== undefined) {
+            // An unrecognized settler already has its own, more specific warning above.
             warnings.push(venueNote);
           }
 
           // Event-history leg via a logs-capable endpoint (HyperRPC preferred; token sent as a
           // Bearer header by fetchDigestLogs, never in the URL).
           const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
-          if (logsEndpoint && rollover) {
+          if (logsEndpoint && rollover && settlerAddr !== undefined && configuredSettler !== undefined) {
             try {
               // A digest binds to ONE settler (its EIP-712 domain), so the venue row's settler
               // scopes the scan to that address and its generation's seed block — retired
@@ -254,7 +271,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                 fromBlock: targets.fromBlock,
                 ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
               });
-              chainVerification = { ...(chainVerification ?? {}), events: labelLogs(logs) };
+              chainVerification = { ...(chainVerification ?? { settler: settlerAddr, settlerGeneration: configuredSettler }), events: labelLogs(logs) };
             } catch (err) {
               warnings.push(
                 err instanceof LogsRangeLimited
@@ -262,7 +279,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   : { code: "logs_unavailable", message: `event-history leg failed: ${firstLine(err)}` },
               );
             }
-          } else if (!logsEndpoint) {
+          } else if (!logsEndpoint && (settlerAddr === undefined || configuredSettler !== undefined)) {
             warnings.push({ code: "logs_unavailable", message: "no logs-capable endpoint configured (set ENVIO_API_TOKEN for HyperRPC, or CORK_LOGS_RPC_URL) — event history omitted; status leg above still applies when an RPC resolved" });
           }
 
