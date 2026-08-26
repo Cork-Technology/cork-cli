@@ -13,6 +13,18 @@
       "kind": "type"
     },
     {
+      "name": "AttributableLog",
+      "kind": "type"
+    },
+    {
+      "name": "AttributedEvent",
+      "kind": "type"
+    },
+    {
+      "name": "AttributedLogs",
+      "kind": "type"
+    },
+    {
       "name": "AuctionPriceReport",
       "kind": "type"
     },
@@ -207,6 +219,10 @@
     {
       "name": "ERC20_TRANSFER_TOPIC",
       "kind": "value"
+    },
+    {
+      "name": "EmitterRole",
+      "kind": "type"
     },
     {
       "name": "EnvioProduct",
@@ -413,10 +429,6 @@
       "kind": "value"
     },
     {
-      "name": "LabeledLog",
-      "kind": "type"
-    },
-    {
       "name": "LegVerification",
       "kind": "type"
     },
@@ -529,6 +541,10 @@
       "kind": "type"
     },
     {
+      "name": "OtherLog",
+      "kind": "type"
+    },
+    {
       "name": "PAUSE_BIT",
       "kind": "value"
     },
@@ -554,6 +570,10 @@
     },
     {
       "name": "PREPARE_MARKET_IMPLEMENTATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "PROTOCOL_EVENTS",
       "kind": "value"
     },
     {
@@ -598,6 +618,10 @@
     },
     {
       "name": "ProbeResult",
+      "kind": "type"
+    },
+    {
+      "name": "ProtocolEmitter",
       "kind": "type"
     },
     {
@@ -889,6 +913,10 @@
       "kind": "value"
     },
     {
+      "name": "UnattributedEvent",
+      "kind": "type"
+    },
+    {
       "name": "UnsignedApprovalTx",
       "kind": "type"
     },
@@ -990,6 +1018,10 @@
     },
     {
       "name": "approvedImplementationGuard",
+      "kind": "value"
+    },
+    {
+      "name": "attributeLogs",
       "kind": "value"
     },
     {
@@ -1529,10 +1561,6 @@
       "kind": "value"
     },
     {
-      "name": "labelLogs",
-      "kind": "value"
-    },
-    {
       "name": "loadHyperSync",
       "kind": "value"
     },
@@ -1698,6 +1726,10 @@
     },
     {
       "name": "previewUnwindSwap",
+      "kind": "value"
+    },
+    {
+      "name": "protocolEmittersFor",
       "kind": "value"
     },
     {
@@ -2929,6 +2961,18 @@
       "kind": "type"
     },
     {
+      "name": "AttributableLog",
+      "kind": "type"
+    },
+    {
+      "name": "AttributedEvent",
+      "kind": "type"
+    },
+    {
+      "name": "AttributedLogs",
+      "kind": "type"
+    },
+    {
       "name": "AuctionPriceReport",
       "kind": "type"
     },
@@ -2967,6 +3011,10 @@
     {
       "name": "ERC1271_MAGIC",
       "kind": "value"
+    },
+    {
+      "name": "EmitterRole",
+      "kind": "type"
     },
     {
       "name": "FORSELF_ACTION_MAP",
@@ -3041,10 +3089,6 @@
       "kind": "value"
     },
     {
-      "name": "LabeledLog",
-      "kind": "type"
-    },
-    {
       "name": "LogsEndpoint",
       "kind": "type"
     },
@@ -3113,12 +3157,24 @@
       "kind": "type"
     },
     {
+      "name": "OtherLog",
+      "kind": "type"
+    },
+    {
       "name": "PERMIT2_ADDRESS",
       "kind": "value"
     },
     {
       "name": "PERMIT2_EXPIRATION_NEVER",
       "kind": "value"
+    },
+    {
+      "name": "PROTOCOL_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "ProtocolEmitter",
+      "kind": "type"
     },
     {
       "name": "ROLLOVER_INTENT_TYPEHASH",
@@ -3193,6 +3249,10 @@
       "kind": "type"
     },
     {
+      "name": "UnattributedEvent",
+      "kind": "type"
+    },
+    {
       "name": "UnsignedApprovalTx",
       "kind": "type"
     },
@@ -3206,6 +3266,10 @@
     },
     {
       "name": "approvalMissingWarning",
+      "kind": "value"
+    },
+    {
+      "name": "attributeLogs",
       "kind": "value"
     },
     {
@@ -3393,10 +3457,6 @@
       "kind": "value"
     },
     {
-      "name": "labelLogs",
-      "kind": "value"
-    },
-    {
       "name": "lopCallName",
       "kind": "value"
     },
@@ -3438,6 +3498,10 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "protocolEmittersFor",
       "kind": "value"
     },
     {

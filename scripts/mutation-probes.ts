@@ -65,6 +65,7 @@ const T = {
   releaseTag: "packages/cli/test/release-tag.test.ts",
   mcpSignals: "packages/cli/test/mcp-signals.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
+  eventAttribution: "packages/core/test/event-attribution.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
@@ -2736,12 +2737,50 @@ const CATALOG: Mutant[] = [
     tests: [T.hybridVerify],
   },
   {
+    // STATE-007: the role check is dropped — any configured contract may emit any protocol
+    // event, so an ExactSettler's `JITMinted` (or the wrong generation's market-created
+    // layout) reads as lifecycle evidence.
+    id: "event-attribution-role-check-dropped",
+    file: "packages/core/src/event-attribution.ts",
+    find: "    if (emitter === undefined || !spec.roles.includes(emitter.role)) {",
+    replace: "    if (emitter === undefined) {",
+    tests: [T.eventAttribution],
+  },
+  {
+    // STATE-007: the emitter is no longer matched by address — the first configured emitter
+    // vouches for every log, which is the topic-only labeling the finding removed.
+    id: "event-attribution-emitter-match-dropped",
+    file: "packages/core/src/event-attribution.ts",
+    find: "    const emitter = emitters.find((e) => e.address.toLowerCase() === log.address.toLowerCase());",
+    replace: "    const emitter = emitters[0];",
+    tests: [T.eventAttribution],
+  },
+  {
+    // STATE-007: a recognized-but-unauthenticated event is silently dropped from the receipt
+    // instead of reported — the reader loses exactly the log that names an impostor.
+    id: "track-receipt-unattributed-dropped",
+    file: "packages/core/src/handlers/track.ts",
+    find: "          ...(a.unattributedEvents.length ? { unattributedEvents: a.unattributedEvents } : {}),",
+    replace: "",
+    tests: [T.eventAttribution],
+  },
+  {
+    // STATE-007: the history leg attributes against EVERY configured emitter instead of the one
+    // settler the digest binds to — a logs endpoint can then decorate one order's history with
+    // another settler's events.
+    id: "track-history-scope-dropped",
+    file: "packages/core/src/handlers/track.ts",
+    find: "              const emitters = (await protocolEmittersFor(chainId)).filter((e) => e.address.toLowerCase() === settlerAddr.toLowerCase());",
+    replace: "              const emitters = await protocolEmittersFor(chainId);",
+    tests: [T.eventAttribution],
+  },
+  {
     // The track gate stops filtering: an attacker-chosen settler is read and its answer becomes
     // chain provenance for the venue row that named it.
     id: "track-settler-gate-dropped",
     file: "packages/core/src/handlers/track.ts",
-    find: "          if (settlerAddr && configuredSettler && resolved) {",
-    replace: "          if (settlerAddr && resolved) {",
+    find: "          const settlerReadable = settlerAddr !== undefined && configuredSettler !== undefined;",
+    replace: "          const settlerReadable = settlerAddr !== undefined;",
     tests: [T.rolloverVerify],
   },
   {

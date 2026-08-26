@@ -8,3 +8,4 @@ export * from "../forself.ts";
 export * from "../fusion.ts";
 export * from "../rollover.ts";
 export * from "../rollover-verify.ts";
+export * from "../event-attribution.ts";

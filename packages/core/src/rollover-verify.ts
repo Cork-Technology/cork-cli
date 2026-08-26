@@ -110,7 +110,7 @@ export interface RawLog {
 }
 
 /** Shape gate for eth_getLogs rows (external, untrusted): blockNumber must be BigInt-parsable
- *  hex — labelLogs feeds it straight to BigInt(). Extra fields pass through (loose object). */
+ *  hex — attributeLogs feeds it straight to BigInt(). Extra fields pass through (loose object). */
 const RawLogRows = z.array(
   z.looseObject({
     address: z.string(),
@@ -187,28 +187,11 @@ export async function fetchDigestLogs(args: {
     throw new Error(`logs endpoint error: ${msg}`);
   }
   // Same trust boundary venue.ts zod-guards: the rows are UNTRUSTED external input, and an
-  // unshaped row used to escape as a raw TypeError from labelLogs' BigInt(blockNumber) instead
+  // unshaped row used to escape as a raw TypeError from the labeler's BigInt(blockNumber) instead
   // of the honest typed error every other malformed response gets.
   const rows = RawLogRows.safeParse(body.result);
   if (!rows.success) throw new Error(`logs endpoint returned malformed log rows (${scrub(rows.error.issues[0]?.message ?? "shape mismatch")})`);
   return rows.data;
-}
-
-export interface LabeledLog {
-  event: string;
-  address: string;
-  txHash: string;
-  /** Decimal string — chain integers ride the wire as strings everywhere else (F10). */
-  blockNumber: string;
-}
-
-export function labelLogs(logs: RawLog[]): LabeledLog[] {
-  return logs.map((l) => ({
-    event: SETTLER_EVENTS[l.topics[0] ?? ""] ?? `unknown (topic0 ${(l.topics[0] ?? "0x").slice(0, 10)}…)`,
-    address: l.address,
-    txHash: l.transactionHash,
-    blockNumber: BigInt(l.blockNumber).toString(),
-  }));
 }
 
 /** Deterministic content tag for a verification result (debug/aids diffing). */

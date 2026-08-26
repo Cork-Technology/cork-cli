@@ -7,9 +7,9 @@ import { readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
 import { classifyInvalidatorWord, LOP_ADDRESSES, lopInvalidatorPlan, type LopOnChainStatus, readLopInvalidator } from "../orders.ts";
 import { classifyRolloverSettler } from "../rollover.ts";
-import { JIT_EVENTS } from "../market-registry.ts";
+import { type AttributedLogs, attributeLogs, protocolEmittersFor } from "../event-attribution.ts";
 import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts";
-import { chainStatusName, fetchDigestLogs, labelLogs, LogsRangeLimited, resolveLogsEndpoint, SETTLER_EVENTS, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
+import { chainStatusName, fetchDigestLogs, LogsRangeLimited, resolveLogsEndpoint, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
@@ -26,8 +26,20 @@ type RolloverChainVerification = {
   chainStatus?: ReturnType<typeof chainStatusName>;
   venueStatus?: string;
   consistent?: boolean;
-  events?: ReturnType<typeof labelLogs>;
+  /** Emitter-authenticated lifecycle events for this digest (audit STATE-007). */
+  events?: AttributedLogs["corkEvents"];
+  /** Recognized topics from an emitter NOT configured for them — reported, never evidence. */
+  unattributedEvents?: AttributedLogs["unattributedEvents"];
+  /** Logs whose topic this build does not know, byte-exact. */
+  otherLogs?: AttributedLogs["otherLogs"];
 };
+
+/** Spread an attribution into a verification block, omitting empty collections. */
+const attributionFields = (a: AttributedLogs): Pick<RolloverChainVerification, "events" | "unattributedEvents" | "otherLogs"> => ({
+  events: a.corkEvents,
+  ...(a.unattributedEvents.length ? { unattributedEvents: a.unattributedEvents } : {}),
+  ...(a.otherLogs.length ? { otherLogs: a.otherLogs } : {}),
+});
 
 /** [K7] chain-verification payload on lop-order reconcile results: the live LOP invalidator. */
 type LopChainVerification = {
@@ -169,16 +181,31 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const client = resolved.client;
     const rpc = () => rpcProvenance(input.format, resolved);
     try {
-      const r = await client.getTransactionReceipt({ hash: subj.txHash });
-      // Label known Cork lifecycle events in the receipt (settler rollover events + the JIT
-      // adapter's market-creation/mint events) so an agent sees WHAT happened, not just a count.
-      const labeled = r.logs
-        .map((l) => {
-          const name = (l.topics[0] && (SETTLER_EVENTS[l.topics[0]] ?? JIT_EVENTS[l.topics[0]])) || undefined;
-          return name ? { event: name, address: l.address, ...(l.topics[1] ? { topic1: l.topics[1] } : {}) } : undefined;
-        })
-        .filter((x): x is NonNullable<typeof x> => x !== undefined);
-      return envelope({ state: "ok", data: { txHash: subj.txHash, status: r.status, blockNumber: r.blockNumber, gasUsed: r.gasUsed, logs: r.logs.length, ...(labeled.length ? { corkEvents: labeled } : {}) }, chainId, source: "chain", block: r.blockNumber, ...rpc(), ctx });
+      const [r, emitters] = await Promise.all([client.getTransactionReceipt({ hash: subj.txHash }), protocolEmittersFor(chainId)]);
+      // Label Cork lifecycle events in the receipt so an agent sees WHAT happened, not just a
+      // count — attributed by EMITTER, not by topic alone: any contract can emit
+      // `OrderSettled(bytes32)`, and a receipt names every contract the tx touched. A recognized
+      // topic from the wrong emitter rides as `unattributedEvents`; unknown logs ride byte-exact
+      // as `otherLogs`. Neither is lifecycle evidence (audit STATE-007).
+      const a = attributeLogs(r.logs, emitters);
+      return envelope({
+        state: "ok",
+        data: {
+          txHash: subj.txHash,
+          status: r.status,
+          blockNumber: r.blockNumber,
+          gasUsed: r.gasUsed,
+          logs: r.logs.length,
+          ...(a.corkEvents.length ? { corkEvents: a.corkEvents } : {}),
+          ...(a.unattributedEvents.length ? { unattributedEvents: a.unattributedEvents } : {}),
+          ...(a.otherLogs.length ? { otherLogs: a.otherLogs } : {}),
+        },
+        chainId,
+        source: "chain",
+        block: r.blockNumber,
+        ...rpc(),
+        ctx,
+      });
     } catch (err) {
       // A missing receipt is a normal outcome (pending/unknown tx); anything else is a real
       // chain-read failure and must not masquerade as "not found".
@@ -271,7 +298,10 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                 fromBlock: targets.fromBlock,
                 ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
               });
-              chainVerification = { ...(chainVerification ?? { settler: settlerAddr, settlerGeneration: configuredSettler }), events: labelLogs(logs) };
+              // Scoped to the ONE settler this digest binds to — the logs endpoint is an external
+              // party; it must not be able to substitute another emitter into this history.
+              const emitters = (await protocolEmittersFor(chainId)).filter((e) => e.address.toLowerCase() === settlerAddr.toLowerCase());
+              chainVerification = { ...(chainVerification ?? { settler: settlerAddr, settlerGeneration: configuredSettler }), ...attributionFields(attributeLogs(logs, emitters)) };
             } catch (err) {
               warnings.push(
                 err instanceof LogsRangeLimited
@@ -422,7 +452,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               const warnings: Array<{ code: string; message: string }> = [
                 { code: "order_not_found", message: `the venue serves no row for this digest (normal once a generation is archived), but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer [K7]` },
               ];
-              let events: ReturnType<typeof labelLogs> | undefined;
+              let attribution: AttributedLogs | undefined;
               const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
               if (logsEndpoint) {
                 try {
@@ -435,7 +465,8 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                     fromBlock: targets.fromBlock,
                     ...(ctx.venueFetch || ctx.logsFetch ? { fetchImpl: ctx.logsFetch ?? ctx.venueFetch! } : {}),
                   });
-                  events = labelLogs(logs);
+                  const emitters = (await protocolEmittersFor(chainId)).filter((e) => e.address.toLowerCase() === settler.toLowerCase());
+                  attribution = attributeLogs(logs, emitters);
                 } catch (err) {
                   warnings.push(
                     err instanceof LogsRangeLimited
@@ -451,7 +482,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   orderDigest: digest,
                   lifecycle: null,
                   order: null,
-                  chainVerification: { leg: "orderStatus (settler view, live RPC; venue-miss sweep)", settler, chainStatus, ...(events ? { events } : {}) },
+                  chainVerification: { leg: "orderStatus (settler view, live RPC; venue-miss sweep)", settler, chainStatus, ...(attribution ? attributionFields(attribution) : {}) },
                 },
                 chainId,
                 source: "chain",

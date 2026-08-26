@@ -8,7 +8,7 @@ import {
   venueChainConsistent,
   resolveLogsEndpoint,
   fetchDigestLogs,
-  labelLogs,
+  attributeLogs,
   LogsRangeLimited,
   verificationDigest,
   SETTLER_EVENTS,
@@ -318,20 +318,27 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
   });
 });
 
-describe("labelLogs", () => {
-  it("labels known settler events and tags unknown topic0s honestly", () => {
+describe("attributeLogs (history rows)", () => {
+  const retiredExact = [{ address: EXACT as `0x${string}`, role: "exactSettler" as const, generation: "retired" as const, label: "july-2026" }];
+  it("attributes a known settler event from its configured emitter; an unknown topic rides byte-exact as otherLogs", () => {
     const known = toEventSelector("OrderSettled(bytes32)");
-    const labeled = labelLogs([
-      { address: EXACT, topics: [known, DIGEST], data: "0x", blockNumber: "0x1de5b3a0", transactionHash: `0x${"ab".repeat(32)}`, logIndex: "0x0" },
-      { address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0x", blockNumber: "0x1de5b3a1", transactionHash: `0x${"cd".repeat(32)}`, logIndex: "0x1" },
+    const a = attributeLogs(
+      [
+        { address: EXACT, topics: [known, DIGEST], data: "0x", blockNumber: "0x1de5b3a0", transactionHash: `0x${"ab".repeat(32)}`, logIndex: "0x0" },
+        { address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0xbeef", blockNumber: "0x1de5b3a1", transactionHash: `0x${"cd".repeat(32)}`, logIndex: "0x1" },
+      ],
+      retiredExact,
+    );
+    expect(a.corkEvents).toEqual([
+      { event: "OrderSettled", address: EXACT, emitter: { role: "exactSettler", generation: "retired", label: "july-2026" }, topic1: DIGEST, txHash: `0x${"ab".repeat(32)}`, blockNumber: String(0x1de5b3a0), logIndex: "0" },
     ]);
-    expect(labeled[0]?.event).toBe("OrderSettled");
-    expect(labeled[0]?.blockNumber).toBe(String(0x1de5b3a0)); // chain integers ride as strings (F10)
-    expect(labeled[1]?.event).toBe("unknown (topic0 0xdededede…)");
+    expect(a.unattributedEvents).toEqual([]);
+    expect(a.otherLogs).toEqual([{ address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0xbeef", txHash: `0x${"cd".repeat(32)}`, blockNumber: String(0x1de5b3a1), logIndex: "1" }]);
   });
-  it("does not throw on a log with no topics", () => {
-    const labeled = labelLogs([{ address: EXACT, topics: [], data: "0x", blockNumber: "0x0", transactionHash: "0x", logIndex: "0x0" }]);
-    expect(labeled[0]?.event).toMatch(/^unknown/);
+  it("does not throw on a log with no topics — it is an other log", () => {
+    const a = attributeLogs([{ address: EXACT, topics: [], data: "0x", blockNumber: "0x0", transactionHash: "0x", logIndex: "0x0" }], retiredExact);
+    expect(a.corkEvents).toEqual([]);
+    expect(a.otherLogs).toHaveLength(1);
   });
 });
 
