@@ -22,6 +22,19 @@ describe("compareVersions", () => {
     expect(compareVersions("v1.2.3", "v1.2.3-rc.1")).toBeGreaterThan(0);
     expect(compareVersions("v1.2.3-rc.1", "v1.2.3-rc.2")).toBeLessThan(0);
   });
+  it("orders prerelease identifiers by SemVer §11: NUMERIC ones numerically (rc.10 > rc.9)", () => {
+    // A plain string compare puts "rc.10" below "rc.9", so self-update would have offered rc.9
+    // as an "update" over rc.10 — and refused rc.10 as a downgrade.
+    expect(compareVersions("v1.2.3-rc.10", "v1.2.3-rc.9")).toBeGreaterThan(0);
+    expect(compareVersions("v1.2.3-rc.2", "v1.2.3-rc.10")).toBeLessThan(0);
+    // numeric sorts below non-numeric; a shorter identifier list sorts below a longer one
+    expect(compareVersions("v1.2.3-1", "v1.2.3-alpha")).toBeLessThan(0);
+    expect(compareVersions("v1.2.3-rc", "v1.2.3-rc.1")).toBeLessThan(0);
+    expect(compareVersions("v1.2.3-alpha.1", "v1.2.3-beta.1")).toBeLessThan(0);
+    // leading zeros and absurd lengths still compare by value, not by text
+    expect(compareVersions("v1.2.3-rc.007", "v1.2.3-rc.7")).toBe(0);
+    expect(compareVersions(`v1.2.3-rc.${"9".repeat(40)}`, "v1.2.3-rc.8")).toBeGreaterThan(0);
+  });
 });
 
 describe("release asset naming", () => {

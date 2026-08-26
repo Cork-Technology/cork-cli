@@ -23,10 +23,37 @@ export const BUILD_TARGET: string = process.env.CH_BUILD_TARGET ?? "";
  */
 export const HYPERSYNC_BINDING: string | null = process.env.CH_HYPERSYNC_BINDING ?? null;
 
+/** Compare two dot-separated prerelease identifier lists by SemVer §11 precedence: numeric
+ *  identifiers compare NUMERICALLY (so rc.10 > rc.9 — a plain string compare gets this backwards
+ *  and would offer rc.9 as an "update" over rc.10), numeric sorts below non-numeric, and a
+ *  shorter list sorts below an otherwise-equal longer one. */
+function comparePrerelease(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a === "") return 1; // a release outranks its own prerelease
+  if (b === "") return -1;
+  const as = a.split(".");
+  const bs = b.split(".");
+  for (let i = 0; i < Math.min(as.length, bs.length); i++) {
+    const x = as[i]!;
+    const y = bs[i]!;
+    if (x === y) continue;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) {
+      const d = BigInt(x) - BigInt(y); // BigInt: an absurdly long identifier must not lose precision
+      if (d !== 0n) return d > 0n ? 1 : -1;
+      continue;
+    }
+    if (xNum !== yNum) return xNum ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return as.length - bs.length;
+}
+
 /**
  * Compare two release versions ("v1.2.3", "1.2.3", "v1.2.3-rc.1"). Returns <0 | 0 | >0.
  * Numeric dot-segments compare numerically; a pre-release suffix sorts BELOW its release
- * (1.2.3-rc.1 < 1.2.3), matching semver precedence for the shapes our tags actually use.
+ * (1.2.3-rc.1 < 1.2.3), and prerelease identifiers follow SemVer §11 precedence.
  */
 export function compareVersions(a: string, b: string): number {
   const parse = (v: string): { nums: number[]; pre: string } => {
@@ -46,8 +73,5 @@ export function compareVersions(a: string, b: string): number {
     const d = (pa.nums[i] ?? 0) - (pb.nums[i] ?? 0);
     if (d !== 0) return d;
   }
-  if (pa.pre === pb.pre) return 0;
-  if (pa.pre === "") return 1; // release > its own pre-release
-  if (pb.pre === "") return -1;
-  return pa.pre < pb.pre ? -1 : 1;
+  return comparePrerelease(pa.pre, pb.pre);
 }

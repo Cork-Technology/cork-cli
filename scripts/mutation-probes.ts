@@ -61,6 +61,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
+  selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
   releaseTag: "packages/cli/test/release-tag.test.ts",
   mcpSignals: "packages/cli/test/mcp-signals.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
@@ -2767,6 +2768,51 @@ const CATALOG: Mutant[] = [
     find: "      if (hops >= MAX_REDIRECTS) throw new Error(",
     replace: "      if (hops >= MAX_REDIRECTS * 1000) throw new Error(",
     tests: [T.venueRedirect],
+  },
+  {
+    // Prerelease identifiers compare as TEXT again: rc.9 outranks rc.10, so self-update offers
+    // an older prerelease as an update and refuses the newer one as a downgrade.
+    id: "version-prerelease-numeric-order-lost",
+    file: "packages/core/src/version.ts",
+    find: "      const d = BigInt(x) - BigInt(y);",
+    replace: "      const d = x < y ? -1n : x > y ? 1n : 0n;",
+    tests: [T.release],
+  },
+  {
+    // The staged artifact's identity is no longer compared: a genuine-but-different release
+    // asset passes provenance and is swapped in.
+    id: "selfupdate-identity-field-check-dropped",
+    file: "packages/cli/src/self-update.ts",
+    find: "    if (identity[field] !== expected[field]) {",
+    replace: "    if (identity[field] !== expected[field] && false) {",
+    tests: [T.selfUpdateIdentity],
+  },
+  {
+    // The identity run regains the ambient search path: untrusted staged bytes can reach every
+    // helper installed on the machine before they are accepted.
+    id: "selfupdate-identity-path-restored",
+    file: "packages/cli/src/self-update.ts",
+    find: '  const env: NodeJS.ProcessEnv = { PATH: "", CI: "1"',
+    replace: '  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? "", CI: "1"',
+    tests: [T.selfUpdateIdentity],
+  },
+  {
+    // Only the direct child is killed on a timeout: a descendant the staged binary spawned is
+    // orphaned and keeps running after the update was refused.
+    id: "selfupdate-identity-kills-only-direct-child",
+    file: "packages/cli/src/self-update.ts",
+    find: '    process.kill(-pid, "SIGKILL");',
+    replace: '    process.kill(pid, "SIGKILL");',
+    tests: [T.selfUpdateIdentity],
+  },
+  {
+    // An annotated tag stops being peeled: the attestation is bound to a tag object rather than
+    // to the commit the release claims.
+    id: "selfupdate-tag-peel-dropped",
+    file: "packages/cli/src/self-update.ts",
+    find: '  for (let peels = 0; object.type === "tag"; peels++) {',
+    replace: "  for (let peels = 0; false; peels++) {",
+    tests: [T.selfUpdateIdentity],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {

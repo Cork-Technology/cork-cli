@@ -905,11 +905,12 @@ export async function runCli(
 
   program
     .command("self-update")
-    .description("update ch in place from the latest GitHub release (verifies provenance before swapping)")
+    .description("update ch in place from the latest GitHub release (verifies provenance AND the staged binary's identity before swapping; never downgrades unless asked)")
     .option("--tag <tag>", "update to a specific release tag instead of latest")
     .option("--dry-run", "resolve and report what would change without downloading")
-    .action(async (opts: { tag?: string; dryRun?: boolean }) => {
-      const res = await runSelfUpdate({ ...(opts.tag ? { tag: opts.tag } : {}), ...(opts.dryRun ? { dryRun: true } : {}) });
+    .option("--allow-downgrade", "permit an OLDER release than the installed one (deliberate rollback; an older release verifies exactly like a newer one)")
+    .action(async (opts: { tag?: string; dryRun?: boolean; allowDowngrade?: boolean }) => {
+      const res = await runSelfUpdate({ ...(opts.tag ? { tag: opts.tag } : {}), ...(opts.dryRun ? { dryRun: true } : {}), ...(opts.allowDowngrade ? { allowDowngrade: true } : {}) });
       out += res.out;
       err += res.err;
       code = res.code === 0 ? EXIT.ok : EXIT.error;

@@ -106,7 +106,7 @@ describe("a GET read may follow same-origin redirects, within a bound", () => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ items: [{ orderHash: `0x${"11".repeat(32)}` }], hasMore: false }));
     });
-    const page = await getLopOrderbook({ baseUrl: venue, breaker: null }, {});
+    const page = await getLopOrderbook({ baseUrl: venue, breaker: null }, { chainId: 1 });
     expect(page.items).toHaveLength(1);
   });
 
@@ -117,7 +117,7 @@ describe("a GET read may follow same-origin redirects, within a bound", () => {
       res.writeHead(302, { location: `/limit-orders/v1/orderbook?hop=${hop}` });
       res.end();
     });
-    await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, {})).rejects.toBeInstanceOf(VenueUnreachable);
+    await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, { chainId: 1 })).rejects.toBeInstanceOf(VenueUnreachable);
     // 1 original + 3 followed hops, then the refusal. (The venue transport retries idempotent
     // GETs once, so the whole sequence runs twice.)
     expect(hop).toBe(8);
@@ -130,7 +130,7 @@ describe("a GET read may follow same-origin redirects, within a bound", () => {
       res.writeHead(302, { location: `${elsewhere}/limit-orders/v1/orderbook` });
       res.end();
     });
-    await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, {})).rejects.toBeInstanceOf(VenueUnreachable);
+    await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, { chainId: 1 })).rejects.toBeInstanceOf(VenueUnreachable);
     expect(seen.count).toBe(0);
   });
 
@@ -140,7 +140,7 @@ describe("a GET read may follow same-origin redirects, within a bound", () => {
         res.writeHead(302, { location });
         res.end();
       });
-      await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, {})).rejects.toBeInstanceOf(VenueUnreachable);
+      await expect(getLopOrderbook({ baseUrl: venue, breaker: null }, { chainId: 1 })).rejects.toBeInstanceOf(VenueUnreachable);
     }
   });
 });
