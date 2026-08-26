@@ -500,9 +500,13 @@ out of the support matrix — ESM-only, engines node ≥ 22).
 ## Release tags and the toolchain pin
 
 Tags live only on the public remote (`cork-cli`) and are cut only on an explicit ask. Create
-them with `sh scripts/release-tag.sh vX.Y.Z[-rc.N] <public-sha>` — it signs, VERIFIES the
-signature (`git tag -v` must say Good), and only then pushes; an unverified tag is deleted, not
-pushed. Reason: an untouched FIDO key yields a zero-filled signature with a clean exit, so
+them with `sh scripts/release-tag.sh vX.Y.Z[-rc.N] <public-sha>` — it checks the remote's
+IDENTITY (host/owner/repo, normalised, so ssh and https spellings of the same repo both pass;
+override with `CORK_RELEASE_REPO`), re-fetches public `main` and requires the candidate to BE
+that head, then signs, VERIFIES the signature (`git tag -v` must say Good), and only then
+pushes; an unverified tag is deleted, not pushed. The head check exists because `git push
+<remote> refs/tags/<tag>` also pushes every object the tag reaches: tagging a private-only
+commit would publish it and its history (audit SUPPLY-001). Port and push to public main FIRST. Reason: an untouched FIDO key yields a zero-filled signature with a clean exit, so
 `git tag -s` alone proves nothing (three such tags on 2026-08-21). Tested with real keys in
 `packages/cli/test/release-tag.test.ts`. The Bun version has ONE home, `mise.toml`
 (`scripts/toolchain-pin.sh` is its one parser): mise/mise-action for dev, CI, and the release

@@ -59,6 +59,7 @@ const T = {
   cli: "packages/cli/test/cli.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
+  releaseTag: "packages/cli/test/release-tag.test.ts",
   mcpSignals: "packages/cli/test/mcp-signals.test.ts",
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
@@ -2657,6 +2658,24 @@ const CATALOG: Mutant[] = [
     find: 'if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId, jitTrust) };',
     replace: 'if (leg.kind === "bundle") return leg;',
     tests: [T.decodeLop],
+  },
+  {
+    // The public-main equality check inverts: the ONE candidate that is publishable is refused
+    // and every unpublished commit is tagged (and its history pushed with the tag).
+    id: "releasetag-public-main-gate-inverted",
+    file: "scripts/release-tag.sh",
+    find: 'if [ "$sha" != "$public_main" ]; then',
+    replace: 'if [ "$sha" = "$public_main" ]; then',
+    tests: [T.releaseTag],
+  },
+  {
+    // Remote identity stops being compared: a tag (and the objects it reaches) can be pushed to
+    // any remote named cork-cli, including a private or attacker-controlled one.
+    id: "releasetag-remote-identity-unchecked",
+    file: "scripts/release-tag.sh",
+    find: 'if [ "$push_repo" != "$canonical_repo" ]; then',
+    replace: 'if [ "$push_repo" = "" ]; then',
+    tests: [T.releaseTag],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {
