@@ -546,7 +546,36 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         chainId,
         ...(action.quoteRef ? { quote_ref: { rfq_id: action.quoteRef.rfqId, answer_id: action.quoteRef.answerId, option_id: action.quoteRef.optionId } } : {}),
       });
-      return mapPost(res, (body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash: body.orderHash ?? orderHash, localOrderHash: orderHash }), lopWarnings);
+      // The LOCAL EIP-712 hash is the order's identity [K3]: it is what the maker signed and
+      // what the LOP will compute at fill time. A venue that echoes a different hash is
+      // describing a different order — surfacing its value as `orderHash` would hand the caller
+      // a key that cancels/tracks nothing (audit STATE-005). The local hash stays primary; the
+      // venue's is reported beside it, and the disagreement is a conflict.
+      const venueOrderHash = typeof (res.body as { orderHash?: unknown } | null)?.orderHash === "string" ? (res.body as { orderHash: string }).orderHash : undefined;
+      const agreed = venueOrderHash === undefined || venueOrderHash.toLowerCase() === orderHash.toLowerCase();
+      const out = mapPost(
+        res,
+        (_body, replay) => ({ kind: "lop-order", accepted: true, replay, orderHash, localOrderHash: orderHash, ...(venueOrderHash !== undefined ? { venueOrderHash } : {}) }),
+        lopWarnings,
+      );
+      // Only a SERVED result can disagree; a 4xx/5xx already carries its own verdict.
+      if (out.state === "ok" && !agreed) {
+        return envelope({
+          state: "conflict",
+          data: { kind: "lop-order", accepted: false, replay: res.httpStatus === 200, orderHash, localOrderHash: orderHash, venueOrderHash },
+          chainId,
+          source: "service",
+          warnings: [
+            ...out.warnings,
+            {
+              code: "order_hash_mismatch",
+              message: `the venue accepted the relay but echoed orderHash ${venueOrderHash}, which contradicts the locally recomputed EIP-712 hash ${orderHash} — the LOCAL hash is what the maker signed and what the LOP computes at fill, so it stays authoritative. Do not use the venue's value to cancel or track this order; re-read the book and check what the venue actually stored`,
+            },
+          ],
+          ctx,
+        });
+      }
+      return out;
     }
 
     if (action.type === "rfq-open") {

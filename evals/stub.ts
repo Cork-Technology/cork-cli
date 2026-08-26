@@ -277,7 +277,10 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
   if (init?.method === "POST") {
     if (url.includes("/rollover/v1/orders")) return r(201, {}); // handler fills the digest from its local recomputation
-    if (url.includes("/limit-orders")) return r(201, { orderHash: "0x" });
+    // Accept with no echoed orderHash — the venue's own shape. Echoing a DIFFERENT hash is a
+    // conflict (the local EIP-712 hash is the order's identity); the placeholder "0x" used to
+    // be one, which would have graded every relay task as a failed relay.
+    if (url.includes("/limit-orders")) return r(201, {});
     // /rfqs/v1/{id}/answers answers with an ANSWER id; the open endpoint with an RFQ id. A
     // stub that returned rfq_id for both would let the handler's `answer_id ?? null` read null
     // and still look accepted — the field the underwriter needs, quietly absent.

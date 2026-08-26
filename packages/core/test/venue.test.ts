@@ -385,7 +385,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
         allowsPartialFills: true,
       },
     };
-    const ok = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0xdead" } }], seen));
+    const ok = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen));
     expect(ok.state).toBe("ok");
     const body = seen[0]!.body as Record<string, unknown>;
     expect(String(body.orderHash)).toMatch(/^0x[0-9a-f]{64}$/); // locally recomputed, never caller-supplied
@@ -398,6 +398,41 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     );
     expect(badExt.state).toBe("conflict");
     expect(badExt.warnings[0]?.code).toBe("extension_salt_mismatch");
+  });
+
+  it("lop-order: the LOCAL EIP-712 hash stays authoritative — a contradicting venue hash is a conflict, a case-only match is not", async () => {
+    const order = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
+    const base = {
+      chainId: 1,
+      clientRequestId: "test-lop-hash-0001",
+      action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premiumAnnualized: "0.036", expiry: 0, nonce: "0", allowsPartialFills: true },
+    };
+    const local = hashLopOrder(1, LOP_ADDRESSES[1]!, toLopOrder(order));
+
+    // A different hash: the venue is describing a different order. Its value is REPORTED (so the
+    // caller can go and look) but never promoted to `orderHash`.
+    const venueOrderHash = `0x${"cc".repeat(32)}`;
+    const mismatch = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: venueOrderHash } }]));
+    expect(mismatch.state).toBe("conflict");
+    expect(mismatch.data).toMatchObject({ accepted: false, orderHash: local, localOrderHash: local, venueOrderHash });
+    expect(mismatch.warnings.some((w) => w.code === "order_hash_mismatch")).toBe(true);
+
+    // Hex case is not a disagreement.
+    const caseOnly = `0x${local.slice(2).toUpperCase()}`;
+    const upper = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 200, body: { orderHash: caseOnly } }]));
+    expect(upper.state).toBe("ok");
+    expect(upper.data).toMatchObject({ accepted: true, replay: true, orderHash: local, venueOrderHash: caseOnly });
+
+    // Omission is the common case and stays clean — no venueOrderHash key invented.
+    const omitted = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }]));
+    expect(omitted.state).toBe("ok");
+    expect(omitted.data).toMatchObject({ accepted: true, replay: false, orderHash: local, localOrderHash: local });
+    expect(omitted.data).not.toHaveProperty("venueOrderHash");
+
+    // A venue REJECTION keeps its own verdict — the hash check never masks a 4xx.
+    const rejected = await runTool("cork_submit", base, ctxWith([{ match: "/limit-orders/v1", status: 400, body: { message: "nope", orderHash: venueOrderHash } }]));
+    expect(rejected.state).toBe("unavailable");
+    expect(rejected.warnings[0]?.code).toBe("venue_rejected");
   });
 
   it("rfq-open: clientRequestId becomes the venue request_id (idempotency [K2] on the wire)", async () => {
@@ -656,7 +691,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
 
   it("sub-0.1% premium → premium_scale_suspect warning (relayed, matching venue leniency)", async () => {
     const lopBase = await lopBaseP;
-    const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }]));
+    const env = await runTool("cork_submit", lopBase, ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }]));
     expect(env.state).toBe("ok");
     const suspect = env.warnings.find((w) => w.code === "premium_scale_suspect");
     expect(suspect).toBeDefined();
@@ -689,7 +724,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
         ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
       );
-    const ok = [{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }];
+    const ok = [{ match: "/limit-orders/v1", status: 201, body: {} }];
 
     // Both sides now canonicalize by parseFloat × 100: "0.036"*100 floats to
     // 3.5999999999999996 while "0.36"*100 is exactly 36, so 36/it = 10.000000000000002 > 10 —
@@ -723,7 +758,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
       );
     const goodOption = { option_id: "1", premium_annualized: "0.036" };
     const answersWith = (option: Record<string, unknown>) => [{ answer_id: "ans_1", answer: { options: [option] } }];
@@ -758,7 +793,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "9.99", quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
       ctxWith([
-        { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } },
+        { match: "/limit-orders/v1", status: 201, body: {} },
         { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
       ], seen),
     );
@@ -773,7 +808,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: { orderHash: "0x1" } }]),
+      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("ok");
   });

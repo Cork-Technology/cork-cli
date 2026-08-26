@@ -2694,6 +2694,15 @@ const CATALOG: Mutant[] = [
     replace: "      if (reported !== chainId) { explicitVerified.set(key, { url: explicitUrl, client: mkClient(explicitUrl, chainId), source: \"explicit\" }); throw new RpcChainMismatchError(explicitUrl, chainId, reported); }",
     tests: [T.rpc],
   },
+  {
+    // The venue's echoed hash is promoted back to primary: a contradicting value becomes the
+    // key a caller would cancel or track with.
+    id: "submit-venue-hash-authoritative",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      if (out.state === \"ok\" && !agreed) {",
+    replace: "      if (out.state === \"ok\" && !agreed && venueOrderHash === undefined) {",
+    tests: [T.venue],
+  },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {
     // The single-target comparator flips: a leg at the configured contract reads as a mismatch

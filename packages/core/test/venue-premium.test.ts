@@ -61,7 +61,9 @@ const lop = async (over: Record<string, unknown> = {}, drop: string[] = []) => {
   for (const k of drop) delete action[k];
   return { chainId: 1, clientRequestId: "test-pa-0001", action };
 };
-const ok201 = (seen: Seen[] = []) => ctxWith([{ match: "/limit-orders/v1", status: 201, body: { orderHash: "0xdead" } }], seen);
+// The venue omits orderHash on accept; a contradicting echo is a conflict and has its own
+// test in venue.test.ts, so these premium fixtures keep the clean shape.
+const ok201 = (seen: Seen[] = []) => ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen);
 const postBody = (seen: Seen[]) => seen.find((s) => s.method === "POST")!.body as Record<string, unknown>;
 
 describe("listing premium — the venue's 0.3.15 resolution, op-for-op", () => {
@@ -160,7 +162,7 @@ describe("listing premium — the venue's 0.3.15 resolution, op-for-op", () => {
   });
 
   it("a successful relay surfaces the venue's in-band warnings[] as venue_notice", async () => {
-    const body = { orderHash: "0xdead", warnings: [{ code: "limit-orders-premium-pct-deprecated", message: "removed 2026-08-17" }] };
+    const body = { warnings: [{ code: "limit-orders-premium-pct-deprecated", message: "removed 2026-08-17" }] };
     const env = await runTool("cork_submit", await lop(), ctxWith([{ match: "/limit-orders/v1", status: 201, body }]));
     expect(env.state).toBe("ok");
     const notice = env.warnings.find((w) => w.code === "venue_notice")!;
