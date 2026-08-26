@@ -13,7 +13,7 @@
 // captured per call and surfaced as telemetry so a stale literal (or a stale user override)
 // announces itself instead of riding the shim silently until the shim retires.
 import { z } from "zod";
-import { fetchWithTimeout } from "../fetch-timeout.ts";
+import { fetchFollowingSameOrigin } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
 import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
@@ -164,7 +164,18 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     throw new VenueUnreachable(`venue unreachable: failing fast — ${host} failed ${br.byHost[host]!.failures} consecutive transport attempts and its breaker is open for another ${Math.ceil(waitMs / 1000)}s; check connectivity or CORK_VENUE_URL`);
   }
   try {
-    const res = await fetchWithTimeout(`${venueBaseUrl(deps.baseUrl)}${path}`, init ?? {}, deps.timeoutMs ?? 10_000, f);
+    // Redirects are followed MANUALLY and only within the venue's own origin: a relay body is
+    // a caller-SIGNED payload, and the default fetch would deliver it to wherever a redirect
+    // points before we ever saw the hop (audit MCP-NET-004). Reads may follow the standard
+    // statuses; writes only 307/308, which preserve method and body.
+    const method = (init?.method ?? "GET").toUpperCase();
+    const res = await fetchFollowingSameOrigin(
+      `${venueBaseUrl(deps.baseUrl)}${path}`,
+      init ?? {},
+      deps.timeoutMs ?? 10_000,
+      method === "GET" || method === "HEAD" ? "follow-get" : "preserve-write",
+      f,
+    );
     if (br) br.byHost[host] = breakerOnSuccess();
     if (br === moduleBreaker) lastOutcome = { ok: true, host, atMs: now() };
     return res;

@@ -46,6 +46,7 @@ const T = {
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
+  venueRedirect: "packages/core/test/venue-redirect.test.ts",
   venuePremium: "packages/core/test/venue-premium.test.ts",
   implementations: "packages/core/test/implementations.test.ts",
   breaker: "packages/core/test/breaker.test.ts",
@@ -2740,6 +2741,32 @@ const CATALOG: Mutant[] = [
     find: "          if (settlerAddr && configuredSettler && resolved) {",
     replace: "          if (settlerAddr && resolved) {",
     tests: [T.rolloverVerify],
+  },
+  {
+    // The origin check on each hop is dropped: a redirect can carry a caller-signed relay body
+    // to any host that answers.
+    id: "redirect-origin-check-dropped",
+    file: "packages/core/src/fetch-timeout.ts",
+    find: "  if (expectedOrigin !== undefined && parsed.origin !== expectedOrigin) {",
+    replace: "  if (expectedOrigin !== undefined && parsed.origin === expectedOrigin && false) {",
+    tests: [T.venueRedirect],
+  },
+  {
+    // A write follows 301/302/303 again: the POST is rewritten to a bodyless GET, so the signed
+    // payload either vanishes or is replayed as a read somewhere it was never addressed to.
+    id: "redirect-write-status-gate-dropped",
+    file: "packages/core/src/fetch-timeout.ts",
+    find: 'if (policy === "preserve-write" && res.status !== 307 && res.status !== 308) {',
+    replace: 'if (policy === "preserve-write" && res.status !== 307 && res.status !== 308 && false) {',
+    tests: [T.venueRedirect],
+  },
+  {
+    // The hop bound goes away: a redirect loop spins until the request deadline.
+    id: "redirect-hop-bound-dropped",
+    file: "packages/core/src/fetch-timeout.ts",
+    find: "      if (hops >= MAX_REDIRECTS) throw new Error(",
+    replace: "      if (hops >= MAX_REDIRECTS * 1000) throw new Error(",
+    tests: [T.venueRedirect],
   },
   // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
   {

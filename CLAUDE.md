@@ -333,7 +333,12 @@ breaker, re-resolves once, retries; `provenance.rpc` discloses the endpoint that
 explicit URLs never fail over. Kill-switch: `CORK_RPC_NO_FAILOVER=1`. Concurrent resolutions are
 single-flighted. The breaker is ONE shared module (`packages/core/src/breaker.ts`,
 mutation-probed) — the venue transport uses it per-host (3 failures → open 30 s), plus one silent
-retry for idempotent venue GETs (never POSTs). The HTTP server exposes `/readyz` — always 200,
+retry for idempotent venue GETs (never POSTs). Venue HTTP follows redirects MANUALLY and only
+within the venue's own origin (`fetchFollowingSameOrigin`, audit MCP-NET-004): the default fetch
+would deliver a caller-SIGNED relay body to wherever a redirect points before the hop was ever
+seen. Reads follow the standard statuses; writes only 307/308 (which preserve method and body) —
+301/302/303 on a write is refused, as is a cross-origin hop, a non-http scheme, a URL carrying
+userinfo, and a chain longer than 3 hops. The timeout wraps the whole chain. The HTTP server exposes `/readyz` — always 200,
 degradation snapshot (endpoint HOSTS only — the committed default URLs embed tokens).
 
 So cork-pool/account-state/pool-whitelist, swap/unwind/impairment compute, and track marketRef
