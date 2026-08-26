@@ -160,7 +160,7 @@ Warning codes:
 | `receipt_not_found` | txHash unknown/pending — a normal outcome. |
 | `chainid_defaulted` | Info on decode order / dutch-auction-price when chainId was omitted: defaulted to 1, and the EIP-712 orderHash (+ Fusion settlement classification) is CHAIN-SPECIFIC — pass chainId for a non-mainnet order. |
 | `rpc_fallback` | Info: a chainlist endpoint served the read; on mid-call failover, earlier reads in the result may be from the previous endpoint. |
-| `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Info on ok prepares: why funding legs were omitted. |
+| `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Info on ok results: a pre-flight that needed an RPC was skipped (the JIT ladder, the oracle-deployability check) / track simulate ran without a sender / the pool burns from a non-adapter `owner`, so there was nothing to fund. Phoenix pool actions never emit `funding_needs_rpc`: they refuse (`requires_rpc`) rather than build without funding legs. |
 | `recipe_not_found` | The recipe ADDRESS isn't approved on the registry (`isRecipe` is the only gate), or a deprecated `mode` name has no configured hint. |
 | `recipe_refused` | `recipe.resolve` reverted — message names the contract's error (e.g. the liquidity recipe needs `args = abi.encode(anchorRate)` while its oracle is undeployed). |
 | `denomination_not_found` / `feed_not_found` | No such label (EXACT BYTES, case-sensitive) / no such DIRECTED base→quote feed. |
@@ -182,7 +182,7 @@ Warning codes:
 | `band_parity_mismatch` | conflict (legacy recipe-rate-constraint): local applyBands port disagreed with the chain — trust the chain, report the bug. |
 | `pool_expired` | Info: a pre-expiry action against an expired pool — builds but would revert; withdraw/withdraw-other/redeem are post-expiry. |
 | `sweep_back` | Info: sweep-back leg(s) return the unspent remainder of a funded **cap** to `account` — the adapter's FULL balance per token, so also residue an earlier bundle abandoned (already takeable by anyone). |
-| `sweep_back_skipped` | Sweep warranted but the target would revert `erc20Transfer` (zero address, or the adapter itself) — the residual stays skimmable. Fix `account`. |
+| `unsafe_shared_balance` | unavailable (prepare_phoenix): no atomic pull → action → sweep exists for this input — the sweep target (`account`) is the zero address or the adapter itself, or a `uint256.max` share sentinel with `owner == adapter` — so no bytes: the alternative leaves a balance on the shared adapter where anyone can take it. Fix `account`, pass the exact share amount, or set `owner` to the share holder. Replaces the build-and-warn `sweep_back_skipped` (removed 2026-08-26, audit ARTIFACT-PREFUND-001). |
 | `pool_paused` | Info: the bundle would revert `EnforcedPause()` — the GLOBAL pause or the pool's `getPausedBitMap` bit (bit0 deposit/mint, bit1 swap/exercise*, bit2 withdraw*/redeem, bit3 unwind-deposit/-mint, bit4 unwind-swap/-exercise*). |
 | `not_whitelisted` | Info: a gated pool checks **two** addresses and this one fails — once per failing address (see whitelist note). forSelf is generation-aware: caller-gate adapters (2026-08-07+) check the ACCOUNT via `isWhitelisted(poolId, msg.sender)`; pre-gate adapters never accuse the account. Also on forSelf taker-fills (`CallerNotWhitelisted`). |
 | `artifact_digest_mismatch` / `intent_hash_mismatch` / `venue_digest_mismatch` / `order_hash_mismatch` / `marketid_mismatch` / `create2_mismatch` | conflict: WHICH verification failed, branchable by code (split from the overloaded `digest_mismatch` 2026-08-10; messages carry "formerly digest_mismatch" one release). Track artifact digest / submit rollover: intent doesn't hash to its own `rolloverIntentHash` (not relayed) / venue echoed a different orderDigest / decode order + taker-fill: supplied or venue orderHash ≠ local recomputation. |
@@ -280,8 +280,9 @@ re-enter the bundler). Renderer: `packages/core/src/bundle/summary.ts`. The deco
 bundle was built against, so their own bytes decode as trusted; the decode handler passes the
 chain's address book (`resolveDecodeTrust`).
 
-**Prepare pre-flight guards.** Every chain-backed `cork_prepare_phoenix` call (funded or
-`pre-funded`) runs one batched read of expiry, pause, whitelist — all **build-and-warn** (bytes
+**Prepare pre-flight guards.** Every `cork_prepare_phoenix` pool action (all of them read the
+chain now — the funding legs need the pool's token addresses) runs one batched read of expiry,
+pause, whitelist — all **build-and-warn** (bytes
 still returned, labelled), each degrading to silence if its view is unavailable.
 `packages/core/src/bundle/preflight.ts`. The approved-implementations guard rides the same
 batch (`implementation_not_approved` above). The venue's published contract has its own
@@ -299,8 +300,12 @@ warn.
 delta is takeable by anyone (`erc20Transfer` is `onlyBundler3` but never checks
 `receiver == initiator()`; `Bundler3.multicall` is public). Every capped leg gets
 `erc20Transfer(token, account, uint256.max)` appended after the action leg — including the
-burn-side caps (withdraw, withdraw-other, unwind-deposit). Exact inputs strand nothing, no sweep;
-`pre-funded` never sweeps. The result reports `sweepBackLegs: n`; a zero residual is a no-op.
+burn-side caps (withdraw, withdraw-other, unwind-deposit). Exact inputs strand nothing, no sweep.
+The result reports `sweepBackLegs: n`; a zero residual is a no-op. There is NO pre-funded mode
+(removed 2026-08-26, audit ARTIFACT-PREFUND-001): an action-only bundle only works against tokens
+parked on the shared adapter beforehand, and that balance is takeable by anyone for as long as it
+sits there — so pull, action and sweep are always ONE transaction, and a plan that cannot be made
+atomic is refused (`unsafe_shared_balance`) instead of degraded.
 
 Retry semantics [K2]: bundles default to a relative deadline (`deadlineSeconds`, re-anchors —
 different bytes on retry); pass an absolute `deadlineAt` for byte-identical retries.
@@ -330,10 +335,10 @@ So cork-pool/account-state/pool-whitelist, swap/unwind/impairment compute, and t
 **just work** on public chains. `requires_rpc` only when nothing resolves (offline, or the staging
 vnet 49222, which needs an explicit `CORK_RPC_URL`). Pure/config tools never touch a chain:
 capabilities, decode, protocol-config, rollover-premium-floor, prepare byte-building.
-(prepare_phoenix funding-leg token resolution needs an *explicit* RPC — without one: bundle +
-`funding_needs_rpc`, `fundingLegs:0`. ForSelf prepares and the taker-fill
-liveness/ERC-1271 checks DO use the default-resolved RPC — security reads run whenever any
-endpoint resolves.)
+(prepare_phoenix funding legs resolve over the same ladder — explicit → default → chainlist;
+only a chain with NO reachable endpoint refuses, `requires_rpc`, and the action is never emitted
+alone. ForSelf prepares and the taker-fill liveness/ERC-1271 checks use it too — security reads
+run whenever any endpoint resolves.)
 
 Per-chain coverage: chainId 1 is **full** on its own stack. 42161 and 8453 both default to
 **phoenix v1.3.0-rc.1 + market-registry 0.3.3** (2026-08-10, identical CREATE2 addresses; the

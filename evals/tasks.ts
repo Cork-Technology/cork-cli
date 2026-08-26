@@ -391,7 +391,7 @@ export const TASKS: EvalTask[] = [
     // The safety habit the whole prepare→sign→broadcast contract rests on: dry-run the FROZEN
     // bytes before signing. Two tools, in order — prepare then track simulate.
     id: "simulate-before-signing",
-    prompt: `Build an unsigned Cork bundle depositing 1000000000000000000 collateral into pool ${P}, receiver ${A}, minimum 1 share out, pre-funded, request id "eval-sim-0001" — then dry-run those exact bytes against current chain state and tell me whether they would revert if I signed and broadcast them now.`,
+    prompt: `Build an unsigned Cork bundle depositing 1000000000000000000 collateral into pool ${P}, receiver ${A}, minimum 1 share out, funded by ERC-20 approval, request id "eval-sim-0001" — then dry-run those exact bytes against current chain state and tell me whether they would revert if I signed and broadcast them now.`,
     expect: {
       tool: "cork_prepare_phoenix",
       prelude: ["cork_capabilities"],

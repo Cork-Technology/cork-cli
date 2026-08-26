@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
+import { poolTokensRpc } from "../../core/test/helpers.ts";
 
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
@@ -23,7 +24,7 @@ describe("ch CLI", () => {
       clientRequestId: "req-00000001",
       action: { type: "swap", poolId: POOL, collateralAssetsOut: "100000000000000000000", receiver: RCV, maxCstSharesIn: "101000000000000000000", maxReferenceAssetsIn: "130000000000000000000" },
     });
-    const r = await runCli(["prepare", "phoenix", "--json", input], { nowSeconds: NOW });
+    const r = await runCli(["prepare", "phoenix", "--json", input], { nowSeconds: NOW, resolveRpc: poolTokensRpc() });
     expect(r.code).toBe(EXIT.ok);
     expect(JSON.parse(r.stdout).data.action).toBe("safeSwap");
   });
@@ -488,7 +489,7 @@ describe("top-level verbs, resource singulars, and filter flags (2026-08-06)", (
   it("ch exercise is a top-level verb equal to prepare pool exercise", async () => {
     const r = await runCli(
       ["exercise", "--chain-id", "1", "--account", RCV, "--client-request-id", "verb-0001", "--pool-id", POOL, "--cst-shares-in", "1000e18", "--receiver", RCV, "--min-collateral-assets-out", "1", "--max-reference-assets-in", "1000000", "--json"],
-      { nowSeconds: NOW },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc() },
     );
     expect(r.stderr).toBe("");
     expect(r.code).toBe(EXIT.ok);

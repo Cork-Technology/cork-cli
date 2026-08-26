@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  resolveDeployment,
   bundlerSweepAbi,
   corkActionCall,
   encodeMulticall,
@@ -14,11 +15,12 @@ import {
   type SafeSwapParams,
 } from "@cork/core";
 import { UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { stubResolved } from "./helpers.ts";
+import { poolTokensRpc, stubResolved } from "./helpers.ts";
 
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
 const NOW = 1_800_000_000n; // deterministic clock
+
 const SUSDE = "0x9d39a5de30e57443bff2a8307a4256c8797a3497" as const;
 const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e" as const;
 
@@ -214,8 +216,8 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shad
   it("prepare_phoenix on 42161 builds a bundle against the announced tx-path contracts", async () => {
     const env = await runTool(
       "cork_prepare_phoenix",
-      { chainId: 42161, account: RCV, clientRequestId: "arb-0001", fundingMode: "pre-funded", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
-      { nowSeconds: NOW },
+      { chainId: 42161, account: RCV, clientRequestId: "arb-0001", fundingMode: "erc20-approve", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc() },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { bundler3: string; corkAdapter: string };
@@ -1011,7 +1013,7 @@ describe("cork-pool output scales — the units-topic contract on the most-read 
 });
 
 describe("runTool: cork_prepare_phoenix", () => {
-  it("builds a swap bundle with deterministic deadline + multicall bytes", async () => {
+  it("builds a swap bundle with deterministic deadline + multicall bytes — pull legs, action, sweep-backs, in that order", async () => {
     const env = await runTool(
       "cork_prepare_phoenix",
       {
@@ -1021,16 +1023,86 @@ describe("runTool: cork_prepare_phoenix", () => {
         action: { type: "swap", poolId: POOL, collateralAssetsOut: "100000000000000000000", receiver: RCV, maxCstSharesIn: "101000000000000000000", maxReferenceAssetsIn: "130000000000000000000" },
         format: "concise",
       },
-      { nowSeconds: NOW },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc() },
     );
     expect(env.state).toBe("ok");
-    const data = env.data as { deadline: string; multicall: string; action: string; corkAdapter: string };
+    const data = env.data as { deadline: string; multicall: string; action: string; corkAdapter: string; fundingLegs: number; sweepBackLegs: number; bundle: Array<{ to: string }>; summary: string[] };
     expect(data.action).toBe("safeSwap");
     expect(data.deadline).toBe((NOW + 1800n).toString());
     expect(data.multicall.startsWith("0x374f435d")).toBe(true); // Bundler3.multicall selector
-    // default fundingMode=permit2 + no RPC -> can't resolve token addresses for the funding leg
-    expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
-    expect((env.data as { fundingLegs: number }).fundingLegs).toBe(0);
+    // default fundingMode=permit2: both swap inputs are caps, so each gets a pull AND a sweep.
+    expect(data.fundingLegs).toBe(2);
+    expect(data.sweepBackLegs).toBe(2);
+    expect(data.bundle).toHaveLength(5);
+    expect(env.warnings.some((w) => w.code === "sweep_back")).toBe(true);
+    expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(false);
+    // Every leg was built against the targets the decoder verifies with — none reads unverified.
+    expect(data.summary.some((line) => /UNVERIFIED|MISMATCH/.test(line))).toBe(false);
+    expect(env.provenance.source).toBe("chain");
+  });
+
+  it("with NO reachable RPC the action is refused, never emitted on its own (an action-only bundle is the pre-funded footgun)", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      {
+        chainId: 1,
+        account: RCV,
+        clientRequestId: "req-00000002",
+        action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" },
+        format: "concise",
+      },
+      { nowSeconds: NOW, resolveRpc: async () => null },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
+    expect(env.warnings[0]?.code).toBe("requires_rpc");
+    expect(env.warnings[0]?.message).toMatch(/NOT emitted on its own/);
+  });
+
+  it("a capped input whose sweep-back target is the adapter itself is REFUSED (unsafe_shared_balance), not built without the sweep", async () => {
+    // `account` is load-bearing: it receives the residual of every capped input. The adapter
+    // rejects itself as a receiver, and a bundle without the sweep would leave that residual on
+    // the shared adapter for anyone to take — so the artifact is withheld, with the reason.
+    const dep = await resolveDeployment(1);
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      {
+        chainId: 1,
+        account: dep.deployment!.corkAdapter!,
+        clientRequestId: "req-00000004",
+        action: { type: "mint", poolId: POOL, cptAndCstSharesOut: "5", receiver: RCV, maxCollateralAssetsIn: "9" },
+        format: "concise",
+      },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc() },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
+    const w = env.warnings.find((x) => x.code === "unsafe_shared_balance")!;
+    expect(w.message).toMatch(/adapter itself/);
+    expect(w.message).toMatch(/no signable bytes were emitted/);
+  });
+
+  it("funding legs resolve over the DEFAULT rpc ladder too — an explicit CORK_RPC_URL is not required", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 1, account: RCV, clientRequestId: "req-00000005", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "full" },
+      { nowSeconds: NOW, resolveRpc: async () => ({ ...(await poolTokensRpc()(1, undefined))!, source: "default" as const }) },
+    );
+    expect(env.state).toBe("ok");
+    expect((env.data as { fundingLegs: number }).fundingLegs).toBe(1);
+    expect(env.provenance.source).toBe("chain");
+    expect(env.provenance.rpc).toEqual({ source: "default", host: "stub.example" });
+    expect(env.warnings.some((w) => w.code === "rpc_fallback")).toBe(false); // a default is not a fallback
+  });
+
+  it("the removed 'pre-funded' spelling is rejected at the schema, before any deployment or chain work", async () => {
+    await expect(
+      runTool(
+        "cork_prepare_phoenix",
+        { chainId: 1, account: RCV, clientRequestId: "req-00000003", fundingMode: "pre-funded", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+        { nowSeconds: NOW, resolveRpc: async () => { throw new Error("must not resolve"); } },
+      ),
+    ).rejects.toBeInstanceOf(ToolInputError);
   });
 
   it("rejects malformed input with ToolInputError", async () => {
@@ -1144,14 +1216,14 @@ describe("deadlineAt: byte-stable retries [K2 deadline-basis]", () => {
     chainId: 1,
     account: "0xc0ffee0000000000000000000000000000000001",
     clientRequestId: id,
-    fundingMode: "pre-funded",
+    fundingMode: "erc20-approve",
     action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1000", receiver: "0xc0ffee0000000000000000000000000000000001", minCptAndCstSharesOut: "1" },
     ...extra,
   });
 
   it("same id at DIFFERENT clocks: relative deadline drifts, absolute deadlineAt is byte-identical", async () => {
-    const t1 = { nowSeconds: NOW };
-    const t2 = { nowSeconds: NOW + 120n };
+    const t1 = { nowSeconds: NOW, resolveRpc: poolTokensRpc() };
+    const t2 = { nowSeconds: NOW + 120n, resolveRpc: poolTokensRpc() };
     const rel1 = await runTool("cork_prepare_phoenix", base("k2-dl-0001"), t1);
     const rel2 = await runTool("cork_prepare_phoenix", base("k2-dl-0001"), t2);
     expect(rel1.provenance.digest).not.toBe(rel2.provenance.digest); // documented drift

@@ -561,7 +561,8 @@ Implemented + tested:
   (chain-backed, block-pinnable); recipe-rate-constraint (2.1.0: the `recipe.resolve` staticcall — the step
   that produces the constraint a JIT order carries and signs).
 - **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
-  legs (erc20-approve / permit2 / pre-funded) for value-in actions and owner==adapter share-burn
+  legs (erc20-approve / permit2 — always in the same transaction as the action; there is no
+  pre-funded mode) for value-in actions and owner==adapter share-burn
   actions; **sweep-back legs** that return the unspent remainder of any funded slippage cap to
   `account`, so it is not left on the adapter where anyone can take it; **pre-flight guards** for
   expiry, pause (the global breaker and the per-pool bit for this action), and whitelist (which

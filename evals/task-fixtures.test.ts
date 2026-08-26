@@ -257,7 +257,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
   it("simulate-before-signing: the prepared bundle's frozen bytes dry-run without reverting", async () => {
     const prepared = await runTool(
       "cork_prepare_phoenix",
-      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-sim-0001", fundingMode: "pre-funded", action: { type: "deposit", poolId: DEMO_POOL_ID, collateralAssetsIn: "1000000000000000000", receiver: DEMO_ACCOUNT, minCptAndCstSharesOut: "1" } },
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-sim-0001", fundingMode: "erc20-approve", action: { type: "deposit", poolId: DEMO_POOL_ID, collateralAssetsIn: "1000000000000000000", receiver: DEMO_ACCOUNT, minCptAndCstSharesOut: "1" } },
       stubContext(),
     );
     expect(prepared.state).toBe("ok");
@@ -306,7 +306,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
   it("ho-direction-twin [held-out]: the reverse-payout direction builds as unwind-swap", async () => {
     const env = await runTool(
       "cork_prepare_phoenix",
-      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-dir-0001", fundingMode: "pre-funded", action: { type: "unwind-swap", poolId: DEMO_POOL_ID, collateralAssetsIn: "3000000000000000000", receiver: DEMO_ACCOUNT, minReferenceAssetsOut: "0", minCstSharesOut: "0" } },
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-dir-0001", fundingMode: "erc20-approve", action: { type: "unwind-swap", poolId: DEMO_POOL_ID, collateralAssetsIn: "3000000000000000000", receiver: DEMO_ACCOUNT, minReferenceAssetsOut: "0", minCstSharesOut: "0" } },
       stubContext(),
     );
     expect(env.state).toBe("ok");

@@ -101,7 +101,7 @@ describe("checkApprovedImplementations", () => {
 describe("the guard inside a prepare (build-and-warn, like the pool pre-flight)", () => {
   it("cork_prepare_phoenix surfaces implementation_not_approved when a trusted role's live code is off-list — bytes still built", async () => {
     // Chain 1's BUNDLED allowlist is real (captured live); a stub whose code hashes elsewhere
-    // must warn. The stub also serves the minimal pool views the pre-funded pre-flight reads.
+    // must warn. The stub also serves the pool views the funded prepare reads.
     const client = {
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "market") return { collateralAsset: ADAPTER, referenceAsset: WLM, expiryTimestamp: 9_999_999_999n, rateMin: 1n, rateMax: 1n, rateChangePerDayMax: 1n, rateChangeCapacityMax: 1n, rateOracle: ADAPTER };
@@ -113,7 +113,7 @@ describe("the guard inside a prepare (build-and-warn, like the pool pre-flight)"
     };
     const env = await runTool(
       "cork_prepare_phoenix",
-      { chainId: 1, account: ADAPTER, clientRequestId: "impl-guard-01", fundingMode: "pre-funded", action: { type: "deposit", poolId: `0x${"11".repeat(32)}`, collateralAssetsIn: "1", receiver: ADAPTER, minCptAndCstSharesOut: "1" } },
+      { chainId: 1, account: ADAPTER, clientRequestId: "impl-guard-01", fundingMode: "erc20-approve", action: { type: "deposit", poolId: `0x${"11".repeat(32)}`, collateralAssetsIn: "1", receiver: ADAPTER, minCptAndCstSharesOut: "1" } },
       { nowSeconds: 1n, rpcUrl: "https://stub.example/rpc", resolveRpc: async () => ({ url: "https://stub.example/rpc", source: "explicit" as const, client: client as never }) },
     );
     expect(env.state).toBe("ok");

@@ -8,11 +8,11 @@ import { type CorkDeployment } from "../config.ts";
 import { encodeMulticall } from "../bundle/bundler3.ts";
 import { decodeBundle } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { canAutoFund, type FundingMode, fundingPlan } from "../bundle/funding.ts";
+import { canAutoFund, fundingPlan } from "../bundle/funding.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
-import { approvedImplementationGuard } from "../implementations.ts";
+import { approvedImplementationGuard, PHOENIX_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, unavailable } from "./shared.ts";
+import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable } from "./shared.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
 
 
@@ -100,7 +100,19 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
   });
 }
 
-/** cork_prepare_phoenix — bundle assembly: funding legs, action leg, sweep-back, pre-flights. */
+/**
+ * cork_prepare_phoenix — bundle assembly: funding legs, action leg, sweep-back, pre-flights.
+ *
+ * Every pool-action bundle is ATOMIC: the initiator's pull legs, the Cork action, and the
+ * sweep-back of any capped residual ride one multicall. The action is never emitted on its own
+ * (audit ARTIFACT-PREFUND-001): an action-only bundle only works against tokens parked on the
+ * shared adapter beforehand, and that balance is takeable by anyone through the public
+ * `Bundler3.multicall` + the adapter's receiver-unchecked `erc20Transfer` until the action lands.
+ *
+ * Building the pull legs needs the pool's token addresses, read from the pool manager over
+ * whatever RPC resolves (explicit → committed default → chainlist), the same ladder every other
+ * chain read uses. Only a chain with NO reachable endpoint refuses (`requires_rpc`).
+ */
 export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: HandlerContext): Promise<Envelope> {
   // ForSelf mode: the action as a DIRECT call to an integrator-deployed ForSelf adapter —
   // no Bundler3, no funding/sweep legs (the adapter pulls and sweeps itself).
@@ -121,125 +133,103 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
   const warnings: Array<{ code: string; message: string }> = [...depWarn];
   if (deadlineWarning) warnings.push(deadlineWarning);
-  let funding: Call[] = [];
-  let sweepBack: Call[] = [];
-  // Filled in whenever we read the pool, so the bundle summary can name tokens by their role.
-  let tokenRoles: Record<string, string> | undefined;
-  const roleMapOf = (t: { collateral: string; reference: string; cst: string; cpt: string }): Record<string, string> => ({
-    [t.collateral.toLowerCase()]: "collateral",
-    [t.reference.toLowerCase()]: "reference",
-    [t.cst.toLowerCase()]: "cST",
-    [t.cpt.toLowerCase()]: "cPT",
-  });
-  const mode = input.fundingMode as FundingMode;
+  // Every schema-admitted pool action has a funding model; this guards the SDK caller who casts.
+  if (!canAutoFund(input.action.type)) {
+    return unavailable(input.chainId, "invalid_state", `'${input.action.type}' has no funding model, so no atomic bundle can be built for it — the action is never emitted on its own`, ctx);
+  }
+  const mode = input.fundingMode;
+  const poolId = input.action.poolId;
 
-  if (mode === "pre-funded") {
-    // Caller guarantees tokens already sit in the adapter — nothing to fund. But when an
-    // explicit RPC is configured, run the same pool-existence/expiry pre-flight the funded
-    // path gets [F19]: 'pre-funded' must not silently skip guards the sibling mode enforces.
-    const poolId = (input.action as { poolId?: `0x${string}` }).poolId;
-    if (ctx.rpcUrl && poolId) {
-      const resolved = await getRpc(ctx, input.chainId);
-      if (resolved) {
-        try {
-          const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
-          if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
-          tokenRoles = roleMapOf(tokens);
-          // 'pre-funded' gets the same guards as the funded path — it must not silently skip
-          // checks its sibling enforces [F19].
-          warnings.push(
-            ...(await poolPreflightWarnings({
-              client: resolved.client,
-              poolManager: dep.poolManager,
-              whitelistManager: dep.whitelistManager,
-              corkAdapter,
-              poolId,
-              actionType: input.action.type,
-              account: input.account,
-              expiryTimestamp: tokens.expiryTimestamp,
-              nowSeconds: nowSecs,
-              atBlock: ctx.atBlock,
-            })),
-            // Interface-first guard: is the code behind every trusted role still an APPROVED
-            // implementation? Same best-effort posture as the pool pre-flight above.
-            ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock)),
-          );
-        } catch {
-          // best-effort — pre-funded byte-building stays offline-capable by design
-        }
-      }
-    }
-  } else if (!canAutoFund(input.action.type)) {
-    warnings.push({ code: "manual_funding", message: `'${input.action.type}' has no auto-funding model in this iteration; fund the adapter manually or use fundingMode 'pre-funded'.` });
-  } else if (!ctx.rpcUrl) {
-    warnings.push({
-      code: "funding_needs_rpc",
-      message: `Funding leg for '${input.action.type}' needs an RPC to resolve pool token addresses; re-run with an RPC or use fundingMode 'pre-funded'. Bundle contains the action leg only.`,
-    });
-  } else {
-    // Explicit RPC only (funding stays offline-by-default); routed through the resolver hook so
-    // tests can stub the client, and guarded like every other chain read — a revert/transport
-    // failure must map to an envelope, never escape raw (viem errors embed the RPC URL).
-    const resolved = await getRpc(ctx, input.chainId);
-    if (!resolved) return unavailable(input.chainId, "requires_rpc", "funding-leg resolution could not reach the configured RPC", ctx);
-    const poolId = (input.action as { poolId: `0x${string}` }).poolId;
-    let tokens;
-    try {
-      tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
-    } catch (err) {
-      return chainReadFailed(input.chainId, err, [], ctx, resolved);
-    }
-    // Refuse to build funding legs against the zero address instead of emitting a
-    // plausible-looking bundle that can only revert on-chain.
-    if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
-    tokenRoles = roleMapOf(tokens);
-    // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
-    // build-and-warn — a bundle that can only revert is still returned, clearly labelled.
-    warnings.push(
-      ...(await poolPreflightWarnings({
-        client: resolved.client,
-        poolManager: dep.poolManager,
-        whitelistManager: dep.whitelistManager,
-        corkAdapter,
-        poolId,
-        actionType: input.action.type,
-        account: input.account,
-        expiryTimestamp: tokens.expiryTimestamp,
-        nowSeconds: nowSecondsOf(ctx),
-        atBlock: ctx.atBlock,
-      })),
-      // Interface-first guard, same posture: warn when a trusted role's live code is off the
-      // approved-implementations list (a proxy upgrade nobody admitted yet, or config drift).
-      ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock)),
+  // The pool read is what makes the funding legs possible: token addresses come from the pool
+  // manager, over the resolved endpoint. Every failure maps to an envelope, never a raw throw
+  // (viem errors embed the RPC URL).
+  const resolved = await getRpc(ctx, input.chainId);
+  if (!resolved) {
+    return unavailable(
+      input.chainId,
+      "requires_rpc",
+      `no RPC endpoint resolved for chainId ${input.chainId}, and the funding legs need the pool's token addresses (poolManager.market/shares) — set CORK_RPC_URL. The action is deliberately NOT emitted on its own: an action-only bundle only works against tokens parked on the shared adapter beforehand, where anyone can take them`,
+      ctx,
     );
-    // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
-    // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
-    // erc20Transfer never checks receiver==initiator() and Bundler3.multicall is public, so
-    // anyone can take it in a later block. Return it to the declared initiator in-bundle.
-    const plan = fundingPlan(input.action, tokens, corkAdapter, mode, input.account);
-    funding = plan.legs;
-    sweepBack = plan.sweepLegs;
-    if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
-    if (plan.sweepNote) warnings.push({ code: "sweep_back_skipped", message: plan.sweepNote });
-    if (sweepBack.length) {
-      warnings.push({
-        code: "sweep_back",
-        message: `this bundle ends with ${sweepBack.length} sweep-back leg(s) returning any unspent balance of ${plan.sweptTokens.join(", ")} to ${input.account}, because auto-funding moved a slippage CAP (not the exact amount) into the adapter. Each sweeps the adapter's FULL balance of that token (uint256.max sentinel), so it also returns any residual an earlier bundle abandoned there — that balance was already takeable by anyone. A zero residual is a no-op, not a revert.`,
-      });
-    }
+  }
+  let tokens;
+  try {
+    tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
+  } catch (err) {
+    return chainReadFailed(input.chainId, err, [], ctx, resolved);
+  }
+  // Refuse to build funding legs against the zero address instead of emitting a
+  // plausible-looking bundle that can only revert on-chain.
+  if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
+  // The bundle summary names tokens by their pool role rather than by bare address.
+  const tokenRoles: Record<string, string> = {
+    [tokens.collateral.toLowerCase()]: "collateral",
+    [tokens.reference.toLowerCase()]: "reference",
+    [tokens.cst.toLowerCase()]: "cST",
+    [tokens.cpt.toLowerCase()]: "cPT",
+  };
+  // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
+  // build-and-warn — a bundle that can only revert is still returned, clearly labelled.
+  warnings.push(
+    ...(await poolPreflightWarnings({
+      client: resolved.client,
+      poolManager: dep.poolManager,
+      whitelistManager: dep.whitelistManager,
+      corkAdapter,
+      poolId,
+      actionType: input.action.type,
+      account: input.account,
+      expiryTimestamp: tokens.expiryTimestamp,
+      nowSeconds: nowSecs,
+      atBlock: ctx.atBlock,
+    })),
+    // Interface-first guard, same posture, scoped to the contracts this bundle executes: warn
+    // when a trusted role's live code is off the allowlist bundled into this build (a proxy
+    // upgrade nobody admitted yet, or an address that moved ahead of a release).
+    ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock, PHOENIX_IMPLEMENTATION_ROLES)),
+  );
+  // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
+  // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
+  // erc20Transfer never checks receiver==initiator() and Bundler3.multicall is public, so
+  // anyone can take it in a later block. Return it to the declared initiator in-bundle.
+  const plan = fundingPlan(input.action, tokens, corkAdapter, mode, input.account);
+  if (plan.refusal) {
+    return envelope({
+      state: "unavailable",
+      data: null,
+      chainId: input.chainId,
+      source: "chain",
+      warnings: [...rpcWarn(resolved), ...warnings, { code: "unsafe_shared_balance", message: `${plan.refusal}; no signable bytes were emitted` }],
+      ...rpcProvenance(input.format, resolved),
+      ctx,
+    });
+  }
+  const funding = plan.legs;
+  const sweepBack = plan.sweepLegs;
+  if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
+  if (sweepBack.length) {
+    warnings.push({
+      code: "sweep_back",
+      message: `this bundle ends with ${sweepBack.length} sweep-back leg(s) returning any unspent balance of ${plan.sweptTokens.join(", ")} to ${input.account}, because auto-funding moved a slippage CAP (not the exact amount) into the adapter. Each sweeps the adapter's FULL balance of that token (uint256.max sentinel), so it also returns any residual an earlier bundle abandoned there — that balance was already takeable by anyone. A zero residual is a no-op, not a revert.`,
+    });
   }
 
   const bundle = [...funding, actionLeg, ...sweepBack];
   const multicall = encodeMulticall(bundle);
-  // What the caller is about to sign, in words. Token roles come from the pool read when we
-  // did one, so amounts are attributed to "collateral"/"cST" rather than bare addresses.
-  const summary = summarizeBundle(decodeBundle(multicall), { tokenRoles, account: input.account, adapter: corkAdapter });
+  // What the caller is about to sign, in words. Token roles come from the pool read, so amounts
+  // are attributed to "collateral"/"cST" rather than bare addresses; the decoder is handed the
+  // same targets the bundle was built against, so every leg labels as trusted.
+  const summary = summarizeBundle(
+    decodeBundle(multicall, { bundler3, corkAdapter, erc20: [tokens.collateral, tokens.reference, tokens.cst, tokens.cpt] }),
+    { tokenRoles, account: input.account, adapter: corkAdapter },
+  );
   return envelope({
     state: "ok",
     data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId: input.chainId,
-    source: ctx.rpcUrl && funding.length ? "chain" : "config",
-    warnings,
+    source: "chain",
+    warnings: [...rpcWarn(resolved), ...warnings],
+    ...rpcProvenance(input.format, resolved),
     ctx,
   });
 }

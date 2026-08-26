@@ -7,6 +7,7 @@ const ADP = "0xccccccccccccbad6f772a511b337d9ccc9570407" as const;
 const OTHER = "0x00000000000000000000000000000000000000ff" as const;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0x0000000000000000000000000000000000000001" as const;
+const INIT = "0x00000000000000000000000000000000000000aa" as const;
 const tokens: PoolTokens = {
   collateral: "0x0000000000000000000000000000000000000010",
   reference: "0x0000000000000000000000000000000000000020",
@@ -21,7 +22,7 @@ const sel = (d: `0x${string}`) => d.slice(0, 10);
 describe("fundingPlan: value-in actions", () => {
   it("deposit -> 1 erc20TransferFrom(collateral) leg to the adapter", () => {
     const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
-    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve");
+    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
     expect(note).toBeUndefined();
     expect(legs).toHaveLength(1);
     expect(legs[0]?.to).toBe(ADP);
@@ -29,52 +30,62 @@ describe("fundingPlan: value-in actions", () => {
   });
   it("swap -> 2 legs (cst + reference)", () => {
     const action = { type: "swap", poolId: POOL, collateralAssetsOut: "1", receiver: RCV, maxCstSharesIn: "2", maxReferenceAssetsIn: "3" } as unknown as PhoenixAction;
-    expect(fundingPlan(action, tokens, ADP, "erc20-approve").legs).toHaveLength(2);
+    expect(fundingPlan(action, tokens, ADP, "erc20-approve", INIT).legs).toHaveLength(2);
   });
   it("permit2 mode uses permit2TransferFrom", () => {
     const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
-    expect(sel(fundingPlan(action, tokens, ADP, "permit2").legs[0]!.data)).toBe(PERMIT2_TF);
+    expect(sel(fundingPlan(action, tokens, ADP, "permit2", INIT).legs[0]!.data)).toBe(PERMIT2_TF);
   });
-  it("pre-funded -> no legs", () => {
+  it("there is no mode that funds nothing: an unknown spelling still pulls, never silently skips", () => {
+    // FundingMode is a closed union; the removed "pre-funded" spelling is rejected at the
+    // schema (see handlers.test) and has no runtime branch left to reach.
     const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
-    expect(fundingPlan(action, tokens, ADP, "pre-funded").legs).toHaveLength(0);
+    const plan = fundingPlan(action, tokens, ADP, "pre-funded" as unknown as "permit2", INIT);
+    expect(plan.legs).toHaveLength(1);
+    expect(sel(plan.legs[0]!.data)).toBe(ERC20_TF);
   });
 });
 
 describe("fundingPlan: share-burn actions", () => {
   it("withdraw owner==adapter -> 1 cpt-transfer leg", () => {
     const action = { type: "withdraw", poolId: POOL, collateralAssetsOut: "1", owner: ADP, receiver: RCV, maxCptSharesIn: "9" } as unknown as PhoenixAction;
-    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve");
+    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
     expect(note).toBeUndefined();
     expect(legs).toHaveLength(1);
   });
   it("unwind-deposit owner==adapter -> 2 legs (cpt + cst)", () => {
     const action = { type: "unwind-deposit", poolId: POOL, collateralAssetsOut: "1", owner: ADP, receiver: RCV, maxCptAndCstSharesIn: "9" } as unknown as PhoenixAction;
-    expect(fundingPlan(action, tokens, ADP, "erc20-approve").legs).toHaveLength(2);
+    expect(fundingPlan(action, tokens, ADP, "erc20-approve", INIT).legs).toHaveLength(2);
   });
   it("owner != adapter -> no leg + owner-managed note", () => {
     const action = { type: "withdraw", poolId: POOL, collateralAssetsOut: "1", owner: OTHER, receiver: RCV, maxCptSharesIn: "9" } as unknown as PhoenixAction;
-    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve");
+    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
     expect(legs).toHaveLength(0);
     expect(note).toMatch(/owner/i);
   });
-  it("owner==adapter with uint256.max sentinel -> no leg + note", () => {
+  it("owner==adapter with uint256.max sentinel -> REFUSAL: no exact amount to pull atomically", () => {
     const MAX = ((1n << 256n) - 1n).toString();
     const action = { type: "redeem", poolId: POOL, cptSharesIn: MAX, owner: ADP, receiver: RCV, minReferenceAssetsOut: "0", minCollateralAssetsOut: "0" } as unknown as PhoenixAction;
-    const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve");
+    const { legs, sweepLegs, note, refusal } = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
     expect(legs).toHaveLength(0);
-    expect(note).toMatch(/sentinel/i);
+    expect(sweepLegs).toHaveLength(0);
+    expect(note).toBeUndefined();
+    // The old behaviour told the caller to park shares on the adapter first — the exact
+    // footgun the funded flow exists to avoid. Now it names the two safe alternatives.
+    expect(refusal).toMatch(/sentinel/i);
+    expect(refusal).toMatch(/exact share amount/i);
+    expect(refusal).toMatch(/owner to the share holder/i);
   });
 });
 
 describe("fundingPlan: guards and predicates", () => {
   it("throws when a fundable action is missing its amount field (never funds 0 silently)", () => {
     const action = { type: "deposit", poolId: POOL, receiver: RCV } as unknown as PhoenixAction;
-    expect(() => fundingPlan(action, tokens, ADP, "erc20-approve")).toThrow(/missing field collateralAssetsIn/);
+    expect(() => fundingPlan(action, tokens, ADP, "erc20-approve", INIT)).toThrow(/missing field collateralAssetsIn/);
   });
   it("fundingLegs is exactly fundingPlan().legs", () => {
     const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
-    expect(fundingLegs(action, tokens, ADP, "permit2")).toEqual(fundingPlan(action, tokens, ADP, "permit2").legs);
+    expect(fundingLegs(action, tokens, ADP, "permit2", INIT)).toEqual(fundingPlan(action, tokens, ADP, "permit2", INIT).legs);
   });
   it("classifies fundable vs burn actions", () => {
     expect(canAutoFund("deposit")).toBe(true);
@@ -85,7 +96,7 @@ describe("fundingPlan: guards and predicates", () => {
   it("an unrecognized action type funds nothing — never guesses a token move", () => {
     const action = { type: "not-an-action", poolId: POOL } as unknown as PhoenixAction;
     expect(canAutoFund(action.type)).toBe(false);
-    expect(fundingPlan(action, tokens, ADP, "erc20-approve").legs).toHaveLength(0);
+    expect(fundingPlan(action, tokens, ADP, "erc20-approve", INIT).legs).toHaveLength(0);
   });
 });
 
@@ -93,18 +104,10 @@ describe("fundingPlan: guards and predicates", () => {
 // Auto-funding moves the caller's slippage CAP into the adapter; the pool consumes only the true
 // amount. The delta is takeable by anyone (CoreAdapter.erc20Transfer never checks
 // receiver==initiator() and Bundler3.multicall is public), so a capped leg must be swept back.
-const INIT = "0x00000000000000000000000000000000000000aa" as const;
 const SWEEP_SEL = toFunctionSelector(bundlerSweepAbi[0]!); // erc20Transfer
 const MAXU = (1n << 256n) - 1n;
 
 describe("fundingPlan: sweep-back legs", () => {
-  it("omits sweep legs entirely when no target is passed (back-compat)", () => {
-    const action = { type: "mint", poolId: POOL, cptAndCstSharesOut: "5", receiver: RCV, maxCollateralAssetsIn: "9" } as unknown as PhoenixAction;
-    const plan = fundingPlan(action, tokens, ADP, "erc20-approve");
-    expect(plan.sweepLegs).toHaveLength(0);
-    expect(plan.sweptTokens).toEqual([]);
-  });
-
   it("mint (capped collateral) -> 1 sweep leg returning the collateral residual to the initiator", () => {
     const action = { type: "mint", poolId: POOL, cptAndCstSharesOut: "5", receiver: RCV, maxCollateralAssetsIn: "9" } as unknown as PhoenixAction;
     const plan = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
@@ -166,19 +169,22 @@ describe("fundingPlan: sweep-back legs", () => {
     expect(plan.sweepLegs).toHaveLength(0);
   });
 
-  it("pre-funded -> no sweep: the caller owns that balance", () => {
-    const action = { type: "mint", poolId: POOL, cptAndCstSharesOut: "5", receiver: RCV, maxCollateralAssetsIn: "9" } as unknown as PhoenixAction;
-    expect(fundingPlan(action, tokens, ADP, "pre-funded", INIT).sweepLegs).toHaveLength(0);
-  });
-
-  it("refuses to build a sweep the adapter would revert on (zero address / the adapter itself)", () => {
+  it("a sweep target the adapter would revert on (zero address / the adapter itself) is a REFUSAL, not a bundle without the sweep", () => {
+    // Without the sweep the capped residual sits on the shared adapter — takeable by anyone —
+    // so the plan must not degrade to "funding legs only" the way it used to.
     const action = { type: "mint", poolId: POOL, cptAndCstSharesOut: "5", receiver: RCV, maxCollateralAssetsIn: "9" } as unknown as PhoenixAction;
     const zero = fundingPlan(action, tokens, ADP, "erc20-approve", "0x0000000000000000000000000000000000000000");
     expect(zero.sweepLegs).toHaveLength(0);
-    expect(zero.sweepNote).toMatch(/zero address/);
-    expect(zero.legs).toHaveLength(1); // funding still built — only the sweep is withheld
+    expect(zero.refusal).toMatch(/zero address/);
     const self = fundingPlan(action, tokens, ADP, "erc20-approve", ADP);
     expect(self.sweepLegs).toHaveLength(0);
-    expect(self.sweepNote).toMatch(/adapter itself/);
+    expect(self.refusal).toMatch(/adapter itself/);
+  });
+
+  it("an EXACT input with a bad sweep target needs no sweep, so it is not refused", () => {
+    const action = { type: "deposit", poolId: POOL, collateralAssetsIn: "5", receiver: RCV, minCptAndCstSharesOut: "1" } as unknown as PhoenixAction;
+    const plan = fundingPlan(action, tokens, ADP, "erc20-approve", ADP);
+    expect(plan.refusal).toBeUndefined();
+    expect(plan.legs).toHaveLength(1);
   });
 });

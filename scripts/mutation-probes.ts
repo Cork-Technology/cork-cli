@@ -69,6 +69,8 @@ const T = {
   evalHygiene: "evals/task-hygiene.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   decodeLop: "packages/core/test/decode-lop-call.test.ts",
+  decodeTrust: "packages/core/test/decode-trust.test.ts",
+  implTrust: "packages/core/test/implementation-trust.test.ts",
   makerCode: "packages/core/test/maker-code-probe.test.ts",
   port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
@@ -2652,9 +2654,78 @@ const CATALOG: Mutant[] = [
     // its orderHash and JIT label.
     id: "lop-label-skips-nested-bundles",
     file: "packages/core/src/handlers/decode.ts",
-    find: 'if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId) };',
+    find: 'if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId, jitTrust) };',
     replace: 'if (leg.kind === "bundle") return leg;',
     tests: [T.decodeLop],
+  },
+  // ── 2026-08-26 audit remediation: decode target trust, allowlist source, atomic funding ───
+  {
+    // The single-target comparator flips: a leg at the configured contract reads as a mismatch
+    // and a look-alike reads as trusted — the audit's own finding, re-opened.
+    id: "decode-target-comparator-inverted",
+    file: "packages/core/src/bundle/decode.ts",
+    find: 'if (to.toLowerCase() === expected.toLowerCase()) return { verification: "trusted" };',
+    replace: 'if (to.toLowerCase() !== expected.toLowerCase()) return { verification: "trusted" };',
+    tests: [T.decodeTrust, T.decodeLop],
+  },
+  {
+    // Token membership inverted: a foreign token reads as trusted, the pool's own as unverified.
+    id: "decode-token-membership-inverted",
+    file: "packages/core/src/bundle/decode.ts",
+    find: 'return { verification: known ? "trusted" : "unverified" };',
+    replace: 'return { verification: known ? "unverified" : "trusted" };',
+    tests: [T.decodeTrust, T.handlers],
+  },
+  {
+    // A mismatch stops escalating the signed-tx decode to a conflict: the label says
+    // MISMATCH but the envelope says ok.
+    id: "decodetx-mismatch-not-conflict",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'return envelope({ state: targetMismatch ? "conflict" : "ok", data: base, chainId, source: "config", warnings, ctx });',
+    replace: 'return envelope({ state: "ok", data: base, chainId, source: "config", warnings, ctx });',
+    tests: [T.decodeTrust],
+  },
+  {
+    // The JIT hook's adapter comparator flips: a maker-chosen adapter reads as Cork's.
+    id: "decode-jit-adapter-comparator-inverted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'if (adapter.toLowerCase() === expected.toLowerCase()) return { verification: "trusted" };',
+    replace: 'if (adapter.toLowerCase() !== expected.toLowerCase()) return { verification: "trusted" };',
+    tests: [T.decodeTrust],
+  },
+  {
+    // The allowlist is read from the RESOLVED config again: a remote document that moves an
+    // address can admit the code behind it — the exact self-authorization MCP-NET-001 names.
+    id: "impl-allowlist-from-resolved-config",
+    file: "packages/core/src/implementations.ts",
+    find: "checkApprovedImplementations(client, chainId, BUNDLED_DEFAULTS, atBlock, roles, cfg.defaults)",
+    replace: "checkApprovedImplementations(client, chainId, cfg.defaults, atBlock, roles, cfg.defaults)",
+    tests: [T.implTrust],
+  },
+  {
+    // Role scoping ignored: every configured role is fingerprinted by every artifact path.
+    id: "impl-role-scope-ignored",
+    file: "packages/core/src/implementations.ts",
+    find: "if (roles !== undefined && !roles.includes(role)) return [];",
+    replace: "if (roles !== undefined && roles.length < 0) return [];",
+    tests: [T.implTrust],
+  },
+  {
+    // The uint256.max sentinel stops refusing: the plan degrades to "no legs", and the handler
+    // emits an action-only bundle that only works against a balance parked on the adapter.
+    id: "funding-sentinel-refusal-dropped",
+    file: "packages/core/src/bundle/funding.ts",
+    find: "if (hasSentinel) return { legs: [], ...NONE, refusal:",
+    replace: "if (hasSentinel) return { legs: [], ...NONE, note:",
+    tests: [T.funding],
+  },
+  {
+    // The handler stops honoring the plan's refusal: the bundle ships without its sweep.
+    id: "phoenix-refusal-ignored",
+    file: "packages/core/src/handlers/phoenix.ts",
+    find: "if (plan.refusal) {",
+    replace: "if (plan.refusal && plan.legs.length < 0) {",
+    tests: [T.handlers],
   },
   {
     // PID 1 gets no default signal action: registering the handler for the wrong signal leaves

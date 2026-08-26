@@ -332,10 +332,10 @@ export const PreparePhoenixInput = z.object({
   account: Address.describe("the initiating account. Funding legs pull from Bundler3's initiator at execution time, but this is ALSO the recipient of the sweep-back legs: for actions funded from a slippage CAP (any max* input), the bundle ends by returning the unspent remainder here, so it is not left on the adapter where anyone can take it. Set it to the address that actually funds the bundle"),
   clientRequestId: ClientRequestId,
   fundingMode: z
-    .enum(["permit2", "erc20-approve", "pre-funded"])
+    .enum(["permit2", "erc20-approve"])
     .default("permit2")
     .describe(
-      "how the bundle sources tokens: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 approve legs to the cork adapter; pre-funded=no funding legs (tokens already in place)",
+      "how the bundle pulls the initiator's tokens into the adapter, in the SAME transaction as the action: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 transferFrom legs through the cork adapter. There is no pre-funded mode — a balance parked on the adapter ahead of the action is takeable by anyone",
     ),
   deadlineSeconds: z
     .number()

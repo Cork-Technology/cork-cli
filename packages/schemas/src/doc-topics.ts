@@ -128,7 +128,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "unavailable",
     contract:
       "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead",
-    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused"],
+    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance"],
   },
   {
     family: "jit & prediction",
@@ -146,7 +146,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "ok",
     contract:
       "prepare pre-flight findings on live pool/account state: the bundle IS returned, labelled (paused, expired, not whitelisted, sweep-back accounting, why funding legs were omitted) — degrading to silence when a view is unavailable",
-    codes: ["pool_expired", "pool_paused", "not_whitelisted", "sweep_back", "sweep_back_skipped", "funding_needs_rpc", "manual_funding", "owner_managed_funding"],
+    codes: ["pool_expired", "pool_paused", "not_whitelisted", "sweep_back", "funding_needs_rpc", "manual_funding", "owner_managed_funding"],
   },
   {
     family: "artifact life",

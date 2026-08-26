@@ -1041,11 +1041,10 @@
             "type": "string",
             "enum": [
               "permit2",
-              "erc20-approve",
-              "pre-funded"
+              "erc20-approve"
             ],
             "default": "permit2",
-            "description": "how the bundle sources tokens: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 approve legs to the cork adapter; pre-funded=no funding legs (tokens already in place)"
+            "description": "how the bundle pulls the initiator's tokens into the adapter, in the SAME transaction as the action: permit2=Permit2 signature-based legs (default); erc20-approve=direct ERC-20 transferFrom legs through the cork adapter. There is no pre-funded mode — a balance parked on the adapter ahead of the action is takeable by anyone"
           },
           "deadlineSeconds": {
             "type": "integer",

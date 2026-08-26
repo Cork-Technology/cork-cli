@@ -3,13 +3,16 @@
 // `balanceOf(address(this))`). Leg fn is on the adapter itself (it inherits GeneralAdapter1):
 //   erc20-approve -> erc20TransferFrom(token, adapter, amount)   (initiator pre-approves adapter)
 //   permit2       -> permit2TransferFrom(token, adapter, amount) (initiator has a Permit2 allowance)
-//   pre-funded    -> no leg (tokens already in the adapter)
+// There is deliberately NO "tokens already in the adapter" mode (audit ARTIFACT-PREFUND-001,
+// 2026-08-24): a balance parked on the adapter ahead of the action is takeable by anyone through
+// the public Bundler3.multicall + the adapter's unguarded erc20Transfer, for as long as it sits
+// there. Pull, action and sweep-back must be ONE transaction.
 import { encodeFunctionData, parseAbi, zeroAddress } from "viem";
 import { U256_MAX } from "../math/fixed.ts";
 import { call, type Call } from "./bundler3.ts";
 import type { PhoenixAction } from "@cork/schemas";
 
-export type FundingMode = "permit2" | "erc20-approve" | "pre-funded";
+export type FundingMode = "permit2" | "erc20-approve";
 export type TokenRole = "collateral" | "reference" | "cst" | "cpt";
 
 export interface PoolTokens {
@@ -106,10 +109,12 @@ export interface FundingPlan {
   sweepLegs: Call[];
   /** Tokens the sweep legs cover, in leg order — for disclosure in the result envelope. */
   sweptTokens: `0x${string}`[];
-  /** Present when funding could not be auto-built and the caller must handle it. */
+  /** Present when the pool burns from an owner that is not the adapter — nothing to fund. */
   note?: string;
-  /** Present when a sweep was warranted but could not be built. */
-  sweepNote?: string;
+  /** Present when NO atomic pull-action-sweep exists for this input: emitting the action anyway
+   *  would rely on a balance parked on the shared adapter, which anyone can take. The handler
+   *  refuses the artifact and relays this text. */
+  refusal?: string;
 }
 
 /**
@@ -145,12 +150,14 @@ function buildSweep(
   tokens: PoolTokens,
   adapter: `0x${string}`,
   target: `0x${string}`,
-): { sweepLegs: Call[]; sweptTokens: `0x${string}`[]; sweepNote?: string } {
+): { sweepLegs: Call[]; sweptTokens: `0x${string}`[]; refusal?: string } {
   const capped = reqs.filter(isCapped);
   if (capped.length === 0) return NONE;
-  // The adapter reverts on both of these receivers, which would take the whole bundle with it.
-  if (target === ZERO_ADDRESS) return { ...NONE, sweepNote: "no sweep-back leg was built: the sweep target is the zero address, which erc20Transfer rejects. Any residual of the capped input stays on the adapter, where it is skimmable by anyone." };
-  if (target.toLowerCase() === adapter.toLowerCase()) return { ...NONE, sweepNote: "no sweep-back leg was built: the sweep target is the adapter itself, which erc20Transfer rejects. Any residual of the capped input stays on the adapter." };
+  // The adapter reverts on both of these receivers, which would take the whole bundle with it —
+  // and a bundle WITHOUT the sweep would leave the capped residual takeable by anyone. Neither
+  // is a bundle to sign: the initiator (`account`) must be a real recipient.
+  if (target === ZERO_ADDRESS) return { ...NONE, refusal: "the sweep-back target (account) is the zero address, which erc20Transfer rejects; without the sweep the unspent part of the capped input would stay on the shared adapter, where anyone can take it. Set account to the address that funds the bundle" };
+  if (target.toLowerCase() === adapter.toLowerCase()) return { ...NONE, refusal: "the sweep-back target (account) is the adapter itself, which erc20Transfer rejects; without the sweep the unspent part of the capped input would stay on the shared adapter, where anyone can take it. Set account to the address that funds the bundle" };
 
   const sweptTokens: `0x${string}`[] = [];
   const sweepLegs: Call[] = [];
@@ -164,20 +171,18 @@ function buildSweep(
 }
 
 /**
- * Build the funding plan for an action (legs + an optional owner-managed note).
- *
- * Pass `sweepTo` (the declared initiator) to also get `sweepLegs` returning the residual of any
- * capped input. Omitted = no sweep, which is the right default for `pre-funded` callers who own
- * their own funding and for existing callers that place only `legs`.
+ * Build the atomic funding plan for an action: the initiator's pull legs (before the action) and
+ * the sweep-back legs returning the residual of every CAPPED input to `sweepTo`, the declared
+ * initiator (after the action). A plan that cannot be made atomic carries `refusal` instead of
+ * legs; the handler must not emit the action on its own.
  */
 export function fundingPlan(
   action: PhoenixAction,
   tokens: PoolTokens,
   adapter: `0x${string}`,
   mode: FundingMode,
-  sweepTo?: `0x${string}`,
+  sweepTo: `0x${string}`,
 ): FundingPlan {
-  if (mode === "pre-funded") return { legs: [], ...NONE };
   const fn = mode === "permit2" ? "permit2TransferFrom" : "erc20TransferFrom";
   const build = (reqs: FundReq[]): Call[] =>
     reqs.map((req) => {
@@ -187,7 +192,7 @@ export function fundingPlan(
       return call(adapter, data);
     });
   // Sweep only what we funded: a requirement we skipped strands nothing of ours.
-  const sweep = (reqs: FundReq[]) => (sweepTo ? buildSweep(reqs, tokens, adapter, sweepTo) : NONE);
+  const sweep = (reqs: FundReq[]) => buildSweep(reqs, tokens, adapter, sweepTo);
 
   const valueReqs = FUNDING_TABLE[action.type];
   if (valueReqs) return { legs: build(valueReqs), ...sweep(valueReqs) };
@@ -200,7 +205,7 @@ export function fundingPlan(
     }
     // owner == adapter: transfer shares in, unless a sentinel amount (uint256.max) is used.
     const hasSentinel = burnReqs.some((r) => BigInt(actionField(action, r.field) ?? "0") === MAX_UINT);
-    if (hasSentinel) return { legs: [], ...NONE, note: "owner==adapter with a uint256.max sentinel amount; pre-fund the adapter's shares directly (amount is resolved on-chain). No funding leg was built." };
+    if (hasSentinel) return { legs: [], ...NONE, refusal: "owner is the adapter and the share amount is the uint256.max sentinel (resolved on-chain), so there is no exact amount to pull from the initiator atomically; the only way to satisfy it is to park shares on the shared adapter first, where anyone can take them. Pass the exact share amount, or set owner to the share holder so the pool burns from them directly" };
     // Burn legs are capped too (maxCptSharesIn / maxCptAndCstSharesIn), so they strand shares
     // exactly like the value-in path does.
     return { legs: build(burnReqs), ...sweep(burnReqs) };
@@ -208,7 +213,8 @@ export function fundingPlan(
   return { legs: [], ...NONE };
 }
 
-/** Legs-only convenience (value-in actions). */
-export function fundingLegs(action: PhoenixAction, tokens: PoolTokens, adapter: `0x${string}`, mode: FundingMode): Call[] {
-  return fundingPlan(action, tokens, adapter, mode).legs;
+/** Legs-only convenience (value-in actions); the initiator is still required because a plan
+ *  is only meaningful with its sweep target. */
+export function fundingLegs(action: PhoenixAction, tokens: PoolTokens, adapter: `0x${string}`, mode: FundingMode, sweepTo: `0x${string}`): Call[] {
+  return fundingPlan(action, tokens, adapter, mode, sweepTo).legs;
 }

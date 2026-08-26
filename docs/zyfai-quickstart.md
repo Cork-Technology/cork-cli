@@ -704,9 +704,9 @@ ch exercise --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-0
 ch prepare pool 8453 --json \
   --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x4a97…30b8","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000000000000000"}}'
 ```
-Build with `--rpc-url <your node>` so the funding legs resolve — without an explicit RPC the bundle
-still builds, but with `fundingLegs: 0` and a `funding_needs_rpc` warning (funding-leg resolution is
-deliberately offline by default). Then sign with your Safe stack, routing the call through your
+The funding legs resolve the pool's token addresses over the default RPC ladder; pass
+`--rpc-url <your node>` to pin your own endpoint. With no reachable endpoint the prepare refuses
+(`requires_rpc`) rather than emit an action-only bundle. Then sign with your Safe stack, routing the call through your
 `*ForSelf` adapter so `receiver` is forced to the Safe (§5, item A).
 
 **Mind the clock while signatures are collected:** every prepared bundle expires — the default
