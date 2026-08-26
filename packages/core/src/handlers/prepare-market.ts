@@ -3,6 +3,7 @@
 import { type ChainId, Envelope, executionEthTransaction } from "@cork/schemas";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, type OracleModeName } from "../market-registry.ts";
 import { resolveMarketRegistry } from "../config-remote.ts";
+import { approvedImplementationGuard, PREPARE_MARKET_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { envelope, getRpc, type HandlerContext, revertReason, rpcWarn, unavailable } from "./shared.ts";
 import { probeFixedOracle, probePairWrapper } from "./registry.ts";
 
@@ -28,6 +29,9 @@ export async function handlePrepareMarket(
   const warnings: Array<{ code: string; message: string }> = warning ? [warning] : [];
   const a = input.action;
   const resolved = await getRpc(ctx, chainId);
+  // Interface-first guard, scoped to the one contract this tx executes (the registry):
+  // build-and-warn, same posture as the deployability pre-check below.
+  if (resolved) warnings.push(...(await approvedImplementationGuard(resolved.client, chainId, ctx.atBlock, PREPARE_MARKET_IMPLEMENTATION_ROLES)));
   // rpcWarn is prepended at ENVELOPE construction, not pushed here: the client fails over
   // in-call (mutating `resolved`), and the disclosure must describe the endpoint that served
   // the pre-checks.

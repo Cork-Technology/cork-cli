@@ -182,6 +182,16 @@
         "approved": [
           "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
         ]
+      },
+      "legacyMarketRegistry": {
+        "approved": [
+          "0x0fc7787ec85619dfc68dab244ac8e3b0696672b3ce7c5a14609c07129d69cb0c"
+        ]
+      },
+      "legacyJitAdapter": {
+        "approved": [
+          "0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1"
+        ]
       }
     },
     "8453": {

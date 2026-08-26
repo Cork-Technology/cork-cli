@@ -209,7 +209,7 @@ Warning codes:
 | `approval_missing` | Info on ok LOP-order prepares: chain reads CONFIRMED a required token approval absent — message names each token → spender with current vs needed; the unsigned grant payloads sit in `data.approvals`. Emitted only on confirmed-missing (unknown stays silent; the entries carry the full picture). Maker/finalize annotate with an EXPLICIT RPC only (funding-leg policy); taker-fill reuses the liveness pre-flight's client. |
 | `venue_notice` | Info: the venue attached an in-band `warnings[]` notice to this response (cork-api 0.3.3+; since 0.3.16 notices can be request-gated — e.g. the rollover offset deprecation fires only on actual legacy pagination) — venue text relayed verbatim under the label, data not instructions. |
 | `venue_deprecated_path` | Info: the venue served this call through its TEMPORARY deprecated-path rewrite (`Deprecation: true` + `x-cork-canonical-path`) — canonical is /<module>/v<n> (0.3.3); check CORK_VENUE_URL for a stale /v1 suffix (the base is normalized, but a proxy may re-add it) or report a stale path literal. |
-| `implementation_not_approved` | Build-and-warn on prepares: the LIVE code behind a trusted role (corkAdapter, whitelistManager via its EIP-1967 slot, marketRegistry, jitAdapter) hashes OFF the config's approved-implementations allowlist — a proxy upgrade nobody admitted (behavioral suite → allowlist entry), an empty account, or config drift. `approved`/unreadable stay silent. Interface-first model: `packages/core/src/implementations.ts` + the cork-defaults `approvedImplementations` block (schema mirrored in notes/distribution-interface-manifest-proposal.md). |
+| `implementation_not_approved` | Build-and-warn on prepares: the LIVE code behind a trusted role (corkAdapter, whitelistManager via its EIP-1967 slot, marketRegistry, jitAdapter, legacyJitAdapter, legacyMarketRegistry) hashes OFF the approved-implementations allowlist BUNDLED INTO THIS BUILD — a proxy upgrade nobody admitted (behavioral suite → allowlist entry), an address that moved ahead of a release, an empty account, or config drift. Addresses come from the resolved (remote-first) config; the allowlist never does, so a config that moves an address cannot admit the code behind it (audit MCP-NET-001). Scoped per prepare path to the roles its bytes execute: Phoenix `corkAdapter`+`whitelistManager`, prepare_market `marketRegistry`, JIT `jitAdapter`+`marketRegistry`, the deprecated JIT lane `legacyJitAdapter`+`legacyMarketRegistry` (`*_IMPLEMENTATION_ROLES` in implementations.ts). `approved`/unreadable stay silent. Interface-first model: `packages/core/src/implementations.ts` + the cork-defaults `approvedImplementations` block (schema mirrored in notes/distribution-interface-manifest-proposal.md). |
 | `quote_ref_unverifiable` | conflict (submit lop-order): the cited RFQ option has no parsable positive premium — NOT relayed (deliberately STRICTER than the venue, which silently skips its band there). |
 | `citation_unresolved` | Info on ok submit (quoteRef/optionRef): the cited answer is beyond the RFQ's TRUNCATED answers embed — absence unproven (superseded answers stay citable), so relayed; the venue checks its full store, and the lop premium cross-check defers to its gate. |
 | `listing_traits_mismatch` | conflict (submit lop-order): listing fields (expiry/nonce/allowsPartialFills) contradict the SIGNED makerTraits [K3] — NOT relayed. |
@@ -427,6 +427,15 @@ Deployment addresses are NOT hardcoded in source. `cork-defaults.json` (repo roo
 `config_fetch_failed` warning. Either outcome is negative-cached 10 min. `CORK_CONFIG_NO_FETCH=1`
 skips fetching (tests set it). Never hand-edit addresses in TS —
 edit `cork-defaults.json`.
+
+ONE block is deliberately NOT remote: `approvedImplementations`. `packages/core/src/implementations.ts`
+reads the allowlist only from `BUNDLED_DEFAULTS` (the copy compiled into this build) while it
+resolves the role ADDRESSES from the same remote-first config every other read uses. A document that
+can move an address must never be the document that admits the code behind it; until a release
+ships the new hash, a moved address warns `implementation_not_approved` — the tripwire working.
+Adding a role means: the address in its config block, the live `keccak256(eth_getCode)` in
+`approvedImplementations`, and the role name in `implementationRoleAddress` — all three, or the
+role is silently skipped (unknown roles never warn, so an older binary tolerates a newer config).
 
 ## Discoverability: examples, maturity, teaching errors
 

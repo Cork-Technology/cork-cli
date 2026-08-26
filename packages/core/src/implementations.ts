@@ -11,15 +11,36 @@
 // guard therefore resolves the implementation address from the EIP-1967 slot FIRST and hashes
 // that code — the proxy shell's own code never changes on an upgrade.
 //
+// Trust split (audit MCP-NET-001, 2026-08-24): the ADDRESSES come from the resolved config
+// (remote-first, like every other address read), but the ALLOWLIST comes only from the copy
+// bundled into this build. A remote document may legitimately move an address; it must never be
+// the same document that admits the code behind that address, or a tampered config would
+// authorize itself. Until a release ships the new hash, a moved address warns — that is the
+// tripwire working, not a bug.
+//
 // Posture matches the other pre-flights: best-effort disclosure. Bytes are built regardless; an
 // unreadable view degrades to silence (a read failure must never turn byte-building into a hard
 // error); only a POSITIVE finding — code that hashes off-list, an empty account, an empty proxy
-// slot — warns.
+// slot — warns. Each prepare path scopes the guard to the roles its artifact actually calls
+// (below), so an unrelated role's drift cannot noise up an unrelated artifact.
 import { keccak256 } from "viem";
-import { resolveConfig, type CorkDefaults } from "./config-remote.ts";
+import { BUNDLED_DEFAULTS, resolveConfig, type CorkDefaults } from "./config-remote.ts";
 
 /** ERC-1967 implementation slot: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1). */
 export const EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" as const;
+
+/** The roles the allowlist can name, and the config block each resolves from. */
+export const IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "legacyMarketRegistry", "legacyJitAdapter"] as const;
+export type ImplementationRole = (typeof IMPLEMENTATION_ROLES)[number];
+
+/** Per-artifact role scopes: exactly the contracts whose code the produced bytes will execute.
+ *  A Bundler3 bundle runs the CorkAdapter (and a gated pool consults the WhitelistManager);
+ *  an oracle-deploy tx runs the MarketRegistry; a 2.1.0 JIT hook runs the JIT adapter, which
+ *  calls the registry; the deprecated hook runs the previous generation of both. */
+export const PHOENIX_IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager"] as const satisfies readonly ImplementationRole[];
+export const PREPARE_MARKET_IMPLEMENTATION_ROLES = ["marketRegistry"] as const satisfies readonly ImplementationRole[];
+export const JIT_IMPLEMENTATION_ROLES = ["jitAdapter", "marketRegistry"] as const satisfies readonly ImplementationRole[];
+export const LEGACY_JIT_IMPLEMENTATION_ROLES = ["legacyJitAdapter", "legacyMarketRegistry"] as const satisfies readonly ImplementationRole[];
 
 /** The minimal client surface the guard needs. Structural on purpose: handler stubs that do not
  *  implement these views skip the guard silently, exactly like the other best-effort legs. */
@@ -39,12 +60,14 @@ export interface ImplementationCheck {
 }
 
 /** Resolve a config role to the address the guard fingerprints — against the SAME blocks that
- *  already own the addresses (deployments / marketRegistry), so the allowlist never duplicates
- *  an address that could then skew. Unknown roles resolve to undefined and are skipped: an
- *  UPDATED remote config may name roles an older binary does not know, and that must not warn. */
+ *  already own the addresses (deployments / marketRegistry / marketRegistryLegacy), so the
+ *  allowlist never duplicates an address that could then skew. Unknown roles resolve to
+ *  undefined and are skipped: an UPDATED config may name roles an older binary does not know,
+ *  and that must not warn. */
 export function implementationRoleAddress(role: string, defaults: CorkDefaults, chainId: number): `0x${string}` | undefined {
   const dep = defaults.deployments[String(chainId)];
   const mr = defaults.marketRegistry?.[String(chainId)];
+  const legacy = defaults.marketRegistryLegacy?.[String(chainId)];
   switch (role) {
     case "corkAdapter":
       return dep?.corkAdapter as `0x${string}` | undefined;
@@ -54,6 +77,10 @@ export function implementationRoleAddress(role: string, defaults: CorkDefaults, 
       return mr?.registry as `0x${string}` | undefined;
     case "jitAdapter":
       return mr?.adapter as `0x${string}` | undefined;
+    case "legacyMarketRegistry":
+      return legacy?.registry as `0x${string}` | undefined;
+    case "legacyJitAdapter":
+      return legacy?.adapter as `0x${string}` | undefined;
     default:
       return undefined;
   }
@@ -94,32 +121,47 @@ async function checkOne(
   }
 }
 
-/** Fingerprint every configured role for the chain. Reads are issued together (one extra round
- *  trip, like the pool pre-flight); a client without `getCode` skips the whole guard. */
+/** Fingerprint the configured roles for the chain — every allowlisted role, or only `roles`
+ *  when a caller scopes the check to the contracts its artifact executes. Reads are issued
+ *  together (one extra round trip, like the pool pre-flight); a client without `getCode` skips
+ *  the whole guard.
+ *
+ *  `addresses` (default: the same defaults) is where role ADDRESSES resolve from and
+ *  `defaults` is where the ALLOWLIST comes from — the production caller passes the resolved
+ *  config for the former and the bundled copy for the latter (see the header). */
 export async function checkApprovedImplementations(
   client: CodeReader,
   chainId: number,
   defaults: CorkDefaults,
   atBlock?: bigint,
+  roles?: readonly string[],
+  addresses: CorkDefaults = defaults,
 ): Promise<ImplementationCheck[]> {
   const chain = defaults.approvedImplementations?.[String(chainId)];
   if (!chain || typeof client.getCode !== "function") return [];
   const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
   const jobs = Object.entries(chain).flatMap(([role, entry]) => {
-    const address = implementationRoleAddress(role, defaults, chainId);
+    if (roles !== undefined && !roles.includes(role)) return [];
+    const address = implementationRoleAddress(role, addresses, chainId);
     return address ? [checkOne(client, role, entry, address, blockArg)] : [];
   });
   return Promise.all(jobs);
 }
 
-/** The one-call form the prepare handlers use beside their pool pre-flight: resolve the current
- *  config (remote-first, same path every address read takes) and return only the warnings.
- *  Swallows its own failures whole — this guard reports drift; it must never be the reason a
- *  bundle fails to build. */
-export async function approvedImplementationGuard(client: CodeReader, chainId: number, atBlock?: bigint): Promise<Array<{ code: string; message: string }>> {
+/** The one-call form the prepare handlers use beside their pool pre-flight: addresses from the
+ *  resolved config (remote-first, the same path every address read takes), the allowlist from
+ *  the copy bundled into this build, scoped to `roles`. Returns only the warnings. Swallows its
+ *  own failures whole — this guard reports drift; it must never be the reason a bundle fails
+ *  to build. */
+export async function approvedImplementationGuard(
+  client: CodeReader,
+  chainId: number,
+  atBlock?: bigint,
+  roles?: readonly string[],
+): Promise<Array<{ code: string; message: string }>> {
   try {
     const cfg = await resolveConfig();
-    return implementationWarnings(await checkApprovedImplementations(client, chainId, cfg.defaults, atBlock));
+    return implementationWarnings(await checkApprovedImplementations(client, chainId, BUNDLED_DEFAULTS, atBlock, roles, cfg.defaults));
   } catch {
     return [];
   }
@@ -134,7 +176,7 @@ export function implementationWarnings(checks: ImplementationCheck[]): Array<{ c
       const via = c.implementation ? ` (implementation ${c.implementation}, resolved from its EIP-1967 proxy slot)` : "";
       out.push({
         code: "implementation_not_approved",
-        message: `the live code behind ${c.role} ${c.address}${via} hashes to ${c.codehash}, which is NOT on the approved-implementations list — the logic changed after the last behavioral-suite admission. Refresh cork-defaults.json (a legitimate upgrade lands there after the suite passes) or treat the target as unverified before signing`,
+        message: `the live code behind ${c.role} ${c.address}${via} hashes to ${c.codehash}, which is NOT on the approved-implementations list bundled into this build — the logic changed after the last behavioral-suite admission, or the address moved ahead of a release. Update to a release that admits it (a legitimate upgrade lands there after the suite passes) or treat the target as unverified before signing`,
       });
     } else if (c.verdict === "no_code") {
       out.push({

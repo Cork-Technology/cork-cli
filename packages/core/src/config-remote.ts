@@ -291,7 +291,12 @@ export function parseDefaults(raw: unknown): CorkDefaults {
   return DefaultsSchema.parse(raw);
 }
 
-const BUNDLED: CorkDefaults = parseDefaults(bundledDefaults);
+/** The defaults bundled into THIS build, parsed once. Address resolution stays remote-first
+ *  (resolveConfig below); this is the copy that is authenticated by the release itself, so it
+ *  is the only acceptable source for the approved-implementations allowlist — a document that
+ *  could name a fresh address must never also be the one that admits the code behind it. */
+export const BUNDLED_DEFAULTS: CorkDefaults = parseDefaults(bundledDefaults);
+const BUNDLED = BUNDLED_DEFAULTS;
 
 /** Bundled fallback for a negative outcome: "absent" is silent by policy, "error" warns. */
 function fromFailure(failure: "absent" | "error"): ResolvedConfig {
