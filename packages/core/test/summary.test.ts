@@ -9,8 +9,12 @@ const TOKEN = "0x0000000000000000000000000000000000000010" as const;
 const MAX_UINT = (1n << 256n) - 1n;
 
 const opts = { adapter: ADP, account: USER, tokenRoles: { [TOKEN]: "collateral" } };
+const ZERO_CALLBACK = `0x${"0".repeat(64)}` as const;
+// A hand-built leg is what the decoder would emit for the tool's own bytes: verified against the
+// adapter it was built for, no Bundler3 callback. Tests that exercise the other verdicts set
+// them explicitly.
 const leg = (over: Partial<DecodedLeg> & { kind: DecodedLeg["kind"] }): DecodedLeg =>
-  ({ to: ADP, value: 0n, skipRevert: false, ...over }) as DecodedLeg;
+  ({ to: ADP, value: 0n, skipRevert: false, callbackHash: ZERO_CALLBACK, verification: "trusted", ...over }) as DecodedLeg;
 
 describe("summarizeBundle", () => {
   it("numbers every leg, in execution order", () => {
@@ -87,5 +91,33 @@ describe("summarizeBundle", () => {
 
   it("empty bundle -> no lines", () => {
     expect(summarizeBundle([], opts)).toEqual([]);
+  });
+  it("a leg whose target CONTRADICTS the configured contract is prefixed as a mismatch that must not be signed", () => {
+    const [line] = summarizeBundle([leg({ kind: "cork", action: "safeSwap", params: { receiver: USER }, to: ATTACKER, verification: "mismatch", expectedTarget: ADP })], opts);
+    expect(line).toMatch(/^1\. TARGET MISMATCH \(expected 0xcccc.*, got 0x0000.*ee\) — do not sign: run Cork 'safeSwap'/);
+  });
+
+  it("a leg nobody could vouch for is prefixed UNVERIFIED; a trusted leg carries no prefix at all", () => {
+    const [unverified, trusted] = summarizeBundle(
+      [leg({ kind: "leg", fn: "approve", role: "erc20", args: [ADP, 5n], to: TOKEN, verification: "unverified" }), leg({ kind: "cork", action: "safeDeposit", params: {} })],
+      opts,
+    );
+    expect(unverified).toMatch(/^1\. UNVERIFIED target: approve/);
+    expect(trusted).toMatch(/^2\. run Cork 'safeDeposit'/);
+  });
+
+  it("an unreadable leg is not double-prefixed: UNREADABLE already says it could not be checked", () => {
+    const [line] = summarizeBundle([leg({ kind: "unknown", selector: "0xdeadbeef", data: "0xdeadbeef", verification: "unverified" })], opts);
+    expect(line).toMatch(/^1\. UNREADABLE leg/);
+    expect(line).not.toContain("UNVERIFIED target");
+  });
+
+  it("a non-zero Bundler3 callbackHash is called out: the target may re-enter the bundler during the leg", () => {
+    const hash = `0x${"ab".repeat(32)}` as const;
+    const [line] = summarizeBundle([leg({ kind: "cork", action: "safeSwap", params: {}, callbackHash: hash })], opts);
+    expect(line).toContain("CALLBACK ENABLED");
+    expect(line).toContain(hash);
+    const [quiet] = summarizeBundle([leg({ kind: "cork", action: "safeSwap", params: {} })], opts);
+    expect(quiet).not.toContain("CALLBACK");
   });
 });

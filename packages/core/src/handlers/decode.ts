@@ -7,10 +7,10 @@ import { decodeJitExtension, type ResolvedConstraint } from "../market-registry.
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
-import { decodeBundle, type DecodedLeg, decodeSingleCall } from "../bundle/decode.ts";
+import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTargets, decodeSingleCall } from "../bundle/decode.ts";
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "../config-remote.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
@@ -20,8 +20,31 @@ type FusionLabel =
   | { settlement: `0x${string}`; classification: string; auction: { startTime: bigint; duration: bigint; initialRateBump: bigint; points: number }; postInteractionGated: boolean; scales: Record<string, string>; note: string }
   | { classification: "legacy"; note: string };
 
+/** Which JIT adapter each generation's hook is expected to call — from the same config the
+ *  prepare paths build against. Absent = nothing to compare (chain without that generation). */
+export interface JitTrustTargets {
+  currentAdapter?: `0x${string}` | undefined;
+  legacyAdapter?: `0x${string}` | undefined;
+}
+
+/** The hook target's verdict: the extension's adapter IS the configured one for that
+ *  generation (trusted), is a DIFFERENT address while one is configured (mismatch — the bytes
+ *  claim Cork semantics at a contract that is not Cork's), or nothing is configured to
+ *  compare against (unverified). A shape is decoded either way [K3]; the verdict says how far
+ *  to believe its meaning. */
+type JitVerification =
+  | { verification: "trusted" }
+  | { verification: "mismatch"; expectedAdapter: `0x${string}` }
+  | { verification: "unverified" };
+
+function verifyJitAdapter(adapter: `0x${string}`, expected: `0x${string}` | undefined): JitVerification {
+  if (expected === undefined) return { verification: "unverified" };
+  if (adapter.toLowerCase() === expected.toLowerCase()) return { verification: "trusted" };
+  return { verification: "mismatch", expectedAdapter: expected };
+}
+
 /** Best-effort JIT label on decoded orders, discriminated on the adapter generation. */
-type JitLabel =
+type JitLabel = JitVerification & (
   | {
       generation: "2.1.0";
       adapter: `0x${string}`;
@@ -52,7 +75,8 @@ type JitLabel =
       permits: number;
       scales: Record<string, string>;
       note: string;
-    };
+    }
+);
 
 /** The fee/override labels a decoded JIT payload carries (audit R1.3): the same C1 collision as
  *  everywhere else — a carried fee at 1e18 = 1% is byte-identical to a WAD rate, and a signer
@@ -108,7 +132,7 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
  *  a Cork-native auction order composes both (amount getters + JIT preInteraction in one blob)
  *  and a taker needs to see both commitments. Shared by kind:"order" and by the fill legs of
  *  kind:"tx" / kind:"calldata", so a signed fill reads exactly like the order it fills. */
-export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | undefined, chainId: ChainId): { fusion?: FusionLabel; jit?: JitLabel } {
+export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | undefined, chainId: ChainId, jitTrust: JitTrustTargets = {}): { fusion?: FusionLabel; jit?: JitLabel } {
   if (extension === undefined || extension === "0x") return {};
   // Fusion: when the extension carries an auction amount-getter, summarize it.
   let fusion: FusionLabel | undefined;
@@ -135,6 +159,7 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
   try {
     const d = decodeJitExtension(extension);
     jit = {
+      ...verifyJitAdapter(d.adapter, jitTrust.currentAdapter),
       generation: "2.1.0",
       adapter: d.adapter,
       collateralAsset: d.params.collateralAsset,
@@ -155,6 +180,7 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
     try {
       const d = legacyRegistry.decodeJitExtension(extension);
       jit = {
+        ...verifyJitAdapter(d.adapter, jitTrust.legacyAdapter),
         generation: "legacy (pre-2.1.0)",
         adapter: d.adapter,
         collateralAsset: d.params.collateralAsset,
@@ -187,10 +213,10 @@ export interface LopLegLabel {
 
 /** Attach LopLegLabel to every 1inch leg in a decoded tree (nested bundles included). Pure:
  *  returns new leg objects, never mutates the decoder's output. */
-export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId): DecodedLeg[] {
+export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId, jitTrust: JitTrustTargets = {}): DecodedLeg[] {
   const lop = LOP_ADDRESSES[chainId];
   return legs.map((leg): DecodedLeg => {
-    if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId) };
+    if (leg.kind === "bundle") return { ...leg, legs: labelLopLegs(leg.legs, chainId, jitTrust) };
     if (leg.kind !== "lop") return leg;
     if (leg.call.fn === "cancelOrder") {
       return { ...leg, label: { orderHash: leg.call.orderHash, makerTraits: decodeMakerTraits(leg.call.makerTraits) } };
@@ -201,16 +227,71 @@ export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId): DecodedLeg[]
       label: {
         orderHash: lop ? hashLopOrder(chainId, lop, order) : null,
         makerTraits: decodeMakerTraits(order.makerTraits),
-        ...labelOrderExtension(order, args.extension, chainId),
+        ...labelOrderExtension(order, args.extension, chainId, jitTrust),
       },
     };
   });
 }
 
+/** The address book a decode verifies against: the chain's deployment (Bundler3, adapter), its
+ *  1inch LOP, and the JIT adapters of both generations — read from the same config every
+ *  prepare path builds against, so a decode of this tool's own bytes verifies `trusted` and a
+ *  substituted target reads `mismatch`. ForSelf and ERC-20 targets are deliberately NOT here:
+ *  the decoder has no authority for them (integrator config; the user's own token). */
+async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promise<{ targets: DecodeTrustTargets; jitTrust: JitTrustTargets; dep: Awaited<ReturnType<typeof getDep>>["dep"]; depWarn: Array<{ code: string; message: string }> }> {
+  const [{ dep, depWarn }, { marketRegistry: mr }, { marketRegistry: legacyMr }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId), resolveMarketRegistryLegacy(chainId)]);
+  return {
+    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId] },
+    jitTrust: { currentAdapter: mr?.adapter, legacyAdapter: legacyMr?.adapter },
+    dep,
+    depWarn,
+  };
+}
+
+const describeTarget = (leg: DecodedLeg): string => {
+  switch (leg.kind) {
+    case "cork": return `Cork '${leg.action}'`;
+    case "forself": return `ForSelf '${leg.action}'`;
+    case "leg": return leg.role === "adapter" ? `adapter '${leg.fn}'` : `ERC-20 '${leg.fn}'`;
+    case "lop": return `1inch '${leg.call.fn}'`;
+    case "bundle": return "Bundler3 multicall";
+    case "unknown": return `selector ${leg.selector}`;
+  }
+};
+
+/** The verification verdicts of a decoded tree (JIT hook targets included), as warnings: one
+ *  `target_mismatch` per contradiction (the handler returns `conflict`), and ONE informational
+ *  `target_unverified` naming every labeled leg nobody could vouch for. */
+function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: string } = {}): { mismatch: boolean; warnings: Array<{ code: string; message: string }> } {
+  const { mismatches, unverified } = collectVerification(legs);
+  const warnings: Array<{ code: string; message: string }> = [];
+  for (const leg of mismatches) {
+    warnings.push({ code: "target_mismatch", message: `${describeTarget(leg)} calldata targets ${leg.to}, but the configured contract for that role is ${leg.expectedTarget} — the bytes claim Cork semantics at a contract that is not Cork's. Do not sign` });
+  }
+  const jitMismatch: string[] = [];
+  const jitUnverified: string[] = [];
+  const walkJit = (list: DecodedLeg[]) => {
+    for (const leg of list) {
+      if (leg.kind === "bundle") walkJit(leg.legs);
+      const j = leg.kind === "lop" ? leg.label?.jit : undefined;
+      if (!j) continue;
+      if (j.verification === "mismatch") jitMismatch.push(`the ${j.generation} JIT preInteraction targets adapter ${j.adapter}, but the configured ${j.generation} JIT adapter is ${j.expectedAdapter}`);
+      else if (j.verification === "unverified") jitUnverified.push(`${j.generation} JIT preInteraction adapter ${j.adapter} (no ${j.generation} JIT adapter is configured on this chain)`);
+    }
+  };
+  walkJit(legs);
+  for (const m of jitMismatch) warnings.push({ code: "target_mismatch", message: `${m} — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not sign` });
+  const names = [...unverified.map((l) => `${describeTarget(l)} at ${l.to}`), ...jitUnverified];
+  if (names.length) {
+    warnings.push({ code: "target_unverified", message: `${names.length} labeled leg(s) could not be checked against a configured contract: ${names.join("; ")}. ${opts.unverifiedHint ?? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"}` });
+  }
+  return { mismatch: mismatches.length > 0 || jitMismatch.length > 0, warnings };
+}
+
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
  *  breakdown + locally recomputed orderHash; any caller-claimed hash is cross-checked, never
  *  trusted [K3]. */
-export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Envelope {
+export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   let order: LopOrder;
   let claimedOrderHash: `0x${string}` | undefined;
   let extension: `0x${string}` | undefined;
@@ -245,7 +326,13 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
     // Arbitrum order is plausible-looking and wrong, with nothing downstream to catch it.
     warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash is CHAIN-SPECIFIC (the same order bytes hash differently per chain); pass chainId if this order rests on another chain (e.g. 42161)" });
   }
-  const { fusion, jit } = labelOrderExtension(order, extension, chainId);
+  const { jitTrust } = await resolveDecodeTrust(ctx, chainId);
+  const { fusion, jit } = labelOrderExtension(order, extension, chainId, jitTrust);
+  if (jit?.verification === "mismatch") {
+    warnings.push({ code: "target_mismatch", message: `the ${jit.generation} JIT preInteraction targets adapter ${jit.adapter}, but the configured ${jit.generation} JIT adapter is ${jit.expectedAdapter} — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not fill` });
+  } else if (jit?.verification === "unverified") {
+    warnings.push({ code: "target_unverified", message: `the ${jit.generation} JIT preInteraction adapter ${jit.adapter} could not be checked: no ${jit.generation} JIT adapter is configured on chainId ${chainId}. The label describes the payload's SHAPE only` });
+  }
   const base = {
     kind: "order" as const,
     chainId,
@@ -284,7 +371,7 @@ export function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: Han
     });
   }
   return envelope({
-    state: "ok",
+    state: jit?.verification === "mismatch" ? "conflict" : "ok",
     data: { ...base, ...saltBinding, ...(claimedOrderHash !== undefined ? { claimedOrderHash, claimedHashVerified: orderHash !== null } : {}) },
     chainId,
     source: "config",
@@ -386,6 +473,8 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   const to = parsed.to ?? null;
   let toLabel: string | null = null;
   let dep: Awaited<ReturnType<typeof getDep>>["dep"];
+  let targets: DecodeTrustTargets = {};
+  let jitTrust: JitTrustTargets = {};
   if (to === null) {
     // Chain-independent: contract creation is outside every Cork prepare path.
     warnings.push({ code: "unknown_target", message: "this transaction has NO `to` (contract creation) — no Cork prepare path produces a deployment tx; do not broadcast unless you built it yourself" });
@@ -396,9 +485,11 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
     // Known-address book for the chain (best-effort config reads; every entry optional). The
     // registry/rollover resolvers read the same remote config file as getDep, so getDep's
     // staleness warning already covers all three — theirs are deliberately not duplicated.
-    const got = await getDep(ctx, chainId);
-    dep = got.dep;
-    warnings.push(...got.depWarn);
+    const trust = await resolveDecodeTrust(ctx, chainId);
+    dep = trust.dep;
+    targets = trust.targets;
+    jitTrust = trust.jitTrust;
+    warnings.push(...trust.depWarn);
     const [{ marketRegistry: mr }, { rollover }] = await Promise.all([resolveMarketRegistry(chainId), resolveRollover(chainId)]);
     const candidates: Array<[string, string | undefined]> = [
       ["bundler3", dep?.bundler3],
@@ -431,8 +522,15 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   // unwraps recursively; any other single call labels via the known ABI set or surfaces raw).
   const data = parsed.data;
   let legs: DecodedLeg[] | undefined;
+  let targetMismatch = false;
   if (data !== undefined && data !== "0x") {
-    legs = labelLopLegs(decodeCallOrBundle(data, to ?? ZERO_ADDR, parsed.value ?? 0n), chainId);
+    legs = labelLopLegs(decodeCallOrBundle(data, to ?? ZERO_ADDR, parsed.value ?? 0n, targets), chainId, jitTrust);
+    // Every labeled leg is verified against the chain's address book: a contradiction is a
+    // conflict (below); a leg nobody can vouch for — a token approve, an integrator's ForSelf
+    // adapter — is said so, once, as information. `unknown_target` above already covers `to`.
+    const v = verificationWarnings(legs, { unverifiedHint: "The label describes the calldata's SHAPE only; the `to` above is what you are actually calling — confirm it yourself before broadcasting" });
+    targetMismatch = v.mismatch;
+    warnings.push(...v.warnings);
   }
   // Same summarizer options as kind:"calldata" ({adapter} only) so the documented parity is
   // UNCONDITIONAL. Passing the signer as `account` would render legs paying the signer as
@@ -481,7 +579,7 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ctx,
     });
   }
-  return envelope({ state: "ok", data: base, chainId, source: "config", warnings, ctx });
+  return envelope({ state: targetMismatch ? "conflict" : "ok", data: base, chainId, source: "config", warnings, ctx });
 }
 
 /** Kind router for cork_decode — order/event/receipt to their handlers, calldata inline. */
@@ -499,24 +597,35 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
   // an ERC-20 leg, a ForSelf adapter call, a 1inch fill or cancel) labels on its own. Bytes that
   // are neither are invalid INPUT (exit 2, teachable) — not an internal error, and never a
   // "decoded" result that hides what they are.
-  const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n), chainId);
+  // Raw calldata carries no target of its own: a multicall's INNER legs have targets and are
+  // verified against the chain's address book; a single call has nothing to verify — it is
+  // labeled by shape and said to be unverified, never silently trusted.
+  const { targets, jitTrust, dep, depWarn } = await resolveDecodeTrust(ctx, chainId);
+  const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);
   if (legs.length === 1 && legs[0]!.kind === "unknown") {
     const u = legs[0]!;
     throw new ToolInputError("cork_decode", [{ path: ["data"], message: `calldata is neither a Bundler3 multicall nor a recognized single call (selector ${u.selector}${u.note ? ` — ${u.note}` : ""}); kind:"calldata" labels Cork adapter actions, ERC-20 legs, ForSelf adapter calls, and 1inch LOP v4 fills/cancels` }]);
   }
-  const warnings: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string }> = [...depWarn];
+  const v = verificationWarnings(legs, {
+    unverifiedHint: isBundlerMulticall(data)
+      ? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"
+      : "Raw calldata names no target contract, so nothing here can be verified — decode the SIGNED transaction (kind \"tx\") to check the target too",
+  });
+  warnings.push(...v.warnings);
   if (input.chainId === undefined && legs.some((l) => l.kind === "lop")) {
     warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash on a 1inch fill/cancel leg is CHAIN-SPECIFIC; pass chainId if these bytes are for another chain (e.g. 8453)" });
   }
   // Plain-English rendering alongside the structured legs: these bytes usually arrive from
   // somewhere else, and "what will this DO" is the question being asked of them.
-  const adapter = (await getDep(ctx, chainId)).dep?.corkAdapter;
+  const adapter = dep?.corkAdapter;
   // Summary before the leg dump: a reader scanning the prose output wants the intent first.
-  return envelope({ state: "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", warnings, ctx });
+  return envelope({ state: v.mismatch ? "conflict" : "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", warnings, ctx });
 }
 
-/** A Bundler3 multicall → its legs; any other bytes → the one call they are (labeled or raw). */
-function decodeCallOrBundle(data: `0x${string}`, to: `0x${string}`, value: bigint): DecodedLeg[] {
-  if (isBundlerMulticall(data)) return decodeBundle(data);
-  return [decodeSingleCall({ to, data, value, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` })];
+/** A Bundler3 multicall → its legs; any other bytes → the one call they are (labeled or raw),
+ *  each verified against `trust`. */
+function decodeCallOrBundle(data: `0x${string}`, to: `0x${string}`, value: bigint, trust: DecodeTrustTargets): DecodedLeg[] {
+  if (isBundlerMulticall(data)) return decodeBundle(data, trust);
+  return [decodeSingleCall({ to, data, value, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }, trust)];
 }

@@ -4,7 +4,7 @@
 // Deliberately literal. It reports what each leg says, never what it ought to say — an unknown leg
 // is called out as unreadable rather than glossed over, because the value of this summary comes
 // entirely from being trustworthy when it matters.
-import type { DecodedLeg } from "./decode.ts";
+import { type DecodedLeg, hasCallback } from "./decode.ts";
 import { U256_MAX } from "../math/fixed.ts";
 import { lopInvalidatorPlan } from "../orders.ts";
 
@@ -116,11 +116,28 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
   }
 }
 
+/** The verification verdict, as a prefix a reader cannot miss. `trusted` is silent — it is the
+ *  expected state, and a summary that says "verified" on every line trains the eye to skip. */
+function verdict(leg: DecodedLeg): string {
+  switch (leg.verification) {
+    case "trusted":
+      return "";
+    case "mismatch":
+      return `TARGET MISMATCH (expected ${leg.expectedTarget ?? "?"}, got ${leg.to}) — do not sign: `;
+    case "unverified":
+      // An unknown leg already announces itself as unreadable; a second prefix adds noise.
+      return leg.kind === "unknown" ? "" : "UNVERIFIED target: ";
+  }
+}
+
 /** Per-leg caveats that change what signing means, appended to the leg's own line. */
 function caveats(leg: DecodedLeg): string {
   const notes: string[] = [];
   if (leg.skipRevert) notes.push("MAY FAIL SILENTLY (skipRevert)");
   if (leg.value > 0n) notes.push(`sends ${leg.value} wei`);
+  // A non-zero callbackHash lets the target call back into Bundler3 (reenter) during this leg
+  // — code the summary cannot see runs inside the bundle. Nothing this tool prepares sets it.
+  if (hasCallback(leg)) notes.push(`CALLBACK ENABLED: the target may re-enter the bundler (callbackHash ${leg.callbackHash})`);
   return notes.length ? ` [${notes.join("; ")}]` : "";
 }
 
@@ -134,7 +151,7 @@ export function summarizeBundle(legs: DecodedLeg[], options: SummaryOptions = {}
   const out: string[] = [];
   const walk = (list: DecodedLeg[], prefix: string) => {
     list.forEach((leg, i) => {
-      out.push(`${prefix}${i + 1}. ${describeLeg(leg, options)}${caveats(leg)}`);
+      out.push(`${prefix}${i + 1}. ${verdict(leg)}${describeLeg(leg, options)}${caveats(leg)}`);
       if (leg.kind === "bundle") walk(leg.legs, `${prefix}   `);
     });
   };

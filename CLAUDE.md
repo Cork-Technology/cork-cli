@@ -154,6 +154,8 @@ Warning codes:
 | `verification_budget` | Info on ok hybrid lists: the page exceeded the 50-row verification budget — the newest 50 verified, the rest labeled `verification:'unverified'`; lower pageSize for full coverage. |
 | `unknown_topic` / `no_lop` | Topic not found (message lists doc topics) / no 1inch LOP for the chain. |
 | `unknown_target` | Info on ok decode tx: `to` isn't a known Cork deployment (expected for a token approve; otherwise identify before broadcasting), or no `to` (contract creation). |
+| `target_mismatch` | conflict (decode tx/calldata/order): a labeled leg's `to` — or a JIT hook's adapter — CONTRADICTS the configured contract for that role (Bundler3, corkAdapter incl. its fund/sweep legs, the chain's LOP, the JIT adapter of either generation). The label is kept (the bytes claim it); `expectedTarget` names the configured address. Do not sign (audit ARTIFACT-DECODE-002). |
+| `target_unverified` | Info on ok decode: ONE warning naming every labeled leg nobody could vouch for — an ERC-20 token call, an integrator-deployed ForSelf adapter, a chain with no configured contract for the role, or raw `kind:"calldata"` for a single call (no `to` at all — decode the signed tx to check the target). Honest "could not check", never a contradiction. Every leg carries `verification: trusted\|mismatch\|unverified`. |
 | `chainid_mismatch` | conflict (decode tx): supplied chainId contradicts the tx's own — the signature commits to the tx's chainId. |
 | `receipt_not_found` | txHash unknown/pending — a normal outcome. |
 | `chainid_defaulted` | Info on decode order / dutch-auction-price when chainId was omitted: defaulted to 1, and the EIP-712 orderHash (+ Fusion settlement classification) is CHAIN-SPECIFIC — pass chainId for a non-mainnet order. |
@@ -270,7 +272,13 @@ string[]` — one plain-English line per leg in execution order, so a signer can
 signing. `uint256.max` reads as "the entire remaining balance"; a Cork leg names its
 `receiver`/`owner` (a redirected payout is visible); `skipRevert` flags "MAY FAIL SILENTLY";
 non-zero `value` flagged; an undecodable leg is `UNREADABLE … Do not sign until you have
-identified it`. Renderer: `packages/core/src/bundle/summary.ts`.
+identified it`; a leg at the wrong contract is `TARGET MISMATCH (expected …, got …) — do not sign:`
+and one nobody could check is `UNVERIFIED target:` (trusted legs carry no prefix — the expected
+state stays quiet); a non-zero Bundler3 `callbackHash` is `CALLBACK ENABLED` (the target may
+re-enter the bundler). Renderer: `packages/core/src/bundle/summary.ts`. The decoder takes
+`DecodeTrustTargets` (`decodeBundle`/`decodeSingleCall`): prepares pass the exact contracts the
+bundle was built against, so their own bytes decode as trusted; the decode handler passes the
+chain's address book (`resolveDecodeTrust`).
 
 **Prepare pre-flight guards.** Every chain-backed `cork_prepare_phoenix` call (funded or
 `pre-funded`) runs one batched read of expiry, pause, whitelist — all **build-and-warn** (bytes

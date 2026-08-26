@@ -113,7 +113,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
       "artifact_digest_mismatch", "intent_hash_mismatch", "venue_digest_mismatch", "order_hash_mismatch",
       "marketid_mismatch", "create2_mismatch", "chainid_mismatch", "status_mismatch", "extension_salt_mismatch",
       "signature_or_reconstruction_mismatch", "prepared_context_mismatch", "listing_traits_mismatch",
-      "band_parity_mismatch", "adapter_binding_mismatch", "premium_scale_mismatch",
+      "band_parity_mismatch", "adapter_binding_mismatch", "premium_scale_mismatch", "target_mismatch",
     ],
   },
   {
@@ -153,7 +153,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "ok",
     contract:
       "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), or a defaulted/ignored input the caller should know about",
-    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect"],
+    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified"],
   },
 ] as const;
 

@@ -25,6 +25,9 @@ import {
   type LopOrder,
 } from "@cork/core";
 import fixture from "./fixtures/rehearsal-lop-calls.json" with { type: "json" };
+import corkDefaults from "../../../cork-defaults.json" with { type: "json" };
+
+const BUNDLER3_8453 = (corkDefaults.deployments as Record<string, { bundler3?: string }>)["8453"]!.bundler3! as `0x${string}`;
 
 const LOP = LOP_ADDRESSES[8453]!;
 const NOW = 1_790_000_000n;
@@ -191,13 +194,16 @@ describe("cork_decode kind:calldata / kind:tx — 1inch legs label, with the sam
     expect((leg.label.jit!.constraint as { rateMax: string }).rateMax).toBe(fixture.jitOrder.constraint.rateMax);
     expect(d.summary).toHaveLength(1);
     const line = d.summary[0]!;
-    expect(line).toMatch(/^1\. fill 1inch limit order 0x/);
+    // Raw calldata names no target contract, so the leg is labeled by shape and SAID to be
+    // unverified — the same bytes decoded as a signed tx to the LOP read as trusted (below).
+    expect(line).toMatch(/^1\. UNVERIFIED target: fill 1inch limit order 0x/);
     expect(line).toContain(`take ${fixture.fill.requiredMakingAmount} of`);
     expect(line).toContain(`paying at most ${fixture.fill.requiredTakingAmount} of`);
     expect(line).toMatch(/Cork just-in-time market via adapter 0x8902…374f/);
     expect(line).toMatch(/mints the cST from the maker's collateral, 1 embedded permit\]/);
     expect(line).not.toMatch(/UNREADABLE/);
-    expect(env.warnings).toEqual([]);
+    expect(env.warnings.map((w) => w.code)).toEqual(["target_unverified"]);
+    expect(env.warnings[0]!.message).toMatch(/Raw calldata names no target contract/);
   });
 
   it("calldata without chainId: the orderHash defaults to the mainnet domain and says so (chainid_defaulted)", async () => {
@@ -218,7 +224,7 @@ describe("cork_decode kind:calldata / kind:tx — 1inch legs label, with the sam
     expect(d.legs[0]!.label.makerTraits.nonce).toBe(fixture.cancel.nonce);
     const plan = lopInvalidatorPlan(BigInt(fixture.cancel.makerTraits));
     expect(plan.mode).toBe("bit");
-    expect(d.summary[0]).toMatch(/^1\. cancel 1inch limit order 0x/);
+    expect(d.summary[0]).toMatch(/^1\. UNVERIFIED target: cancel 1inch limit order 0x/);
     expect(d.summary[0]).toContain(`bit invalidator (nonce ${fixture.cancel.nonce})`);
   });
 
@@ -231,9 +237,12 @@ describe("cork_decode kind:calldata / kind:tx — 1inch legs label, with the sam
       { to: lop, data: fixture.fill.calldata as `0x${string}`, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` },
       { to: lop, data: fixture.cancel.calldata as `0x${string}`, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` },
     ]);
-    const outer = encodeMulticall([{ to: "0x00000000000000000000000000000000000000b3", data: wrapped, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }]);
+    const outer = encodeMulticall([{ to: BUNDLER3_8453, data: wrapped, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }]);
     const env = await decode({ kind: "calldata", chainId: 8453, data: outer });
     expect(env.state).toBe("ok");
+    // Inner targets are verifiable (a multicall's legs name their contracts): the reenter
+    // bundle targets the chain's Bundler3 and the fills its LOP, so every leg is trusted.
+    expect(env.warnings.filter((w) => w.code === "target_unverified" || w.code === "target_mismatch")).toEqual([]);
     type Leg = { kind: string; legs?: Leg[]; label?: { orderHash: string | null; jit?: { adapter: string } } };
     const d = env.data as { summary: string[]; legs: Leg[] };
     const inner = d.legs[0]!.legs!;
@@ -243,7 +252,31 @@ describe("cork_decode kind:calldata / kind:tx — 1inch legs label, with the sam
     expect(inner[1]!.label!.orderHash).toBe(fixture.cancel.orderHash);
     expect(d.summary.filter((l) => /fill 1inch limit order 0x/.test(l))).toHaveLength(1);
     expect(d.summary.filter((l) => /cancel 1inch limit order 0x/.test(l))).toHaveLength(1);
-    expect(d.summary.some((l) => /UNREADABLE/.test(l))).toBe(false);
+    expect(d.summary.some((l) => /UNREADABLE|UNVERIFIED|MISMATCH/.test(l))).toBe(false);
+  });
+
+  it("calldata: a fill wrapped by a multicall at an address that is NOT the chain's Bundler3 is a target mismatch — labeled, and a conflict", async () => {
+    // The `multicall(Call[])` selector proves a shape, not the executor. A router that speaks
+    // Bundler3's ABI would run these legs under a different msg.sender, so the label the
+    // signer reads ("a nested bundle") would be a lie about who executes it.
+    const lop = LOP_ADDRESSES[8453]!;
+    const wrapped = encodeMulticall([{ to: lop, data: fixture.fill.calldata as `0x${string}`, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }]);
+    const router = "0x00000000000000000000000000000000000000b3";
+    const outer = encodeMulticall([{ to: router, data: wrapped, value: 0n, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` }]);
+    const env = await decode({ kind: "calldata", chainId: 8453, data: outer });
+    expect(env.state).toBe("conflict");
+    const mismatch = env.warnings.filter((w) => w.code === "target_mismatch");
+    expect(mismatch).toHaveLength(1);
+    expect(mismatch[0]!.message).toContain(router);
+    expect(mismatch[0]!.message.toLowerCase()).toContain(BUNDLER3_8453.toLowerCase());
+    type Leg = { kind: string; verification: string; expectedTarget?: string; legs?: Leg[]; label?: { orderHash: string | null } };
+    const d = env.data as { summary: string[]; legs: Leg[] };
+    expect(d.legs[0]!.verification).toBe("mismatch");
+    expect(d.legs[0]!.expectedTarget!.toLowerCase()).toBe(BUNDLER3_8453.toLowerCase());
+    // The inner fill still labels (the walker recursed) and is itself trusted: it targets the LOP.
+    expect(d.legs[0]!.legs![0]!.verification).toBe("trusted");
+    expect(lc(d.legs[0]!.legs![0]!.label!.orderHash!)).toBe(lc(fixture.jitOrder.orderHash));
+    expect(d.summary[0]).toMatch(/^1\. TARGET MISMATCH/);
   });
 
   it("calldata that is neither a bundle nor a recognized call is invalid input that names the selector", async () => {
