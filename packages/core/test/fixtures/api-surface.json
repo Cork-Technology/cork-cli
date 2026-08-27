@@ -1,6 +1,10 @@
 {
   ".": [
     {
+      "name": "ALLOWED_SENDER_MASK",
+      "kind": "value"
+    },
+    {
       "name": "ASSET_KIND",
       "kind": "value"
     },
@@ -1009,6 +1013,10 @@
       "kind": "value"
     },
     {
+      "name": "allowedSenderSuffix",
+      "kind": "value"
+    },
+    {
       "name": "annotateApprovalStatus",
       "kind": "value"
     },
@@ -1530,6 +1538,10 @@
     },
     {
       "name": "intentStructHash",
+      "kind": "value"
+    },
+    {
+      "name": "isAllowedSender",
       "kind": "value"
     },
     {
@@ -2953,6 +2965,10 @@
   ],
   "./orders": [
     {
+      "name": "ALLOWED_SENDER_MASK",
+      "kind": "value"
+    },
+    {
       "name": "AllowanceReader",
       "kind": "type"
     },
@@ -3261,6 +3277,10 @@
       "kind": "value"
     },
     {
+      "name": "allowedSenderSuffix",
+      "kind": "value"
+    },
+    {
       "name": "annotateApprovalStatus",
       "kind": "value"
     },
@@ -3446,6 +3466,10 @@
     },
     {
       "name": "intentStructHash",
+      "kind": "value"
+    },
+    {
+      "name": "isAllowedSender",
       "kind": "value"
     },
     {

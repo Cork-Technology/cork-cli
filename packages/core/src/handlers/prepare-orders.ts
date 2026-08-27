@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
+import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -429,6 +429,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
         allowPartialFills: action.allowsPartialFills,
         usePermit2: action.usePermit2,
+        ...(action.allowedSender !== undefined ? { allowedSender: action.allowedSender } : {}),
         ...(extension !== undefined ? { extension } : {}),
       });
     } catch (err) {
@@ -485,6 +486,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // The venue listing must carry this exact value: cork_submit compares the listing's nonce
         // against what the signed makerTraits encode and refuses to relay a mismatch.
         nonce: built.nonce,
+        // Exclusivity as the signed traits STORE it (decoded back from the built word, not echoed
+        // from the input): the 10-byte suffix the book will show, null = any taker.
+        allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSenderLow10Bytes,
         approvals,
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
@@ -827,6 +831,24 @@ async function buildTakerFillArtifact(a: {
   artifactSource: "service" | "config" | "chain";
 }): Promise<Envelope> {
   const { ctx, chainId, account, clientRequestId, action, lop, signed, localOrderHash } = a;
+  // Exclusivity pre-flight, chain-free from the signed bytes [K3]: a reserved order admits ONE
+  // filler — the LOP compares the LOW 80 BITS of msg.sender to the suffix the maker signed and
+  // reverts PrivateOrder() otherwise. The sender is whoever CALLS the LOP: the account on the
+  // raw path, the ForSelf ADAPTER on the wrapper path (the wrapper is the LOP's caller, the
+  // account only calls the wrapper). Bytes that can only revert are not built; the message
+  // names the reserved suffix so a taker who controls that sender can re-prepare with it.
+  const allowedSender = decodeMakerTraits(signed.order.makerTraits).allowedSenderLow10Bytes;
+  const fillSender = action.forSelf ? action.forSelf.adapter : account;
+  if (allowedSender !== null && !isAllowedSender(signed.order.makerTraits, fillSender)) {
+    return envelope({
+      state: "unavailable",
+      data: { orderHash: localOrderHash, allowedSender, fillSender, fillSenderSuffix: allowedSenderSuffix(fillSender) },
+      chainId,
+      source: "config",
+      warnings: [{ code: "private_order", message: `this order is reserved for a filler whose address ends in ${allowedSender} (the signed makerTraits allowed-sender slot), but ${action.forSelf ? `a ForSelf fill is sent to the LOP by the ADAPTER ${fillSender}` : `this fill would be sent by ${fillSender}`}, whose last 10 bytes are ${allowedSenderSuffix(fillSender)} — the LOP reverts PrivateOrder(), so no fill bytes were built. If you control the reserved sender, prepare again with it as ${action.forSelf ? "the adapter (the LOP sees the adapter, never the account, on the wrapper path)" : "account"}; otherwise this order is not yours to lift` }],
+      ctx,
+    });
+  }
   // Liveness pre-flight [K7]: the venue can list rows whose on-chain invalidator already
   // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
   // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
@@ -1017,6 +1039,9 @@ async function buildTakerFillArtifact(a: {
       requiredMakingAmount: fill.requiredMakingAmount,
       requiredTakingAmount: fill.requiredTakingAmount,
       takerTraits: fill.takerTraits,
+      // The order's exclusivity as signed (null = open); a non-null value here is the suffix
+      // this fill's sender was just checked against.
+      allowedSender,
       approvals,
       // A caller-assembled interaction is opaque bytes: whatever tokens the interaction
       // contract itself pulls mid-fill are invisible here — say so instead of implying the

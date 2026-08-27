@@ -142,6 +142,29 @@ export interface MakerTraitsParts {
   hasExtension?: boolean;
   expiry: bigint; // unix seconds (0 = none)
   nonce: bigint;
+  /** Reserve the fill for ONE filler: the LOW 80 BITS (last 10 bytes) of this address are packed
+   *  into makerTraits bits [0,80) — all the order stores — and the LOP reverts PrivateOrder() for
+   *  any msg.sender whose last 10 bytes differ. Omitted or the zero address = any taker. */
+  allowedSender?: `0x${string}`;
+}
+
+/** MakerTraitsLib._ALLOWED_SENDER_MASK = type(uint80).max — the LOW 80 BITS of an address are all
+ *  a makerTraits word stores of the allowed sender, and all the fill compares of msg.sender. */
+export const ALLOWED_SENDER_MASK = (1n << 80n) - 1n;
+
+/** The 10-byte suffix a makerTraits word stores for an allowed sender — the same truncation
+ *  MakerTraitsLib applies to the filling msg.sender, so book and chain compare like for like. */
+export function allowedSenderSuffix(address: `0x${string}`): `0x${string}` {
+  return `0x${(BigInt(address) & ALLOWED_SENDER_MASK).toString(16).padStart(20, "0")}`;
+}
+
+/** MakerTraitsLib.isAllowedSender, bit-exact: an open order (stored suffix 0) admits any sender;
+ *  a reserved one admits exactly the senders whose LOW 80 BITS equal the stored suffix. The high
+ *  80 bits of `sender` never take part — two addresses sharing a 10-byte suffix are one filler
+ *  to the LOP. */
+export function isAllowedSender(makerTraits: bigint, sender: `0x${string}`): boolean {
+  const allowed = makerTraits & ALLOWED_SENDER_MASK;
+  return allowed === 0n || allowed === (BigInt(sender) & ALLOWED_SENDER_MASK);
 }
 
 export function buildMakerTraits(p: MakerTraitsParts): bigint {
@@ -154,7 +177,13 @@ export function buildMakerTraits(p: MakerTraitsParts): bigint {
   if (p.nonce < 0n || p.nonce > U40) {
     throw new Error(`makerTraits nonce ${p.nonce} does not fit the 40-bit trait slot (max ${U40})`);
   }
-  let t = 0n;
+  // The allowed-sender slot keeps only the low 80 bits: an address whose last 10 bytes are all
+  // zero would pack to 0 = "any taker" — the opposite of what was asked, silently. Refuse it.
+  const allowedSender = p.allowedSender === undefined ? 0n : BigInt(p.allowedSender) & ALLOWED_SENDER_MASK;
+  if (p.allowedSender !== undefined && BigInt(p.allowedSender) !== 0n && allowedSender === 0n) {
+    throw new Error(`allowedSender ${p.allowedSender} cannot be reserved: its low 80 bits are zero, and a zero allowed-sender slot means ANY taker — the LOP stores only the last 10 bytes of the address`);
+  }
+  let t = allowedSender;
   if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;
   if (p.allowMultipleFills) t |= ALLOW_MULTIPLE_FILLS_FLAG;
   if (p.usePermit2) t |= USE_PERMIT2_FLAG;
@@ -165,7 +194,7 @@ export function buildMakerTraits(p: MakerTraitsParts): bigint {
 }
 
 /** Full MakerTraitsLib breakdown — the exact inverse of buildMakerTraits, plus the flags/slots
- *  our builder never sets (epoch manager, unwrap-WETH, series, allowed sender). */
+ *  our builder never sets (epoch manager, unwrap-WETH, series). */
 export interface DecodedMakerTraits {
   allowPartialFills: boolean;
   allowMultipleFills: boolean;
@@ -186,7 +215,7 @@ export interface DecodedMakerTraits {
 
 /** Decode a makerTraits word against the MakerTraitsLib bit layout (bit-exact inverse). */
 export function decodeMakerTraits(t: bigint): DecodedMakerTraits {
-  const senderLow = t & ((1n << 80n) - 1n);
+  const senderLow = t & ALLOWED_SENDER_MASK;
   return {
     allowPartialFills: (t & NO_PARTIAL_FILLS_FLAG) === 0n,
     allowMultipleFills: (t & ALLOW_MULTIPLE_FILLS_FLAG) !== 0n,
@@ -293,6 +322,9 @@ export interface MakerOrderArgs {
   expiry?: bigint;
   allowPartialFills?: boolean;
   usePermit2?: boolean;
+  /** Reserve the fill for one msg.sender (its low 80 bits are what the order stores and the LOP
+   *  compares) — see MakerTraitsParts.allowedSender. */
+  allowedSender?: `0x${string}`;
   /** Cork hook extension bytes (deploy-on-fill / JIT-mint orders). When present, the salt's low
    *  160 bits are BOUND to keccak256(extension) (OrderLib checks this at fill) and
    *  HAS_EXTENSION_FLAG is set; determinism moves to the top 96 bits. */
@@ -343,6 +375,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
     hasExtension,
     expiry: a.expiry ?? 0n,
     nonce,
+    ...(a.allowedSender !== undefined ? { allowedSender: a.allowedSender } : {}),
   });
   // An extension with a pre-/post-interaction only runs if its makerTraits flag is set.
   if (hasExtension) makerTraits |= extensionInteractionFlags(a.extension!);

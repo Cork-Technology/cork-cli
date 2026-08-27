@@ -1936,8 +1936,18 @@ const CATALOG: Mutant[] = [
     // complete records relay unchecked — both quote_ref and optionRef paths break at once.
     id: "citation-truncated-gate-flipped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "return { option, unresolved: option === undefined && rfq.truncated === true };",
-    replace: "return { option, unresolved: option === undefined && rfq.truncated !== true };",
+    find: "return { answer, option, unresolved: answer === undefined && rfq.truncated === true };",
+    replace: "return { answer, option, unresolved: answer === undefined && rfq.truncated !== true };",
+    tests: [T.venue],
+  },
+  {
+    // Truncation gate keyed on the OPTION instead of the answer: an answer that IS in the embed
+    // but lacks the cited option relays on a truncated record — an embedded answer row carries
+    // its whole payload, so that absence is proven and the venue 400s it.
+    id: "citation-unresolved-keyed-on-option",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "return { answer, option, unresolved: answer === undefined && rfq.truncated === true };",
+    replace: "return { answer, option, unresolved: option === undefined && rfq.truncated === true };",
     tests: [T.venue],
   },
   {
@@ -1978,11 +1988,132 @@ const CATALOG: Mutant[] = [
   },
   {
     // Attribution check inverted: third-party quote stamping relays (the venue 400s it — but
-    // the pre-flight exists to refuse with teaching first) and every OWN citation is refused.
-    id: "quote-ref-maker-requester-inverted",
+    // the pre-flight exists to refuse with teaching first) and every PARTY citation is refused.
+    id: "quote-ref-party-inverted",
     file: "packages/core/src/handlers/submit.ts",
-    find: "if (typeof storedRequester === \"string\" && storedRequester.toLowerCase() !== action.order.maker.toLowerCase()) {",
-    replace: "if (typeof storedRequester === \"string\" && storedRequester.toLowerCase() === action.order.maker.toLowerCase()) {",
+    find: "} else if (!makerIsParty && partiesKnown) {",
+    replace: "} else if (makerIsParty && partiesKnown) {",
+    tests: [T.venue],
+  },
+  {
+    // The party rule regressed to the pre-0.4.1 requester-only form: a maker-mode SELL citing
+    // its own quote (the underwriter of the cited answer, gh#60) is refused — the relay
+    // out-rejects its venue on exactly the flow the fix re-enabled.
+    id: "quote-ref-party-requester-only",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const parties = [requester, underwriter].filter(",
+    replace: "const parties = [requester].filter(",
+    tests: [T.venue],
+  },
+  {
+    // Underwriter matched against ANY answer on the RFQ instead of the CITED one: citing a
+    // rival's answer passes — the very third-party stamping the party rule refuses.
+    id: "quote-ref-party-any-answer-underwriter",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const underwriter = cited.answer?.underwriter;",
+    replace: "const underwriter = ((rfq.answers ?? []) as CitedAnswer[]).map((a) => a.underwriter).find((u) => typeof u === \"string\" && u.toLowerCase() === action.order.maker.toLowerCase()) ?? cited.answer?.underwriter;",
+    tests: [T.venue],
+  },
+  {
+    // Non-party PROVEN on a half-known embed: a requester that is not the maker refuses even
+    // when the answer row carries no underwriter to compare — out-rejecting the venue, whose
+    // full store may well name this maker as the underwriter.
+    id: "quote-ref-party-half-proof-refuses",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const partiesKnown = typeof requester === \"string\" && typeof underwriter === \"string\";",
+    replace: "const partiesKnown = typeof requester === \"string\" || typeof underwriter === \"string\";",
+    tests: [T.venue],
+  },
+  {
+    // Allowed-sender comparison ignores the mask: a filler whose LOW 80 BITS match but whose
+    // high bits differ (the exact comparison MakerTraitsLib performs) is refused as a stranger,
+    // and a reserved order reads as reserved-for-other on the book.
+    id: "allowed-sender-mask-dropped-on-sender",
+    file: "packages/core/src/orders.ts",
+    find: "return allowed === 0n || allowed === (BigInt(sender) & ALLOWED_SENDER_MASK);",
+    replace: "return allowed === 0n || allowed === BigInt(sender);",
+    tests: [T.orders, T.venue, T.hybridVerify],
+  },
+  {
+    // Open-order short-circuit dropped: an open order (slot 0) admits nobody — every fill of
+    // every ordinary order is refused private_order.
+    id: "allowed-sender-open-short-circuit-dropped",
+    file: "packages/core/src/orders.ts",
+    find: "return allowed === 0n || allowed === (BigInt(sender) & ALLOWED_SENDER_MASK);",
+    replace: "return allowed === (BigInt(sender) & ALLOWED_SENDER_MASK);",
+    tests: [T.orders, T.venue],
+  },
+  {
+    // Mask width off by one (79 bits): the stored suffix loses its top bit, so the signed
+    // order reserves a DIFFERENT filler than the one named and the book decodes a wrong suffix.
+    id: "allowed-sender-mask-width",
+    file: "packages/core/src/orders.ts",
+    find: "export const ALLOWED_SENDER_MASK = (1n << 80n) - 1n;",
+    replace: "export const ALLOWED_SENDER_MASK = (1n << 79n) - 1n;",
+    tests: [T.orders],
+  },
+  {
+    // allowedSender packed but not into the traits word: the slot stays 0, the order is open,
+    // and the result echoes null — the maker asked for exclusivity and silently got none.
+    id: "allowed-sender-not-packed",
+    file: "packages/core/src/orders.ts",
+    find: "  let t = allowedSender;\n  if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;",
+    replace: "  let t = 0n;\n  if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;",
+    tests: [T.orders, T.handlers],
+  },
+  {
+    // Taker-fill exclusivity judged on the ACCOUNT on the ForSelf path: the LOP's msg.sender
+    // there is the ADAPTER, so an order reserved for the adapter is refused and one reserved
+    // for the account builds bytes that revert PrivateOrder().
+    id: "takerfill-private-order-forself-sender",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const fillSender = action.forSelf ? action.forSelf.adapter : account;",
+    replace: "const fillSender = account;",
+    tests: [T.forself],
+  },
+  {
+    // Exclusivity gate dropped: a reserved order builds fill bytes for a stranger — bytes that
+    // can only revert PrivateOrder(), the class of artifact the pre-flight exists to refuse.
+    id: "takerfill-private-order-gate-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (allowedSender !== null && !isAllowedSender(signed.order.makerTraits, fillSender)) {",
+    replace: "if (false) {",
+    tests: [T.venue, T.forself],
+  },
+  {
+    // Book exclusivity served from the venue's echo instead of the signed word [K3]: a
+    // mis-decoding venue relabels reserved orders open (and vice versa) with nothing to catch it.
+    id: "book-exclusivity-from-venue-echo",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "const annotated: Row = { ...row, allowedSender, exclusivity };",
+    replace: "const annotated: Row = { ...row, allowedSender: typeof row.allowedSender === \"string\" ? row.allowedSender : row.allowedSender === null ? null : allowedSender, exclusivity };",
+    tests: [T.hybridVerify],
+  },
+  {
+    // reserved-for-account / reserved-for-other swapped: the caller skips the order reserved
+    // for it and prepares the one it cannot fill.
+    id: "book-exclusivity-account-classes-swapped",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "isAllowedSender(traits, account) ? \"reserved-for-account\" : \"reserved-for-other\";",
+    replace: "isAllowedSender(traits, account) ? \"reserved-for-other\" : \"reserved-for-account\";",
+    tests: [T.hybridVerify],
+  },
+  {
+    // Hash-lie drop demoted to the chain leg: a row misrepresenting its own order is served
+    // (labeled unverified) whenever no RPC resolves — the self-contradiction needed no chain.
+    id: "book-hash-lie-served-offline",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "      hashLies += 1;\n      continue;",
+    replace: "      hashLies += 1;\n      served.push(row);\n      continue;",
+    tests: [T.hybridVerify],
+  },
+  {
+    // exclude_request_prefix silently dropped from the rfqs URL: the venue serves the whole
+    // feed (its default), nothing errors, the heartbeats the caller asked to skip come back.
+    id: "rfqs-exclude-prefix-dropped-from-url",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor",
+    replace: "cursor: p.cursor",
     tests: [T.venue],
   },
   {

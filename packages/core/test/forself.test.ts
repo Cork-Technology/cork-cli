@@ -18,6 +18,7 @@ import {
   type LopOrder,
 } from "@cork/core";
 import { forSelfPairAllowed } from "../src/handlers/forself.ts";
+import { allowedSenderSuffix } from "../src/orders.ts";
 import { stubRpc } from "./helpers.ts";
 
 const POOL = `0x${"11".repeat(32)}` as const;
@@ -247,6 +248,29 @@ const venueWith = (row: Record<string, unknown>) => async (url: string) => {
 };
 
 describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
+  it("exclusivity is judged on the ADAPTER — the LOP's msg.sender on this path — never on the account", async () => {
+    // Reserved for the ACCOUNT: through the wrapper the LOP sees the adapter, so this reverts PrivateOrder.
+    const forAccount = await signedVenueRow({ makerTraits: BigInt(allowedSenderSuffix(ACCOUNT)) });
+    const refused = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0020", action: { type: "taker-fill", orderHash: forAccount.orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(forAccount.row), resolveRpc: chainStub() },
+    );
+    expect(refused.state).toBe("unavailable");
+    expect(refused.warnings[0]?.code).toBe("private_order");
+    expect(refused.warnings[0]?.message).toContain("ADAPTER");
+    expect(refused.data).toMatchObject({ fillSender: ADAPTER, fillSenderSuffix: allowedSenderSuffix(ADAPTER), allowedSender: allowedSenderSuffix(ACCOUNT) });
+    // Reserved for the ADAPTER: builds, and the wrapper result names the suffix it was checked against.
+    const forAdapter = await signedVenueRow({ makerTraits: BigInt(allowedSenderSuffix(ADAPTER)) });
+    const built = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: ACCOUNT, clientRequestId: "forself-fill-0021", action: { type: "taker-fill", orderHash: forAdapter.orderHash, forSelf: { adapter: ADAPTER, poolId: POOL } }, format: "concise" },
+      { nowSeconds: NOW, venueFetch: venueWith(forAdapter.row), resolveRpc: chainStub() },
+    );
+    expect(built.state).toBe("ok");
+    expect((built.data as { allowedSender: string | null; to: string }).allowedSender).toBe(allowedSenderSuffix(ADAPTER));
+  });
+
   it("emits an unsigned fillOrderForSelf call to the adapter, capped and deadline-bound", async () => {
     const { orderHash, row } = await signedVenueRow();
     const env = await runTool(

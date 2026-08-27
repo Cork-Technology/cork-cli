@@ -10,7 +10,7 @@ import { type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInp
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
 import { decodeJitExtension } from "../market-registry.ts";
-import { buildTakerFill } from "../orders.ts";
+import { buildTakerFill, decodeMakerTraits } from "../orders.ts";
 import { annotateApprovalStatus, approvalMissingWarning, takerApprovalRequirements } from "../order-approvals.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
@@ -309,6 +309,9 @@ export async function prepareForSelfTakerFill(args: {
       fillFunction: call.functionName,
       requiredMakingAmount: derived.requiredMakingAmount,
       requiredTakingAmount: derived.requiredTakingAmount,
+      // The order's exclusivity as signed (null = open); a non-null value is the suffix the
+      // ADAPTER — the LOP's msg.sender on this path — was checked against upstream.
+      allowedSender: decodeMakerTraits(signed.order.makerTraits).allowedSenderLow10Bytes,
       approvals,
       forSelf: {
         adapter: forSelf.adapter,

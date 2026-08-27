@@ -356,6 +356,9 @@ export interface RfqListParams extends PageParams {
   requester?: string;
   withAnswers?: boolean;
   view?: "full" | "current";
+  /** Drop RFQs whose request_id starts with this LITERAL prefix (venue 0.4.1 escapes LIKE
+   *  wildcards) — e.g. "healthcheck-" to skip status-page heartbeats server-side. */
+  excludeRequestPrefix?: string;
 }
 
 /**
@@ -370,7 +373,7 @@ export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueL
   return asList(
     await getJson(
       deps,
-      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, cursor: p.cursor, limit: p.limit })}`,
+      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );

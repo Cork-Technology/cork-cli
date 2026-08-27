@@ -5,7 +5,7 @@
 // degradation, and the rfqs unverifiable disclosure.
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
+import { allowedSenderSuffix, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { HYBRID_VERIFY_BUDGET } from "../src/handlers/hybrid-verify.ts";
 import { runTool } from "../src/handlers.ts";
 import { stubRpc } from "./helpers.ts";
@@ -296,5 +296,73 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as { items: Array<Record<string, unknown>>; note?: string };
     expect(d.items[0]!.verification).toBeUndefined();
     expect(d.note).toMatch(/no on-chain footprint|unverifiable/);
+  });
+});
+
+describe("hybrid verification — orderbook exclusivity and self-consistency (chain-free, K3)", () => {
+  const TAKER = "0x00000000000000000000000000000000000000dd" as const;
+  // Shares TAKER's last 10 bytes with different first 10 bytes: the same filler to the LOP.
+  const TAKER_TWIN = "0xffffffffffffffffffff000000000000000000dd" as const;
+  const STRANGER = "0x00000000000000000000000000000000000000ee" as const;
+  const reservedTraits = BigInt(allowedSenderSuffix(TAKER));
+  type BookRow = { allowedSender: string | null; exclusivity: string; verification: string };
+  const rowsOf = (env: { data: unknown }) => (env.data as { items: BookRow[]; verification: { dropped: number; unverified: number; confirmed: number }; count: number });
+
+  it("without an RPC, every parsed row still carries allowedSender + exclusivity decoded from its signed makerTraits", async () => {
+    const open = await bookRow(1n);
+    const reserved = await bookRow(2n, { makerTraits: reservedTraits });
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [open, reserved]), resolveRpc: async () => null });
+    expect(env.state).toBe("ok");
+    const d = rowsOf(env);
+    expect(d.items[0]).toMatchObject({ allowedSender: null, exclusivity: "open", verification: "unverified" });
+    expect(d.items[1]).toMatchObject({ allowedSender: allowedSenderSuffix(TAKER), exclusivity: "reserved", verification: "unverified" });
+    expect(d.verification).toMatchObject({ confirmed: 0, unverified: 2, dropped: 0 });
+  });
+
+  it("filters.account classifies a reserved row against the FILL SENDER by its last 10 bytes: twin = for-account, stranger = for-other", async () => {
+    const reserved = await bookRow(2n, { makerTraits: reservedTraits });
+    const open = await bookRow(1n);
+    const mine = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved, open]), resolveRpc: async () => null }, { filters: { account: TAKER_TWIN } });
+    expect(rowsOf(mine).items[0]!.exclusivity).toBe("reserved-for-account");
+    expect(rowsOf(mine).items[1]!.exclusivity).toBe("open"); // an open row is open for everyone
+    const theirs = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved]), resolveRpc: async () => null }, { filters: { account: STRANGER } });
+    expect(rowsOf(theirs).items[0]!.exclusivity).toBe("reserved-for-other");
+  });
+
+  it("the annotation survives the liveness leg: a live reserved row is 'confirmed' AND still classified", async () => {
+    const reserved = await bookRow(2n, { makerTraits: reservedTraits });
+    const chain = stubRpc((c) => {
+      if (c.functionName === "bitInvalidatorForOrder") return 0n;
+      throw new Error(`no stub for ${c.functionName}`);
+    });
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved]), resolveRpc: chain }, { filters: { account: TAKER } });
+    expect(rowsOf(env).items[0]).toMatchObject({ verification: "confirmed", allowedSender: allowedSenderSuffix(TAKER), exclusivity: "reserved-for-account" });
+    expect(rowsOf(env).verification.confirmed).toBe(1);
+  });
+
+  it("the venue's allowedSender echo is replaced by the local decode; a contradicting echo is disclosed, an agreeing one is silent", async () => {
+    const reserved = await bookRow(2n, { makerTraits: reservedTraits });
+    const lying = { ...reserved, allowedSender: allowedSenderSuffix(STRANGER) }; // the venue mis-decodes
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [lying]), resolveRpc: async () => null });
+    expect(rowsOf(env).items[0]!.allowedSender).toBe(allowedSenderSuffix(TAKER)); // ours, from the signed word
+    expect(env.warnings.some((w) => w.code === "listing_traits_mismatch" && w.message.includes("allowedSender"))).toBe(true);
+    // The venue says open (null) about a reserved order: also a contradiction.
+    const nullLie = await query("orderbook", { venueFetch: venueWith("orderbook", [{ ...reserved, allowedSender: null }]), resolveRpc: async () => null });
+    expect(nullLie.warnings.some((w) => w.code === "listing_traits_mismatch")).toBe(true);
+    // An agreeing echo (case-flipped) and an open row echoed as null: no warning.
+    const honest = await query("orderbook", { venueFetch: venueWith("orderbook", [{ ...reserved, allowedSender: allowedSenderSuffix(TAKER).toUpperCase().replace("0X", "0x") }, { ...(await bookRow(1n)), allowedSender: null }]), resolveRpc: async () => null });
+    expect(honest.warnings.some((w) => w.code === "listing_traits_mismatch")).toBe(false);
+  });
+
+  it("a row that does not hash to its own claimed orderHash is DROPPED without a chain read (order_hash_mismatch), RPC or not", async () => {
+    const honest = await bookRow(1n);
+    const liar = { ...(await bookRow(2n)), orderHash: honest.orderHash }; // claims another order's hash
+    for (const resolveRpc of [async () => null, stubRpc((c) => (c.functionName === "bitInvalidatorForOrder" ? 0n : (() => { throw new Error("no stub"); })()))]) {
+      const env = await query("orderbook", { venueFetch: venueWith("orderbook", [honest, liar]), resolveRpc });
+      expect(env.state).toBe("ok");
+      expect(rowsOf(env).count).toBe(1);
+      expect(rowsOf(env).verification.dropped).toBe(1);
+      expect(env.warnings.some((w) => w.code === "order_hash_mismatch" && w.message.includes("DROPPED"))).toBe(true);
+    }
   });
 });

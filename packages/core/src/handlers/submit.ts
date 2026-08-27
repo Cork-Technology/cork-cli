@@ -93,18 +93,30 @@ export function resolveListingPremium(premium: number | undefined, premiumAnnual
   return { ok: true, premiumPct: Number.parseFloat(premiumAnnualized) * 100 };
 }
 
+/** The shape of one embedded answer row on the venue's RFQ single-get (answers[]): the
+ *  underwriter that posted it rides beside the payload, so a citation resolves to BOTH the
+ *  option and the party who authored it. */
+interface CitedAnswer {
+  answer_id?: unknown;
+  underwriter?: unknown;
+  answer?: { options?: Array<Record<string, unknown>> };
+}
+
 /**
- * Resolve a cited option inside a fetched RFQ record. The venue validates citations against
- * its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get embed
- * we pre-flight against is READ-BOUNDED (READ_LIMIT rows, flagged `truncated`) — so a missing
- * row proves absence only when the embed is complete. `unresolved` = the citation may exist
- * beyond the truncation horizon; the caller relays and lets the venue's full-store check rule.
+ * Resolve a quote citation inside a fetched RFQ record: the cited ANSWER (which names the
+ * underwriter who posted it) and the cited OPTION within it. The venue validates citations
+ * against its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get
+ * embed we pre-flight against is READ-BOUNDED (READ_LIMIT rows, flagged `truncated`) — so a
+ * missing ANSWER proves absence only when the embed is complete. `unresolved` = the answer may
+ * exist beyond the truncation horizon; the caller relays and lets the venue's full-store check
+ * rule. A missing OPTION inside a resolved answer is definitive: an embedded answer row carries
+ * its whole payload.
  */
-function resolveCitedOption(rfq: Record<string, unknown>, answerId: string, optionId: string): { option: Record<string, unknown> | undefined; unresolved: boolean } {
-  const answers = (rfq.answers ?? []) as Array<{ answer_id?: unknown; answer?: { options?: Array<Record<string, unknown>> } }>;
+function resolveCitation(rfq: Record<string, unknown>, answerId: string, optionId: string): { answer: CitedAnswer | undefined; option: Record<string, unknown> | undefined; unresolved: boolean } {
+  const answers = (rfq.answers ?? []) as CitedAnswer[];
   const answer = answers.find((a) => String(a.answer_id) === answerId);
   const option = answer?.answer?.options?.find((o) => String(o.option_id) === optionId);
-  return { option, unresolved: option === undefined && rfq.truncated === true };
+  return { answer, option, unresolved: answer === undefined && rfq.truncated === true };
 }
 
 export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<Envelope> {
@@ -439,7 +451,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // quote_ref pre-flight [K3-style]: replicate the venue's own POST-time gate (post-order.ts
       // "Verify RFQ provenance") so a bad citation fails EARLY with teaching instead of a venue
       // 400. The venue checks, in order: the answer exists on the named RFQ, the order's maker
-      // is the RFQ's requester (attribution integrity — no stamping third-party quotes), the
+      // is a PARTY to that quote (attribution integrity — no stamping third-party quotes), the
       // option exists, chain and collateral cohere with this order, and the declared premium
       // sits inside the strict float band ratio > 10 || ratio < 0.1 — computed via
       // Number.parseFloat on the very JSON numbers we relay, so replicating those operations
@@ -449,17 +461,39 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (action.quoteRef) {
         const rfq = await getRfq(deps, action.quoteRef.rfqId);
         if (!rfq) return unavailable(chainId, "invalid_order_terms", `quote_ref cites unknown RFQ '${action.quoteRef.rfqId}'`, ctx);
-        const storedRequester = (rfq.request as Record<string, unknown> | undefined)?.requester;
-        if (typeof storedRequester === "string" && storedRequester.toLowerCase() !== action.order.maker.toLowerCase()) {
-          return unavailable(chainId, "invalid_order_terms", `quote_ref belongs to another buyer: RFQ '${action.quoteRef.rfqId}' was opened by ${storedRequester}, but this order's maker is ${action.order.maker} — the venue rejects third-party quote stamping (quote-to-fill attribution stays honest)`, ctx);
-        }
-        const { option, unresolved } = resolveCitedOption(rfq, action.quoteRef.answerId, action.quoteRef.optionId);
-        if (unresolved) {
+        const cited = resolveCitation(rfq, action.quoteRef.answerId, action.quoteRef.optionId);
+        // The party rule (cork-api 0.4.1, gh#60): the maker must be the RFQ's REQUESTER (a
+        // demand BUY citing the quote it accepted) or the UNDERWRITER recorded on the cited
+        // ANSWER (a maker-mode SELL citing its own quote) — that answer's underwriter, not any
+        // underwriter on the RFQ: citing a rival's answer is exactly the stamping the rule
+        // refuses. Identities are declared until COR-125 enforces RFQ signatures; the EIP-712
+        // maker signature recovered above is what prevents citation theft meanwhile. An
+        // identity the embed does not carry cannot be compared, so non-party is PROVEN only
+        // when both are present and neither is the maker; otherwise the venue's full store
+        // decides (a relay must never out-reject its venue).
+        const requester = (rfq.request as Record<string, unknown> | undefined)?.requester;
+        const underwriter = cited.answer?.underwriter;
+        const parties = [requester, underwriter].filter((p): p is string => typeof p === "string");
+        const makerIsParty = parties.some((p) => p.toLowerCase() === action.order.maker.toLowerCase());
+        const partiesKnown = typeof requester === "string" && typeof underwriter === "string";
+        if (cited.unresolved) {
           // The embed is truncated and the cited answer is beyond the horizon — absence is not
           // proven, so relay: the venue validates citations against its FULL store and 400s a
-          // genuinely bad one. Flagged, never silent (the premium cross-check cannot run here).
-          lopWarnings.push({ code: "citation_unresolved", message: `quote_ref could not be resolved client-side: RFQ '${action.quoteRef.rfqId}' serves a TRUNCATED answers embed and answer '${action.quoteRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design) and the premium cross-check is deferred to its gate` });
+          // genuinely bad one. Flagged, never silent (the premium cross-check cannot run here,
+          // and neither can the underwriter half of the party rule).
+          lopWarnings.push({ code: "citation_unresolved", message: `quote_ref could not be resolved client-side: RFQ '${action.quoteRef.rfqId}' serves a TRUNCATED answers embed and answer '${action.quoteRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design) and the premium cross-check${makerIsParty ? "" : " and the party check (maker = requester, or the underwriter of that answer)"} ${makerIsParty ? "is" : "are"} deferred to its gate` });
+        } else if (cited.answer === undefined) {
+          return unavailable(chainId, "invalid_order_terms", `quote_ref answer '${action.quoteRef.answerId}' is not on RFQ '${action.quoteRef.rfqId}' (the answers embed is complete, so absence is proven) — the venue rejects a citation whose answer is not found for the given rfq_id`, ctx);
+        } else if (!makerIsParty && partiesKnown) {
+          return unavailable(chainId, "invalid_order_terms", `quote_ref belongs to other parties: RFQ '${action.quoteRef.rfqId}' was opened by ${String(requester)} and answer '${action.quoteRef.answerId}' was posted by ${String(underwriter)}, but this order's maker is ${action.order.maker} — the venue rejects third-party quote stamping (quote-to-fill attribution stays honest); only the requester or the underwriter of THAT answer may cite it`, ctx);
         } else {
+          const { option } = cited;
+          if (!makerIsParty) {
+            // Neither identity the venue compares is in the embed, so the party half of the
+            // citation cannot be pre-flighted — relayed with the caution; the venue rules.
+            const named = parties.length === 0 ? `names neither the requester nor the underwriter of answer '${action.quoteRef.answerId}'` : `names only ${typeof requester === "string" ? "the requester" : `the underwriter of answer '${action.quoteRef.answerId}'`} (${parties[0]}), who is not this order's maker`;
+            lopWarnings.push({ code: "citation_unresolved", message: `quote_ref party check could not run client-side: the RFQ embed ${named} — relayed; the venue compares the maker ${action.order.maker} against both identities in its full store and rejects a third-party citation` });
+          }
           if (!option) return unavailable(chainId, "invalid_order_terms", `quote_ref option '${action.quoteRef.optionId}' not found in answer '${action.quoteRef.answerId}' of RFQ '${action.quoteRef.rfqId}'`, ctx);
           const optChain = (option as { chain_id?: unknown }).chain_id;
           if (typeof optChain === "number" && optChain !== chainId) {
@@ -637,7 +671,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         if (rfq.state === "expired") {
           return unavailable(chainId, "invalid_order_terms", `RFQ '${action.rfqId}' is expired — the venue no longer accepts counters on it (would 410 on relay); post a fresh RFQ instead`, ctx);
         }
-        const { option, unresolved } = resolveCitedOption(rfq, action.optionRef.answerId, action.optionRef.optionId);
+        const { option, unresolved } = resolveCitation(rfq, action.optionRef.answerId, action.optionRef.optionId);
         if (unresolved) {
           counterWarnings.push({ code: "citation_unresolved", message: `optionRef could not be resolved client-side: RFQ '${action.rfqId}' serves a TRUNCATED answers embed and answer '${action.optionRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design)` });
         } else if (!option) {

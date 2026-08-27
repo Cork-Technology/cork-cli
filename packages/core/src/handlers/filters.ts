@@ -27,6 +27,7 @@ export interface QueryFilters {
   state?: "open" | "expired";
   withAnswers?: boolean;
   view?: "full" | "current";
+  excludeRequestPrefix?: string;
   recipe?: `0x${string}`;
   args?: `0x${string}`;
   rate?: bigint;
@@ -61,6 +62,7 @@ export const KNOWN_FILTER_KEYS = [
   "state",
   "withAnswers",
   "view",
+  "excludeRequestPrefix",
   "recipe",
   "args",
   "rate",
@@ -160,6 +162,13 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     const v = String(raw.view);
     if (v !== "full" && v !== "current") fail("view", "expected 'full' (every stored answer row, the default) | 'current' (the negotiation frontier: one current answer per underwriter + the current counter)");
     else out.view = v;
+  }
+  // rfqs list: a LITERAL request_id prefix to drop server-side (venue 0.4.1; it escapes LIKE
+  // wildcards, so "50%_off" excludes exactly that prefix). The venue bounds it to 1..64 chars.
+  if (raw?.excludeRequestPrefix !== undefined) {
+    const v = String(raw.excludeRequestPrefix);
+    if (v.length < 1 || v.length > 64) fail("excludeRequestPrefix", "expected a literal request_id prefix of 1 to 64 characters (e.g. 'healthcheck-')");
+    else out.excludeRequestPrefix = v;
   }
   if (raw?.withAnswers !== undefined) {
     if (typeof raw.withAnswers === "boolean") out.withAnswers = raw.withAnswers;

@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.3.16"
+  "version": "0.4.1"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -2019,6 +2019,11 @@
            "items": {
             "additionalProperties": false,
             "properties": {
+             "allowedSender": {
+              "description": "Exclusivity lock, decoded from makerTraits bits [0,80) (1inch LOP v4 allowed sender). null = open to any taker. Non-null = a 10-byte hex value holding the LOW 80 BITS of the permitted msg.sender (not a complete address - the signed order stores no more); the LOP contract reverts PrivateOrder() unless the last 10 bytes of the filling msg.sender equal it. Compare your own fill-sender's last 10 bytes to find orders reserved for you. Display/routing metadata only - enforcement is on-chain.",
+              "nullable": true,
+              "type": "string"
+             },
              "allowsPartialFills": {
               "type": "boolean"
              },
@@ -2151,6 +2156,7 @@
              "expiry",
              "nonce",
              "allowsPartialFills",
+             "allowedSender",
              "chainId",
              "createdAt",
              "updatedAt",
@@ -9360,6 +9366,17 @@
        "maximum": 100,
        "minimum": 1,
        "type": "integer"
+      }
+     },
+     {
+      "description": "Exclude RFQs whose request_id starts with this literal prefix (e.g. \"healthcheck-\" to drop status-page heartbeats). Matching is literal: LIKE wildcards in the prefix are escaped.",
+      "in": "query",
+      "name": "exclude_request_prefix",
+      "required": false,
+      "schema": {
+       "maxLength": 64,
+       "minLength": 1,
+       "type": "string"
       }
      },
      {

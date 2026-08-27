@@ -19,9 +19,9 @@
 // yet — chain existence rides as an `exists` annotation, not a liveness verdict.
 import { zeroAddress } from "viem";
 import { poolManagerAbi } from "../chain/abis.ts";
-import { classifyInvalidatorWord, hashLopOrder, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
+import { classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { classifyRolloverSettler } from "../rollover.ts";
-import { parseSignedLopOrder } from "../datasources/venue.ts";
+import { parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
@@ -75,6 +75,67 @@ interface EthGetLogsClient {
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 
+/** How a book row's signed exclusivity reads to a caller: `open` = any taker; `reserved` = the
+ *  makerTraits name a filler and no fill sender was given to compare; `reserved-for-account` /
+ *  `reserved-for-other` = compared against `filters.account` (the taker account on a raw fill,
+ *  the ForSelf adapter on a wrapper fill — whoever calls the LOP). */
+export type BookExclusivity = "open" | "reserved" | "reserved-for-account" | "reserved-for-other";
+
+interface AnnotatedBook {
+  lop: `0x${string}`;
+  /** The served rows in the venue's order — self-contradicting rows removed, the rest carrying
+   *  `allowedSender` + `exclusivity` decoded from their own signed makerTraits. */
+  rows: Row[];
+  /** Parse results keyed by SERVED row, so the liveness leg never re-parses. */
+  parsed: Map<Row, { signed: SignedLopOrder; localHash: `0x${string}` }>;
+  dropped: number;
+  warnings: Warning[];
+}
+
+/** The chain-free half of orderbook verification [K3], run on EVERY row whether or not an RPC
+ *  resolves: parse the signed order once, re-hash it, and decode what its makerTraits commit
+ *  to. A row that does not hash to its own claimed orderHash misrepresents itself and is
+ *  dropped without a chain read (its hash is the key every fill/cancel/track would use, so it
+ *  is unusable either way). Exclusivity is served from the LOCAL decode — the venue's
+ *  `allowedSender` echo is replaced, never read as truth; an echo that contradicted the signed
+ *  bytes is counted and disclosed. An unparseable row rides through untouched (the liveness
+ *  leg labels it unverified). */
+function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, account: `0x${string}` | undefined): AnnotatedBook {
+  const parsed = new Map<Row, { signed: SignedLopOrder; localHash: `0x${string}` }>();
+  const served: Row[] = [];
+  let hashLies = 0;
+  let echoLies = 0;
+  for (const row of rows) {
+    const p = parseSignedLopOrder(row);
+    if (!p.ok) {
+      served.push(row);
+      continue;
+    }
+    const localHash = hashLopOrder(chainId, lop, p.value.order);
+    if (p.value.venueOrderHash !== undefined && p.value.venueOrderHash.toLowerCase() !== localHash.toLowerCase()) {
+      hashLies += 1;
+      continue;
+    }
+    const traits = p.value.order.makerTraits;
+    const allowedSender = decodeMakerTraits(traits).allowedSenderLow10Bytes;
+    const echo = row.allowedSender;
+    if (echo !== undefined && (typeof echo === "string" ? echo.toLowerCase() : null) !== allowedSender) echoLies += 1;
+    const exclusivity: BookExclusivity =
+      allowedSender === null ? "open" : account === undefined ? "reserved" : isAllowedSender(traits, account) ? "reserved-for-account" : "reserved-for-other";
+    const annotated: Row = { ...row, allowedSender, exclusivity };
+    parsed.set(annotated, { signed: p.value, localHash });
+    served.push(annotated);
+  }
+  const warnings: Warning[] = [];
+  if (hashLies > 0) {
+    warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash [K3]; a row that misrepresents its own order is unusable under either hash` });
+  }
+  if (echoLies > 0) {
+    warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word [K3]; the venue's echo was not used` });
+  }
+  return { lop, rows: served, parsed, dropped: hashLies, warnings };
+}
+
 /** Verify one page of venue rows against the chain. Returns null for resources with no
  *  verifiable on-chain footprint (rfqs; rollover fills/contracts rows are already event-shaped
  *  and reconcile via cork_track) — the caller serves those rows untouched, with a note. */
@@ -84,23 +145,37 @@ export async function verifyVenueRows(a: {
   resource: string;
   kind?: string | undefined;
   rows: Row[];
+  /** orderbook only: the fill sender each row's exclusivity is classified against. */
+  account?: `0x${string}` | undefined;
 }): Promise<HybridVerification | null> {
-  const { ctx, chainId, resource, rows } = a;
+  const { ctx, chainId, resource } = a;
   const verifiable =
     resource === "orderbook" || resource === "cork-pools" || resource === "trading-pairs" || resource === "fills" || (resource === "rollover-orders" && (a.kind ?? "orders") === "orders");
   if (!verifiable) return null;
 
+  // The orderbook's chain-free half runs first, RPC or not: it needs only the LOP domain (for
+  // the re-hash) and the rows' own signed bytes.
+  let book: AnnotatedBook | undefined;
+  if (resource === "orderbook") {
+    const lop = LOP_ADDRESSES[chainId];
+    if (!lop) return allUnverified(a.rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` });
+    book = annotateBookRows(a.rows, chainId, lop, a.account);
+  }
+  const rows = book ? book.rows : a.rows;
+
   const resolved = await getRpc(ctx, chainId).catch(() => null);
   if (!resolved) {
     // The pre-rename centralized behavior, demoted to a labeled fallback: venue rows serve,
-    // but every one says it is venue-claimed only.
-    return allUnverified(rows, { code: "chain_read_failed", message: "no RPC resolved — hybrid verification did not run; every row is venue-claimed only (verification:'unverified')" });
+    // but every one says it is venue-claimed only. What the rows' own bytes already settled
+    // (the book's self-contradictions) stays settled.
+    const out = allUnverified(rows, { code: "chain_read_failed", message: "no RPC resolved — hybrid verification did not run; every row is venue-claimed only (verification:'unverified')" });
+    return book ? { ...out, warnings: [...book.warnings, ...out.warnings], dropped: book.dropped } : out;
   }
   const client = resolved.client;
 
   const inBudget = rows.slice(0, HYBRID_VERIFY_BUDGET);
   const overBudget = rows.slice(HYBRID_VERIFY_BUDGET);
-  const warnings: Warning[] = [];
+  const warnings: Warning[] = [...(book?.warnings ?? [])];
   if (overBudget.length > 0) {
     warnings.push({ code: "verification_budget", message: `the page has ${String(rows.length)} rows; the first ${String(HYBRID_VERIFY_BUDGET)} (newest) were chain-verified and the remaining ${String(overBudget.length)} are labeled verification:'unverified' — lower pageSize for full coverage` });
   }
@@ -108,7 +183,7 @@ export async function verifyVenueRows(a: {
   const kept: Row[] = [];
   let confirmed = 0;
   let transportUnverified = 0;
-  let dropped = 0;
+  let dropped = book?.dropped ?? 0;
   const droppedWhy: string[] = [];
   const keep = (row: Row, v: "confirmed" | "unverified", transport = false) => {
     kept.push(label(row, v));
@@ -120,30 +195,24 @@ export async function verifyVenueRows(a: {
     if (droppedWhy.length < 3 && !droppedWhy.includes(why)) droppedWhy.push(why);
   };
 
-  if (resource === "orderbook") {
-    const lop = LOP_ADDRESSES[chainId];
-    if (!lop) return allUnverified(rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` });
-    // Phase 1 — parse every row and collect the UNIQUE invalidator reads it needs. One bit
-    // word covers 256 orders of the same (maker, slot), so rows dedupe onto shared reads.
-    // A read is keyed on the WORD it fetches (bit mode: maker + slot index, since 256 nonces
-    // share one word; remaining mode: maker + orderHash) and carries one representative
-    // (plan, maker, hash) to perform it with — readLopInvalidator owns the view's arguments.
+  if (book) {
+    // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
+    // page needs. One bit word covers 256 orders of the same (maker, slot), so rows dedupe
+    // onto shared reads. A read is keyed on the WORD it fetches (bit mode: maker + slot index,
+    // since 256 nonces share one word; remaining mode: maker + orderHash) and carries one
+    // representative (plan, maker, hash) to perform it with — readLopInvalidator owns the
+    // view's arguments.
     type InvalidatorRead = { plan: LopInvalidatorPlan; maker: `0x${string}`; orderHash: `0x${string}` };
-    type BookRef = { row: Row; verdict?: "unparseable" | "hash-lie"; readKey?: string; plan?: LopInvalidatorPlan };
+    type BookRef = { row: Row; readKey?: string; plan?: LopInvalidatorPlan };
     const reads = new Map<string, InvalidatorRead>();
     const refs: BookRef[] = inBudget.map((row) => {
-      const parsed = parseSignedLopOrder(row);
-      if (!parsed.ok) return { row, verdict: "unparseable" as const };
-      const order = parsed.value.order;
-      const localHash = hashLopOrder(chainId, lop, order);
-      if (parsed.value.venueOrderHash !== undefined && parsed.value.venueOrderHash.toLowerCase() !== localHash.toLowerCase()) {
-        // The row misrepresents its own order [K3] — a definitive self-contradiction.
-        return { row, verdict: "hash-lie" as const };
-      }
+      const parsed = book.parsed.get(row);
+      if (!parsed) return { row }; // unparseable — served, labeled unverified below
+      const { order } = parsed.signed;
       const plan = lopInvalidatorPlan(order.makerTraits);
       const maker = order.maker.toLowerCase() as `0x${string}`;
-      const readKey = plan.mode === "bit" ? `bit:${maker}:${plan.slot.toString()}` : `raw:${maker}:${localHash.toLowerCase()}`;
-      if (!reads.has(readKey)) reads.set(readKey, { plan, maker: order.maker, orderHash: localHash });
+      const readKey = plan.mode === "bit" ? `bit:${maker}:${plan.slot.toString()}` : `raw:${maker}:${parsed.localHash.toLowerCase()}`;
+      if (!reads.has(readKey)) reads.set(readKey, { plan, maker: order.maker, orderHash: parsed.localHash });
       return { row, readKey, plan };
     });
     // Phase 2 — the deduped reads run CONCURRENTLY (the default mode's latency is this leg).
@@ -151,7 +220,7 @@ export async function verifyVenueRows(a: {
     await Promise.all(
       [...reads].map(async ([key, r]) => {
         try {
-          words.set(key, await readLopInvalidator(client, r.plan, lop, r.maker, r.orderHash));
+          words.set(key, await readLopInvalidator(client, r.plan, book.lop, r.maker, r.orderHash));
         } catch {
           words.set(key, "error");
         }
@@ -159,10 +228,9 @@ export async function verifyVenueRows(a: {
     );
     // Phase 3 — verdicts applied in the venue's own row order.
     for (const ref of refs) {
-      if (ref.verdict === "unparseable") keep(ref.row, "unverified");
-      else if (ref.verdict === "hash-lie") drop("row does not hash to its claimed orderHash");
+      if (ref.readKey === undefined) keep(ref.row, "unverified");
       else {
-        const word = words.get(ref.readKey!);
+        const word = words.get(ref.readKey);
         if (word === undefined || word === "error") keep(ref.row, "unverified", true);
         else if (classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
         else keep(ref.row, "confirmed");

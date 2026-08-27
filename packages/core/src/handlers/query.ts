@@ -517,6 +517,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
             ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
             ...(filters.view ? { view: filters.view } : {}),
+            ...(filters.excludeRequestPrefix !== undefined ? { excludeRequestPrefix: filters.excludeRequestPrefix } : {}),
             ...(cursor ? { cursor } : {}),
             limit: input.pageSize,
           }));
@@ -545,7 +546,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // them through the same readers lite-decentralized serves (one implementation, two
       // consumers). null = a resource with no on-chain footprint (rfqs; rollover fills/contracts
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
-      const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items });
+      const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
       const items = verification ? verification.items : traversal.items;
       return envelope({
         // A merely-partial read is honest evidence (state ok + warning); only a self-contradicting

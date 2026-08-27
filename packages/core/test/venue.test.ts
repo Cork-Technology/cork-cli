@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
-import { buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
+import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
 
@@ -543,7 +543,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   });
 
   it("F5: an EXACTLY-100x premium divergence is blocked (the float ratio rounded to 99.99999999999999)", async () => {
-    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.041" }] } }] };
+    const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.041" }] } }] };
     const env = await runTool(
       "cork_submit",
       await lop({ premiumAnnualized: "4.10", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
@@ -554,7 +554,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   });
 
   it("F5: a cited option with no parsable premium is a conflict, not a silent skip", async () => {
-    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
+    const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
     const env = await runTool(
       "cork_submit",
       await lop({ quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
@@ -704,7 +704,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
   it("quote_ref citing a diverging premium → conflict premium_scale_mismatch, NOT relayed", async () => {
     const seen: Seen[] = [];
     const lopBase = await lopBaseP;
-    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
+    const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.00036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
@@ -723,7 +723,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
+        ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
       );
     const ok = [{ match: "/limit-orders/v1", status: 201, body: {} }];
 
@@ -753,7 +753,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     expect(rePrice.state).toBe("ok"); // inside the band: tolerated as a re-price, exactly like the book
   });
 
-  it("quote_ref provenance mirrors the venue: maker must be the RFQ's requester, option must cohere (chain, collateral leg)", async () => {
+  it("quote_ref provenance mirrors the venue (0.4.1): the maker must be a PARTY — the requester, or the underwriter of the CITED answer", async () => {
     const lopBase = await lopBaseP;
     const withRfq = (rfq: Record<string, unknown>, declared = "0.036") =>
       runTool(
@@ -762,27 +762,94 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
         ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
       );
     const goodOption = { option_id: "1", premium_annualized: "0.036" };
-    const answersWith = (option: Record<string, unknown>) => [{ answer_id: "ans_1", answer: { options: [option] } }];
+    const BUYER = "0xdddddddddddddddddddddddddddddddddddddddd";
+    const RIVAL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const answer = (answerId: string, underwriter: string, option: Record<string, unknown> = goodOption) => ({ answer_id: answerId, underwriter, answer: { options: [option] } });
 
-    // Third-party quote stamping: the RFQ was opened by someone else → refused before relay.
-    const stamped = await withRfq({ rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, answers: answersWith(goodOption) });
+    // Third-party quote stamping: the RFQ was opened by someone else AND the cited answer was
+    // posted by someone else → refused before relay, naming both parties.
+    const stamped = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [answer("ans_1", RIVAL)] });
     expect(stamped.state).toBe("unavailable");
+    expect(stamped.warnings[0]?.code).toBe("invalid_order_terms");
     expect(stamped.warnings[0]?.message).toContain("maker");
+    expect(stamped.warnings[0]?.message).toContain(RIVAL);
 
-    // Own RFQ (maker == requester, case-insensitive) → the citation stands and relays.
-    const own = await withRfq({ rfq_id: "rfq_1", request: { requester: SIGNER.address.toLowerCase() }, answers: answersWith(goodOption) });
+    // Own RFQ (maker == requester, case-insensitive) → the demand-BUY citation stands and relays.
+    const own = await withRfq({ rfq_id: "rfq_1", request: { requester: SIGNER.address.toLowerCase() }, answers: [answer("ans_1", RIVAL)] });
     expect(own.state).toBe("ok");
+    expect(own.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
+
+    // The underwriter of the CITED answer (maker-mode SELL citing its own quote, cork-api 0.4.1 /
+    // gh#60) → relays. Case-flipped to prove the compare.
+    const underwriter = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [answer("ans_1", SIGNER.address.toUpperCase().replace("0X", "0x"))] });
+    expect(underwriter.state).toBe("ok");
+    expect(underwriter.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
+
+    // The underwriter of ANOTHER answer on the same RFQ, citing a rival's answer → refused: the
+    // venue matches the underwriter recorded on the cited answer, not any underwriter on the RFQ.
+    const rivalsAnswer = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [answer("ans_1", RIVAL), answer("ans_2", SIGNER.address)] });
+    expect(rivalsAnswer.state).toBe("unavailable");
+    expect(rivalsAnswer.warnings[0]?.message).toContain("THAT answer");
 
     // The cited option must describe THIS order: wrong chain refused, foreign collateral refused.
-    const wrongChain = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, chain_id: 42161 }) }); // order is chainId 1
+    const mine = { requester: SIGNER.address };
+    const wrongChain = await withRfq({ rfq_id: "rfq_1", request: mine, answers: [answer("ans_1", RIVAL, { ...goodOption, chain_id: 42161 })] }); // order is chainId 1
     expect(wrongChain.state).toBe("unavailable");
     expect(wrongChain.warnings[0]?.message).toContain("chain");
-    const foreignCollateral = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, collateral_asset: "0xcccccccccccccccccccccccccccccccccccccccc" }) });
+    const foreignCollateral = await withRfq({ rfq_id: "rfq_1", request: mine, answers: [answer("ans_1", RIVAL, { ...goodOption, collateral_asset: "0xcccccccccccccccccccccccccccccccccccccccc" })] });
     expect(foreignCollateral.state).toBe("unavailable");
     expect(foreignCollateral.warnings[0]?.message).toContain("collateral");
     // …and a collateral that IS a leg passes (the maker asset, case-flipped to prove the compare).
-    const legCollateral = await withRfq({ rfq_id: "rfq_1", answers: answersWith({ ...goodOption, chain_id: 1, collateral_asset: "0x9D39A5DE30E57443BFF2A8307A4256C8797A3497".toLowerCase() }) });
+    const legCollateral = await withRfq({ rfq_id: "rfq_1", request: mine, answers: [answer("ans_1", RIVAL, { ...goodOption, chain_id: 1, collateral_asset: "0x9D39A5DE30E57443BFF2A8307A4256C8797A3497".toLowerCase() })] });
     expect(legCollateral.state).toBe("ok");
+  });
+
+  it("quote_ref party rule: the venue checks the party BEFORE the option, and an answer absent from a COMPLETE embed is proven absent", async () => {
+    const lopBase = await lopBaseP;
+    const seen: Seen[] = [];
+    const submit = (rfq: Record<string, unknown>, answerId = "ans_1") =>
+      runTool(
+        "cork_submit",
+        { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId, optionId: "1" } } },
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }], seen),
+      );
+    const BUYER = "0xdddddddddddddddddddddddddddddddddddddddd";
+    const RIVAL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    // Third party + the option missing too: the venue's first complaint is the party, so is ours.
+    const party = await submit({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [{ answer_id: "ans_1", underwriter: RIVAL, answer: { options: [] } }] });
+    expect(party.state).toBe("unavailable");
+    expect(party.warnings[0]?.message).toContain("other parties");
+    // The answer is not in a COMPLETE embed (no `truncated`): absence is proven → refused, no relay.
+    const absent = await submit({ rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", underwriter: RIVAL, answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] }, "ans_missing");
+    expect(absent.state).toBe("unavailable");
+    expect(absent.warnings[0]?.message).toContain("not on RFQ");
+    // Truncation only hides ANSWERS: an answer that IS in a truncated embed carries its whole
+    // payload, so a missing option inside it is proven absent — refused, not deferred.
+    const optionGone = await submit({ rfq_id: "rfq_1", truncated: true, request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", underwriter: RIVAL, answer: { options: [{ option_id: "2", premium_annualized: "0.036" }] } }] });
+    expect(optionGone.state).toBe("unavailable");
+    expect(optionGone.warnings[0]?.message).toContain("option '1' not found");
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("quote_ref party rule never out-rejects the venue: an identity the embed does not carry cannot prove a non-party → relayed with citation_unresolved", async () => {
+    const lopBase = await lopBaseP;
+    const seen: Seen[] = [];
+    const submit = (rfq: Record<string, unknown>) =>
+      runTool(
+        "cork_submit",
+        { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }], seen),
+      );
+    const option = { option_id: "1", premium_annualized: "0.036" };
+    // The requester is someone else and the answer row carries no underwriter: half a proof.
+    const halfKnown = await submit({ rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, answers: [{ answer_id: "ans_1", answer: { options: [option] } }] });
+    expect(halfKnown.state).toBe("ok");
+    expect(halfKnown.warnings.some((w) => w.code === "citation_unresolved" && w.message.includes("party"))).toBe(true);
+    // Neither identity present: same deferral. The premium band still ran on the resolved option.
+    const unknown = await submit({ rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [option] } }] });
+    expect(unknown.state).toBe("ok");
+    expect(unknown.warnings.some((w) => w.code === "citation_unresolved")).toBe(true);
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(2);
   });
 
   it("quote_ref on a TRUNCATED embed defers to the venue: relayed with citation_unresolved, the band check consciously skipped", async () => {
@@ -795,17 +862,19 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "9.99", quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
       ctxWith([
         { match: "/limit-orders/v1", status: 201, body: {} },
-        { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", truncated: true, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
+        { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, truncated: true, answers: [{ answer_id: "ans_1", underwriter: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
       ], seen),
     );
     expect(env.state).toBe("ok");
-    expect(env.warnings.some((w) => w.code === "citation_unresolved")).toBe(true);
+    // The maker is not the requester and the cited answer (whose underwriter it may be) is
+    // beyond the horizon — the party check is deferred too, and says so.
+    expect(env.warnings.some((w) => w.code === "citation_unresolved" && w.message.includes("party check"))).toBe(true);
     expect(seen.filter((s) => s.method === "POST").length).toBe(1); // relayed — the venue's full-store check rules
   });
 
   it("quote_ref with a consistent premium relays cleanly", async () => {
     const lopBase = await lopBaseP;
-    const rfq = { rfq_id: "rfq_1", answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
+    const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] };
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
@@ -960,6 +1029,23 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
 });
 
 describe("cork_query rfqs (venue RFQ discovery feed)", () => {
+  it("excludeRequestPrefix rides to the venue as exclude_request_prefix, URL-encoded verbatim (venue 0.4.1 escapes LIKE wildcards itself)", async () => {
+    const seen: Seen[] = [];
+    const env = await runTool(
+      "cork_query",
+      { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "healthcheck-" }, pageSize: 25, format: "concise" },
+      ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen),
+    );
+    expect(env.state).toBe("ok");
+    expect(seen[0]!.url).toContain("exclude_request_prefix=healthcheck-");
+    // A prefix with a LIKE wildcard is sent literally (encoded), never pre-escaped here — the
+    // venue's escaping is its own contract; double-escaping would exclude a different prefix.
+    await runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "50%_off" }, pageSize: 25, format: "concise" }, ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen));
+    expect(seen[1]!.url).toContain("exclude_request_prefix=50%25_off");
+    // The venue's 1..64 bound is a teachable input error here, not a venue 400.
+    await expect(runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "x".repeat(65) }, pageSize: 25, format: "concise" }, ctxWith([]))).rejects.toThrow(ToolInputError);
+  });
+
   it("list routes to /rfqs with snake_case params (state, requester, with_answers)", async () => {
     const seen: Seen[] = [];
     const env = await runTool(
@@ -1219,6 +1305,31 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: async () => stubResolved({ readContract: async () => { throw new Error("rpc down"); } }) },
     );
     expect(broken.state).toBe("ok"); // liveness is best-effort — a failed read never blocks bytes
+  });
+
+  it("exclusivity pre-flight: a reserved order whose allowed-sender suffix is not this fill's sender gets NO bytes (private_order)", async () => {
+    const TAKER = "0x00000000000000000000000000000000000000dd" as const;
+    const STRANGER = "0x00000000000000000000000000000000000000ee" as const;
+    const reservedT: LopOrder = { ...orderT, makerTraits: BigInt(allowedSenderSuffix(STRANGER)) };
+    const reservedHash = hashLopOrder(42161, LOP, reservedT);
+    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: SIG, extension: "0x" };
+    const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [reservedRow], hasMore: false } }], reservedHash);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("private_order");
+    expect(env.warnings[0]?.message).toContain("PrivateOrder");
+    expect(env.data).toMatchObject({ orderHash: reservedHash, allowedSender: allowedSenderSuffix(STRANGER), fillSender: TAKER, fillSenderSuffix: allowedSenderSuffix(TAKER) });
+  });
+
+  it("exclusivity pre-flight: reserved for THIS sender (compared on the last 10 bytes only) builds, and the result names the suffix; an open order reports null", async () => {
+    const TAKER_TWIN = "0xffffffffffffffffffff000000000000000000dd" as const; // same suffix as the fill account
+    const reservedT: LopOrder = { ...orderT, makerTraits: BigInt(allowedSenderSuffix(TAKER_TWIN)) };
+    const reservedHash = hashLopOrder(42161, LOP, reservedT);
+    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: SIG, extension: "0x" };
+    const mine = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [reservedRow], hasMore: false } }], reservedHash);
+    expect(mine.state).toBe("ok");
+    expect((mine.data as { allowedSender: string | null }).allowedSender).toBe(allowedSenderSuffix(TAKER_TWIN));
+    const open = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]);
+    expect((open.data as { allowedSender: string | null }).allowedSender).toBeNull();
   });
 
   it("a row that does not hash to the requested order → conflict digest_mismatch (no fill bytes)", async () => {

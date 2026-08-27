@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData, parseAbi, toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, finalizeMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { ALLOWED_SENDER_MASK, allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, decodeMakerTraits, finalizeMakerOrder, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder } from "@cork/core";
 
 const MAKER = "0x0000000000000000000000000000000000000abc" as const;
 const MAKER_ASSET = "0x0000000000000000000000000000000000000001" as const;
@@ -237,5 +237,57 @@ describe("buildCancelOrder", () => {
   it("encodes LOP.cancelOrder(makerTraits, orderHash)", () => {
     const { data } = buildCancelOrder(0n, `0x${"1".repeat(64)}`);
     expect(data.slice(0, 10)).toBe(toFunctionSelector("function cancelOrder(uint256 makerTraits, bytes32 orderHash)"));
+  });
+});
+
+describe("allowed sender (MakerTraitsLib bits [0,80)) — the exclusivity slot", () => {
+  const parts = { allowPartialFills: true, allowMultipleFills: false, usePermit2: false, expiry: 1893456000n, nonce: 5n };
+  const RESERVED = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01" as const;
+  // Same last 10 bytes as RESERVED, different first 10: one filler to the LOP.
+  const TWIN = "0x00000000000000000000eF0123456789AbCdEf01" as const;
+  const OTHER = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf02" as const;
+
+  it("packs only the LOW 80 BITS of the address, leaving every other slot untouched", () => {
+    const open = buildMakerTraits(parts);
+    const reserved = buildMakerTraits({ ...parts, allowedSender: RESERVED });
+    expect(reserved & ALLOWED_SENDER_MASK).toBe(BigInt(RESERVED) & ALLOWED_SENDER_MASK);
+    expect(reserved & ~ALLOWED_SENDER_MASK).toBe(open); // expiry, nonce, flags: identical
+    expect(open & ALLOWED_SENDER_MASK).toBe(0n);
+    expect(allowedSenderSuffix(RESERVED)).toBe("0xef0123456789abcdef01"); // the LAST 20 hex chars
+    expect(allowedSenderSuffix(TWIN)).toBe(allowedSenderSuffix(RESERVED));
+  });
+
+  it("decodes back to the stored suffix (null when open) — build and decode are inverses", () => {
+    expect(decodeMakerTraits(buildMakerTraits(parts)).allowedSenderLow10Bytes).toBeNull();
+    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: RESERVED })).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    // A suffix with leading zero bytes keeps its width: the slot is 10 bytes, always.
+    const leadingZero = "0x0000000000000000000000000000000000000001" as const;
+    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: leadingZero })).allowedSenderLow10Bytes).toBe("0x00000000000000000001");
+  });
+
+  it("isAllowedSender mirrors MakerTraitsLib: open admits anyone; reserved admits exactly the shared 10-byte suffix", () => {
+    const open = buildMakerTraits(parts);
+    const reserved = buildMakerTraits({ ...parts, allowedSender: RESERVED });
+    expect(isAllowedSender(open, OTHER)).toBe(true);
+    expect(isAllowedSender(reserved, RESERVED)).toBe(true);
+    expect(isAllowedSender(reserved, TWIN)).toBe(true); // the high 80 bits never take part
+    expect(isAllowedSender(reserved, OTHER)).toBe(false); // last byte differs
+    expect(isAllowedSender(reserved, "0x0000000000000000000000000000000000000000")).toBe(false);
+  });
+
+  it("the zero address means open; an address whose low 80 bits are zero cannot be reserved (it would silently read as open)", () => {
+    expect(buildMakerTraits({ ...parts, allowedSender: "0x0000000000000000000000000000000000000000" })).toBe(buildMakerTraits(parts));
+    expect(() => buildMakerTraits({ ...parts, allowedSender: "0x0123456789abcdef012300000000000000000000" })).toThrow(/low 80 bits are zero/);
+  });
+
+  it("buildMakerOrder carries allowedSender into the signed traits and nothing else changes", () => {
+    const base = { chainId: 1 as const, lop: LOP_ADDRESSES[1]!, maker: MAKER, makerAsset: MAKER_ASSET, takerAsset: TAKER_ASSET, makingAmount: 100n, takingAmount: 200n, clientRequestId: "req-reserved-0001" };
+    const open = buildMakerOrder(base);
+    const reserved = buildMakerOrder({ ...base, allowedSender: RESERVED });
+    expect(decodeMakerTraits(reserved.order.makerTraits).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    expect(reserved.order.makerTraits & ~ALLOWED_SENDER_MASK).toBe(open.order.makerTraits);
+    expect(reserved.order.salt).toBe(open.order.salt);
+    expect(reserved.nonce).toBe(open.nonce);
+    expect(reserved.orderHash).not.toBe(open.orderHash); // the traits are signed
   });
 });

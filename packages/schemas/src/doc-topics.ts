@@ -108,7 +108,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "verification mismatch",
     envelope: "conflict",
     contract:
-      "a local recomputation disagreed with a supplied or venue-claimed value [K3/K7] — the payload was NOT relayed / the row was not trusted; the code names WHICH verification failed so callers can branch",
+      "a local recomputation disagreed with a supplied or venue-claimed value [K3/K7] — the payload was NOT relayed / the row was not trusted; the code names WHICH verification failed so callers can branch (two also ride ok as INFO on an orderbook read: order_hash_mismatch counts rows dropped for not hashing to their own claimed orderHash, listing_traits_mismatch counts rows whose venue allowedSender echo contradicted the signed makerTraits — the served value is the local decode)",
     codes: [
       "artifact_digest_mismatch", "intent_hash_mismatch", "venue_digest_mismatch", "order_hash_mismatch",
       "marketid_mismatch", "create2_mismatch", "chainid_mismatch", "status_mismatch", "extension_salt_mismatch",
@@ -127,8 +127,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "domain terms",
     envelope: "unavailable",
     contract:
-      "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead",
-    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance"],
+      "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); private_order is taker-fill's exclusivity refusal (the signed allowed-sender suffix is not this fill's sender — the LOP would revert PrivateOrder); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead",
+    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance", "private_order"],
   },
   {
     family: "jit & prediction",

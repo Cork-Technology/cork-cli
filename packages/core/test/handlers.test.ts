@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { allowedSenderSuffix, decodeMakerTraits } from "../src/orders.ts";
 import { toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
@@ -500,6 +501,22 @@ describe("runTool: cork_prepare_orders", () => {
     expect(d.orderHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(d.typedData.primaryType).toBe("Order");
     expect(d.typedData.domain.name).toBe("1inch Aggregation Router");
+  });
+  it("maker-order allowedSender reserves the fill: the signed traits store the last 10 bytes, echoed back from the BUILT word; open orders echo null", async () => {
+    const RESERVED = "0xabcdef0123456789abcdef0123456789abcdef01"; // lowercase: the Address schema checks EIP-55 on mixed case
+    const base = { chainId: 1, account: RCV, action: { type: "maker-order", poolId: POOL, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000", takingAmount: "1000000" }, format: "concise" } as const;
+    const reserved = await runTool("cork_prepare_orders", { ...base, clientRequestId: "ord-reserved-01", action: { ...base.action, allowedSender: RESERVED } }, { nowSeconds: NOW });
+    expect(reserved.state).toBe("ok");
+    const d = reserved.data as { allowedSender: string | null; typedData: { message: { makerTraits: string } } };
+    expect(d.allowedSender).toBe(allowedSenderSuffix(RESERVED));
+    expect(decodeMakerTraits(BigInt(d.typedData.message.makerTraits)).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    const open = await runTool("cork_prepare_orders", { ...base, clientRequestId: "ord-open-01" }, { nowSeconds: NOW });
+    expect((open.data as { allowedSender: string | null }).allowedSender).toBeNull();
+    // An address whose low 80 bits are zero cannot be reserved — a domain-rule envelope, not a throw.
+    const unreservable = await runTool("cork_prepare_orders", { ...base, clientRequestId: "ord-zero-suffix-01", action: { ...base.action, allowedSender: "0x0123456789abcdef012300000000000000000000" } }, { nowSeconds: NOW });
+    expect(unreservable.state).toBe("unavailable");
+    expect(unreservable.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(unreservable.warnings[0]?.message).toContain("low 80 bits");
   });
   it("cancel returns LOP cancelOrder calldata", async () => {
     const env = await runTool(

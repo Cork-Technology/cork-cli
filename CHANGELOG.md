@@ -8,6 +8,19 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+### Added
+
+- `cork_prepare_orders maker-order` takes `allowedSender`: the fill is reserved for one filler by packing the low 80 bits of that address into makerTraits (1inch LOP v4 allowed sender); the LOP reverts `PrivateOrder()` for any other `msg.sender`. The result echoes the stored 10-byte suffix as `allowedSender` (null when open), decoded back from the built word. Name the address that will CALL the LOP — the taker's account on a raw fill, the ForSelf adapter on a wrapper fill. An address whose low 80 bits are zero is refused (`invalid_order_terms`): it would silently read as open.
+- `cork_query orderbook` rows carry `allowedSender` and `exclusivity` (`open` | `reserved` | `reserved-for-account` | `reserved-for-other`), decoded from each row's SIGNED makerTraits — chain-free, so the annotation is served with or without an RPC. `filters.account` names the fill sender the classification is made against. The venue's own `allowedSender` echo (cork-api 0.4.1) is replaced by the local decode; an echo that contradicts the signed word is disclosed once per page under `listing_traits_mismatch` (info). A row that does not hash to its own claimed `orderHash` is now dropped in the same chain-free pass (`order_hash_mismatch`, info, counted in `verification.dropped`) instead of only when an RPC resolves.
+- `cork_prepare_orders taker-fill` refuses a reserved order whose allowed-sender suffix is not this fill's sender (`private_order`, unavailable) — bytes that can only revert `PrivateOrder()` are not built. The sender is the account on the raw path and the ADAPTER on the ForSelf path (the wrapper is the LOP's caller). The message names the reserved suffix; `data` carries `allowedSender`, `fillSender`, `fillSenderSuffix`. Built fills echo `allowedSender` (null when open).
+- `cork_query rfqs` takes `filters.excludeRequestPrefix` (venue 0.4.1 `exclude_request_prefix`): RFQs whose `request_id` starts with the literal prefix are dropped server-side — `healthcheck-` skips status-page heartbeats. Bounded to 1–64 characters, like the venue.
+- SDK (`@cork/core` `/orders`): `ALLOWED_SENDER_MASK`, `allowedSenderSuffix`, `isAllowedSender` (a bit-exact MakerTraitsLib.isAllowedSender), and `allowedSender` on `MakerTraitsParts` / `MakerOrderArgs`.
+
+### Changed
+
+- `cork_submit lop-order` mirrors the venue's 0.4.1 `quote_ref` party rule (cork-api PR #61, closes cork-indexing-api#60): the maker may be the RFQ's requester OR the underwriter recorded on the CITED answer — a maker-mode SELL can cite its own quote. The underwriter of a different answer on the same RFQ, and any third party, stay refused (`invalid_order_terms`). The pre-flight resolves the cited ANSWER first, as the venue does; when the embed is truncated and hides that answer, or omits an identity the venue would compare, the party check is deferred to the venue's full store and the order relays with `citation_unresolved` — a relay never out-rejects its venue. A missing option inside an embedded answer is proven absent (the embed carries the whole payload) and refused even on a truncated record.
+- The committed venue openapi capture tracks cork-api 0.4.1.
+
 ### Security
 
 Remediation of the 2026-08-24 source audit, one commit per finding. The findings were reported by the security reviewer; the remedies below differ from the proposed pull request where a proposed remedy broke a path in production use.
