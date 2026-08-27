@@ -493,6 +493,10 @@
       "kind": "value"
     },
     {
+      "name": "MIRRORED_VENUE_LOGIC",
+      "kind": "value"
+    },
+    {
       "name": "MULTICALL_SELECTOR",
       "kind": "value"
     },
@@ -3775,6 +3779,10 @@
     {
       "name": "LopBookParams",
       "kind": "type"
+    },
+    {
+      "name": "MIRRORED_VENUE_LOGIC",
+      "kind": "value"
     },
     {
       "name": "PageParams",

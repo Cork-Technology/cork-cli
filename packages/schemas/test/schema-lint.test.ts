@@ -38,9 +38,9 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_prepare_orders :: action<oneOf0>.auction.durationSeconds": "relative duration, bounded to the 3-byte wire field (~194 days)",
   "cork_prepare_orders :: action<oneOf0>.auction.points[].timeDelta": "relative duration, bounded to the 2-byte wire field (65535s)",
   // Venue-defined wire numerics (the venue's own JSON contract), bounded in schema.
-  "cork_prepare_orders :: action<oneOf1>.listing.premium": "venue book field: PERCENT float, bounded 0..1000",
+  "cork_prepare_orders :: action<oneOf1>.listing.premium": "REMOVED by the venue 2026-08-17 — the field survives only to refuse with teaching; PERCENT float shape kept so the refusal matches what callers still send",
   "cork_prepare_orders :: action<oneOf1>.listing.expiry": "venue book field: absolute unix int, bounded <= year 2100",
-  "cork_submit :: action<oneOf1>.premium": "venue book field: PERCENT float, bounded 0..1000",
+  "cork_submit :: action<oneOf1>.premium": "REMOVED by the venue 2026-08-17 — the field survives only to refuse with teaching; PERCENT float shape kept so the refusal matches what callers still send",
   "cork_submit :: action<oneOf1>.expiry": "venue book field: absolute unix int, bounded <= year 2100",
   "cork_submit :: action<oneOf2>.expiryWindow.notBefore": "venue RFQ field: absolute unix int, bounded <= year 2100 + handler window checks",
   "cork_submit :: action<oneOf2>.expiryWindow.notAfter": "venue RFQ field: absolute unix int, bounded <= year 2100 + handler window checks",

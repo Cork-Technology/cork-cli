@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
-import { Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
+import { UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
@@ -1051,6 +1051,9 @@ async function buildTakerFillArtifact(a: {
       ...(action.interaction !== undefined ? { approvalsNote: "a custom taker interaction rides this fill — any tokens the interaction contract itself pulls are OUTSIDE this approvals report; discover them with cork_track simulate before granting anything" } : {}),
       ...(jitData ? { jit: jitData } : {}),
       ...(auctionData ? { auction: auctionData } : {}),
+      // Money outputs carry their unit [R1 convention]: two tokens' quanta meet on this result
+      // and neither is necessarily 18-decimals.
+      scales: { requiredMakingAmount: "base units of makerAsset (the token's own decimals)", requiredTakingAmount: "base units of takerAsset — the on-chain cap the calldata enforces", unitsTopic: UNITS_TOPIC_REFERENCE },
       simulationRequired: true,
       execution: executionEthTransaction(),
       clientRequestId: clientRequestId,

@@ -286,6 +286,7 @@ describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
     );
     expect(env.state).toBe("ok");
     const d = env.data as Record<string, never> & { to: string; calldata: `0x${string}`; fillFunction: string; forSelf: Record<string, unknown> };
+    expect((env.data as { scales: { requiredTakingAmount: string } }).scales.requiredTakingAmount).toContain("base units");
     expect(d.to).toBe(ADAPTER);
     expect(d.fillFunction).toBe("fillOrderForSelf");
     // The calldata decodes back to the exact fill: full making, cap = signed taking, our deadline.

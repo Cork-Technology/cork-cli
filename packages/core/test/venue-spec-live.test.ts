@@ -10,7 +10,7 @@
 // with a loud log when the venue itself is unreachable — an outage is not a contract change.
 import { describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
-import { venueBaseUrl } from "@cork/core";
+import { MIRRORED_VENUE_LOGIC, venueBaseUrl } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 const FIXTURE = new URL("./fixtures/venue-openapi.json", import.meta.url);
@@ -54,6 +54,9 @@ describe.skipIf(!LIVE)("venue openapi tripwire — live", () => {
           `paths added: ${added.length ? added.join(", ") : "none"}; removed: ${removed.length ? removed.join(", ") : "none"}; ` +
           `field-level changes may exist beyond paths). Review what moved, adapt the replicated gates if needed, ` +
           `then re-capture deliberately: CORK_RPC_LIVE=1 UPDATE_VENUE_SPEC=1 vitest run packages/core/test/venue-spec-live.test.ts`,
+          ``,
+          `A version change can also move ROUTE LOGIC no schema shows (the 0.4.1 quote_ref party rule did) — re-verify each mirrored gate against the venue source:`,
+          ...MIRRORED_VENUE_LOGIC.map((m) => `  - ${m.gate}\n    mirror ${m.mirror} ← ${m.venueSource}`),
       );
     }
   }, 45_000);

@@ -1275,6 +1275,8 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     expect(d.orderHash).toBe(hash);
     expect(d.fillFunction).toBe("fillOrder");
     expect(d.calldata.slice(0, 10)).toBe("0x9fda64bd"); // uint256-tuple selector
+    // Money outputs say their unit: two tokens' base units meet on this result.
+    expect((env.data as { scales: { requiredTakingAmount: string } }).scales.requiredTakingAmount).toContain("base units");
     expect(env.warnings.some((w) => w.code === "unsigned_artifact")).toBe(true);
   });
 

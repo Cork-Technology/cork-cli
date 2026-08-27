@@ -6,7 +6,11 @@
 //     probe rather than silently losing coverage), or
 //   - the clean baseline is already red (a red suite would masquerade as "caught").
 // Files are restored byte-exactly from an in-memory snapshot in a finally block, so the probe
-// run never leaves mutants behind — safe on a dirty working tree.
+// run never leaves mutants behind — safe on a dirty working tree. NOT safe to run BESIDE:
+// while the catalog is in flight, real source sits mutated for seconds at a time, so any
+// concurrent vitest/eval/CLI run in this tree can read a mutant and fail on phantoms
+// (observed 2026-08-27: a forself selector-parity "failure" that was the abi-struct-order
+// mutant, live in the tree at that moment). One tree, one runner at a time.
 //
 //   bun run test:mutation            # full catalog (~2–5 min; spawns focused vitest runs)
 //   bun scripts/mutation-probes.ts --only marketid,orders   # comma-separated id prefixes
@@ -2117,6 +2121,15 @@ const CATALOG: Mutant[] = [
     find: "      hashLies += 1;\n      continue;",
     replace: "      hashLies += 1;\n      served.push(row);\n      continue;",
     tests: [T.hybridVerify],
+  },
+  {
+    // A mirrored gate vanishes from the register: the next venue version bump's teaching no
+    // longer names it, and its drift goes back to being caught by humans on Slack.
+    id: "venue-mirror-register-entry-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'gate: "quote_ref citation: answer existence, PARTY rule',
+    replace: 'gate: "citation: answer existence, PARTY rule',
+    tests: ["packages/core/test/mirrored-venue-logic.test.ts"],
   },
   {
     // Applicability gate severed: a known key on the wrong resource is silently unapplied

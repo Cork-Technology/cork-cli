@@ -28,6 +28,25 @@ export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
  *  the same host the canonical paths hit. The strip is disclosed in the changelog rather than
  *  per-call (it is a config migration, not a per-request event); the per-request radar is the
  *  Deprecation-header capture below. */
+/**
+ * The venue ROUTE-LOGIC this tool mirrors op-for-op. The openapi capture (venue-spec-live)
+ * tripwires SCHEMA drift, but a venue release can change route BEHAVIOR without moving a schema
+ * — the 0.4.1 quote_ref party rule did exactly that, and the requester-only mirror out-rejected
+ * the venue in production until a human noticed on Slack. So: when the live venue version moves,
+ * every gate below is a re-verification item, named here once so the tripwire's teaching can
+ * enumerate them instead of trusting memory.
+ */
+export const MIRRORED_VENUE_LOGIC = [
+  { gate: "quote_ref citation: answer existence, PARTY rule (requester or the cited answer's underwriter), option/chain/collateral coherence", mirror: "packages/core/src/handlers/submit.ts#resolveCitation", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (Verify RFQ provenance)" },
+  { gate: "quote_ref premium acceptance band (parseFloat, fraction x100 canonicalization, strict ratio > 10 || < 0.1, both premiums > 0)", mirror: "packages/core/src/handlers/submit.ts#resolveListingPremium", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (premium scale signal)" },
+  { gate: "premiumAnnualized caps: RFQ fraction pattern + < 0.5; book pattern + <= 100 (patterns are structure/R13, caps are policy)", mirror: "packages/core/src/handlers/submit.ts#premiumFractionViolation", venueSource: "rfq + limit-orders write schemas" },
+  { gate: "listing traits cross-check: expiry/nonce/allowsPartialFills vs the signed makerTraits", mirror: "packages/core/src/handlers/submit.ts#handleSubmit", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (trait decode)" },
+  { gate: "rollover admission battery (deadline ordering, positive premium, distinct tokens/pools, hook shape)", mirror: "packages/core/src/rollover.ts#checkRolloverOrderTerms", venueSource: "rollover post route deterministic checks" },
+  { gate: "rfq-counter gates: requester-only (403), expired RFQ (410), optionRef existence", mirror: "packages/core/src/handlers/submit.ts#handleSubmit", venueSource: "rfq post-counter route" },
+  { gate: "orderbook allowedSender decode (makerTraits low 80 bits, null = open)", mirror: "packages/core/src/handlers/hybrid-verify.ts#annotateBookRows", venueSource: "src/modules/limit-orders/v1/routes/get-orderbook.ts#decodeAllowedSenderSuffix" },
+  { gate: "rfqs exclude_request_prefix bounds (1..64, LITERAL — the venue escapes LIKE wildcards itself)", mirror: "packages/core/src/handlers/filters.ts#parseQueryFilters", venueSource: "src/modules/rfq/v1/schemas/get-rfqs.schema.ts" },
+] as const;
+
 export function venueBaseUrl(override?: string): string {
   const raw = override ?? process.env.CORK_VENUE_URL ?? DEFAULT_VENUE_URL;
   return raw.replace(/\/+$/u, "").replace(/\/v\d+$/u, "").replace(/\/+$/u, "");

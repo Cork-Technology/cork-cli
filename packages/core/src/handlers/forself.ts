@@ -6,7 +6,7 @@
 // pool manager, and the pinned LOP on the fill surface) are verified whenever an RPC
 // resolves, and a mismatch is a CONFLICT, not a warning.
 import type { PublicClient } from "viem";
-import { type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
+import { UNITS_TOPIC_REFERENCE, type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
 import { decodeJitExtension } from "../market-registry.ts";
@@ -313,6 +313,7 @@ export async function prepareForSelfTakerFill(args: {
       // ADAPTER — the LOP's msg.sender on this path — was checked against upstream.
       allowedSender: decodeMakerTraits(signed.order.makerTraits).allowedSender,
       approvals,
+      scales: { requiredMakingAmount: "base units of makerAsset (the token's own decimals)", requiredTakingAmount: "base units of takerAsset — the wrapper's pull cap", unitsTopic: UNITS_TOPIC_REFERENCE },
       forSelf: {
         adapter: forSelf.adapter,
         poolId: forSelf.poolId,

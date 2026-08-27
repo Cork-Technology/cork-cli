@@ -255,8 +255,8 @@ address that actually funds the bundle.
 
 **Maker-order nonces are per-request.** Cork-built orders set `allowMultipleFills: false`, so they
 live in the 1inch **bit** invalidator — keyed on `(maker, nonce)`, NOT orderHash. The nonce derives
-from `clientRequestId` (40-bit slot: retries stay byte-identical [K2], distinct requests get
-distinct bits). Orders sharing an id share one bit — filling or cancelling either reverts the
+from `clientRequestId` (40-bit slot: retries stay byte-identical [K2]; distinct requests land on
+distinct bits — birthday-rare 40-bit collisions, not a guarantee). Orders sharing an id share one bit — filling or cancelling either reverts the
 other `BitInvalidatedOrder` — so give every concurrently-live order its own id. maker-order
 returns the derived `nonce`; the venue listing must carry it exactly or submit refuses
 `listing_traits_mismatch`.
@@ -288,7 +288,10 @@ still returned, labelled), each degrading to silence if its view is unavailable.
 `packages/core/src/bundle/preflight.ts`. The approved-implementations guard rides the same
 batch (`implementation_not_approved` above). The venue's published contract has its own
 tripwire: `packages/core/test/venue-spec-live.test.ts` (CORK_RPC_LIVE=1) compares the live
-openapi against the committed capture — re-capture deliberately with UPDATE_VENUE_SPEC=1.
+openapi against the committed capture — re-capture deliberately with UPDATE_VENUE_SPEC=1. A
+version bump can also move ROUTE LOGIC no schema shows (the 0.4.1 quote_ref party rule did):
+`MIRRORED_VENUE_LOGIC` (datasources/venue.ts) registers every route-logic mirror, the tripwire's
+teaching enumerates it, and an offline test pins each entry to its mirror symbol.
 
 **A gated pool checks TWO addresses.** `CorkAdapter.onlyWhitelisted` checks `initiator()` — *you*
 — while `CorkPoolManager._onlyWhitelisted` checks `_msgSender()`, which for a bundled call is the
