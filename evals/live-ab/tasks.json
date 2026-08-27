@@ -7,19 +7,19 @@
   },
   {
     "id": "t2-postexpiry-reference-out",
-    "prompt": "Using the cork tools: pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet (chainId 1) has EXPIRED. I hold CPT shares and want to settle them for EXACTLY 100000000 units of the pool's REFERENCE asset (not the collateral). My account, owner and receiver are all 0xc0ffee0000000000000000000000000000000001. Use pre-funded mode and clientRequestId reg-eval-t2-0001. Build the unsigned bundle and tell me what I'd sign.",
+    "prompt": "Using the cork tools: pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet (chainId 1) has EXPIRED. I hold CPT shares and want to settle them for EXACTLY 100000000 units of the pool's REFERENCE asset (not the collateral). My account, owner and receiver are all 0xc0ffee0000000000000000000000000000000001. Use erc20-approve funding and clientRequestId reg-eval-t2-0001. Build the unsigned bundle and tell me what I'd sign.",
     "expect_tool": "cork_prepare_phoenix",
     "targets": ["action.type=withdraw-other", "action.referenceAssetsOut=100000000"]
   },
   {
     "id": "t3-deposit-decimals",
-    "prompt": "Using the cork tools: build an unsigned bundle depositing exactly 2.5 sUSDe (sUSDe has 18 decimals) into pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet. Account and receiver 0xc0ffee0000000000000000000000000000000001, accept any resulting share amount of at least 1 wei, pre-funded mode, clientRequestId reg-eval-t3-0001.",
+    "prompt": "Using the cork tools: build an unsigned bundle depositing exactly 2.5 sUSDe (sUSDe has 18 decimals) into pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a on mainnet. Account and receiver 0xc0ffee0000000000000000000000000000000001, accept any resulting share amount of at least 1 wei, erc20-approve funding, clientRequestId reg-eval-t3-0001.",
     "expect_tool": "cork_prepare_phoenix",
     "targets": ["action.type=deposit", "action.collateralAssetsIn=2500000000000000000", "action.minCptAndCstSharesOut=1"]
   },
   {
     "id": "t4-absolute-deadline",
-    "prompt": "Using the cork tools: build an unsigned swap bundle on mainnet taking exactly 1000000000000000000 of the collateral out of pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a (receiver/account 0xc0ffee0000000000000000000000000000000001, cap CST in at 2000000000000000000 and reference in at 2000000, pre-funded, clientRequestId reg-eval-t4-0001). CRITICAL: the bundle must stop being valid exactly at unix timestamp 1795000000 — and a retry later must produce byte-identical output.",
+    "prompt": "Using the cork tools: build an unsigned swap bundle on mainnet taking exactly 1000000000000000000 of the collateral out of pool 0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a (receiver/account 0xc0ffee0000000000000000000000000000000001, cap CST in at 2000000000000000000 and reference in at 2000000, erc20-approve funding, clientRequestId reg-eval-t4-0001). CRITICAL: the bundle must stop being valid exactly at unix timestamp 1795000000 — and a retry later must produce byte-identical output.",
     "expect_tool": "cork_prepare_phoenix",
     "targets": ["action.type=swap", "deadlineAt=1795000000"]
   },
