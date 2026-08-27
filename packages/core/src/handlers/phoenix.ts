@@ -186,7 +186,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     // Interface-first guard, same posture, scoped to the contracts this bundle executes: warn
     // when a trusted role's live code is off the allowlist bundled into this build (a proxy
     // upgrade nobody admitted yet, or an address that moved ahead of a release).
-    ...(await approvedImplementationGuard(resolved.client, input.chainId, ctx.atBlock, PHOENIX_IMPLEMENTATION_ROLES)),
+    ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
   );
   // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
   // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's

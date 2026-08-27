@@ -49,7 +49,7 @@ function reader(codeByAddress: Record<string, `0x${string}`>, slots: Record<stri
 describe("checkApprovedImplementations", () => {
   it("approves a direct role whose live code hashes onto the list — case-insensitively", async () => {
     const d = defaultsWith({ corkAdapter: { approved: [HASH_A.toUpperCase().replace("0X", "0x")] } });
-    const checks = await checkApprovedImplementations(reader({ [ADAPTER]: CODE_A }), 1, d);
+    const checks = await checkApprovedImplementations(reader({ [ADAPTER]: CODE_A }), 1, { allowlist: d });
     // the config validator checksums addresses — compare case-insensitively
     expect(checks.map((c) => ({ ...c, address: c.address.toLowerCase() }))).toEqual([{ role: "corkAdapter", address: ADAPTER, codehash: HASH_A, verdict: "approved" }]);
     expect(implementationWarnings(checks)).toEqual([]);
@@ -57,7 +57,7 @@ describe("checkApprovedImplementations", () => {
 
   it("flags a direct role whose live code hashes OFF the list, naming role and hash", async () => {
     const d = defaultsWith({ corkAdapter: { approved: [HASH_A] } });
-    const checks = await checkApprovedImplementations(reader({ [ADAPTER]: CODE_B }), 1, d);
+    const checks = await checkApprovedImplementations(reader({ [ADAPTER]: CODE_B }), 1, { allowlist: d });
     expect(checks[0]!.verdict).toBe("not_approved");
     expect(checks[0]!.codehash).toBe(HASH_B);
     const warnings = implementationWarnings(checks);
@@ -71,7 +71,7 @@ describe("checkApprovedImplementations", () => {
     const d = defaultsWith({ whitelistManager: { proxy: "eip1967", approved: [HASH_A] } });
     // The shell's own code (CODE_B) is deliberately off-list — only the implementation counts.
     const r = reader({ [WLM]: CODE_B, [IMPL]: CODE_A }, { [WLM]: `0x${"00".repeat(12)}${IMPL.slice(2)}` }, slotReads);
-    const checks = await checkApprovedImplementations(r, 1, d);
+    const checks = await checkApprovedImplementations(r, 1, { allowlist: d });
     expect(checks).toEqual([{ role: "whitelistManager", address: WLM, implementation: IMPL, codehash: HASH_A, verdict: "approved" }]);
     // The slot is asserted as a LITERAL, not the exported constant — asserting the import would
     // mutate in lockstep with the code and see nothing (the impl-1967-slot-drift probe's kill).
@@ -81,9 +81,9 @@ describe("checkApprovedImplementations", () => {
 
   it("an EMPTY proxy slot is a positive finding (proxy_unresolved), an empty implementation account is no_code — both warn", async () => {
     const d = defaultsWith({ whitelistManager: { proxy: "eip1967", approved: [HASH_A] } });
-    const emptySlot = await checkApprovedImplementations(reader({ [WLM]: CODE_B }), 1, d);
+    const emptySlot = await checkApprovedImplementations(reader({ [WLM]: CODE_B }), 1, { allowlist: d });
     expect(emptySlot[0]!.verdict).toBe("proxy_unresolved");
-    const codeless = await checkApprovedImplementations(reader({ [WLM]: CODE_B }, { [WLM]: `0x${"00".repeat(12)}${IMPL.slice(2)}` }), 1, d);
+    const codeless = await checkApprovedImplementations(reader({ [WLM]: CODE_B }, { [WLM]: `0x${"00".repeat(12)}${IMPL.slice(2)}` }), 1, { allowlist: d });
     expect(codeless[0]!.verdict).toBe("no_code");
     expect(implementationWarnings([...emptySlot, ...codeless]).map((w) => w.code)).toEqual(["implementation_not_approved", "implementation_not_approved"]);
   });
@@ -91,10 +91,10 @@ describe("checkApprovedImplementations", () => {
   it("degrades to silence: a throwing read is unreadable (no warning); a client without getCode skips the guard; an unknown role is skipped", async () => {
     const d = defaultsWith({ corkAdapter: { approved: [HASH_A] }, notARole: { approved: [HASH_A] } });
     const throwing: CodeReader = { getCode: async () => { throw new Error("eth_getCode unsupported"); } };
-    const checks = await checkApprovedImplementations(throwing, 1, d);
+    const checks = await checkApprovedImplementations(throwing, 1, { allowlist: d });
     expect(checks.map((c) => ({ ...c, address: c.address.toLowerCase() }))).toEqual([{ role: "corkAdapter", address: ADAPTER, verdict: "unreadable" }]); // notARole skipped
     expect(implementationWarnings(checks)).toEqual([]);
-    expect(await checkApprovedImplementations({}, 1, d)).toEqual([]);
+    expect(await checkApprovedImplementations({}, 1, { allowlist: d })).toEqual([]);
   });
 });
 

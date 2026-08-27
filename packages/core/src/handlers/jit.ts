@@ -160,7 +160,7 @@ export async function runJitPreflightLadder(args: {
   const client = resolved.client;
   // Interface-first guard on the two contracts the hook executes (adapter + registry): the
   // binding reads below prove WHICH contracts, this proves their CODE is the admitted one.
-  warnings.push(...(await approvedImplementationGuard(client, chainId, ctx.atBlock, JIT_IMPLEMENTATION_ROLES)));
+  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
   try {
     const [boundLop, boundRegistry, boundController] = await Promise.all([
       client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
@@ -378,7 +378,7 @@ export async function prepareJitLegacy(args: {
   const client = resolved.client;
   // The deprecated lane is held to the same standard as the current one: its adapter and
   // registry have their own allowlist roles, so a swapped implementation warns here too.
-  warnings.push(...(await approvedImplementationGuard(client, chainId, ctx.atBlock, LEGACY_JIT_IMPLEMENTATION_ROLES)));
+  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: LEGACY_JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
   try {
     const [boundLop, boundRegistry, boundController] = await Promise.all([
       client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),

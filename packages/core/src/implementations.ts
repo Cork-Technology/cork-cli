@@ -121,23 +121,34 @@ async function checkOne(
   }
 }
 
-/** Fingerprint the configured roles for the chain — every allowlisted role, or only `roles`
- *  when a caller scopes the check to the contracts its artifact executes. Reads are issued
- *  together (one extra round trip, like the pool pre-flight); a client without `getCode` skips
- *  the whole guard.
- *
- *  `addresses` (default: the same defaults) is where role ADDRESSES resolve from and
- *  `defaults` is where the ALLOWLIST comes from — the production caller passes the resolved
- *  config for the former and the bundled copy for the latter (see the header). */
+/** The two documents and two scopes a fingerprint run is parameterized by. NAMED on purpose:
+ *  the allowlist source and the address source are both CorkDefaults, and swapping them
+ *  positionally would quietly hand the allowlist to the document an attacker can move — the
+ *  exact confusion the trust split exists to prevent. */
+export interface ApprovedImplementationsOptions {
+  /** The document the approved-implementations ALLOWLIST is read from. Production passes the
+   *  copy bundled into the build (`BUNDLED_DEFAULTS`): a document that can move an address must
+   *  never also be the one that admits the code behind it (see the header). */
+  allowlist: CorkDefaults;
+  /** Where role ADDRESSES resolve from — the resolved (remote-first) config in production.
+   *  Default: the allowlist document (the single-document case). */
+  addresses?: CorkDefaults;
+  /** Scope to the roles the caller's artifact executes; omitted = every allowlisted role. */
+  roles?: readonly string[];
+  atBlock?: bigint;
+}
+
+/** Fingerprint the configured roles for the chain — every allowlisted role, or only
+ *  `opts.roles` when a caller scopes the check to the contracts its artifact executes. Reads
+ *  are issued together (one extra round trip, like the pool pre-flight); a client without
+ *  `getCode` skips the whole guard. */
 export async function checkApprovedImplementations(
   client: CodeReader,
   chainId: number,
-  defaults: CorkDefaults,
-  atBlock?: bigint,
-  roles?: readonly string[],
-  addresses: CorkDefaults = defaults,
+  opts: ApprovedImplementationsOptions,
 ): Promise<ImplementationCheck[]> {
-  const chain = defaults.approvedImplementations?.[String(chainId)];
+  const { allowlist, addresses = allowlist, roles, atBlock } = opts;
+  const chain = allowlist.approvedImplementations?.[String(chainId)];
   if (!chain || typeof client.getCode !== "function") return [];
   const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
   const jobs = Object.entries(chain).flatMap(([role, entry]) => {
@@ -156,12 +167,11 @@ export async function checkApprovedImplementations(
 export async function approvedImplementationGuard(
   client: CodeReader,
   chainId: number,
-  atBlock?: bigint,
-  roles?: readonly string[],
+  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock"> = {},
 ): Promise<Array<{ code: string; message: string }>> {
   try {
     const cfg = await resolveConfig();
-    return implementationWarnings(await checkApprovedImplementations(client, chainId, BUNDLED_DEFAULTS, atBlock, roles, cfg.defaults));
+    return implementationWarnings(await checkApprovedImplementations(client, chainId, { allowlist: BUNDLED_DEFAULTS, addresses: cfg.defaults, ...opts }));
   } catch {
     return [];
   }

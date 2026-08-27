@@ -11,7 +11,7 @@ import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketR
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
-import { parseQueryFilters, type QueryFilters } from "./filters.ts";
+import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
@@ -468,6 +468,9 @@ export function venueNoticeWarnings(t: { venueWarnings: Array<Record<string, unk
 export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const filters = parseQueryFilters(input.filters);
+  // Applicability after shape: a globally unknown key gets parse's own did-you-mean; a known
+  // key on the wrong resource is refused here with that resource's key list.
+  assertFiltersApplicable(input.resource, input.filters);
 
   if (VENUE_RESOURCES.has(input.resource)) {
     // Explicit full-decentralized mode: serve the EVENT-DERIVED subset over HyperSync.

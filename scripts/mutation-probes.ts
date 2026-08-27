@@ -56,6 +56,7 @@ const T = {
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
   hybridVerify: "packages/core/test/hybrid-verify.test.ts",
+  filterScope: "packages/core/test/query-filter-scope.test.ts",
   scanCache: "packages/core/test/scan-cache.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
@@ -2067,7 +2068,7 @@ const CATALOG: Mutant[] = [
     // exclusivity echo, and the venue book then contradicts what the policy gate admitted.
     id: "finalize-allowed-sender-echo-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSenderLow10Bytes,",
+    find: "data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSender,",
     replace: "data: { ...artifact, approvals, allowedSender: null,",
     tests: [T.handlers],
   },
@@ -2116,6 +2117,32 @@ const CATALOG: Mutant[] = [
     find: "      hashLies += 1;\n      continue;",
     replace: "      hashLies += 1;\n      served.push(row);\n      continue;",
     tests: [T.hybridVerify],
+  },
+  {
+    // Applicability gate severed: a known key on the wrong resource is silently unapplied
+    // again — the caller reads an unfiltered answer as a filtered one.
+    id: "query-filter-scope-gate-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "  assertFiltersApplicable(input.resource, input.filters);",
+    replace: "",
+    tests: [T.filterScope],
+  },
+  {
+    // One resource row widened to everything: protocol-config accepts (and ignores) any filter.
+    id: "query-filter-scope-row-widened",
+    file: "packages/core/src/handlers/filters.ts",
+    find: '"protocol-config": [],',
+    replace: '"protocol-config": KNOWN_FILTER_KEYS,',
+    tests: [T.filterScope],
+  },
+  {
+    // One resource row over-tightened: the orderbook's exclusivity classifier loses its fill
+    // sender — valid input refused, the over-refusal direction the acceptance test pins.
+    id: "query-filter-scope-row-tightened",
+    file: "packages/core/src/handlers/filters.ts",
+    find: '"orderbook": ["poolId", "side", "status", "orderHash", "account"],',
+    replace: '"orderbook": ["poolId", "side", "status", "orderHash"],',
+    tests: [T.filterScope, T.hybridVerify],
   },
   {
     // exclude_request_prefix silently dropped from the rfqs URL: the venue serves the whole
@@ -3098,8 +3125,8 @@ const CATALOG: Mutant[] = [
     // address can admit the code behind it — the exact self-authorization MCP-NET-001 names.
     id: "impl-allowlist-from-resolved-config",
     file: "packages/core/src/implementations.ts",
-    find: "checkApprovedImplementations(client, chainId, BUNDLED_DEFAULTS, atBlock, roles, cfg.defaults)",
-    replace: "checkApprovedImplementations(client, chainId, cfg.defaults, atBlock, roles, cfg.defaults)",
+    find: "checkApprovedImplementations(client, chainId, { allowlist: BUNDLED_DEFAULTS, addresses: cfg.defaults, ...opts })",
+    replace: "checkApprovedImplementations(client, chainId, { allowlist: cfg.defaults, addresses: cfg.defaults, ...opts })",
     tests: [T.implTrust],
   },
   {

@@ -247,7 +247,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         state: "ok",
         // Advisory echoes OUTSIDE `artifact` (the digest pins signed content alone), decoded
         // from the SIGNED traits like maker-order's: the exclusivity suffix the book will show.
-        data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSenderLow10Bytes, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
+        data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSender, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
         chainId,
         source: makerAccountType === "ERC1271" ? "chain" : "config",
         warnings: [
@@ -490,7 +490,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         nonce: built.nonce,
         // Exclusivity as the signed traits STORE it (decoded back from the built word, not echoed
         // from the input): the 10-byte suffix the book will show, null = any taker.
-        allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSenderLow10Bytes,
+        allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSender,
         approvals,
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
@@ -839,7 +839,7 @@ async function buildTakerFillArtifact(a: {
   // raw path, the ForSelf ADAPTER on the wrapper path (the wrapper is the LOP's caller, the
   // account only calls the wrapper). Bytes that can only revert are not built; the message
   // names the reserved suffix so a taker who controls that sender can re-prepare with it.
-  const allowedSender = decodeMakerTraits(signed.order.makerTraits).allowedSenderLow10Bytes;
+  const allowedSender = decodeMakerTraits(signed.order.makerTraits).allowedSender;
   const fillSender = action.forSelf ? action.forSelf.adapter : account;
   if (allowedSender !== null && !isAllowedSender(signed.order.makerTraits, fillSender)) {
     return envelope({

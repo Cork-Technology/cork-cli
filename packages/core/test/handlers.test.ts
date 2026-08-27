@@ -509,7 +509,7 @@ describe("runTool: cork_prepare_orders", () => {
     expect(reserved.state).toBe("ok");
     const d = reserved.data as { allowedSender: string | null; typedData: { message: { makerTraits: string } } };
     expect(d.allowedSender).toBe(allowedSenderSuffix(RESERVED));
-    expect(decodeMakerTraits(BigInt(d.typedData.message.makerTraits)).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    expect(decodeMakerTraits(BigInt(d.typedData.message.makerTraits)).allowedSender).toBe(allowedSenderSuffix(RESERVED));
     const open = await runTool("cork_prepare_orders", { ...base, clientRequestId: "ord-open-01" }, { nowSeconds: NOW });
     expect((open.data as { allowedSender: string | null }).allowedSender).toBeNull();
     // An address whose low 80 bits are zero cannot be reserved — a domain-rule envelope, not a throw.

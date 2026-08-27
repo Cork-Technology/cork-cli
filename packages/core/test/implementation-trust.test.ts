@@ -94,7 +94,7 @@ describe("allowlist source vs address source", () => {
 
   it("the bundled allowlist judges the code behind an address the resolved config moved — the moved-to contract is NOT approved", async () => {
     const hostile = parseDefaults(hostileDefaults());
-    const checks = await checkApprovedImplementations(client, 1, BUNDLED_DEFAULTS, undefined, ["corkAdapter"], hostile);
+    const checks = await checkApprovedImplementations(client, 1, { allowlist: BUNDLED_DEFAULTS, roles: ["corkAdapter"], addresses: hostile });
     expect(checks).toHaveLength(1);
     expect(checks[0]!.address.toLowerCase()).toBe(ATTACKER); // address: from the resolved (hostile) config
     expect(checks[0]!.codehash).toBe(HASH_ATTACK);
@@ -103,7 +103,7 @@ describe("allowlist source vs address source", () => {
 
   it("control: had the allowlist come from the same document as the address, the attacker would approve itself", async () => {
     const hostile = parseDefaults(hostileDefaults());
-    const checks = await checkApprovedImplementations(client, 1, hostile, undefined, ["corkAdapter"]);
+    const checks = await checkApprovedImplementations(client, 1, { allowlist: hostile, roles: ["corkAdapter"] });
     expect(checks[0]!.verdict).toBe("approved");
   });
 });
@@ -207,9 +207,9 @@ describe("role scoping: each artifact path fingerprints only the contracts its b
 
   it("an explicit role filter is honored by the checker itself, whatever the allowlist names", async () => {
     const reader: CodeReader = { getCode: async () => "0x" };
-    const all = await checkApprovedImplementations(reader, 42161, BUNDLED_DEFAULTS);
+    const all = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS });
     expect(all.map((c) => c.role).sort()).toEqual(["corkAdapter", "jitAdapter", "legacyJitAdapter", "legacyMarketRegistry", "marketRegistry", "whitelistManager"]);
-    const scoped = await checkApprovedImplementations(reader, 42161, BUNDLED_DEFAULTS, undefined, ["marketRegistry"]);
+    const scoped = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: ["marketRegistry"] });
     expect(scoped.map((c) => c.role)).toEqual(["marketRegistry"]);
   });
 });
@@ -225,8 +225,8 @@ describe("the deprecated generation is held to the same standard", () => {
     // A chain without a legacy generation resolves nothing for those roles — skipped, no warning.
     expect(implementationRoleAddress("legacyJitAdapter", BUNDLED_DEFAULTS, 8453)).toBeUndefined();
     const reader: CodeReader = { getCode: async () => "0x" };
-    expect(await checkApprovedImplementations(reader, 8453, BUNDLED_DEFAULTS, undefined, LEGACY_JIT_IMPLEMENTATION_ROLES)).toEqual([]);
-    const legacy = await checkApprovedImplementations(reader, 42161, BUNDLED_DEFAULTS, undefined, LEGACY_JIT_IMPLEMENTATION_ROLES);
+    expect(await checkApprovedImplementations(reader, 8453, { allowlist: BUNDLED_DEFAULTS, roles: LEGACY_JIT_IMPLEMENTATION_ROLES })).toEqual([]);
+    const legacy = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: LEGACY_JIT_IMPLEMENTATION_ROLES });
     expect(legacy.map((c) => [c.role, c.verdict]).sort()).toEqual([["legacyJitAdapter", "no_code"], ["legacyMarketRegistry", "no_code"]]);
   });
 });

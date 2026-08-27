@@ -17,6 +17,10 @@
       "kind": "type"
     },
     {
+      "name": "ApprovedImplementationsOptions",
+      "kind": "type"
+    },
+    {
       "name": "AttributableLog",
       "kind": "type"
     },
@@ -2334,6 +2338,10 @@
     }
   ],
   "./config": [
+    {
+      "name": "ApprovedImplementationsOptions",
+      "kind": "type"
+    },
     {
       "name": "BUILD_COMMIT",
       "kind": "value"

@@ -31,7 +31,7 @@ export async function handlePrepareMarket(
   const resolved = await getRpc(ctx, chainId);
   // Interface-first guard, scoped to the one contract this tx executes (the registry):
   // build-and-warn, same posture as the deployability pre-check below.
-  if (resolved) warnings.push(...(await approvedImplementationGuard(resolved.client, chainId, ctx.atBlock, PREPARE_MARKET_IMPLEMENTATION_ROLES)));
+  if (resolved) warnings.push(...(await approvedImplementationGuard(resolved.client, chainId, { roles: PREPARE_MARKET_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
   // rpcWarn is prepended at ENVELOPE construction, not pushed here: the client fails over
   // in-call (mutating `resolved`), and the disclosure must describe the endpoint that served
   // the pre-checks.

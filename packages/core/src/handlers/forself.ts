@@ -311,7 +311,7 @@ export async function prepareForSelfTakerFill(args: {
       requiredTakingAmount: derived.requiredTakingAmount,
       // The order's exclusivity as signed (null = open); a non-null value is the suffix the
       // ADAPTER — the LOP's msg.sender on this path — was checked against upstream.
-      allowedSender: decodeMakerTraits(signed.order.makerTraits).allowedSenderLow10Bytes,
+      allowedSender: decodeMakerTraits(signed.order.makerTraits).allowedSender,
       approvals,
       forSelf: {
         adapter: forSelf.adapter,

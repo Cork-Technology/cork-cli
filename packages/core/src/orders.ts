@@ -210,7 +210,7 @@ export interface DecodedMakerTraits {
   series: bigint;
   /** Low 80 bits — the LAST 10 BYTES of the allowed sender (0 = any taker). The full address is
    *  not recoverable from the traits; only this suffix is enforced on-chain. */
-  allowedSenderLow10Bytes: `0x${string}` | null;
+  allowedSender: `0x${string}` | null;
 }
 
 /** Decode a makerTraits word against the MakerTraitsLib bit layout (bit-exact inverse). */
@@ -228,7 +228,7 @@ export function decodeMakerTraits(t: bigint): DecodedMakerTraits {
     expiry: (t >> 80n) & U40,
     nonce: (t >> 120n) & U40,
     series: (t >> 160n) & U40,
-    allowedSenderLow10Bytes: senderLow === 0n ? null : (`0x${senderLow.toString(16).padStart(20, "0")}` as `0x${string}`),
+    allowedSender: senderLow === 0n ? null : (`0x${senderLow.toString(16).padStart(20, "0")}` as `0x${string}`),
   };
 }
 
@@ -365,7 +365,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   // would collide with each other.
   //
   // Derived from the idempotency key so retries stay byte-identical [K2] while genuinely
-  // different requests land on different bits. 40 bits of space, from a range of the hash the
+  // genuinely different requests land on different bits (a 40-bit slot: collisions are birthday-rare, not impossible — two live orders on one bit invalidate together). 40 bits of space, from a range of the hash the
   // plain-order salt does not use.
   const nonce = (BigInt(keccak256(stringToHex(a.clientRequestId))) >> 160n) & U40;
   let makerTraits = buildMakerTraits({

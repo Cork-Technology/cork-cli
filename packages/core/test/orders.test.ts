@@ -258,11 +258,11 @@ describe("allowed sender (MakerTraitsLib bits [0,80)) — the exclusivity slot",
   });
 
   it("decodes back to the stored suffix (null when open) — build and decode are inverses", () => {
-    expect(decodeMakerTraits(buildMakerTraits(parts)).allowedSenderLow10Bytes).toBeNull();
-    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: RESERVED })).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    expect(decodeMakerTraits(buildMakerTraits(parts)).allowedSender).toBeNull();
+    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: RESERVED })).allowedSender).toBe(allowedSenderSuffix(RESERVED));
     // A suffix with leading zero bytes keeps its width: the slot is 10 bytes, always.
     const leadingZero = "0x0000000000000000000000000000000000000001" as const;
-    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: leadingZero })).allowedSenderLow10Bytes).toBe("0x00000000000000000001");
+    expect(decodeMakerTraits(buildMakerTraits({ ...parts, allowedSender: leadingZero })).allowedSender).toBe("0x00000000000000000001");
   });
 
   it("isAllowedSender mirrors MakerTraitsLib: open admits anyone; reserved admits exactly the shared 10-byte suffix", () => {
@@ -284,7 +284,7 @@ describe("allowed sender (MakerTraitsLib bits [0,80)) — the exclusivity slot",
     const base = { chainId: 1 as const, lop: LOP_ADDRESSES[1]!, maker: MAKER, makerAsset: MAKER_ASSET, takerAsset: TAKER_ASSET, makingAmount: 100n, takingAmount: 200n, clientRequestId: "req-reserved-0001" };
     const open = buildMakerOrder(base);
     const reserved = buildMakerOrder({ ...base, allowedSender: RESERVED });
-    expect(decodeMakerTraits(reserved.order.makerTraits).allowedSenderLow10Bytes).toBe(allowedSenderSuffix(RESERVED));
+    expect(decodeMakerTraits(reserved.order.makerTraits).allowedSender).toBe(allowedSenderSuffix(RESERVED));
     expect(reserved.order.makerTraits & ~ALLOWED_SENDER_MASK).toBe(open.order.makerTraits);
     expect(reserved.order.salt).toBe(open.order.salt);
     expect(reserved.nonce).toBe(open.nonce);

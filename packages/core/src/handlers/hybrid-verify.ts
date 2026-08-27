@@ -117,7 +117,7 @@ function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, acco
       continue;
     }
     const traits = p.value.order.makerTraits;
-    const allowedSender = decodeMakerTraits(traits).allowedSenderLow10Bytes;
+    const allowedSender = decodeMakerTraits(traits).allowedSender;
     const echo = row.allowedSender;
     if (echo !== undefined && (typeof echo === "string" ? echo.toLowerCase() : null) !== allowedSender) echoLies += 1;
     const exclusivity: BookExclusivity =

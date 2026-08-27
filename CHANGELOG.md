@@ -8,6 +8,16 @@ schemas, and exit codes (policy R11). Human-readable text and log formats are no
 
 ## [Unreleased]
 
+**This release is v0.5.0, a breaking minor (policy R10/R11: the diff decides the bump).** The
+`pre-funded` value is removed from `cork_prepare_phoenix.fundingMode`, a covered input schema;
+the SDK changes below reshape covered exports. Checklist A.2 applies.
+
+### Breaking
+
+- `cork_query` validates filter keys PER RESOURCE: a known key the named resource does not consume is refused with teaching that lists the resource's own keys (exit 2), instead of being silently unapplied — the orderHash client-side rule ("a known filter key is never silently unapplied"), generalized to every resource. `RESOURCE_FILTER_KEYS` + `assertFiltersApplicable` join the core exports' handler surface; drift gates pin the map to the resource enum and to `KNOWN_FILTER_KEYS` from both sides.
+- SDK (`@cork/core`): `checkApprovedImplementations(client, chainId, opts)` and `approvedImplementationGuard(client, chainId, opts?)` take an options object (`ApprovedImplementationsOptions`: `allowlist`, `addresses`, `roles`, `atBlock`). The old positional form put two `CorkDefaults` in one argument list where swapping them hands the allowlist to the document an attacker can move — the confusion the trust split exists to prevent, now unrepresentable.
+- SDK (`@cork/core` `/orders`): `DecodedMakerTraits.allowedSenderLow10Bytes` is renamed `allowedSender` — one name for the 10-byte suffix across the traits breakdown, book rows, and prepare results (the doc comment keeps the low-80-bits teaching). `cork_decode`'s makerTraits breakdown (covered JSON output) renames with it.
+
 ### Added
 
 - `cork_prepare_orders maker-order` takes `allowedSender`: the fill is reserved for one filler by packing the low 80 bits of that address into makerTraits (1inch LOP v4 allowed sender); the LOP reverts `PrivateOrder()` for any other `msg.sender`. The result echoes the stored 10-byte suffix as `allowedSender` (null when open), decoded back from the built word. Name the address that will CALL the LOP — the taker's account on a raw fill, the ForSelf adapter on a wrapper fill. An address whose low 80 bits are zero is refused (`invalid_order_terms`): it would silently read as open.

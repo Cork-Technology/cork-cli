@@ -78,6 +78,53 @@ export const KNOWN_FILTER_KEYS = [
  *  importing the list keeps the sugar and the parser from drifting apart. */
 export const DIGIT_FILTER_KEYS = ["rate", "expiry"] as const;
 
+type FilterKey = (typeof KNOWN_FILTER_KEYS)[number];
+
+/** The filter keys each resource CONSUMES — the applicability gate handleQuery enforces. A key
+ *  outside its resource's row is refused with teaching (exit 2): a filter that is accepted but
+ *  never applied lets a caller mistake an unfiltered answer for a filtered one — the orderHash
+ *  client-side rule ("a known filter key is never silently unapplied"), generalized to every
+ *  resource. Rows are the UNION across the resource's modes and kinds (fills.poolId is
+ *  full-decentralized-only, rollover-orders unions orders/fills/contracts keys); narrowing
+ *  within a mode stays the handler's own business. A drift gate pins this record to the schema
+ *  enum and to KNOWN_FILTER_KEYS from both sides. */
+export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>> = {
+  "cork-pools": ["poolId"],
+  "cork-pool": ["poolId"],
+  "pool-whitelist": ["poolId", "account"],
+  "whitelisted-addresses": ["poolId"],
+  "rollover-orders": ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest", "filler", "address", "factory"],
+  "trading-pairs": ["poolId"],
+  "orderbook": ["poolId", "side", "status", "orderHash", "account"],
+  "fills": ["orderHash", "poolId"],
+  "account-state": ["poolId", "account"],
+  "protocol-config": [],
+  "registry-assets": ["address", "legacy"],
+  "registry-oracle": ["collateralAsset", "referenceAsset", "mode", "rate", "legacy"],
+  "registry-recipes": ["recipe", "mode", "legacy"],
+  "registry-denominations": ["label", "legacy"],
+  "registry-feeds": ["base", "quote", "legacy"],
+  "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle"],
+  "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix"],
+};
+
+/** Refuse a KNOWN filter key the named resource does not consume. Runs after parseQueryFilters
+ *  (globally unknown keys get its did-you-mean first), so every refusal here is a real key on
+ *  the wrong resource — the teaching names the resource's own keys. */
+export function assertFiltersApplicable(resource: string, raw: Record<string, unknown> | undefined): void {
+  const applicable = RESOURCE_FILTER_KEYS[resource];
+  if (applicable === undefined) return; // an unmapped resource never over-refuses (schema drift is the gate's job)
+  for (const key of Object.keys(raw ?? {})) {
+    if (!(applicable as readonly string[]).includes(key)) {
+      const near = nearestValue(key, applicable);
+      throw new ToolInputError("cork_query", [{
+        path: ["filters", key],
+        message: `filters.${key} does not apply to resource '${resource}' — it would be silently unapplied, and an unfiltered answer must never pass for a filtered one. ${applicable.length ? `'${resource}' consumes: ${applicable.join(", ")}` : `'${resource}' takes no filters`}${near ? ` — did you mean '${near}'?` : ""}`,
+      }]);
+    }
+  }
+}
+
 export function parseQueryFilters(raw: Record<string, unknown> | undefined): QueryFilters {
   const out: QueryFilters = {};
   const fail = (key: string, message: string): never => {
