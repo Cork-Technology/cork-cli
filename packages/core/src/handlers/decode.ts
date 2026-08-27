@@ -241,13 +241,21 @@ export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId, jitTrust: Jit
  *  prepare path builds against, so a decode of this tool's own bytes verifies `trusted` and a
  *  substituted target reads `mismatch`. ForSelf and ERC-20 targets are deliberately NOT here:
  *  the decoder has no authority for them (integrator config; the user's own token). */
-async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promise<{ targets: DecodeTrustTargets; jitTrust: JitTrustTargets; dep: Awaited<ReturnType<typeof getDep>>["dep"]; depWarn: Array<{ code: string; message: string }> }> {
+async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promise<{
+  targets: DecodeTrustTargets;
+  jitTrust: JitTrustTargets;
+  dep: Awaited<ReturnType<typeof getDep>>["dep"];
+  depWarn: Array<{ code: string; message: string }>;
+  /** The 2.1.0 registry block, for callers that also name its contracts (the tx target book). */
+  marketRegistry: Awaited<ReturnType<typeof resolveMarketRegistry>>["marketRegistry"];
+}> {
   const [{ dep, depWarn }, { marketRegistry: mr }, { marketRegistry: legacyMr }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId), resolveMarketRegistryLegacy(chainId)]);
   return {
     targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId] },
     jitTrust: { currentAdapter: mr?.adapter, legacyAdapter: legacyMr?.adapter },
     dep,
     depWarn,
+    marketRegistry: mr,
   };
 }
 
@@ -493,7 +501,8 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
     targets = trust.targets;
     jitTrust = trust.jitTrust;
     warnings.push(...trust.depWarn);
-    const [{ marketRegistry: mr }, { rollover }] = await Promise.all([resolveMarketRegistry(chainId), resolveRollover(chainId)]);
+    const mr = trust.marketRegistry;
+    const { rollover } = await resolveRollover(chainId);
     const candidates: Array<[string, string | undefined]> = [
       ["bundler3", dep?.bundler3],
       ["corkAdapter", dep?.corkAdapter],
