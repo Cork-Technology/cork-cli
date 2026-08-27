@@ -50,6 +50,8 @@ evals/.*.jsonl
 
 # Slack-thread drafts are working files, never repo content (owner rule 2026-08-11)
 notes/*slack*
+# Telegram drafts are outward messages like the Slack ones: working files, never committed
+notes/*telegram*
 
 # local demo workspace from notes/demo-rundown-cork-defi-mcp-base.md (holds RPC URLs + demo addresses)
 cork-demo/
