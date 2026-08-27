@@ -170,8 +170,9 @@ export const TASKS: EvalTask[] = [
       // actually produce ("venue-free", "off-venue", "directly to your filler", "before
       // cork_submit will relay", "requires the destination pool to be indexed") — and never
       // "yes, post it now". Over-fitting to the teaching's exact words graded a fully correct
-      // off-venue answer as a miss (observed 2026-08-20).
-      answer: /venue.free|off.venue|directly to (your |the )?filler|not (yet )?(relay|post|admit|accept)|(until|before|once) [\s\S]{0,80}(indexed|pool exists|destination|dst pool)|cannot [\s\S]{0,40}(venue|post)|no jit bypass/i,
+      // off-venue answer as a miss (observed 2026-08-20; again 2026-08-27 with "unless …
+      // indexed" and "refuses to relay").
+      answer: /venue.free|off.venue|directly to (your |the )?filler|not (yet )?(relay|post|admit|accept)|refuses? to (relay|post|admit|accept)|(until|before|once|unless) [\s\S]{0,80}(indexed|pool exists|destination|dst pool)|cannot [\s\S]{0,40}(venue|post)|no jit bypass/i,
       // "can I post this right now?" invites post-build verification hops (observed: a derive/
       // track double-check after a correct first-call build) — the approvals-maker-order
       // precedent for verify-inviting prompts.

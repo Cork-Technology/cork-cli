@@ -75,7 +75,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     case "unwindSwapFee":
       return 50_000_000_000_000_000n;
     case "shares":
-      return [CPT, CST];
+      // Only the known (existing) pool answers live share addresses. A blanket answer made
+      // EVERY derived pool read exists:true with shares "read" — contradicting the JIT tasks'
+      // own premise ("destination pool does not exist yet"); the honest prediction path is the
+      // creation SIMULATION below (observed 2026-08-27: an agent that probed derive-cork-pool
+      // was told the pool already existed and graded down for believing it).
+      return known ? [CPT, CST] : ["0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"];
     case "rate":
       return 800_000_000_000_000_000n;
     case "decimals":
@@ -338,6 +343,18 @@ export function stubContext(): HandlerContext {
       source: "explicit" as const,
       client: {
         readContract: async (a: never) => readContract(a, chainId),
+        // Share PREDICTION for a pool that does not exist: production simulates the JIT
+        // creation via eth_simulateV1 and reads shares from the in-memory pool. The stub
+        // answers that simulation with every leg green and the final shares read encoding
+        // [cPT, cST] — so derive-cork-pool reports exists:false with shares "simulated",
+        // matching the JIT tasks' premise.
+        simulateCalls: async (a: { calls: Array<{ to?: string; data?: string }> }) => ({
+          results: a.calls.map((_, i) =>
+            i === a.calls.length - 1
+              ? { status: "success", data: `0x${CPT.slice(2).toLowerCase().padStart(64, "0")}${CST.slice(2).toLowerCase().padStart(64, "0")}` }
+              : { status: "success", data: "0x" },
+          ),
+        }),
         // Code is ADDRESS-AWARE, not blanket: the ForSelf adapter is a CONTRACT (its bindings
         // are verified before a caller grants it an allowance, and a codeless address is
         // correctly refused adapter_binding_mismatch), while every other fixture account stays
