@@ -1,6 +1,6 @@
 {
   "name": "@cork/schemas",
-  "version": "0.4.1",
+  "version": "0.5.0-rc.1",
   "description": "Zod source-of-truth schemas, registry, and examples for the Cork helper tools.",
   "license": "UNLICENSED",
   "private": false,
