@@ -551,6 +551,18 @@ describe("runTool: cork_prepare_orders finalize-maker-order", () => {
   const call = (over: Record<string, unknown>, crid = "final-int-01") =>
     runTool("cork_prepare_orders", { chainId: 1, account: acct.address, clientRequestId: crid, action: { type: "finalize-maker-order", prepared, listing, ...over }, format: "concise" }, { nowSeconds: NOW, resolveRpc: async () => null });
 
+  it("echoes the signed exclusivity: a reserved order's allowedSender suffix rides the finalize result (null when open)", async () => {
+    const RESERVED = "0xabcdef0123456789abcdef0123456789abcdef01";
+    const reservedT: LopOrder = { ...orderT, makerTraits: BigInt(allowedSenderSuffix(RESERVED)) };
+    const reservedHash = hashLopOrder(1, LOP, reservedT);
+    const reservedPrepared = { ...prepared, orderHash: reservedHash, typedData: { ...prepared.typedData, message: { ...prepared.typedData.message, makerTraits: reservedT.makerTraits.toString() } } };
+    const env = await call({ prepared: reservedPrepared, signature: await acct.sign({ hash: reservedHash }) });
+    expect(env.state).toBe("ok");
+    expect((env.data as { allowedSender: string | null }).allowedSender).toBe(allowedSenderSuffix(RESERVED));
+    const open = await call({ signature: await acct.sign({ hash: orderHash }) });
+    expect((open.data as { allowedSender: string | null }).allowedSender).toBeNull();
+  });
+
   it("verifies the signer and emits a verbatim cork_submit lop-order artifact (never signs)", async () => {
     const signature = await acct.sign({ hash: orderHash });
     const env = await call({ signature });

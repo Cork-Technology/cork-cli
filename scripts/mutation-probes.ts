@@ -959,13 +959,14 @@ const CATALOG: Mutant[] = [
     tests: [T.evalGrading],
   },
   {
-    // The exact regression this guards against: the answer regex reverting to its stale
-    // empty-book expectation while the fixture still serves 1 resting order. The killer test
-    // pins the two together; this mutant reintroduces the five-week drift it was written to catch.
+    // The exact regression this guards against: the answer regex going stale against the
+    // fixture's actual row count (five weeks at "empty" once; the count moved 1 -> 2 when the
+    // RESERVED sibling landed 2026-08-27). The killer test pins regex and book together; this
+    // mutant reintroduces the previous count, the most tempting wrong value at every move.
     id: "eval-task-orderbook-count-stale",
     file: "evals/tasks.ts",
-    find: 'answer: /\\b1\\b|\\bone\\b/i, maxCalls: 2 } },',
-    replace: 'answer: /\\b0\\b|zero|no (resting )?orders|empty/i, maxCalls: 2 } },',
+    find: 'answer: /\\b2\\b|\\btwo\\b/i, maxCalls: 2 } },',
+    replace: 'answer: /\\b1\\b|\\bone\\b/i, maxCalls: 2 } },',
     tests: [T.taskFixtures],
   },
   {
@@ -2060,6 +2061,15 @@ const CATALOG: Mutant[] = [
     find: "  let t = allowedSender;\n  if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;",
     replace: "  let t = 0n;\n  if (!p.allowPartialFills) t |= NO_PARTIAL_FILLS_FLAG;",
     tests: [T.orders, T.handlers],
+  },
+  {
+    // Finalize echo severed from the signed bytes: a reserved order finalizes with a null
+    // exclusivity echo, and the venue book then contradicts what the policy gate admitted.
+    id: "finalize-allowed-sender-echo-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSenderLow10Bytes,",
+    replace: "data: { ...artifact, approvals, allowedSender: null,",
+    tests: [T.handlers],
   },
   {
     // Taker-fill exclusivity judged on the ACCOUNT on the ForSelf path: the LOP's msg.sender

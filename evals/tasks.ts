@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
+import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -81,8 +81,10 @@ export const TASKS: EvalTask[] = [
   // Every agent that read the tool's own (correct) count of 1 and said so honestly was scored a
   // miss; the fixture-coherence gate never caught it because this task predates that file's
   // coverage. Fixed to the actual count, not re-emptied — the resting order is load-bearing for
-  // fill-resting-order/fill-inline-signed-order and must stay.
-  { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b1\b|\bone\b/i, maxCalls: 2 } },
+  // fill-resting-order/fill-inline-signed-order and must stay. 2026-08-27: the count moved to
+  // TWO when the RESERVED sibling landed (the fill-reserved-order fixture below) — the regex
+  // moves in the SAME commit as the fixture, which is the discipline that prevents a repeat.
+  { id: "venue-orderbook", prompt: `Fetch the current Cork orderbook for pool ${P} and tell me how many resting orders there are.`, expect: { tool: "cork_query", params: { resource: "orderbook" }, state: "ok", answer: /\b2\b|\btwo\b/i, maxCalls: 2 } },
   { id: "whitelist-enumerate", prompt: "List ALL whitelisted addresses across Cork pools (the full enumeration, not a single-account check).", expect: { tool: "cork_query", params: { resource: "whitelisted-addresses" }, state: "ok", answer: /a11ce/i, maxCalls: 2 } },
   { id: "rollover-feed", prompt: "Show me the currently fillable Cork rollover orders on Arbitrum (chain 42161).", expect: { tool: "cork_query", params: { resource: "rollover-orders" }, state: "ok", maxCalls: 2 } },
   // ── compute ────────────────────────────────────────────────────────────
@@ -369,6 +371,22 @@ export const TASKS: EvalTask[] = [
       // be an unrequested venue post [K1].
       forbid: ["cork_submit"],
       maxCalls: 3,
+    },
+  },
+  {
+    // cork-api 0.4.1 / COR-182: a resting order can be RESERVED for one filler (makerTraits
+    // allowed-sender, low 80 bits). The tool refuses to build bytes that can only revert
+    // PrivateOrder(); the grade is that the refusal reaches the user as teaching, not a retry.
+    id: "fill-reserved-order",
+    prompt: `Prepare the unsigned fill calldata for the resting Cork limit order ${RESERVED_ORDER_HASH} on mainnet (chain 1), taker account ${A}, request id "eval-reserved-0001". If I cannot fill it, explain exactly why and who can.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "taker-fill", orderHash: RESERVED_ORDER_HASH } },
+      state: "unavailable",
+      code: "private_order",
+      answer: /reserv|private|exclusiv/i,
+      maxCalls: 4,
     },
   },
   {

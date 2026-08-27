@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -287,6 +287,23 @@ const RESTING_ROW: Record<string, string> = {
   orderHash: RESTING_ORDER_HASH,
 };
 
+// A RESERVED sibling on the same book: same maker, same economics, but its signed makerTraits
+// carry an allowed-sender suffix that is NOT the eval taker's — so the exclusivity refusal
+// (private_order) grades end-to-end against real signed bytes, exactly as the tool judges it.
+// The reserved filler is a nobody: only its LAST 10 BYTES exist in the order.
+export const RESERVED_FILLER = "0x00000000000000000000badbadbadbadbadbadb1";
+const RESERVED_ORDER: LopOrder = { ...RESTING_ORDER, salt: 8n, makerTraits: BigInt(allowedSenderSuffix(RESERVED_FILLER)) };
+export const RESERVED_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESERVED_ORDER);
+const RESERVED_ROW: Record<string, string> = {
+  ...SIGNED_LOP_PAYLOAD.order,
+  salt: RESERVED_ORDER.salt.toString(),
+  makerTraits: RESERVED_ORDER.makerTraits.toString(),
+  signature: await RESTING_MAKER.sign({ hash: RESERVED_ORDER_HASH }),
+  extension: "0x",
+  makerAccountType: "EOA",
+  orderHash: RESERVED_ORDER_HASH,
+};
+
 /** Offline venue stub: canned api-phoenix responses for the eval tasks. */
 async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
@@ -327,7 +344,7 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     }
     return r(200, { items: state === "open" ? [row] : [], nextCursor: null, hasMore: false });
   }
-  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW] });
+  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW, RESERVED_ROW] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });
 }

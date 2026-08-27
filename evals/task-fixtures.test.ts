@@ -30,6 +30,7 @@ import {
   RC2_CLONE,
   RC2_EXACT_SETTLER,
   RC2_FACTORY,
+  RESERVED_ORDER_HASH,
   RESTING_ORDER_HASH,
   RETIRED_EXACT_SETTLER,
   SIGNED_LOP_PAYLOAD,
@@ -380,6 +381,27 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
 
   it("the demo-pool read the oldest task grades still answers (fixture canary)", async () => {
     const env = await runTool("cork_query", { resource: "cork-pool", chainId: 1, filters: { poolId: DEMO_POOL_ID } }, stubContext());
+    expect(env.state).toBe("ok");
+  });
+});
+
+describe("task fixture: fill-reserved-order", () => {
+  it("the canonical fill of the RESERVED row refuses private_order (chain-free, from the signed bytes)", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-reserved-0001", action: { type: "taker-fill", orderHash: RESERVED_ORDER_HASH }, format: "concise" },
+      stubContext(),
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("private_order");
+    expect(env.warnings[0]?.message).toContain("badbadb"); // names the reserved suffix — the teaching the task grades
+  });
+  it("the open sibling still fills — the reserved row must not shadow it", async () => {
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-fill-0001", action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH }, format: "concise" },
+      stubContext(),
+    );
     expect(env.state).toBe("ok");
   });
 });

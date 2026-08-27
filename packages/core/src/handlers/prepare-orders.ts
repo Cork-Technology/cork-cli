@@ -245,7 +245,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (finalizeApprovalWarn) finalizeWarnings.push(finalizeApprovalWarn);
       return envelope({
         state: "ok",
-        data: { ...artifact, approvals, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
+        // Advisory echoes OUTSIDE `artifact` (the digest pins signed content alone), decoded
+        // from the SIGNED traits like maker-order's: the exclusivity suffix the book will show.
+        data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSenderLow10Bytes, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
         chainId,
         source: makerAccountType === "ERC1271" ? "chain" : "config",
         warnings: [
