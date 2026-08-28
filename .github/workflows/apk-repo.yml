@@ -529,9 +529,10 @@ jobs:
           set -o pipefail
           mkdir -p sboms
           owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
-          # Candidates never move :latest (policy R7: the pointer tracks production only).
+          # :latest tracks production only (G9/R7). While the component is pre-1.0 (v0.x.y) it is
+          # partner-preview, so it never moves :latest; only a bare v1.0.0+ tag does. Candidates never do.
           tags="ghcr.io/$owner/cork-cli:$TAG"
-          [ "$CANDIDATE" = "true" ] || tags="$tags ghcr.io/$owner/cork-cli:latest"
+          case "$TAG" in v0.*|*-*) : ;; *) tags="$tags ghcr.io/$owner/cork-cli:latest" ;; esac
           echo "publishing: $tags"
           apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
           # shellcheck disable=SC2086 # $tags is a deliberate word list

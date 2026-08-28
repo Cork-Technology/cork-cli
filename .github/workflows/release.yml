@@ -162,7 +162,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          case "${{ github.ref_name }}" in *-*) PRE="--prerelease";; *) PRE="";; esac
+          # G9: while the component is pre-1.0 (v0.x.y) it is partner-preview — unaudited — so a bare
+          # tag stays pre-release and never takes GitHub's Latest badge. Only a bare v1.0.0+ tag (the
+          # first audited/production line) drops the flag. An -rc is always pre-release. Version is the
+          # sole signal; no external flag.
+          case "${{ github.ref_name }}" in v0.*|*-*) PRE="--prerelease";; *) PRE="";; esac
           gh release create "${{ github.ref_name }}" $PRE \
             --verify-tag \
             --title "${{ github.ref_name }}" \
