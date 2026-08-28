@@ -166,15 +166,21 @@ jobs:
           gh release create "${{ github.ref_name }}" $PRE \
             --verify-tag \
             --title "${{ github.ref_name }}" \
-            --notes "Single-binary \`ch\` (CLI + \`ch mcp\` stdio server). Verify any asset with:
+            --notes "This is a frozen, per-version record. Living docs: https://docs.cork.tech · other versions: this repo's Releases.
+
+          Usage — \`ch\` is one binary: the CLI, and an MCP stdio server via \`ch mcp\`. Put it on PATH, then \`ch capabilities\` lists the 9 tools and \`ch <command> --help\` explains one. Point an MCP client at \`ch mcp\`. Example: \`ch query cork-pools --chain-id 8453\`. Guide: docs/cli.md.
+
+          SDK — \`@cork/core\` is the integrator library: a curated root export plus eight subpaths (/math /orders /registry /chain /bundle /venue /indexer /config), e.g. \`import { runTool } from '@cork/core'\`. The \`cork-*.tgz\` assets are the npm packages \`@cork/schemas\` + \`@cork/core\` + \`@cork/mcp\`; add the schemas AND core tarball URLs to your \`dependencies\` (the lockfile pins the sha512). Guide: docs/sdk.md.
+
+          Channels — covered by this release: the \`ch-*\` binaries, the \`cork-*.tgz\` SDK packages, and the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`. Every binary and tarball is attested and listed in checksums.txt. A \`-rc\` does NOT publish the apk Pages channel or the \`:latest\` image — those are production-only.
+
+          Verify any asset:
           \`\`\`
           gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml
           \`\`\`
-          Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt. One caveat: match your host's libc to the asset you verify (glibc assets on a glibc host, musl on musl) — for same-OS targets Bun embeds the HOST's libc flavor, so a musl host rebuilding \`ch-linux-x64\` gets a correct-but-different binary, a false mismatch (verified empirically: musl assets reproduce byte-identically from an independent musl machine).
+          Reproduce: same commit, Bun pinned by mise.toml, \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\` — checksums must match checksums.txt. Match your host's libc to the asset (glibc on glibc, musl on musl): for same-OS targets Bun embeds the host's libc flavor, so a musl host rebuilding \`ch-linux-x64\` gets a correct-but-different binary.
 
-          SDK: the \`cork-*.tgz\` assets are the npm-installable \`@cork/schemas\` + \`@cork/core\` + \`@cork/mcp\` packages, attested and checksummed like every other asset. Add the schemas AND core tarball URLs to your \`dependencies\` (core's dependency on schemas resolves to the sibling tarball; your lockfile pins the sha512). Install guide: docs/sdk.md.
-
-          Changes: the \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md in this tag's tree. Covered surface (versioning policy R11): JSON output, tool names, input schemas, exit codes. A \`-rc\` tag is a release candidate: pre-release flagged, not a production cut." \
+          Changes and compatibility — read the \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md in this tag's tree, including its Breaking and Changed entries, before you upgrade. Covered surface (versioning policy R11): JSON output, tool names, input schemas, exit codes. Cork operates no on-chain deployment of this tool. A \`-rc\` tag is a release candidate: pre-release flagged, not a production cut." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt
 
   # apk-repository + OCI + Phala channel, called for EVERY release. Called DIRECTLY rather than
