@@ -226,7 +226,7 @@ jobs:
 
           The covered surface is the JSON output, the tool names, the input schemas, and the exit codes (policy R11). This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade.
 
-          Cork runs no on-chain deployment of this tool. A \`-rc\` tag is a release candidate — we flag it pre-release, not production." \
+          Cork runs no on-chain deployment of this tool. This is a partner-preview release — unaudited and lightly reviewed; pin the Distribution you integrate against for its stream. A \`-rc\` tag is a release candidate; we flag it pre-release." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt
 
   # apk-repository + OCI + Phala channel, called for EVERY release. Called DIRECTLY rather than
