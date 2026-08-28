@@ -206,13 +206,22 @@ export function portCommits(repo: string, commits: string[], base: string, sign:
   }
 }
 
-const isMain = process.argv[1]?.endsWith("port-to-public.ts");
-if (isMain) {
-  const args = process.argv.slice(2);
+/** Parse the CLI args into flags, base, and the commit list. Exported so the arg handling —
+ *  not just portCommits — is under test: the driver glue is where a silent drop once hid. */
+export function parseArgs(args: string[]): { sign: boolean; base: string; commits: string[] } {
   const sign = args.includes("--sign");
   const baseIdx = args.indexOf("--base");
   const base = baseIdx !== -1 ? args[baseIdx + 1]! : "cork-cli/main";
-  const commits = args.filter((a, i) => !a.startsWith("--") && i !== baseIdx + 1);
+  // Keep every positional; drop only real flags and the --base VALUE. The `baseIdx !== -1`
+  // guard is load-bearing: with --base absent, baseIdx is -1 and baseIdx + 1 is 0, so an
+  // unguarded `i !== baseIdx + 1` silently drops the FIRST commit (no error).
+  const commits = args.filter((a, i) => !a.startsWith("--") && !(baseIdx !== -1 && i === baseIdx + 1));
+  return { sign, base, commits };
+}
+
+const isMain = process.argv[1]?.endsWith("port-to-public.ts");
+if (isMain) {
+  const { sign, base, commits } = parseArgs(process.argv.slice(2));
   if (commits.length === 0) {
     console.error("usage: bun scripts/port-to-public.ts [--base cork-cli/main] [--sign] <commit>...");
     process.exit(1);

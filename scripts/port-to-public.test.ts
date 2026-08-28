@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { EXCLUDED_PREFIXES, isExcluded, portCommits, REPOINTS, stripAiTrailers, transformTree } from "./port-to-public.ts";
+import { EXCLUDED_PREFIXES, isExcluded, parseArgs, portCommits, REPOINTS, stripAiTrailers, transformTree } from "./port-to-public.ts";
 
 let repo: string;
 
@@ -150,5 +150,16 @@ describe("port-to-public: the transform is a pure function of the private tree",
     expect(isExcluded("packages/.DS_Store")).toBe(true);
     expect(isExcluded("src/app.ts")).toBe(false);
     expect(isExcluded("packages/core/src/index.ts")).toBe(false);
+  });
+
+  it("parseArgs keeps every commit when --base is omitted (the first-commit-drop regression)", () => {
+    // With --base absent, baseIdx is -1: an unguarded `i !== baseIdx + 1` drops index 0.
+    expect(parseArgs(["A", "B", "C"])).toEqual({ sign: false, base: "cork-cli/main", commits: ["A", "B", "C"] });
+    // A single commit must survive too — the driver's `commits.length === 0` guard once fired here.
+    expect(parseArgs(["A"]).commits).toEqual(["A"]);
+    // --base drops only its VALUE, never a commit; --sign is a flag, not a commit.
+    expect(parseArgs(["--base", "public", "A", "B"])).toEqual({ sign: false, base: "public", commits: ["A", "B"] });
+    expect(parseArgs(["--sign", "A", "B"])).toEqual({ sign: true, base: "cork-cli/main", commits: ["A", "B"] });
+    expect(parseArgs(["--base", "public", "--sign", "A"]).commits).toEqual(["A"]);
   });
 });
