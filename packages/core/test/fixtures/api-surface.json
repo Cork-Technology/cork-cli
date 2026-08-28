@@ -501,6 +501,10 @@
       "kind": "value"
     },
     {
+      "name": "MAX_FEE_PERCENTAGE_FALLBACK",
+      "kind": "value"
+    },
+    {
       "name": "MIRRORED_VENUE_LOGIC",
       "kind": "value"
     },
@@ -3640,6 +3644,10 @@
     },
     {
       "name": "JIT_MINTED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "MAX_FEE_PERCENTAGE_FALLBACK",
       "kind": "value"
     },
     {

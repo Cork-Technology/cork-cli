@@ -5,12 +5,12 @@
 //   - a mutant's `find` pattern no longer matches (pattern rot: the source moved; re-aim the
 //     probe rather than silently losing coverage), or
 //   - the clean baseline is already red (a red suite would masquerade as "caught").
-// Files are restored byte-exactly from an in-memory snapshot in a finally block, so the probe
-// run never leaves mutants behind — safe on a dirty working tree. NOT safe to run BESIDE:
-// while the catalog is in flight, real source sits mutated for seconds at a time, so any
-// concurrent vitest/eval/CLI run in this tree can read a mutant and fail on phantoms
-// (observed 2026-08-27: a forself selector-parity "failure" that was the abi-struct-order
-// mutant, live in the tree at that moment). One tree, one runner at a time.
+// Mutants are planted and run in a DISPOSABLE SANDBOX COPY of the working tree (see the sandbox
+// block in the runner): the real tree is never mutated, so concurrent vitest/eval/CLI runs in
+// the tree are safe, and a kill mid-mutant strands only tmp-dir garbage. (Before 2026-08-28 the
+// mutants were written into real source — the one-tree-one-runner era; observed 2026-08-27 as a
+// forself selector-parity "failure" that was an in-flight mutant.) Rot checks still read the
+// REAL files — probes aim at the source of record, not the copy.
 //
 //   bun run test:mutation            # full catalog (~2–5 min; spawns focused vitest runs)
 //   bun scripts/mutation-probes.ts --only marketid,orders   # comma-separated id prefixes
@@ -19,7 +19,9 @@
 // BYTES or a wrong money answer — struct/tuple field order, enum ordinals, bit flags, hash
 // inputs, rounding directions, boundary comparators, storage-slot math — not statement coverage.
 // The catalog is append-only in spirit: when a survivor is killed, keep the probe.
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 interface Mutant {
   id: string;
@@ -74,6 +76,8 @@ const T = {
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
   marketCreator: "packages/core/test/market-creator.test.ts",
+  constCache: "packages/core/test/constants-cache.test.ts",
+  outputScales: "evals/output-scales-gate.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
@@ -266,17 +270,18 @@ const CATALOG: Mutant[] = [
     // grant). Killed by the 0.3.2-generation tests, which stub FEE_MANAGER_ROLE() answering.
     id: "roles-generation-probe-dropped",
     file: "packages/core/src/market-registry.ts",
-    find: '      second = (await client.readContract({ address: controller, abi: controllerViewsAbi, functionName: "FEE_MANAGER_ROLE" })) as `0x${string}`;\n      secondRole = "FEE_MANAGER";',
-    replace: '      throw new Error("mutant: generation probe disabled");',
+    find: '    const probed = await probe("FEE_MANAGER_ROLE");\n    if (probed !== undefined) {',
+    replace: '    const probed = await probe("FEE_MANAGER_ROLE");\n    if (false as boolean) {',
     tests: [T.mr],
   },
   {
-    // Swapped role constant: both reads become CONFIGURATOR, so the mixed-state stub reports
-    // POOL_CREATOR: false — the killer asserts the per-role truth in the warning message.
+    // Swapped role fallback: the creator-role read degrades to CONFIGURATOR when the live probe
+    // has no answer, so the mixed-state stub reports POOL_CREATOR: false — the killer asserts
+    // the per-role truth in the warning message.
     id: "roles-gate-creator-arg-swapped",
     file: "packages/core/src/market-registry.ts",
-    find: 'args: [roles.creator ?? POOL_CREATOR_ROLE, adapter]',
-    replace: 'args: [roles.creator ?? CONFIGURATOR_ROLE, adapter]',
+    find: 'const creator = roles.creator ?? (await probe("POOL_CREATOR_ROLE")) ?? POOL_CREATOR_ROLE;',
+    replace: 'const creator = roles.creator ?? (await probe("POOL_CREATOR_ROLE")) ?? CONFIGURATOR_ROLE;',
     tests: [T.mr],
   },
   // Per-site warning emission (maker vs taker disambiguated by indentation, same convention as
@@ -287,11 +292,11 @@ const CATALOG: Mutant[] = [
   // (The first version of these probes had the labels swapped; the survivors exposed it.)
   {
     id: "takerjit-roles-warn-dropped",
-    // Anchored WITH the readAdapterRoles line: the ladder's call (no role-override arg) is what
-    // disambiguates it from prepareJitLegacy's same-indentation roles conditional.
+    // Anchored WITH the readAdapterRoles line: the ladder's call (chainId-only options — the
+    // constants-cache opt-in) is what disambiguates it from prepareJitLegacy's role-override call.
     file: "packages/core/src/handlers/jit.ts",
-    find: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);\n    if (!adapterRoles.granted) {",
-    replace: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);\n    if (false) {",
+    find: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });\n    if (!adapterRoles.granted) {",
+    replace: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });\n    if (false) {",
     tests: [T.venue],
   },
   {
@@ -1226,8 +1231,8 @@ const CATALOG: Mutant[] = [
   {
     id: "jit-fee-cap-boundary",
     file: "packages/core/src/handlers/jit.ts",
-    find: "if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {",
-    replace: "if (swapFee >= 5n * 10n ** 18n || unwindFee >= 5n * 10n ** 18n) {",
+    find: "if (swapFee > cap || unwindFee > cap) {",
+    replace: "if (swapFee >= cap || unwindFee >= cap) {",
     tests: [T.mr],
   },
   {
@@ -3228,8 +3233,8 @@ const CATALOG: Mutant[] = [
     // The value gate's verdict is dropped: past expiries and over-cap fees build anyway.
     id: "creator-value-gate-dropped",
     file: "packages/core/src/handlers/prepare-market.ts",
-    find: "const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, CREATOR_VALUE_SITE);\n  if (valueGate) return valueGate;",
-    replace: "const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, CREATOR_VALUE_SITE);\n  void valueGate;",
+    find: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });\n  if (valueGate) return valueGate;',
+    replace: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });\n  void valueGate;',
     tests: [T.marketCreator],
   },
   {
@@ -3256,9 +3261,63 @@ const CATALOG: Mutant[] = [
     // warns would_revert and scares a signer off a valid tx.
     id: "creator-expiry-bound-exclusive",
     file: "packages/core/src/handlers/jit.ts",
-    find: "if (maxDur === null || expiryTimestamp <= nowSecs + maxDur) return undefined;",
-    replace: "if (maxDur === null || expiryTimestamp < nowSecs + maxDur) return undefined;",
+    find: "if (maxDur === undefined || expiryTimestamp <= nowSecs + maxDur) return undefined;",
+    replace: "if (maxDur === undefined || expiryTimestamp < nowSecs + maxDur) return undefined;",
     tests: [T.marketCreator],
+  },
+  // ── constants cache (2026-08-28): live contract constants, compiled literals as FALLBACKS ──
+  {
+    // TTL comparator inverted: fresh entries are refused and stale ones served — the cache
+    // stops converging on the chain's value and the stale-refusal test dies.
+    id: "const-cache-ttl-inverted",
+    file: "packages/core/src/chain/constants-cache.ts",
+    find: "  if (!e || nowMs - e.ts > CONSTANT_TTL_MS) return undefined;",
+    replace: "  if (!e || nowMs - e.ts <= CONSTANT_TTL_MS) return undefined;",
+    tests: [T.constCache],
+  },
+  {
+    // chainId falls out of the cache key: identical CREATE2 addresses across chains share one
+    // entry, and one chain's constant answers for another — the cross-chain test dies.
+    id: "const-cache-key-chain-dropped",
+    file: "packages/core/src/chain/constants-cache.ts",
+    find: "const keyOf = (chainId: number, address: string, fn: string): string => `${chainId}:${address.toLowerCase()}:${fn}`;",
+    replace: "const keyOf = (chainId: number, address: string, fn: string): string => `${address.toLowerCase()}:${fn}`;",
+    tests: [T.constCache],
+  },
+  {
+    // The live cap stops reaching the gate: a cached 3e18 cap is ignored and the compiled 5e18
+    // silently rules again — the exact replicated-constant drift this module retires.
+    id: "valuegate-live-cap-ignored",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  const cap = opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;",
+    replace: "  const cap = MAX_FEE_PERCENTAGE_FALLBACK;",
+    tests: [T.constCache],
+  },
+  {
+    // resolveFeeCap loses its fallback: a cold cache answers 0 and every fee refuses.
+    id: "feecap-fallback-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? MAX_FEE_PERCENTAGE_FALLBACK;',
+    replace: '  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? 0n;',
+    tests: [T.constCache, T.mr],
+  },
+  // ── output-scales gate (audit A2 structural remediation): unlabeled money outputs fail CI ──
+  {
+    // The maker-order scales block vanishes: approvals[].amount ships unlabeled again — the
+    // exact class the gate exists for; the walker must name it.
+    id: "maker-order-scales-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: '        scales: { makingAmount: "base units of makerAsset (the token\'s own decimals)", takingAmount: "base units of takerAsset", approvalsAmount: "approvals[].amount is base units of that entry\'s own token", unitsTopic: UNITS_TOPIC_REFERENCE },\n',
+    replace: "",
+    tests: [T.outputScales],
+  },
+  {
+    // The authority tx's amount label vanishes — the gate's other real first-run finding.
+    id: "authority-scale-dropped",
+    file: "packages/core/src/handlers/phoenix.ts",
+    find: '      scale: "amount is base units of `token` (its own decimals); the uint256 max sentinel = unlimited",\n',
+    replace: "",
+    tests: [T.outputScales],
   },
 ];
 
@@ -3271,43 +3330,86 @@ if (catalog.length === 0) {
   process.exit(1);
 }
 
+// ── sandbox: mutants run in a disposable COPY of the working tree ───────────────────────────
+// Fixes the one-tree-one-runner footgun (audit A4, structural remediation 2026-08-28): mutants
+// used to be written into REAL source for seconds at a time, so any concurrent vitest/eval/CLI
+// run read mutated code and failed on phantoms (observed 2026-08-27). Now the WORKING TREE is
+// never touched: every tracked + untracked-unignored file is copied into a temp dir, each
+// node_modules is symlinked in (bun's isolated linker resolves through symlinks), and both the
+// baseline and every mutant vitest run execute with cwd = sandbox. A kill mid-mutant strands
+// nothing — cleanup is just deleting the temp dir, and even a SIGKILL leaves only tmp garbage.
+function createSandbox(): string {
+  const root = mkdtempSync(join(tmpdir(), "cork-mutation-"));
+  const ls = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  if (ls.exitCode !== 0) {
+    console.error("git ls-files failed — the sandbox copy needs a git worktree to enumerate the source set");
+    process.exit(1);
+  }
+  for (const rel of ls.stdout.toString("utf8").split("\0")) {
+    if (!rel) continue;
+    let stat;
+    try {
+      stat = lstatSync(rel);
+    } catch {
+      continue; // deleted-but-tracked
+    }
+    mkdirSync(join(root, dirname(rel)), { recursive: true });
+    if (stat.isSymbolicLink()) {
+      symlinkSync(readlinkSync(rel), join(root, rel));
+    } else if (stat.isFile()) {
+      copyFileSync(rel, join(root, rel));
+    }
+    // Anything else (a submodule gitlink is a DIRECTORY in ls-files) is skipped: no catalog
+    // test runs inside a submodule, and its tree is not this repo's source.
+  }
+  // Symlink every node_modules the real tree holds (root + per-package; bun isolated linker).
+  const nmCandidates = ["node_modules", ...readdirSync(".", { withFileTypes: true }).filter((d) => d.isDirectory()).flatMap((d) => {
+    try {
+      return readdirSync(d.name, { withFileTypes: true }).filter((s) => s.isDirectory()).map((s) => join(d.name, s.name, "node_modules"));
+    } catch {
+      return [];
+    }
+  })];
+  for (const nm of nmCandidates) {
+    if (!existsSync(nm) || existsSync(join(root, nm))) continue;
+    mkdirSync(join(root, dirname(nm)), { recursive: true });
+    symlinkSync(resolve(nm), join(root, nm));
+  }
+  return root;
+}
+
+const sandbox = createSandbox();
+const cleanup = (): void => {
+  try {
+    rmSync(sandbox, { recursive: true, force: true });
+  } catch {
+    /* tmp garbage at worst */
+  }
+};
+process.on("exit", cleanup);
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
+console.log(`sandbox: ${sandbox} (the working tree is never mutated — concurrent runs in the tree are safe)`);
+
 async function vitest(tests: string[]): Promise<boolean> {
-  const proc = Bun.spawn(["bun", "x", "vitest", "run", ...tests], { stdout: "ignore", stderr: "ignore" });
+  const proc = Bun.spawn(["bun", "x", "vitest", "run", ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
   return (await proc.exited) === 0;
 }
 
-// Baseline: the union of targeted test files must be green BEFORE mutating.
+// Baseline: the union of targeted test files must be green (IN THE SANDBOX) before mutating —
+// this also proves the sandbox copy itself is runnable, so a copy defect cannot fake "caught".
 const allTests = [...new Set(catalog.flatMap((m) => m.tests))];
 console.log(`baseline: ${allTests.length} test files clean-run…`);
 if (!(await vitest(allTests))) {
-  console.error("BASELINE RED — fix the suite before running mutation probes (a red baseline would fake 'caught').");
+  console.error("BASELINE RED — fix the suite before running mutation probes (a red baseline would fake 'caught'). If the plain tree is green, the sandbox copy is the suspect: a test may depend on something git ls-files does not enumerate.");
   process.exit(1);
 }
-
-// Kill-safety: between the mutant write and the finally-restore, REAL SOURCE sits mutated on
-// disk — an interrupt in that window used to strand it there (observed 2026-08-12: a killed run
-// left failover-disclosure-dropped applied, failing an unrelated suite an hour later, one
-// deleted line with no visible cause). Track the in-flight original and restore it on any exit
-// path. SIGKILL is uncatchable — `git checkout <file>` stays the manual recovery for that case.
-let inFlight: { file: string; original: string } | null = null;
-const restoreInFlight = (): void => {
-  if (inFlight) {
-    try {
-      writeFileSync(inFlight.file, inFlight.original);
-      console.error(`\nrestored ${inFlight.file} (interrupted mid-mutant)`);
-    } catch {
-      console.error(`\nFAILED to restore ${inFlight.file} — run \`git checkout ${inFlight.file}\``);
-    }
-    inFlight = null;
-  }
-};
-process.on("exit", restoreInFlight);
-process.on("SIGINT", () => process.exit(130));
-process.on("SIGTERM", () => process.exit(143));
 
 let survivors = 0;
 let rotted = 0;
 for (const m of catalog) {
+  // Rot checks read the REAL file (the probe aims at the source of record); the mutant is
+  // planted in the sandbox twin.
   const original = readFileSync(m.file, "utf8");
   if (!original.includes(m.find)) {
     console.log(`ROT      ${m.id} — pattern no longer matches ${m.file}; re-aim the probe`);
@@ -3325,8 +3427,8 @@ for (const m of catalog) {
   }
   // split/join, not String.replace with a string arg — replace interprets `$$`/`$&`/$` in the
   // replacement, which would silently corrupt a future mutant quoting such source.
-  inFlight = { file: m.file, original };
-  writeFileSync(m.file, original.split(m.find).join(m.replace));
+  const twin = join(sandbox, m.file);
+  writeFileSync(twin, original.split(m.find).join(m.replace));
   try {
     const passed = await vitest(m.tests);
     if (passed) {
@@ -3336,8 +3438,7 @@ for (const m of catalog) {
       console.log(`caught   ${m.id}`);
     }
   } finally {
-    writeFileSync(m.file, original);
-    inFlight = null;
+    writeFileSync(twin, original);
   }
 }
 

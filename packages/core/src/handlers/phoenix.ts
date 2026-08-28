@@ -88,6 +88,7 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
       spender: a.spender,
       amount: tx.amount,
       unlimited: tx.unlimited,
+      scale: "amount is base units of `token` (its own decimals); the uint256 max sentinel = unlimited",
       spenderRole: spenderRoleOf(a.spender, dep.corkAdapter, PERMIT2_ADDRESS),
       note: "a direct tx from the token owner (an ERC-20 allowance is keyed to msg.sender, so this cannot ride inside a Bundler3 bundle); current allowances are readable via cork_query account-state",
       execution: executionEthTransaction(),

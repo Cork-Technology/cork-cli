@@ -13,7 +13,7 @@ import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../da
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -247,7 +247,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         state: "ok",
         // Advisory echoes OUTSIDE `artifact` (the digest pins signed content alone), decoded
         // from the SIGNED traits like maker-order's: the exclusivity suffix the book will show.
-        data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSender, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
+        data: { ...artifact, approvals, allowedSender: finalizeTraits.allowedSender, scales: { approvalsAmount: "approvals[].amount is base units of that entry's own token", unitsTopic: UNITS_TOPIC_REFERENCE }, signedArtifactDigest: verificationDigest(artifact), callerSigned: true, helperSigned: false },
         chainId,
         source: makerAccountType === "ERC1271" ? "chain" : "config",
         warnings: [
@@ -297,7 +297,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const swapFee = BigInt(jm.swapFeePercentage);
       const unwindFee = BigInt(jm.unwindSwapFeePercentage);
       const expiryTimestamp = BigInt(jm.expiryTimestamp);
-      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
+      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { capWei: await resolveFeeCap(chainId, "adapter") });
       if (valueGate) return valueGate;
       const farFuture = farFutureExpiryWarning(expiryTimestamp, nowSecs);
       if (farFuture) warnings.push(farFuture);
@@ -349,6 +349,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
                 unwindSwapFeePercentage: unwindFee,
                 swapFeePercentage: swapFee,
                 preCalls,
+                chainId,
               });
               const cst = pred.cst;
               if (pred.status === "unavailable") {
@@ -490,6 +491,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // from the input): the 10-byte suffix the book will show, null = any taker.
         allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSender,
         approvals,
+        scales: { makingAmount: "base units of makerAsset (the token's own decimals)", takingAmount: "base units of takerAsset", approvalsAmount: "approvals[].amount is base units of that entry's own token", unitsTopic: UNITS_TOPIC_REFERENCE },
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
         execution: executionMakerOrder(),
@@ -544,7 +546,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const jm = action.jitMarket;
       // Same value-domain gate the LOP JIT builders run (fee cap + future expiry, one place so
       // the boundary rules cannot drift), plus the rollover-specific window rule.
-      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx));
+      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { capWei: await resolveFeeCap(chainId, "adapter") });
       if (gate) return gate;
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
         return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);

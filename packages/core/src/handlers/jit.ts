@@ -3,7 +3,8 @@
 import { type ChainId, Envelope } from "@cork/schemas";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, marketRegistryAbi, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
+import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
@@ -22,13 +23,30 @@ export interface ValueGateSite {
 }
 const JIT_VALUE_SITE: ValueGateSite = { fees: "JIT fee percentages", expiryField: "jitMarket.expiryTimestamp", revertActor: "a fill" };
 
+/** The site's deployed fee ceiling, from the long-TTL constants cache (both the JIT adapter
+ *  and the CorkMarketCreator expose MAX_FEE_PERCENTAGE(), verified live 2026-08-28) — the
+ *  compiled 5e18 answers only while the cache is cold or offline. Config-only resolution, so
+ *  the value gates keep running FIRST and offline; the ladder/create-pool refresh the cache
+ *  once a client exists, converging one call after any redeploy that moves the cap. */
+export async function resolveFeeCap(chainId: ChainId, capSource: "adapter" | "creator"): Promise<bigint> {
+  const { marketRegistry: mr } = await resolveMarketRegistry(chainId);
+  const address = capSource === "creator" ? mr?.marketCreator : mr?.adapter;
+  if (!address) return MAX_FEE_PERCENTAGE_FALLBACK;
+  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? MAX_FEE_PERCENTAGE_FALLBACK;
+}
+
+const capText = (cap: bigint): string => (cap % 10n ** 18n === 0n ? `${cap / 10n ** 18n}e18 (${cap / 10n ** 18n}%)` : `${cap} (1e18 = 1%)`);
+
 /** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction) AND the
  *  create-pool prepare: the protocol's fee cap and strictly-future expiry, in one place so a
  *  boundary rule can never drift between the paths. Returns the gate envelope, or undefined
- *  when the values pass. */
-export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint, site: ValueGateSite = JIT_VALUE_SITE): Envelope | undefined {
-  if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {
-    return unavailable(chainId, "invalid_order_terms", `${site.fees} are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation`, ctx);
+ *  when the values pass. `capWei` comes from resolveFeeCap (the deployed contract's own value
+ *  through the cache); the default is the compiled fallback. */
+export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint, opts: { site?: ValueGateSite; capWei?: bigint } = {}): Envelope | undefined {
+  const site = opts.site ?? JIT_VALUE_SITE;
+  const cap = opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;
+  if (swapFee > cap || unwindFee > cap) {
+    return unavailable(chainId, "invalid_order_terms", `${site.fees} are 1e18 = 1% and capped at ${capText(cap)} — this value would revert at pool creation`, ctx);
   }
   if (expiryTimestamp <= nowSecs) {
     return unavailable(chainId, "invalid_order_terms", `${site.expiryField} ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so ${site.revertActor} would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
@@ -48,17 +66,20 @@ export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint)
 }
 
 /** Best-effort maxExpiryDuration bound check (the creator/adapter/BaseFiller creation rule:
- *  expiry <= now + registry.maxExpiryDuration(), INCLUSIVE). Emits would_revert with the date
- *  the market becomes creatable; silent when the read fails or the bound passes. The bound
- *  applies only to a call that CREATES the pool — callers gate on existence where they know it. */
+ *  expiry <= now + registry.maxExpiryDuration(), INCLUSIVE). The bound is a registry constant,
+ *  so it rides the long-TTL constants cache: a fresh cached value costs no read, a stale one
+ *  refreshes through the client. Emits would_revert with the date the market becomes
+ *  creatable; silent when no value is obtainable or the bound passes. The bound applies only
+ *  to a call that CREATES the pool — callers gate on existence where they know it. */
 export async function maxExpiryBoundWarning(
   client: Parameters<typeof readAdapterRoles>[0],
+  chainId: ChainId,
   registry: `0x${string}`,
   expiryTimestamp: bigint,
   nowSecs: bigint,
 ): Promise<{ code: string; message: string } | undefined> {
-  const maxDur = (await client.readContract({ address: registry, abi: marketRegistryAbi, functionName: "maxExpiryDuration" }).catch(() => null)) as bigint | null;
-  if (maxDur === null || expiryTimestamp <= nowSecs + maxDur) return undefined;
+  const maxDur = cachedContractConstant(chainId, registry, "maxExpiryDuration") ?? (await refreshContractConstant(client, chainId, registry, "maxExpiryDuration"));
+  if (maxDur === undefined || expiryTimestamp <= nowSecs + maxDur) return undefined;
   return { code: "would_revert", message: `expiryTimestamp ${expiryTimestamp} exceeds the registry's creation bound: expiry must be <= now + maxExpiryDuration (${nowSecs} + ${maxDur}) when the pool is CREATED, or the creation reverts ExpiryOutOfRange. The market becomes creatable from ${expiryTimestamp - maxDur}; an already-existing pool is unaffected` };
 }
 
@@ -207,7 +228,10 @@ export async function runJitPreflightLadder(args: {
     if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
       return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
     }
-    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter);
+    // Opportunistic cache refresh for the fee cap the value gate consumed earlier this call
+    // (and will consume next call): a contract constant, one read per TTL.
+    await refreshContractConstant(client, chainId, mr.adapter, "MAX_FEE_PERCENTAGE");
+    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });
     if (!adapterRoles.granted) {
       warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change)${words.rolesTail}` });
     }
@@ -254,7 +278,7 @@ export async function runJitPreflightLadder(args: {
     // maxExpiryDuration when the fill must CREATE the pool — a bound the >5y advisory alone
     // cannot see (2.1.0 reads it at 30 days). An existing pool skips the bound on-chain; the
     // warning says so rather than gating.
-    const expiryBound = await maxExpiryBoundWarning(client, mr.registry, expiryTimestamp, nowSecondsOf(ctx));
+    const expiryBound = await maxExpiryBoundWarning(client, chainId, mr.registry, expiryTimestamp, nowSecondsOf(ctx));
     if (expiryBound) warnings.push(expiryBound);
     return { ...base, constraint, verified: { client, boundController, source, oracle: { ...oracle, address: oracle.address }, derived } };
   } catch (err) {
@@ -320,7 +344,7 @@ export async function buildTakerJitInteraction(args: {
       if (jitDep?.poolManager === undefined) {
         warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
       } else {
-        const pred = await predictShares(client, { adapter: ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls });
+        const pred = await predictShares(client, { adapter: ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId });
         if (pred.status === "unavailable") {
           warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
         }

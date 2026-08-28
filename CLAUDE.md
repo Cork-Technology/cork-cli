@@ -90,8 +90,17 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
   `CORK_RPC_LIVE=1`) · `bun run test:mutation` (scripts/mutation-probes.ts: applies catalogued
   semantic mutants — struct/tuple order, enum ordinals, bit flags, hash inputs, rounding,
   comparators, storage-slot math — FAILS unless the offline suite kills every one; also fails on
-  pattern rot. Surviving mutant: killer test, keep the probe) · `bun run test:prop` (pinned-seed
-  fast-check under experiments/proptest — CI-gated private, loud-skipped in the public port).
+  pattern rot. Surviving mutant: killer test, keep the probe. Since 2026-08-28 mutants run in a
+  DISPOSABLE SANDBOX COPY of the tree — git ls-files copy + symlinked node_modules, vitest cwd'd
+  there — so the working tree is never mutated, concurrent test/eval/CLI runs are safe, and a
+  kill strands only tmp garbage; rot checks still read the REAL files) · `bun run test:prop`
+  (pinned-seed fast-check under experiments/proptest — CI-gated private, loud-skipped in the
+  public port). The offline suite also carries the OUTPUT-scales gate
+  (evals/output-scales-gate.test.ts): every worked example runs against the stub and money-named
+  output fields without a scales/scale/rateScale/unitsTopic label in scope fail the walk (wire-
+  verbatim subtrees — typedData/order/venuePost/intent — and `input`/`examples` echoes are
+  exempt; residual look-alikes join its allowlist WITH a reason) — the output twin of
+  schema-lint's x-units input gate.
 
 ## Install / verify as an MCP server
 
@@ -333,7 +342,15 @@ cached in-process and on disk (`~/.cache/cork-helper-cli/`, override `CORK_RPC_C
 temp+rename atomic). Full-decentralized scans keep INCREMENTAL CURSORS in the same dir
 (`scan-cache.json`, override `CORK_SCAN_CACHE_FILE`): decoded pre-filter rows + a watermark per
 scan identity, ~200-block reorg overlap re-scanned each call, partial backfills never written
-back, oversized row sets never cached — the cache may only make a read cheaper, never change it. Automatic clients fail over **in-call** (a transport failure feeds the
+back, oversized row sets never cached — the cache may only make a read cheaper, never change it.
+CONTRACT CONSTANTS (MAX_FEE_PERCENTAGE, maxExpiryDuration, controller role hashes) ride a
+7-day-TTL cache in the same dir (`contract-constants.json`, override `CORK_CONST_CACHE_FILE`;
+`packages/core/src/chain/constants-cache.ts`, INTERNAL): sync cache-read with the compiled
+literal as FALLBACK ONLY, async best-effort refresh where a client already exists — value gates
+keep running first and offline, and a redeploy that moves a constant converges one call later
+instead of leaving a source literal silently authoritative (2026-08-28; the C12
+replicated-verdict class applied to constants). Under vitest the cache is a NO-OP unless a test
+opts in via `CORK_CONST_CACHE_FILE` (hermetic suites, no ~/.cache writes). Automatic clients fail over **in-call** (a transport failure feeds the
 breaker, re-resolves once, retries; `provenance.rpc` discloses the endpoint that actually served);
 explicit URLs never fail over. Kill-switch: `CORK_RPC_NO_FAILOVER=1`. Concurrent resolutions are
 single-flighted. The breaker is ONE shared module (`packages/core/src/breaker.ts`,
@@ -516,8 +533,8 @@ surface; eight domain subpaths (`/math` `/orders` `/registry` `/chain` `/bundle`
 `/indexer` `/config`) map 1:1 to barrels in `packages/core/src/exports/` — package.json exports
 map ⟷ barrel files ⟷ tsconfig `paths` ⟷ vitest alias must stay in sync (the parity tests in
 `packages/core/test/api-surface.test.ts` pin all pairings). `breaker.ts`/`atomic-file.ts`/
-`fetch-timeout.ts`/`scan-cache.ts`/`handlers/*` are INTERNAL — never re-export them; their tests
-import relatively. The whole public surface (type exports included) is fixture-pinned by the
+`fetch-timeout.ts`/`scan-cache.ts`/`chain/constants-cache.ts`/`handlers/*` are INTERNAL — never
+re-export them; their tests import relatively. The whole public surface (type exports included) is fixture-pinned by the
 API-surface drift gate — an intended change needs a CHANGELOG note + `UPDATE_API_SURFACE=1`
 regen, mirroring the MCP surface-drift workflow. `bun run verify:publish` = build + layout gate +
 `publint --strict` + `attw --profile esm-only` (all must stay green; node10/CJS are deliberately

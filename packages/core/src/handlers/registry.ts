@@ -654,7 +654,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
       if (!oracle.deployed) {
         preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });
       }
-      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls });
+      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls, chainId });
     }
     const extra: Array<{ code: string; message: string }> = [];
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the pool id, oracle, and constraint above are still valid" });

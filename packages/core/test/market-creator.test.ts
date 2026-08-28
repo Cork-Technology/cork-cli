@@ -119,12 +119,12 @@ describe("expiry-bound helpers (the registry's maxExpiryDuration is REAL — 30 
 
   it("maxExpiryBoundWarning: outside the INCLUSIVE bound warns with the creatable-from date; at the bound stays silent; a failed read degrades to silence", async () => {
     const client = (dur: bigint | Error) => ({ readContract: async () => { if (dur instanceof Error) throw dur; return dur; } }) as never;
-    const over = await maxExpiryBoundWarning(client(2_592_000n), REG, 1_790_000_000n + 2_592_001n, 1_790_000_000n);
+    const over = await maxExpiryBoundWarning(client(2_592_000n), 42161, REG, 1_790_000_000n + 2_592_001n, 1_790_000_000n);
     expect(over?.code).toBe("would_revert");
     expect(over!.message).toContain("ExpiryOutOfRange");
     expect(over!.message).toContain(`${1_790_000_000n + 2_592_001n - 2_592_000n}`);
-    expect(await maxExpiryBoundWarning(client(2_592_000n), REG, 1_790_000_000n + 2_592_000n, 1_790_000_000n)).toBeUndefined();
-    expect(await maxExpiryBoundWarning(client(new Error("boom")), REG, 9_999_999_999n, 1n)).toBeUndefined();
+    expect(await maxExpiryBoundWarning(client(2_592_000n), 42161, REG, 1_790_000_000n + 2_592_000n, 1_790_000_000n)).toBeUndefined();
+    expect(await maxExpiryBoundWarning(client(new Error("boom")), 42161, REG, 9_999_999_999n, 1n)).toBeUndefined();
   });
 });
 

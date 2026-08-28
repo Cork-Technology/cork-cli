@@ -18,6 +18,7 @@
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex, zeroAddress } from "viem";
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
+import { cachedContractConstantBytes32, refreshContractConstant } from "./chain/constants-cache.ts";
 import type { Market } from "./types.ts";
 
 const ZERO_ADDRESS = zeroAddress;
@@ -140,6 +141,7 @@ export const accessControlAbi = parseAbi([
 export const controllerViewsAbi = parseAbi([
   "function CORK_POOL_MANAGER() view returns (address)",
   "function FEE_MANAGER_ROLE() view returns (bytes32)",
+  "function POOL_CREATOR_ROLE() view returns (bytes32)",
 ]);
 
 /** DefaultCorkController.createNewPool — used in state-override simulations to predict the cST
@@ -150,9 +152,19 @@ export const controllerCreatePoolAbi = parseAbi([
   "function createNewPool(PoolCreationParams params)",
 ]);
 
-/** Controller role hashes (keccak256 of the role name; declared in DefaultCorkController). */
+/** Controller role hashes (keccak256 of the role name; declared in DefaultCorkController).
+ *  FALLBACKS: the pre-flights probe the controller's own role views (long-TTL cached — the
+ *  constants-cache module) and these compiled values answer only when the chain never has.
+ *  CONFIGURATOR is the exception — pre-0.3.2 controllers expose no view for it, which is why
+ *  it exists at all. */
 export const POOL_CREATOR_ROLE = "0x4066b03ab177190abcd4de6384e71f7a60f56b879537b65d43a0523ade6cfe52" as const;
 export const CONFIGURATOR_ROLE = "0x3b49a237fe2d18fa4d9642b8a0e065923cceb71b797783b619a030a61d848bf0" as const;
+
+/** The protocol fee ceiling, 1e18 = 1% — the adapter's and the creator's MAX_FEE_PERCENTAGE
+ *  restated as the offline fallback. Online, the value gates read the deployed contract's own
+ *  view through the long-TTL constants cache (resolveFeeCap in handlers/jit.ts), so a redeploy
+ *  that moves the cap cannot leave this literal silently authoritative. */
+export const MAX_FEE_PERCENTAGE_FALLBACK = 5n * 10n ** 18n;
 
 /** Controller-role pre-flight shared by every JIT prepare site (maker, taker-fill, legacy).
  *  The granted/missing decision lives in exactly this one comparator so a single mutation
@@ -163,26 +175,44 @@ export async function readAdapterRoles(
   client: PublicClient,
   controller: `0x${string}`,
   adapter: `0x${string}`,
-  roles: { creator?: `0x${string}`; second?: `0x${string}`; secondLabel?: string } = {},
+  roles: { creator?: `0x${string}`; second?: `0x${string}`; secondLabel?: string; chainId?: number } = {},
 ): Promise<{ hasCreator: boolean; hasSecond: boolean; secondRole: string; granted: boolean }> {
   // The controller's own surface decides which SECOND role the adapter needs (chain outranks
   // config): the 0.3.2-generation controller splits fee authority into FEE_MANAGER_ROLE — a
   // public constant view that answers, and the role the rollout grants alongside POOL_CREATOR
   // — while earlier controllers gate fees behind CONFIGURATOR_ROLE. The probed value is used
   // as the role id itself, so even a renamed hash follows the deployed truth. An explicit
-  // roles.second override (the pre-2.1.0 legacy path) skips the probe.
+  // roles.second override (the pre-2.1.0 legacy path) skips the probe. Both probes run through
+  // the long-TTL constants cache when `roles.chainId` is given (a probed hash is a contract
+  // constant — one read per TTL, and the COMPILED hashes below become pure fallbacks); without
+  // a chainId the probes read live each call, exactly the pre-cache behavior.
+  const probe = async (fn: "POOL_CREATOR_ROLE" | "FEE_MANAGER_ROLE"): Promise<`0x${string}` | undefined> => {
+    if (roles.chainId !== undefined) {
+      const cached = cachedContractConstantBytes32(roles.chainId, controller, fn);
+      if (cached !== undefined) return cached;
+      const fresh = await refreshContractConstant(client, roles.chainId, controller, fn, "bytes32");
+      return fresh === undefined ? undefined : (`0x${fresh.toString(16).padStart(64, "0")}` as `0x${string}`);
+    }
+    try {
+      return (await client.readContract({ address: controller, abi: controllerViewsAbi, functionName: fn })) as `0x${string}`;
+    } catch {
+      return undefined;
+    }
+  };
   let second = roles.second;
   let secondRole = roles.secondLabel ?? "CONFIGURATOR";
   if (second === undefined) {
-    try {
-      second = (await client.readContract({ address: controller, abi: controllerViewsAbi, functionName: "FEE_MANAGER_ROLE" })) as `0x${string}`;
+    const probed = await probe("FEE_MANAGER_ROLE");
+    if (probed !== undefined) {
+      second = probed;
       secondRole = "FEE_MANAGER";
-    } catch {
+    } else {
       second = CONFIGURATOR_ROLE;
     }
   }
+  const creator = roles.creator ?? (await probe("POOL_CREATOR_ROLE")) ?? POOL_CREATOR_ROLE;
   const [hasCreator, hasSecond] = await Promise.all([
-    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [roles.creator ?? POOL_CREATOR_ROLE, adapter] }),
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [creator, adapter] }),
     client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [second, adapter] }),
   ]);
   return { hasCreator, hasSecond, secondRole, granted: hasCreator && hasSecond };
@@ -521,6 +551,10 @@ export async function predictShares(
      *  registry.deploy / deployFixedRateOracle the fill itself performs when the market's oracle
      *  is not deployed yet. Mirrors the fill exactly, so prediction works pre-deploy. */
     preCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[];
+    /** Enables the constants-cache lookup of the controller's live POOL_CREATOR_ROLE hash for
+     *  the state-override grant (cache-read only — no extra RPC on this hot path); omitted =
+     *  the compiled fallback, the pre-cache behavior. */
+    chainId?: number;
   },
 ): Promise<PredictSharesResult> {
   // 0. Generation consistency: shares must be read from the pool manager THIS controller
@@ -554,9 +588,12 @@ export async function predictShares(
   }
   // 2. Simulate the creation the fill would perform, granting the simulating account (the
   //    adapter) POOL_CREATOR_ROLE via state override — role-grant-independent, so the
-  //    prediction works both before and after governance grants the real roles.
+  //    prediction works both before and after governance grants the real roles. The role hash
+  //    prefers the controller's own cached live value (warmed by readAdapterRoles in the same
+  //    prepare); the compiled fallback covers a cold cache.
   try {
     const pre = args.preCalls ?? [];
+    const creatorRole = (args.chainId !== undefined ? cachedContractConstantBytes32(args.chainId, args.controller, "POOL_CREATOR_ROLE") : undefined) ?? POOL_CREATOR_ROLE;
     const createData = buildCreatePoolCall(args.market, args.unwindSwapFeePercentage ?? 0n, args.swapFeePercentage ?? 0n);
     const simulated = await client.simulateCalls({
       account: args.adapter,
@@ -566,7 +603,7 @@ export async function predictShares(
         { to: poolManager, data: buildSharesCall(args.poolId) },
       ],
       stateOverrides: [
-        { address: args.controller, stateDiff: [{ slot: roleMemberSlot(POOL_CREATOR_ROLE, args.adapter), value: toHex(1n, { size: 32 }) }] },
+        { address: args.controller, stateDiff: [{ slot: roleMemberSlot(creatorRole, args.adapter), value: toHex(1n, { size: 32 }) }] },
       ],
     });
     const create = simulated.results[pre.length];

@@ -5,7 +5,8 @@ import { buildCreatorCreatePoolCall, buildDeployFixedRateOracleCall, buildDeploy
 import { resolveMarketRegistry } from "../config-remote.ts";
 import { approvedImplementationGuard, CREATE_POOL_IMPLEMENTATION_ROLES, PREPARE_MARKET_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
-import { jitValueGate, maxExpiryBoundWarning, type ValueGateSite } from "./jit.ts";
+import { jitValueGate, maxExpiryBoundWarning, resolveFeeCap, type ValueGateSite } from "./jit.ts";
+import { refreshContractConstant } from "../chain/constants-cache.ts";
 import { probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
@@ -171,9 +172,9 @@ async function handleCreatePool(
   const unwindFee = BigInt(a.unwindSwapFeePercentage);
   const expiryTimestamp = BigInt(a.expiryTimestamp);
   const nowSecs = nowSecondsOf(ctx);
-  // Value-domain rules (the creator restates the adapter's bounds: fee cap 5e18, future
-  // expiry) — the SHARED gate, creator-worded.
-  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, CREATOR_VALUE_SITE);
+  // Value-domain rules (the creator restates the adapter's bounds: the MAX_FEE_PERCENTAGE cap,
+  // future expiry) — the SHARED gate, creator-worded, cap from the creator's own cached view.
+  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });
   if (valueGate) return valueGate;
   let constraint: ResolvedConstraint | undefined = a.constraint
     ? { rateMin: BigInt(a.constraint.rateMin), rateMax: BigInt(a.constraint.rateMax), rateChangePerDayMax: BigInt(a.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(a.constraint.rateChangeCapacityMax) }
@@ -227,7 +228,10 @@ async function handleCreatePool(
         ctx,
       });
     }
-    const creatorRoles = await readAdapterRoles(client, boundController, creator);
+    // Opportunistic constants-cache refresh (fee cap consumed by the value gate above; one
+    // read per TTL) — beside the role probes readAdapterRoles caches itself.
+    await refreshContractConstant(client, chainId, creator, "MAX_FEE_PERCENTAGE");
+    const creatorRoles = await readAdapterRoles(client, boundController, creator, { chainId });
     if (!creatorRoles.granted) {
       warnings.push({ code: "roles_not_granted", message: `the market creator is missing controller roles (POOL_CREATOR: ${creatorRoles.hasCreator}, ${creatorRoles.secondRole}: ${creatorRoles.hasSecond}) — sending this tx will revert until both are granted (a governance action, not a code change)` });
     }
@@ -275,7 +279,7 @@ async function handleCreatePool(
       if (!oracle.deployed) {
         preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(a.collateralAsset, a.referenceAsset, oracle.mode ?? "price") });
       }
-      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls });
+      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls, chainId });
     }
     if (shares.status === "unavailable") {
       warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the calldata and pool id above are still exact; the tx itself returns (poolId, cst, cpt)" });
@@ -285,7 +289,7 @@ async function handleCreatePool(
     } else {
       // Creation-only rules, checked only when this tx would actually CREATE: the registry's
       // expiry bound (INCLUSIVE) and a live oracle currently reporting a zero rate.
-      const bound = await maxExpiryBoundWarning(client, mr.registry, expiryTimestamp, nowSecs);
+      const bound = await maxExpiryBoundWarning(client, chainId, mr.registry, expiryTimestamp, nowSecs);
       if (bound) warnings.push(bound);
       if (oracle.deployed && oracle.rate === 0n) {
         warnings.push({ code: "would_revert", message: "the rate oracle reports a ZERO rate right now — creating this pool would revert RateUnavailable (a pool is permanent; a dead rate source must not be baked in)" });
