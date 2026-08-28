@@ -6,11 +6,11 @@ We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surfac
 **minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
 schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
 
-## [0.5.0-rc.1] — 2026-08-27
+## [0.5.0-rc.2] — 2026-08-28
 
-**This is the first candidate for v0.5.0, a breaking minor (policy R10/R11: the diff decides the
-bump).** The `pre-funded` value is removed from `cork_prepare_phoenix.fundingMode`, a covered
-input schema; the SDK changes below reshape covered exports. Checklist A.2 applies.
+**Candidate for v0.5.0, a breaking minor (policy R10/R11: the diff decides the bump).** The
+`pre-funded` value is removed from `cork_prepare_phoenix.fundingMode`, a covered input schema;
+the SDK changes below reshape covered exports. Checklist A.2 applies.
 
 ### Breaking
 
