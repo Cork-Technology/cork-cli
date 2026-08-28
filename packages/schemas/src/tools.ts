@@ -102,6 +102,10 @@ const PremiumPerShareRate = TokenAmount.describe(
 // invisible). One const per field closes the omission class structurally.
 const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 });
 const JitUnwindSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only").meta({ "x-units": X_UNITS.pct18 });
+// The creator twins: same unit story, same cap, but a direct tx creates the pool — "this fill"
+// would be the wrong actor. Kept beside the JIT pair so the four stay in one frame.
+const CreatorSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this call creates the pool").meta({ "x-units": X_UNITS.pct18 });
+const CreatorUnwindSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18) — creation only").meta({ "x-units": X_UNITS.pct18 });
 // Rollover teaching strings shared between the prepare (rollover-intent) and submit
 // (rollover-order) shapes — three of them were maintained as identical copies at both sites.
 const RolloverOrderSizeWire = TokenAmount.describe("src cST shares to roll — cST is always 18 decimals");
@@ -599,6 +603,21 @@ export const PrepareMarketInput = z.object({
       rate: UintStr.describe("the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts").meta({ "x-units": X_UNITS.wad }),
     })
       .describe("unsigned MarketRegistry.deployFixedRateOracle(rate) tx: create the fixed-rate oracle for a RATE (no pair — a fixed rate is not a fact about two assets). Permissionless and IDEMPOTENT; this is the oracle a FIXED-recipe JIT order's rateOverride will produce"),
+    A("create-pool", {
+      collateralAsset: Address,
+      referenceAsset: Address,
+      expiryTimestamp: UnixSeconds.describe("pool expiry — must be in the future, and (when this call CREATES the pool) no later than now + the registry's maxExpiryDuration"),
+      recipe: Address.optional().describe("the approved IMarketRecipe CONTRACT ADDRESS — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used"),
+      mode: z.string().min(1).optional().describe("DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"),
+      rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the creator (UnexpectedRateOverride), not ignored").meta({ "x-units": X_UNITS.wad }),
+      additionalData: Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x"),
+      constraint: RateConstraintWire
+        .optional()
+        .describe("the four rate limits the pool is created with (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"),
+      swapFeePercentage: CreatorSwapFeeWire,
+      unwindSwapFeePercentage: CreatorUnwindSwapFeeWire,
+    })
+      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
   ]),
   format: Format,
 });

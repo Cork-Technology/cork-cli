@@ -136,9 +136,9 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     contract:
       "build-and-warn guards on predicted identity (pool id, oracle, shares, roles): the artifact IS returned; a member says which prediction is unverified, would revert at fill time, or needs re-signing — implementation_not_approved escalates the same posture to trusted-role code drift",
     codes: [
-      "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "oracle_not_deployable",
-      "oracle_not_deployed", "stale_share_prediction", "share_prediction_unavailable", "rate_drift_notice",
-      "constraint_window_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
+      "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
+      "oracle_not_deployable", "oracle_not_deployed", "stale_share_prediction", "share_prediction_unavailable",
+      "rate_drift_notice", "constraint_window_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
     ],
   },
   {

@@ -88,6 +88,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_prepare_market: [
     { title: "Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum)", input: { chainId: 42161, clientRequestId: "demo-market-0001", action: { type: "deploy-oracle", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", mode: "price" } } },
     { title: "Unsigned fixed-rate-oracle deploy tx (keyed on the RATE, no pair; the oracle a FIXED order's rateOverride produces)", input: { chainId: 42161, clientRequestId: "demo-market-0002", action: { type: "deploy-fixed-oracle", rate: "1000000000000000000" } } },
+    { title: "Unsigned CorkMarketCreator.createNewPool tx — create a JIT pool AHEAD of the fill (the smart-account path around EOA-only ERC-2612 permits: create, cst.approve, fill with no permits)", input: { chainId: 8453, clientRequestId: "demo-market-0003", action: { type: "create-pool", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1790000000", recipe: "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55", constraint: { rateMin: "900000000000000000", rateMax: "1100000000000000000", rateChangePerDayMax: "10000000000000000", rateChangeCapacityMax: "100000000000000000" } } } },
   ],
   cork_track: [
     { title: "Digest-pin an artifact you were handed", input: { mode: "verify", subject: { kind: "artifact", artifact: { any: "json" } } } },
@@ -185,8 +186,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
   },
   cork_prepare_market: {
     status: "activated",
-    reason: "MarketRegistry 2.1.0 contracts 0.3.3 verified on-chain 2026-08-10 (Arbitrum One + Base, identical addresses — the CREATE2-collision-fix redeploy): deploy-oracle builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate)",
-    variants: { "deploy-oracle": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" } },
+    reason: "MarketRegistry 2.1.0 contracts 0.3.3 verified on-chain 2026-08-10 (Arbitrum One + Base, identical addresses — the CREATE2-collision-fix redeploy): deploy-oracle builds the permissionless idempotent registry.deploy(ca, ref, mode) tx; deploy-fixed-oracle builds deployFixedRateOracle(rate); create-pool builds CorkMarketCreator.createNewPool(params) (cork-periphery 0.1.0, bindings + POOL_CREATOR/FEE_MANAGER roles verified on-chain 2026-08-28 on both chains)",
+    variants: { "deploy-oracle": { status: "activated" }, "deploy-fixed-oracle": { status: "activated" }, "create-pool": { status: "activated" } },
   },
   cork_track: {
     status: "activated",

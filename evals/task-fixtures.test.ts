@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { stubContext } from "./stub.ts";
+import { CST, stubContext } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   DEMO_RECEIPT,
@@ -162,6 +162,23 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "oracle_already_deployed")).toBe(true);
+  });
+
+  it("create-pool-smart-account: the creator tx builds ok with a derived pool id, predicted shares, and the cst.approve follow-up in its note", async () => {
+    const env = await runTool(
+      "cork_prepare_market",
+      { chainId: 42161, clientRequestId: "eval-create-pool-0001", action: { type: "create-pool", collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1791000000", recipe: LIQUIDITY_RECIPE } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { pool?: { poolId?: string; exists?: boolean }; shares?: { corkSwapToken?: string | null }; note?: string; calldata?: string };
+    expect(d.pool?.poolId).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(d.pool?.exists).toBe(false);
+    expect(d.shares?.corkSwapToken).toBe(CST); // the stub's shares simulation, same as derive-cork-pool
+    expect(d.note).toContain("cst.approve"); // the answer regex's ground truth (/approv/i)
+    expect(d.calldata?.startsWith("0xb6747077")).toBe(true); // createNewPool selector
+    // Inside the 30-day creation bound the stub serves — no would_revert.
+    expect(env.warnings.map((w) => w.code)).not.toContain("would_revert");
   });
 
   it("the stub never fingerprints an implementation role as an EMPTY account — a prepare carries no implementation_not_approved", async () => {

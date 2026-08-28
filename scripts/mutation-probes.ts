@@ -73,6 +73,7 @@ const T = {
   eventAttribution: "packages/core/test/event-attribution.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
+  marketCreator: "packages/core/test/market-creator.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
   approvals: "packages/core/test/order-approvals.test.ts",
   evalGrading: "evals/grading.test.ts",
@@ -3175,6 +3176,89 @@ const CATALOG: Mutant[] = [
     find: '    for (const sig of ["SIGTERM", "SIGINT"] as const) {',
     replace: '    for (const sig of ["SIGUSR2"] as const) {',
     tests: [T.mcpSignals],
+  },
+  // ── CorkMarketCreator create-pool (2026-08-28): direct pool creation ahead of a fill ───────
+  {
+    // MarketParams constraint tuple order flipped: the calldata encodes rateMax where the
+    // contract reads rateMin — a pool created with inverted limits. Killed by the cast golden
+    // vector (distinct 0.9e18/1.1e18 values) and the independently-authored components decode.
+    id: "creator-params-constraint-order",
+    file: "packages/core/src/market-registry.ts",
+    find: "struct CreatorRateConstraint { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+    replace: "struct CreatorRateConstraint { uint256 rateMax; uint256 rateMin; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+    tests: [T.marketCreator],
+  },
+  {
+    // Fee fields swapped in the struct declaration: the swap fee lands in the unwind slot.
+    // Invisible to the golden vector (0/0 fees) — killed by the distinct-fees word-layout test.
+    id: "creator-params-fee-order",
+    file: "packages/core/src/market-registry.ts",
+    find: "bytes additionalData; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+    replace: "bytes additionalData; uint256 unwindSwapFeePercentage; uint256 swapFeePercentage; }",
+    tests: [T.marketCreator],
+  },
+  {
+    // The shared coherence comparator inverts for FIXED recipes: a zero rateOverride passes and
+    // the tx reverts in the FixedRateOracle constructor instead of refusing with teaching.
+    id: "creator-coherence-fixed-inverted",
+    file: "packages/core/src/market-registry.ts",
+    find: 'if (source === "fixed") return rateOverride === 0n ? "needs-rate" : "ok";',
+    replace: 'if (source === "fixed") return rateOverride !== 0n ? "needs-rate" : "ok";',
+    tests: [T.marketCreator],
+  },
+  {
+    // The creator's binding check stops comparing the registry: a cross-generation creator
+    // (or a config typo) builds bytes against contracts the pre-flights never proved.
+    id: "creator-binding-comparator-dropped",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase())) {",
+    replace: "if (false) {",
+    tests: [T.marketCreator],
+  },
+  {
+    // Existence inverted: an existing pool loses its idempotent-no-op disclosure and gains the
+    // creation-only would_revert checks it must not run (the bound applies only at creation).
+    id: "creator-pool-exists-inverted",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "    if (shares.exists) {\n      warnings.push({ code: \"pool_already_exists\",",
+    replace: "    if (!shares.exists) {\n      warnings.push({ code: \"pool_already_exists\",",
+    tests: [T.marketCreator],
+  },
+  {
+    // The value gate's verdict is dropped: past expiries and over-cap fees build anyway.
+    id: "creator-value-gate-dropped",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, CREATOR_VALUE_SITE);\n  if (valueGate) return valueGate;",
+    replace: "const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, CREATOR_VALUE_SITE);\n  void valueGate;",
+    tests: [T.marketCreator],
+  },
+  {
+    // The guard scope loses the creator role: the one contract this tx executes goes
+    // unfingerprinted while the registry still is — scoping working backwards.
+    id: "creator-impl-role-scope-dropped",
+    file: "packages/core/src/implementations.ts",
+    find: 'export const CREATE_POOL_IMPLEMENTATION_ROLES = ["marketCreator", "marketRegistry"] as const satisfies readonly ImplementationRole[];',
+    replace: 'export const CREATE_POOL_IMPLEMENTATION_ROLES = ["marketRegistry"] as const satisfies readonly ImplementationRole[];',
+    tests: [T.marketCreator, T.implTrust],
+  },
+  {
+    // Decode role swap: a createNewPool leg verifies against the REGISTRY address, so the real
+    // creator reads mismatch and a registry-addressed fake reads trusted.
+    id: "decode-market-creator-role-swapped",
+    file: "packages/core/src/bundle/decode.ts",
+    find: 'const role = CREATOR_FUNCTIONS.has(functionName) ? "marketCreator" : "marketRegistry";',
+    replace: 'const role = CREATOR_FUNCTIONS.has(functionName) ? "marketRegistry" : "marketCreator";',
+    tests: [T.marketCreator],
+  },
+  {
+    // The creation bound turns exclusive: an expiry exactly AT now + maxExpiryDuration — which
+    // the contract accepts (INCLUSIVE, "the longest permitted market must stay creatable") —
+    // warns would_revert and scares a signer off a valid tx.
+    id: "creator-expiry-bound-exclusive",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "if (maxDur === null || expiryTimestamp <= nowSecs + maxDur) return undefined;",
+    replace: "if (maxDur === null || expiryTimestamp < nowSecs + maxDur) return undefined;",
+    tests: [T.marketCreator],
   },
 ];
 

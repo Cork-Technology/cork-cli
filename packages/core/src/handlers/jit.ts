@@ -3,7 +3,7 @@
 import { type ChainId, Envelope } from "@cork/schemas";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, type PermitParams, predictShares, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, marketRegistryAbi, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
@@ -12,17 +12,54 @@ import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReas
 import { resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
-/** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction): the
- *  protocol's fee cap and strictly-future expiry, in one place so a boundary rule can never
- *  drift between the two paths. Returns the gate envelope, or undefined when the values pass. */
-export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint): Envelope | undefined {
+/** Site-specific WORDS for the shared value gate: the boundary rules are identical wherever a
+ *  pool gets created (JIT hook or the CorkMarketCreator tx); only the field name and the thing
+ *  that reverts differ per surface. */
+export interface ValueGateSite {
+  fees: string;
+  expiryField: string;
+  revertActor: string;
+}
+const JIT_VALUE_SITE: ValueGateSite = { fees: "JIT fee percentages", expiryField: "jitMarket.expiryTimestamp", revertActor: "a fill" };
+
+/** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction) AND the
+ *  create-pool prepare: the protocol's fee cap and strictly-future expiry, in one place so a
+ *  boundary rule can never drift between the paths. Returns the gate envelope, or undefined
+ *  when the values pass. */
+export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint, site: ValueGateSite = JIT_VALUE_SITE): Envelope | undefined {
   if (swapFee > 5n * 10n ** 18n || unwindFee > 5n * 10n ** 18n) {
-    return unavailable(chainId, "invalid_order_terms", "JIT fee percentages are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation", ctx);
+    return unavailable(chainId, "invalid_order_terms", `${site.fees} are 1e18 = 1% and capped at 5e18 (5%) — this value would revert at pool creation`, ctx);
   }
   if (expiryTimestamp <= nowSecs) {
-    return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so a fill would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
+    return unavailable(chainId, "invalid_order_terms", `${site.expiryField} ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so ${site.revertActor} would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
   }
   return undefined;
+}
+
+/** The >5-years advisory, shared by the maker and rollover jitMarket sites. The old copies
+ *  claimed "the chain enforces NO upper bound" — false since the 2.1.0 registry: pool CREATION
+ *  is bounded by registry.maxExpiryDuration (30 days at last read), enforced by the JIT
+ *  adapter, the rollover BaseFiller, and the CorkMarketCreator alike. A far expiry is not
+ *  refused here (an EXISTING pool skips the bound), but the claim had to go. */
+export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint): { code: string; message: string } | undefined {
+  const FIVE_YEARS = 5n * 31_557_600n;
+  if (expiryTimestamp <= nowSecs + FIVE_YEARS) return undefined;
+  return { code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and pool CREATION is bounded by the registry's maxExpiryDuration, so a fill that must create this pool reverts ExpiryOutOfRange until that window reaches the expiry; double-check this is intended` };
+}
+
+/** Best-effort maxExpiryDuration bound check (the creator/adapter/BaseFiller creation rule:
+ *  expiry <= now + registry.maxExpiryDuration(), INCLUSIVE). Emits would_revert with the date
+ *  the market becomes creatable; silent when the read fails or the bound passes. The bound
+ *  applies only to a call that CREATES the pool — callers gate on existence where they know it. */
+export async function maxExpiryBoundWarning(
+  client: Parameters<typeof readAdapterRoles>[0],
+  registry: `0x${string}`,
+  expiryTimestamp: bigint,
+  nowSecs: bigint,
+): Promise<{ code: string; message: string } | undefined> {
+  const maxDur = (await client.readContract({ address: registry, abi: marketRegistryAbi, functionName: "maxExpiryDuration" }).catch(() => null)) as bigint | null;
+  if (maxDur === null || expiryTimestamp <= nowSecs + maxDur) return undefined;
+  return { code: "would_revert", message: `expiryTimestamp ${expiryTimestamp} exceeds the registry's creation bound: expiry must be <= now + maxExpiryDuration (${nowSecs} + ${maxDur}) when the pool is CREATED, or the creation reverts ExpiryOutOfRange. The market becomes creatable from ${expiryTimestamp - maxDur}; an already-existing pool is unaffected` };
 }
 
 /** Decorates a jit_side_mismatch with the WHY, when knowable: an order side that already hosts
@@ -181,11 +218,14 @@ export async function runJitPreflightLadder(args: {
     // rateOverride ↔ source coherence — checked BEFORE constraint resolution so the caller
     // gets the real rule, not a downstream recipe revert: the fill REJECTS a non-zero
     // override on a price/nav recipe (UnexpectedRateOverride), and a fixed fill deploys
-    // FixedRateOracle(rateOverride), whose constructor reverts on 0.
-    if (source === "fixed" && rateOverride === 0n) {
+    // FixedRateOracle(rateOverride), whose constructor reverts on 0. The comparator is the
+    // shared rateOverrideCoherence (one rule, per-site words — the create-pool prepare gates
+    // on the same predicate).
+    const coherence = rateOverrideCoherence(source, rateOverride);
+    if (coherence === "needs-rate") {
       return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is a FIXED-rate recipe: the order must carry rateOverride (the rate its FixedRateOracle is deployed at) — zero reverts the fill in the oracle constructor`, ctx) };
     }
-    if (source !== "fixed" && rateOverride !== 0n) {
+    if (coherence === "must-be-zero") {
       return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx) };
     }
     if (!constraint) {
@@ -210,6 +250,12 @@ export async function runJitPreflightLadder(args: {
       warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
     }
     const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
+    // Creation-bound pre-flight (best-effort): the adapter enforces the registry's
+    // maxExpiryDuration when the fill must CREATE the pool — a bound the >5y advisory alone
+    // cannot see (2.1.0 reads it at 30 days). An existing pool skips the bound on-chain; the
+    // warning says so rather than gating.
+    const expiryBound = await maxExpiryBoundWarning(client, mr.registry, expiryTimestamp, nowSecondsOf(ctx));
+    if (expiryBound) warnings.push(expiryBound);
     return { ...base, constraint, verified: { client, boundController, source, oracle: { ...oracle, address: oracle.address }, derived } };
   } catch (err) {
     if (!constraint) {

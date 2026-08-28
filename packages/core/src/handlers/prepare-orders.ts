@@ -13,7 +13,7 @@ import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../da
 import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
 import { resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -299,10 +299,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const expiryTimestamp = BigInt(jm.expiryTimestamp);
       const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);
       if (valueGate) return valueGate;
-      const FIVE_YEARS = 5n * 31_557_600n;
-      if (expiryTimestamp > nowSecs + FIVE_YEARS) {
-        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
-      }
+      const farFuture = farFutureExpiryWarning(expiryTimestamp, nowSecs);
+      if (farFuture) warnings.push(farFuture);
 
       // DEPRECATED generation: mode-string extraData against the old adapter, behind the gate.
       if (jm.legacy) {
@@ -551,10 +549,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
         return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
       }
-      const FIVE_YEARS = 5n * 31_557_600n;
-      if (BigInt(jm.expiryTimestamp) > nowSecondsOf(ctx) + FIVE_YEARS) {
-        warnings.push({ code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${jm.expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and the chain enforces NO upper bound; double-check this is intended` });
-      }
+      const farFuture = farFutureExpiryWarning(BigInt(jm.expiryTimestamp), nowSecondsOf(ctx));
+      if (farFuture) warnings.push(farFuture);
       // Best-effort pool-identity cross-check: the commitment PINS the carried constraint, and
       // constraint values are part of pool identity — a dstPoolId kept from an OLDER derivation
       // signs an order every fill reverts (BaseFiller__JitPoolMismatch). Same posture as the

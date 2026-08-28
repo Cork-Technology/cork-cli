@@ -251,7 +251,7 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
 }> {
   const [{ dep, depWarn }, { marketRegistry: mr }, { marketRegistry: legacyMr }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId), resolveMarketRegistryLegacy(chainId)]);
   return {
-    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId] },
+    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
     jitTrust: { currentAdapter: mr?.adapter, legacyAdapter: legacyMr?.adapter },
     dep,
     depWarn,
@@ -265,6 +265,7 @@ const describeTarget = (leg: DecodedLeg): string => {
     case "forself": return `ForSelf '${leg.action}'`;
     case "leg": return leg.role === "adapter" ? `adapter '${leg.fn}'` : `ERC-20 '${leg.fn}'`;
     case "lop": return `1inch '${leg.call.fn}'`;
+    case "market": return `${leg.role === "marketCreator" ? "market creator" : "market registry"} '${leg.action}'`;
     case "bundle": return "Bundler3 multicall";
     case "unknown": return `selector ${leg.selector}`;
   }
@@ -511,6 +512,7 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ["whitelistManager", dep?.whitelistManager],
       ["1inch LOP v4", LOP_ADDRESSES[chainId]],
       ["marketRegistry", mr?.registry],
+      ["corkMarketCreator", mr?.marketCreator],
       ["corkLimitOrderAdapter (JIT)", mr?.adapter],
       ["exactSettler", rollover?.exactSettler],
       ["partialSettler", rollover?.partialSettler],
@@ -616,7 +618,7 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
   const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);
   if (legs.length === 1 && legs[0]!.kind === "unknown") {
     const u = legs[0]!;
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `calldata is neither a Bundler3 multicall nor a recognized single call (selector ${u.selector}${u.note ? ` — ${u.note}` : ""}); kind:"calldata" labels Cork adapter actions, ERC-20 legs, ForSelf adapter calls, and 1inch LOP v4 fills/cancels` }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: `calldata is neither a Bundler3 multicall nor a recognized single call (selector ${u.selector}${u.note ? ` — ${u.note}` : ""}); kind:"calldata" labels Cork adapter actions, ERC-20 legs, ForSelf adapter calls, market-infrastructure calls (registry oracle deploys, CorkMarketCreator.createNewPool), and 1inch LOP v4 fills/cancels` }]);
   }
   const warnings: Array<{ code: string; message: string }> = [...depWarn];
   const v = verificationWarnings(legs, {

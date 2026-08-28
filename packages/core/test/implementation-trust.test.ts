@@ -17,6 +17,7 @@ import { getAddress, keccak256 } from "viem";
 import {
   BUNDLED_DEFAULTS,
   checkApprovedImplementations,
+  CREATE_POOL_IMPLEMENTATION_ROLES,
   implementationRoleAddress,
   JIT_IMPLEMENTATION_ROLES,
   LEGACY_JIT_IMPLEMENTATION_ROLES,
@@ -202,13 +203,14 @@ describe("role scoping: each artifact path fingerprints only the contracts its b
     expect(PHOENIX_IMPLEMENTATION_ROLES).toEqual(["corkAdapter", "whitelistManager"]);
     expect(PREPARE_MARKET_IMPLEMENTATION_ROLES).toEqual(["marketRegistry"]);
     expect(JIT_IMPLEMENTATION_ROLES).toEqual(["jitAdapter", "marketRegistry"]);
+    expect(CREATE_POOL_IMPLEMENTATION_ROLES).toEqual(["marketCreator", "marketRegistry"]);
     expect(LEGACY_JIT_IMPLEMENTATION_ROLES).toEqual(["legacyJitAdapter", "legacyMarketRegistry"]);
   });
 
   it("an explicit role filter is honored by the checker itself, whatever the allowlist names", async () => {
     const reader: CodeReader = { getCode: async () => "0x" };
     const all = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS });
-    expect(all.map((c) => c.role).sort()).toEqual(["corkAdapter", "jitAdapter", "legacyJitAdapter", "legacyMarketRegistry", "marketRegistry", "whitelistManager"]);
+    expect(all.map((c) => c.role).sort()).toEqual(["corkAdapter", "jitAdapter", "legacyJitAdapter", "legacyMarketRegistry", "marketCreator", "marketRegistry", "whitelistManager"]);
     const scoped = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: ["marketRegistry"] });
     expect(scoped.map((c) => c.role)).toEqual(["marketRegistry"]);
   });

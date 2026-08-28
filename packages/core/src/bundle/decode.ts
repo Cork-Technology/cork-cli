@@ -18,6 +18,7 @@ import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
 import { bundlerLegAbi } from "./legs.ts";
 import { forSelfAbi } from "../forself.ts";
+import { marketCreatorAbi, marketRegistryAbi } from "../market-registry.ts";
 import { decodeLopCall, lopCallName, type DecodedLopCall } from "../orders.ts";
 import type { LopLegLabel } from "../handlers/decode.ts";
 import { decodeMulticall, isBundlerMulticall, ZERO_CALLBACK_HASH, type Call } from "./bundler3.ts";
@@ -36,6 +37,10 @@ export interface DecodeTrustTargets {
   /** Token contracts a plain ERC-20 leg (approve/transfer/transferFrom) may be trusted at —
    *  the pool's own tokens, from the pool read the bundle was built against. */
   erc20?: readonly `0x${string}`[] | undefined;
+  /** The 2.1.0 MarketRegistry, for oracle-deploy legs (deploy / deployFixedRateOracle). */
+  marketRegistry?: `0x${string}` | undefined;
+  /** The CorkMarketCreator, for direct createNewPool legs. */
+  marketCreator?: `0x${string}` | undefined;
 }
 
 export type LegVerification = "trusted" | "mismatch" | "unverified";
@@ -62,6 +67,11 @@ export type DecodedLeg =
   /** A 1inch LOP v4 fill or cancel. `label` (orderHash, maker-traits breakdown, JIT/Fusion
    *  extension labels) is chain-specific, so the decode handler attaches it afterwards. */
   | (LegBase & { kind: "lop"; call: DecodedLopCall; label?: LopLegLabel })
+  /** A market-infrastructure call — a MarketRegistry oracle deploy (`role: "marketRegistry"`)
+   *  or a CorkMarketCreator.createNewPool (`role: "marketCreator"`); this tool's own
+   *  cork_prepare_market outputs, recognized so validate-before-broadcast never calls them
+   *  UNREADABLE. */
+  | (LegBase & { kind: "market"; role: "marketRegistry" | "marketCreator"; action: string; params: readonly unknown[] })
   | (LegBase & { kind: "bundle"; legs: DecodedLeg[] })
   | (LegBase & { kind: "unknown"; selector: `0x${string}`; data: `0x${string}`; note?: string });
 
@@ -87,6 +97,15 @@ const ADAPTER_LEG_FUNCTIONS = new Set(["erc20TransferFrom", "permit2TransferFrom
 // surfacing as UNREADABLE. The adapter ADDRESS is integrator config — trusted only when the
 // caller passes it (the ForSelf prepare does, after verifying its bindings).
 const FORSELF_SELECTORS = selectorMap(forSelfAbi);
+// Market-infrastructure calls this tool's own cork_prepare_market emits: the registry's two
+// oracle deploys and the creator's createNewPool. Built from the SAME ABIs the builders encode
+// with, filtered to the state-changing entrypoints — one declaration site, no drift. (The
+// controller's createNewPool(PoolCreationParams) has a different selector and stays
+// unrecognized: nothing this tool prepares calls the controller directly.)
+const MARKET_FUNCTION_NAMES = new Set(["deploy", "deployFixedRateOracle", "createNewPool"]);
+const MARKET_ABI: readonly AbiFunction[] = ([...marketRegistryAbi, ...marketCreatorAbi] as readonly unknown[]).filter((f): f is AbiFunction => (f as { type?: string }).type === "function" && MARKET_FUNCTION_NAMES.has((f as AbiFunction).name));
+const MARKET_SELECTORS = selectorMap(MARKET_ABI);
+const CREATOR_FUNCTIONS = new Set(["createNewPool"]);
 
 /** Verdict for a role with ONE authoritative address: equal → trusted, configured-but-different
  *  → mismatch, unconfigured → unverified. */
@@ -131,6 +150,12 @@ function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets): DecodedL
       const { functionName, args } = decodeFunctionData({ abi: forSelfAbi, data: c.data });
       return { ...base(c), ...verifyAgainst(c.to, trust.forSelf), kind: "forself", action: functionName, params: args[0] };
     }
+    if (MARKET_SELECTORS.has(selector)) {
+      const { functionName, args } = decodeFunctionData({ abi: MARKET_ABI, data: c.data });
+      const role = CREATOR_FUNCTIONS.has(functionName) ? "marketCreator" : "marketRegistry";
+      const verdict = verifyAgainst(c.to, role === "marketCreator" ? trust.marketCreator : trust.marketRegistry);
+      return { ...base(c), ...verdict, kind: "market", role, action: functionName, params: args as readonly unknown[] };
+    }
     // The 1inch LOP fill/cancel surface this tool's own taker-fill and cancel produce: labeled
     // by selector so the validate-before-broadcast decode of those bytes names the order, the
     // amounts, and the hooks instead of calling the tool's own output UNREADABLE.
@@ -138,7 +163,7 @@ function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets): DecodedL
       return { ...base(c), ...verifyAgainst(c.to, trust.lop), kind: "lop", call: decodeLopCall(c.data) };
     }
   } catch (err) {
-    return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? lopCallName(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — malformed or truncated` };
+    return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? MARKET_SELECTORS.get(selector) ?? lopCallName(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — malformed or truncated` };
   }
   return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data };
 }

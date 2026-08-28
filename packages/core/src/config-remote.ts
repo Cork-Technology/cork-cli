@@ -141,6 +141,10 @@ const MarketRegistrySchema = z
   .object({
     registry: Address,
     adapter: Address.optional(),
+    // CorkMarketCreator (cork-periphery): direct permissionless pool creation — the same
+    // derivation a JIT fill runs, callable ahead of the fill. Optional: an older config
+    // without it simply gates the create-pool prepare (unknown_deployment).
+    marketCreator: Address.optional(),
     controller: Address.optional(),
     wrapperFactory: Address.optional(),
     fixedRateOracleFactory: Address.optional(),

@@ -2911,8 +2911,8 @@
     },
     {
       "name": "cork_prepare_market",
-      "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One and Base (42161, 8453). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
-      "descriptionTokensApprox": 183,
+      "description": "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). create-pool = CorkMarketCreator.createNewPool(params): create the pool a JIT order derives AHEAD of the fill — the smart-account path around EOA-only ERC-2612 JIT permits (batch create-pool, cst.approve, then a permit-free fill); also permissionless and idempotent. Live on Arbitrum One and Base (42161, 8453). Markets are otherwise created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket). Example — Unsigned oracle-deploy tx for a pair (registry.deploy(ca, ref, mode) — permissionless, idempotent; Arbitrum): {\"chainId\":42161,\"clientRequestId\":\"demo-market-0001\",\"action\":{\"type\":\"deploy-oracle\",\"collateralAsset\":\"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2\",\"referenceAsset\":\"0xdDb46999F8891663a8F2828d25298f70416d7610\",\"mode\":\"price\"}}",
+      "descriptionTokensApprox": 242,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2986,6 +2986,105 @@
                 ],
                 "additionalProperties": false,
                 "description": "unsigned MarketRegistry.deployFixedRateOracle(rate) tx: create the fixed-rate oracle for a RATE (no pair — a fixed rate is not a fact about two assets). Permissionless and IDEMPOTENT; this is the oracle a FIXED-recipe JIT order's rateOverride will produce"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "create-pool"
+                  },
+                  "collateralAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "referenceAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "expiryTimestamp": {
+                    "description": "pool expiry — must be in the future, and (when this call CREATES the pool) no later than now + the registry's maxExpiryDuration",
+                    "$ref": "#/$defs/UnixSeconds"
+                  },
+                  "recipe": {
+                    "description": "the approved IMarketRecipe CONTRACT ADDRESS — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead"
+                  },
+                  "rateOverride": {
+                    "default": "0",
+                    "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the creator (UnexpectedRateOverride), not ignored",
+                    "x-units": "D18{1}",
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "additionalData": {
+                    "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "constraint": {
+                    "type": "object",
+                    "properties": {
+                      "rateMin": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$",
+                        "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "rateMax": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$",
+                        "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "rateChangePerDayMax": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$",
+                        "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "rateChangeCapacityMax": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$",
+                        "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      }
+                    },
+                    "required": [
+                      "rateMin",
+                      "rateMax",
+                      "rateChangePerDayMax",
+                      "rateChangeCapacityMax"
+                    ],
+                    "additionalProperties": false,
+                    "description": "the four rate limits the pool is created with (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                  },
+                  "swapFeePercentage": {
+                    "default": "0",
+                    "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this call creates the pool",
+                    "x-units": "D18{%}",
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "unwindSwapFeePercentage": {
+                    "default": "0",
+                    "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                    "x-units": "D18{%}",
+                    "$ref": "#/$defs/UintStr"
+                  }
+                },
+                "required": [
+                  "type",
+                  "collateralAsset",
+                  "referenceAsset",
+                  "expiryTimestamp"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"
               }
             ]
           },
@@ -3014,6 +3113,16 @@
             "type": "string",
             "pattern": "^[0-9]+$",
             "description": "unsigned integer, decimal string"
+          },
+          "UnixSeconds": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
+          },
+          "Hex": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]*$",
+            "description": "0x-prefixed hex"
           }
         }
       },

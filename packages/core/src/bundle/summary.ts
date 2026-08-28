@@ -109,6 +109,24 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
       const hash = leg.label?.orderHash ? ` ${short(leg.label.orderHash)}` : "";
       return `fill 1inch limit order${hash} from maker ${who(od.maker, o)} on ${target}: ${terms}${delivered}${hooks.length ? ` [${hooks.join("; ")}]` : ""}`;
     }
+    case "market": {
+      // Market-infrastructure calls are all idempotent creates: the summary names WHAT gets
+      // created and where, so a swapped pair or a wrong registry is visible at a glance.
+      const p = leg.params as readonly unknown[];
+      if (leg.action === "createNewPool") {
+        const m = p[0] as { collateralAsset?: string; referenceAsset?: string; expiryTimestamp?: bigint; recipe?: string } | undefined;
+        const pair = m && typeof m.collateralAsset === "string" && typeof m.referenceAsset === "string" ? `${who(m.collateralAsset, o)}/${who(m.referenceAsset, o)}` : "?";
+        return `create the Cork pool for ${pair} expiring ${m?.expiryTimestamp ?? "?"} (recipe ${typeof m?.recipe === "string" ? short(m.recipe) : "?"}) via the market creator ${who(leg.to, o)} — idempotent: an existing pool is a lookup`;
+      }
+      if (leg.action === "deploy") {
+        const [ca, ref, mode] = p as [unknown, unknown, unknown];
+        return `deploy the ${mode === 1 ? "nav" : "price"} rate oracle for ${who(ca, o)}/${who(ref, o)} on the market registry ${who(leg.to, o)} — idempotent`;
+      }
+      if (leg.action === "deployFixedRateOracle") {
+        return `deploy the fixed-rate oracle for rate ${amount(p[0])} (ABSOLUTE, 1e18 = 1.0) on the market registry ${who(leg.to, o)} — idempotent`;
+      }
+      return `call ${leg.action}() on ${who(leg.to, o)}`;
+    }
     case "bundle":
       return `a nested bundle on ${who(leg.to, o)} (${leg.legs.length} leg${leg.legs.length === 1 ? "" : "s"}):`;
     case "unknown":

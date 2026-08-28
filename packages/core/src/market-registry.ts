@@ -62,6 +62,7 @@ export const marketRegistryAbi = parseAbi([
   "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
   "function deploy(address ca, address ref, uint8 mode) returns (address wrapper)",
   "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
+  "function maxExpiryDuration() view returns (uint256)",
   // The registry's typed reverts (IMarketRegistry, 0.3.x). Declared so viem decodes them
   // into simulate/read error messages — which is what lets diagnoseOracleDeployFailure tell
   // a NAMED registration failure from the unnamed CREATE2-collision class (a raw create
@@ -403,6 +404,62 @@ const sharesAbi = parseAbi(["function shares(bytes32 poolId) view returns (addre
 /** poolManager.shares(poolId) calldata, for the second leg of the prediction simulation. */
 export function buildSharesCall(poolId: `0x${string}`): `0x${string}` {
   return encodeFunctionData({ abi: sharesAbi, functionName: "shares", args: [poolId] });
+}
+
+// ── CorkMarketCreator (cork-periphery): direct pool creation ahead of a fill ─────────────────
+
+/** CorkMarketCreator surface (cork-periphery 0.1.0). `MarketParams` is the adapter's
+ *  JITMarketParams WITHOUT the fill-only mint flag — the nine shared fields keep the same
+ *  names, types, and ORDER (wire format; the contract states the parity as a rule). The typed
+ *  errors are declared so simulate/decode name the creator's own reverts. */
+export const marketCreatorAbi = parseAbi([
+  "struct CreatorRateConstraint { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+  "struct CreatorMarketParams { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; CreatorRateConstraint constraint; bytes additionalData; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+  "function POOL_MANAGER() view returns (address)",
+  "function CONTROLLER() view returns (address)",
+  "function MARKET_REGISTRY() view returns (address)",
+  "function MAX_FEE_PERCENTAGE() view returns (uint256)",
+  "function version() view returns (string)",
+  "function createNewPool(CreatorMarketParams params) returns (bytes32 poolId, address cst, address cpt)",
+  "error RateUnavailable()",
+  "error UnexpectedRateOverride(address recipe)",
+  "error RecipeRejectedConstraint(address recipe)",
+  "error ExpiryOutOfRange(uint256 expiryTimestamp, uint256 maxExpiryTimestamp)",
+  "error SwapFeeOutOfRange(uint256 fee, uint256 maxFee)",
+  "error UnwindSwapFeeOutOfRange(uint256 fee, uint256 maxFee)",
+]);
+
+/** The creator's input: JITMarketParams minus `enableJitMint` (creation only, never a mint). */
+export type CreatorMarketParams = Omit<JITMarketParams, "enableJitMint">;
+
+/** Unsigned CorkMarketCreator.createNewPool(params) calldata — the same pool a JIT fill would
+ *  derive and create, creatable AHEAD of the fill; permissionless + idempotent (an existing
+ *  pool is a lookup returning (poolId, cst, cpt)). */
+export function buildCreatorCreatePoolCall(params: CreatorMarketParams): `0x${string}` {
+  return encodeFunctionData({
+    abi: marketCreatorAbi,
+    functionName: "createNewPool",
+    args: [{
+      collateralAsset: params.collateralAsset,
+      referenceAsset: params.referenceAsset,
+      expiryTimestamp: params.expiryTimestamp,
+      recipe: params.recipe,
+      rateOverride: params.rateOverride,
+      constraint: { ...params.constraint },
+      additionalData: params.additionalData,
+      swapFeePercentage: params.swapFeePercentage,
+      unwindSwapFeePercentage: params.unwindSwapFeePercentage,
+    }],
+  });
+}
+
+/** rateOverride ↔ recipe-source coherence — the ONE comparator behind the JIT ladder's and the
+ *  create-pool prepare's gates (the wording differs per site; the rule must not): a FIXED
+ *  recipe's oracle is FixedRateOracle(rateOverride), whose constructor reverts on 0; a
+ *  price/nav path REJECTS a non-zero override (UnexpectedRateOverride), it is not ignored. */
+export function rateOverrideCoherence(source: RecipeSourceName, rateOverride: bigint): "needs-rate" | "must-be-zero" | "ok" {
+  if (source === "fixed") return rateOverride === 0n ? "needs-rate" : "ok";
+  return rateOverride !== 0n ? "must-be-zero" : "ok";
 }
 
 /** Storage slot of `_roles[role].hasRole[account]` in plain OZ AccessControl (mapping at slot 0,

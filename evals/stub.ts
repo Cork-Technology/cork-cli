@@ -27,7 +27,7 @@ const MR_42161 = (corkDefaults as { marketRegistry: Record<string, { registry: s
 const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
   Object.values(corkDefaults.deployments as Record<string, { corkAdapter?: string; whitelistManager?: string }>)
     .flatMap((d) => [d.corkAdapter, d.whitelistManager])
-    .concat(Object.values((corkDefaults as { marketRegistry?: Record<string, { registry?: string; adapter?: string }> }).marketRegistry ?? {}).flatMap((m) => [m.registry, m.adapter]))
+    .concat(Object.values((corkDefaults as { marketRegistry?: Record<string, { registry?: string; adapter?: string; marketCreator?: string }> }).marketRegistry ?? {}).flatMap((m) => [m.registry, m.adapter, m.marketCreator]))
     .concat(Object.values((corkDefaults as { marketRegistryLegacy?: Record<string, { registry?: string; adapter?: string }> }).marketRegistryLegacy ?? {}).flatMap((m) => [m.registry, m.adapter]))
     .filter((a): a is string => typeof a === "string")
     .map((a) => a.toLowerCase()),
@@ -104,7 +104,20 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return true; // matches the seeded whitelist events below — verification leg agrees
     // ── MarketRegistry 2.1.0 surface (recipes as contracts; constraint via recipe.resolve) ──
     case "MARKET_REGISTRY":
-      return REGISTRY_210; // adapter immutable — keeps the binding guard green
+      return REGISTRY_210; // adapter/creator immutable — keeps the binding guard green
+    // ── CorkMarketCreator bindings + controller roles (the create-pool pre-flights): answer
+    //    the CONFIGURED addresses per chain, like MARKET_REGISTRY above — a pinned literal
+    //    here rots on every redeploy (the 0.3.2 lesson at the top of this file). ──
+    case "POOL_MANAGER":
+      return (corkDefaults as { deployments: Record<string, { poolManager?: string }> }).deployments[String(chainId)]?.poolManager ?? "0x0000000000000000000000000000000000000000";
+    case "CONTROLLER":
+      return (corkDefaults as { marketRegistry: Record<string, { controller?: string }> }).marketRegistry[String(chainId)]?.controller ?? "0x0000000000000000000000000000000000000000";
+    case "FEE_MANAGER_ROLE":
+      return `0x${"6c".repeat(32)}`; // any stable hash — the pre-flight uses the probed value itself
+    case "hasRole":
+      return true; // POOL_CREATOR + FEE_MANAGER granted (matches the live grants, 2026-08-28)
+    case "maxExpiryDuration":
+      return 2_592_000n; // 30 days — the live registry's value at last read
     case "isRecipe": {
       const a = String(args.args?.[0] ?? "").toLowerCase();
       return a === LIQUIDITY_RECIPE.toLowerCase() || a === FIXED_RECIPE.toLowerCase();

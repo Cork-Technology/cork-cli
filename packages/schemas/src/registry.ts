@@ -113,7 +113,7 @@ export const REGISTRY = [
     cliPath: ["prepare", "market"],
     phase: 4,
     description:
-      "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). Live on Arbitrum One and Base (42161, 8453). NOT for creating the market itself — markets are created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket).",
+      "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). create-pool = CorkMarketCreator.createNewPool(params): create the pool a JIT order derives AHEAD of the fill — the smart-account path around EOA-only ERC-2612 JIT permits (batch create-pool, cst.approve, then a permit-free fill); also permissionless and idempotent. Live on Arbitrum One and Base (42161, 8453). Markets are otherwise created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket).",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: PrepareMarketInput,
     output: Envelope,

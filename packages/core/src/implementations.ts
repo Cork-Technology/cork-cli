@@ -30,16 +30,18 @@ import { BUNDLED_DEFAULTS, resolveConfig, type CorkDefaults } from "./config-rem
 export const EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" as const;
 
 /** The roles the allowlist can name, and the config block each resolves from. */
-export const IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "legacyMarketRegistry", "legacyJitAdapter"] as const;
+export const IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "marketCreator", "legacyMarketRegistry", "legacyJitAdapter"] as const;
 export type ImplementationRole = (typeof IMPLEMENTATION_ROLES)[number];
 
 /** Per-artifact role scopes: exactly the contracts whose code the produced bytes will execute.
  *  A Bundler3 bundle runs the CorkAdapter (and a gated pool consults the WhitelistManager);
  *  an oracle-deploy tx runs the MarketRegistry; a 2.1.0 JIT hook runs the JIT adapter, which
- *  calls the registry; the deprecated hook runs the previous generation of both. */
+ *  calls the registry; a create-pool tx runs the CorkMarketCreator, which calls the registry;
+ *  the deprecated hook runs the previous generation of both. */
 export const PHOENIX_IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager"] as const satisfies readonly ImplementationRole[];
 export const PREPARE_MARKET_IMPLEMENTATION_ROLES = ["marketRegistry"] as const satisfies readonly ImplementationRole[];
 export const JIT_IMPLEMENTATION_ROLES = ["jitAdapter", "marketRegistry"] as const satisfies readonly ImplementationRole[];
+export const CREATE_POOL_IMPLEMENTATION_ROLES = ["marketCreator", "marketRegistry"] as const satisfies readonly ImplementationRole[];
 export const LEGACY_JIT_IMPLEMENTATION_ROLES = ["legacyJitAdapter", "legacyMarketRegistry"] as const satisfies readonly ImplementationRole[];
 
 /** The minimal client surface the guard needs. Structural on purpose: handler stubs that do not
@@ -77,6 +79,8 @@ export function implementationRoleAddress(role: string, defaults: CorkDefaults, 
       return mr?.registry as `0x${string}` | undefined;
     case "jitAdapter":
       return mr?.adapter as `0x${string}` | undefined;
+    case "marketCreator":
+      return mr?.marketCreator as `0x${string}` | undefined;
     case "legacyMarketRegistry":
       return legacy?.registry as `0x${string}` | undefined;
     case "legacyJitAdapter":

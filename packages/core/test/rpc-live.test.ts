@@ -365,3 +365,75 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
     }
   }, 90_000);
 });
+
+// CorkMarketCreator (cork-periphery 0.1.0) — live parity on Base: the tool's create-pool
+// prepare against the DEPLOYED creator. The reference is a raw eth_call of the tool-built
+// calldata: the contract itself runs the whole derivation (recipe membership → oracle deploy →
+// constraint verify → derivation) and returns (poolId, cst, cpt) — which must equal the
+// tool's own predicted pool block wei-for-wei. First proven 2026-08-28 (two anchors, both
+// triples byte-exact).
+describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
+  // mwUSDC (nav source) / USDC — both registered on Base; the NAV LiquidityRecipe.
+  const MW_USDC = "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca" as const;
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+  const NAV_RECIPE = "0xAeD3D0e3C86A994d88741C285657c3e78550f66d" as const;
+  // Wide-window anchor (the nav liquidity recipe resolves rateMin=1, rateMax=2×anchor): the
+  // live NAV (~1.086 CA-quoted or its inverse) sits inside the window either way, so
+  // recipe.verify passes at creation whichever direction the wrapper reports.
+  const ANCHOR = `0x${(105n * 10n ** 16n).toString(16).padStart(64, "0")}` as const;
+  const creatorAbi = parseAbi([
+    "function POOL_MANAGER() view returns (address)",
+    "function CONTROLLER() view returns (address)",
+    "function MARKET_REGISTRY() view returns (address)",
+    "function version() view returns (string)",
+    "function POOL_CREATOR_ROLE() view returns (bytes32)",
+    "function hasRole(bytes32 role, address account) view returns (bool)",
+  ]);
+
+  it("the configured creator answers its views, matches the config wiring, and holds POOL_CREATOR_ROLE", async () => {
+    const { resolveMarketRegistry, resolveConfig } = await import("@cork/core");
+    const { marketRegistry: mr } = await resolveMarketRegistry(8453);
+    expect(mr?.marketCreator).toBeDefined();
+    expect(mr?.controller).toBeDefined();
+    const cfg = await resolveConfig();
+    const pm = cfg.defaults.deployments["8453"]?.poolManager as `0x${string}`;
+    const r = await resolveRpc(8453, undefined);
+    expect(r).not.toBeNull();
+    const creator = mr!.marketCreator as `0x${string}`;
+    const [boundPm, boundController, boundRegistry, version] = await Promise.all([
+      r!.client.readContract({ address: creator, abi: creatorAbi, functionName: "POOL_MANAGER" }),
+      r!.client.readContract({ address: creator, abi: creatorAbi, functionName: "CONTROLLER" }),
+      r!.client.readContract({ address: creator, abi: creatorAbi, functionName: "MARKET_REGISTRY" }),
+      r!.client.readContract({ address: creator, abi: creatorAbi, functionName: "version" }),
+    ]);
+    expect(boundPm.toLowerCase()).toBe(pm.toLowerCase());
+    expect(boundController.toLowerCase()).toBe(mr!.controller!.toLowerCase());
+    expect(boundRegistry.toLowerCase()).toBe(mr!.registry.toLowerCase());
+    expect(version).toBe("0.1.0");
+    const role = await r!.client.readContract({ address: boundController, abi: creatorAbi, functionName: "POOL_CREATOR_ROLE" });
+    expect(await r!.client.readContract({ address: boundController, abi: creatorAbi, functionName: "hasRole", args: [role, creator] })).toBe(true);
+  }, 60_000);
+
+  it("a raw eth_call of tool-built createNewPool calldata returns the tool's exact predicted (poolId, cst, cpt)", async () => {
+    // Expiry inside the registry's 30-day creation bound at run time.
+    const expiry = BigInt(Math.floor(Date.now() / 1000) + 20 * 86_400);
+    const env = await runTool(
+      "cork_prepare_market",
+      { chainId: 8453, clientRequestId: `live-creator-${expiry}`, action: { type: "create-pool", collateralAsset: MW_USDC, referenceAsset: USDC, expiryTimestamp: expiry.toString(), recipe: NAV_RECIPE, additionalData: ANCHOR } },
+      { nowSeconds: expiry - 20n * 86_400n },
+    );
+    expect(env.state).toBe("ok");
+    const d = env.data as { to: `0x${string}`; calldata: `0x${string}`; pool: { poolId: string; exists: boolean }; shares: { corkSwapToken: string | null; corkPrincipalToken: string | null } | undefined };
+    expect(d.pool?.poolId).toBeDefined();
+    const r = await resolveRpc(8453, undefined);
+    const res = await r!.client.call({ to: d.to, data: d.calldata });
+    expect(res.data).toBeDefined();
+    const poolId = res.data!.slice(0, 66);
+    const cst = `0x${res.data!.slice(2 + 64 + 24, 2 + 128)}`;
+    const cpt = `0x${res.data!.slice(2 + 128 + 24, 2 + 192)}`;
+    expect(poolId.toLowerCase()).toBe(d.pool.poolId.toLowerCase());
+    // When the share simulation ran (eth_simulateV1 supported), the triple must match exactly.
+    if (d.shares?.corkSwapToken) expect(cst.toLowerCase()).toBe(d.shares.corkSwapToken.toLowerCase());
+    if (d.shares?.corkPrincipalToken) expect(cpt.toLowerCase()).toBe(d.shares.corkPrincipalToken.toLowerCase());
+  }, 90_000);
+});
