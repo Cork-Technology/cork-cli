@@ -216,6 +216,9 @@ export const DecodeInput = z.object({
       .record(z.string(), z.unknown())
       .describe("an already-structured payload to label: the order's JSON struct fields (kind 'order'), ONE log object {address?, topics[], data} (kind 'event'), or a receipt {logs:[...]} (kind 'receipt')"),
   ]),
+  to: Address.optional().describe(
+    "kind:\"calldata\" only: the contract you INTEND to send these bytes to. Supplying it turns the shape-only labeling into real target verification, exactly like decoding the signed tx: the claim is checked against the configured address book (trusted stays quiet; a contradiction is a conflict, target_mismatch — do not sign; a role nobody can vouch for stays unverified). Omit = shape-only labels with target_unverified. Rejected for every other kind — a signed tx carries its own `to` (recovered and verified from the bytes), and order/event/receipt have no call target",
+  ),
   chainId: ChainId.optional(),
   format: Format,
 });

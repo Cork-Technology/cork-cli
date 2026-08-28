@@ -599,6 +599,13 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
 /** Kind router for cork_decode — order/event/receipt to their handlers, calldata inline. */
 export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
+  // `to` is a calldata-only claim. Every other kind either carries its own target (a signed tx —
+  // recovered from the bytes, where a second caller-supplied claim would be an unverifiable
+  // contradiction vector) or has no call target at all; a known field is never silently
+  // unapplied, so it refuses with teaching instead.
+  if (input.to !== undefined && input.kind !== "calldata") {
+    throw new ToolInputError("cork_decode", [{ path: ["to"], message: input.kind === "tx" ? "`to` applies only to kind:\"calldata\" — a signed tx carries its own target, which this decode recovers from the bytes and verifies; drop the field" : `\`to\` applies only to kind:"calldata" — kind "${input.kind}" has no call target; drop the field` }]);
+  }
   if (input.kind === "tx") return handleDecodeTx(input, ctx);
   if (input.kind === "order") return handleDecodeOrder(input, chainId, ctx);
   if (input.kind === "event") return handleDecodeEvent(input, chainId, ctx);
@@ -607,24 +614,38 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
     throw new ToolInputError("cork_decode", "calldata decode requires a hex string");
   }
   const data = input.data as `0x${string}`;
+  const claimedTo = input.to as `0x${string}` | undefined;
   // A Bundler3 multicall unwraps recursively; a single recognized call (a Cork adapter action,
-  // an ERC-20 leg, a ForSelf adapter call, a 1inch fill or cancel) labels on its own. Bytes that
-  // are neither are invalid INPUT (exit 2, teachable) — not an internal error, and never a
-  // "decoded" result that hides what they are.
-  // Raw calldata carries no target of its own: a multicall's INNER legs have targets and are
-  // verified against the chain's address book; a single call has nothing to verify — it is
-  // labeled by shape and said to be unverified, never silently trusted.
+  // an ERC-20 leg, a ForSelf adapter call, a market-infrastructure call, a 1inch fill or cancel)
+  // labels on its own. Bytes that are neither are invalid INPUT (exit 2, teachable) — not an
+  // internal error, and never a "decoded" result that hides what they are.
+  // Raw calldata carries no target of its own; the optional `to` is the CALLER's claim of where
+  // these bytes will be sent, and supplying it turns shape-only labeling into the same target
+  // verification the signed-tx decode runs: a multicall's inner legs always verified, the single
+  // call (or the outer multicall target) now verified against the claimed address too. Without
+  // it, a single call is labeled by shape and said to be unverified, never silently trusted.
   const { targets, jitTrust, dep, depWarn } = await resolveDecodeTrust(ctx, chainId);
-  const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);
+  const legs = labelLopLegs(decodeCallOrBundle(data, claimedTo ?? ZERO_ADDR, 0n, claimedTo !== undefined || isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);
   if (legs.length === 1 && legs[0]!.kind === "unknown") {
     const u = legs[0]!;
     throw new ToolInputError("cork_decode", [{ path: ["data"], message: `calldata is neither a Bundler3 multicall nor a recognized single call (selector ${u.selector}${u.note ? ` — ${u.note}` : ""}); kind:"calldata" labels Cork adapter actions, ERC-20 legs, ForSelf adapter calls, market-infrastructure calls (registry oracle deploys, CorkMarketCreator.createNewPool), and 1inch LOP v4 fills/cancels` }]);
   }
   const warnings: Array<{ code: string; message: string }> = [...depWarn];
+  // The outer multicall target is not a leg, so the claimed `to` for a bundle is checked here:
+  // the bytes are Bundler3.multicall calldata, and a claim that is NOT the configured Bundler3
+  // is the same contradiction a mismatched leg is.
+  let outerMismatch = false;
+  if (claimedTo !== undefined && isBundlerMulticall(data) && targets.bundler3 !== undefined && claimedTo.toLowerCase() !== targets.bundler3.toLowerCase()) {
+    outerMismatch = true;
+    warnings.push({ code: "target_mismatch", message: `these bytes are Bundler3.multicall calldata, but the claimed target ${claimedTo} is not the configured Bundler3 (${targets.bundler3}) — the bytes claim Cork semantics at a contract that is not Cork's. Do not sign` });
+  }
   const v = verificationWarnings(legs, {
-    unverifiedHint: isBundlerMulticall(data)
-      ? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"
-      : "Raw calldata names no target contract, so nothing here can be verified — decode the SIGNED transaction (kind \"tx\") to check the target too",
+    unverifiedHint:
+      claimedTo !== undefined
+        ? "The target here is the CALLER'S claim, verified against the configured contracts where a role exists; roles this decode has no authority for (a token, an integrator-deployed adapter) stay unverified. The claim also only helps if you actually send the tx to that address — the signed-tx decode (kind \"tx\") is still the last word"
+        : isBundlerMulticall(data)
+          ? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"
+          : "Raw calldata names no target contract, so nothing here can be verified — decode the SIGNED transaction (kind \"tx\") to check the target too, or pass `to` (the address you intend to send to) to verify the claim now",
   });
   warnings.push(...v.warnings);
   if (input.chainId === undefined && legs.some((l) => l.kind === "lop")) {
@@ -634,7 +655,14 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
   // somewhere else, and "what will this DO" is the question being asked of them.
   const adapter = dep?.corkAdapter;
   // Summary before the leg dump: a reader scanning the prose output wants the intent first.
-  return envelope({ state: v.mismatch ? "conflict" : "ok", data: { kind: "calldata", summary: summarizeBundle(legs, { adapter }), legs }, chainId, source: "config", warnings, ctx });
+  return envelope({
+    state: v.mismatch || outerMismatch ? "conflict" : "ok",
+    data: { kind: "calldata", ...(claimedTo !== undefined ? { to: claimedTo } : {}), summary: summarizeBundle(legs, { adapter }), legs },
+    chainId,
+    source: "config",
+    warnings,
+    ctx,
+  });
 }
 
 /** A Bundler3 multicall → its legs; any other bytes → the one call they are (labeled or raw),

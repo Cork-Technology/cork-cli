@@ -180,3 +180,58 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
     expect(codes(env)).toEqual(["target_mismatch"]);
   });
 });
+
+describe("kind:calldata with a claimed `to` — target verification without waiting for the signed tx (2026-08-28)", () => {
+  const deposit = depositLeg(ADAPTER_1);
+
+  it("the claimed target IS the configured contract: trusted, silent, echoed in data.to", async () => {
+    const env = await runTool("cork_decode", { kind: "calldata", data: deposit.data, to: ADAPTER_1 }, ctx);
+    expect(env.state).toBe("ok");
+    const d = env.data as { to: string; legs: Leg[]; summary: string[] };
+    expect(d.to).toBe(ADAPTER_1);
+    expect(d.legs[0]!.verification).toBe("trusted");
+    expect(codes(env)).not.toContain("target_unverified");
+    expect(d.summary[0]).not.toContain("UNVERIFIED");
+  });
+
+  it("a claimed target that CONTRADICTS the configured contract is a conflict — the same refusal the signed-tx decode gives", async () => {
+    const env = await runTool("cork_decode", { kind: "calldata", data: deposit.data, to: FAKE }, ctx);
+    expect(env.state).toBe("conflict");
+    expect(codes(env)).toContain("target_mismatch");
+    const d = env.data as { legs: Leg[]; summary: string[] };
+    expect(d.legs[0]!.verification).toBe("mismatch");
+    expect(d.legs[0]!.expectedTarget).toBe(ADAPTER_1);
+    expect(d.summary[0]).toContain("TARGET MISMATCH");
+  });
+
+  it("a multicall's OUTER target is checked too: the configured Bundler3 passes, anything else conflicts naming it", async () => {
+    const multicall = encodeMulticall([pullLeg(ADAPTER_1), depositLeg(ADAPTER_1)]);
+    const good = await runTool("cork_decode", { kind: "calldata", data: multicall, to: BUNDLER3_1 }, ctx);
+    expect(good.state).toBe("ok");
+    expect(codes(good)).not.toContain("target_mismatch");
+    const bad = await runTool("cork_decode", { kind: "calldata", data: multicall, to: FAKE }, ctx);
+    expect(bad.state).toBe("conflict");
+    const w = bad.warnings.find((x) => x.code === "target_mismatch");
+    expect(w?.message).toContain("Bundler3");
+    expect(w?.message).toContain(BUNDLER3_1);
+  });
+
+  it("`to` on kind:\"tx\" refuses with teaching — the signed bytes carry their own target", async () => {
+    const err = await runTool("cork_decode", { kind: "tx", data: "0x02c0", to: ADAPTER_1 }, ctx).then(
+      () => undefined,
+      (e: unknown) => e as { issues?: Array<{ path: unknown[]; message: string }> },
+    );
+    expect(err, "must refuse").toBeDefined();
+    expect(err!.issues?.[0]?.path).toEqual(["to"]);
+    expect(err!.issues?.[0]?.message).toContain('applies only to kind:"calldata"');
+    expect(err!.issues?.[0]?.message).toContain("carries its own target");
+  });
+
+  it("omitting `to` keeps the pre-existing contract: shape-only labels, target_unverified teaching the two verification paths", async () => {
+    const env = await runTool("cork_decode", { kind: "calldata", data: deposit.data }, ctx);
+    expect(env.state).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "target_unverified");
+    expect(w?.message).toContain('kind "tx"');
+    expect(w?.message).toContain("pass `to`");
+  });
+});

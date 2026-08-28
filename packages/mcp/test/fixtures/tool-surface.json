@@ -660,8 +660,8 @@
     },
     {
       "name": "cork_decode",
-      "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
-      "descriptionTokensApprox": 355,
+      "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
+      "descriptionTokensApprox": 380,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -691,6 +691,10 @@
                 "description": "an already-structured payload to label: the order's JSON struct fields (kind 'order'), ONE log object {address?, topics[], data} (kind 'event'), or a receipt {logs:[...]} (kind 'receipt')"
               }
             ]
+          },
+          "to": {
+            "description": "kind:\"calldata\" only: the contract you INTEND to send these bytes to. Supplying it turns the shape-only labeling into real target verification, exactly like decoding the signed tx: the claim is checked against the configured address book (trusted stays quiet; a contradiction is a conflict, target_mismatch — do not sign; a role nobody can vouch for stays unverified). Omit = shape-only labels with target_unverified. Rejected for every other kind — a signed tx carries its own `to` (recovered and verified from the bytes), and order/event/receipt have no call target",
+            "$ref": "#/$defs/Address"
           },
           "chainId": {
             "type": "number",
@@ -722,6 +726,11 @@
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]*$",
             "description": "0x-prefixed hex"
+          },
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
           }
         }
       },

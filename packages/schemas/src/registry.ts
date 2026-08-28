@@ -67,7 +67,7 @@ export const REGISTRY = [
     cliPath: ["decode"],
     phase: 1,
     description:
-      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3].",
+      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3].",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: DecodeInput,
     output: Envelope,

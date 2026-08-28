@@ -3319,6 +3319,26 @@ const CATALOG: Mutant[] = [
     replace: "",
     tests: [T.outputScales],
   },
+  // ── decode calldata claimed `to` (2026-08-28): target verification before the signed tx ────
+  {
+    // The claim stops reaching the decoder: legs fall back to ZERO_ADDR + empty trust, so a
+    // caller-verified decode silently degrades to shape-only — trusted never appears and a
+    // contradicting claim stops conflicting.
+    id: "calldata-claimed-to-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "const legs = labelLopLegs(decodeCallOrBundle(data, claimedTo ?? ZERO_ADDR, 0n, claimedTo !== undefined || isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);",
+    replace: "const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);",
+    tests: [T.decodeTrust],
+  },
+  {
+    // The multicall's OUTER target check vanishes: bytes claimed at a non-Bundler3 address
+    // decode clean — the inner legs verify but the contract that would RUN them is unchecked.
+    id: "calldata-outer-bundler-check-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "if (claimedTo !== undefined && isBundlerMulticall(data) && targets.bundler3 !== undefined && claimedTo.toLowerCase() !== targets.bundler3.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.decodeTrust],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────
