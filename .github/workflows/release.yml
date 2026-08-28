@@ -166,21 +166,67 @@ jobs:
           gh release create "${{ github.ref_name }}" $PRE \
             --verify-tag \
             --title "${{ github.ref_name }}" \
-            --notes "This page is a frozen record of one version. For the living docs, see https://docs.cork.tech. For other versions, see this repo's Releases.
+            --notes "A frozen record of one version. Living docs: https://docs.cork.tech · other versions: the Releases page.
 
-          What it is. \`ch\` is one binary. It is the CLI, and through \`ch mcp\` an MCP stdio server. Put it on your PATH. \`ch capabilities\` lists the 9 tools. \`ch <command> --help\` explains one. Point an MCP client at \`ch mcp\`. Example: \`ch query cork-pools --chain-id 8453\`. Guide: docs/cli.md.
+          ### The CLI
 
-          SDK. \`@cork/core\` is the integrator library. It has a curated root export and eight subpaths: /math /orders /registry /chain /bundle /venue /indexer /config. Example: \`import { runTool } from '@cork/core'\`. The \`cork-*.tgz\` assets are the npm packages \`@cork/schemas\`, \`@cork/core\`, and \`@cork/mcp\`. Add the schemas and core tarball URLs to your \`dependencies\`. The lockfile pins the sha512. Guide: docs/sdk.md.
+          \`ch\` is one binary — the CLI, and an MCP stdio server through \`ch mcp\`.
 
-          Channels. This release covers three: the \`ch-*\` binaries, the \`cork-*.tgz\` SDK packages, and the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`. Every binary and tarball is attested and listed in checksums.txt. A \`-rc\` release does not publish the apk channel or the \`:latest\` image. Those are production only.
+          - Put it on your PATH.
+          - \`ch capabilities\` lists the 9 tools; \`ch <command> --help\` explains one.
+          - Point an MCP client at \`ch mcp\`.
+          - Example: \`ch query cork-pools --chain-id 8453\`
 
-          Verify any asset:
+          Guide: [docs/cli.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/cli.md).
+
+          ### The SDK
+
+          \`@cork/core\` is the integrator library — a curated root export plus eight subpaths (\`/math\` \`/orders\` \`/registry\` \`/chain\` \`/bundle\` \`/venue\` \`/indexer\` \`/config\`):
+
+          \`\`\`ts
+          import { runTool } from '@cork/core'
+          \`\`\`
+
+          The \`cork-*.tgz\` assets are the npm packages, attested and pinned by your lockfile's sha512. Add them to your \`package.json\`:
+
+          \`\`\`json
+          \"dependencies\": {
+            \"@cork/schemas\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
+            \"@cork/core\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-core-${GITHUB_REF_NAME#v}.tgz\"
+          }
+          \`\`\`
+
+          Guide: [docs/sdk.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/sdk.md).
+
+          ### Channels
+
+          This release covers three:
+
+          - the \`ch-*\` binaries,
+          - the \`cork-*.tgz\` SDK packages,
+          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`.
+
+          Every binary and tarball is attested and listed in \`checksums.txt\`. A \`-rc\` release does not publish the apk channel or the \`:latest\` image — those are production only.
+
+          ### Verify
+
           \`\`\`
           gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml
           \`\`\`
-          Reproduce it. Use the same commit and the Bun pinned by mise.toml: \`bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}\`. The checksums must match checksums.txt. Match your host libc to the asset — glibc on glibc, musl on musl. For a same-OS target Bun embeds the host libc, so a musl host that rebuilds \`ch-linux-x64\` gets a correct but different binary.
 
-          Compatibility. The covered surface is the JSON output, the tool names, the input schemas, and the exit codes (policy R11). This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md, in this tag's tree, lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade. Cork runs no on-chain deployment of this tool. A \`-rc\` tag is a release candidate. We flag it pre-release, not production." \
+          Reproduce it with the same commit and the Bun pinned by mise.toml:
+
+          \`\`\`
+          bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}
+          \`\`\`
+
+          The checksums must match \`checksums.txt\`. Match your host libc to the asset — glibc on glibc, musl on musl. For a same-OS target Bun embeds the host libc, so a musl host that rebuilds \`ch-linux-x64\` gets a correct but different binary.
+
+          ### Compatibility
+
+          The covered surface is the JSON output, the tool names, the input schemas, and the exit codes (policy R11). This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade.
+
+          Cork runs no on-chain deployment of this tool. A \`-rc\` tag is a release candidate — we flag it pre-release, not production." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt
 
   # apk-repository + OCI + Phala channel, called for EVERY release. Called DIRECTLY rather than
