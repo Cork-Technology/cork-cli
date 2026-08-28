@@ -228,7 +228,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   /** 0.3.3 (2026-08-10): the recipes are deployed on 42161 but NOT YET approved there
    *  (isRecipe false ×3; they ARE approved on Base). Recipe-dependent legs adapt to that
    *  live state instead of pinning it: unapproved → assert the honest recipe_not_found gate;
-   *  approved (the moment Zian's approval txs land) → full wei-for-wei parity, no edit needed. */
+   *  approved (the moment the contracts team's approval txs land) → full wei-for-wei parity, no edit needed. */
   const liqApprovedOn42161 = async (): Promise<boolean> => {
     const r = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(r.state).toBe("ok");

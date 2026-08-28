@@ -522,7 +522,7 @@ venue retires it.
   API ever served.
 - **The registry live-parity default moved to the cork-api registry module**
   (`https://api-phoenix.cork.tech/registry`; override with `CORK_MARKET_API`). The standalone
-  zian-b sandbox retires after the cutover. Our path literals compose with the mount into the
+  dev sandbox retires after the cutover. Our path literals compose with the mount into the
   canonical `/registry/v1/…` form, unchanged.
 
 ### Fixed
