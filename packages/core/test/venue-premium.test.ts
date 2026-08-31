@@ -1,4 +1,4 @@
-// The listing premium contract (cork-api 0.3.15, COR-35): premium_annualized is the ONE premium
+// The listing premium contract (cork-api 0.3.15): premium_annualized is the ONE premium
 // field — the percent-number `premium` completed its scheduled sunset on 2026-08-17 and the
 // venue answers a pointed 400 on presence (a preValidation gate, not a silent schema strip).
 // The venue's RESOLUTION is replicated operation-for-operation from its post-order route —

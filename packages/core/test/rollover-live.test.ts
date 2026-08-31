@@ -1,4 +1,4 @@
-// Live verification of the rc.2 rollover deployment (rollover-private @ 5af1048e, v0.1.0-rc.2)
+// Live verification of the rc.2 rollover deployment (rollover v0.1.0-rc.2, v0.1.0-rc.2)
 // against the real chains. Self-skips unless CORK_RPC_LIVE=1 so CI stays offline/deterministic.
 //
 // Three legs, per chain (42161 + 8453 — identical CREATE2 addresses, per-chain domains):
@@ -8,7 +8,7 @@
 //   3. ENCODING — resolveFor over our own encodeOrderData/ORDER_DATA_TYPEHASH reaches the
 //      Settler__RolloverContractNotDeployed state check: the 864-byte layout, typehash, digest,
 //      and deadline gates all pass on REAL bytecode, and admission dies only at the first check
-//      that needs a deployed clone. This is the exact probe cork-indexing-api used to verify
+//      that needs a deployed clone. This is the exact probe the venue used to verify
 //      its rc.2 encoder; a wire regression fails DECODE (a different error) before that state
 //      check is ever reached.
 import { describe, expect, it } from "vitest";

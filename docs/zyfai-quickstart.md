@@ -1081,4 +1081,4 @@ with *"call `cork_capabilities` first"* when in doubt, so it grounds itself befo
 
 *Questions or a stale value? `ch capabilities` (search/topic) is the living manual — the authority on
 tool state, examples, and maturity. For the deeper security analysis and the pilot's open items, ask
-your Cork contact (Baptiste).*
+your Cork contact.*

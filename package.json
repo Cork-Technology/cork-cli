@@ -1,5 +1,5 @@
 {
-  "name": "cork-helper-cli",
+  "name": "cork-cli",
   "private": true,
   "type": "module",
   "workspaces": [

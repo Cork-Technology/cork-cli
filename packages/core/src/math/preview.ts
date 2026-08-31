@@ -1,4 +1,4 @@
-// Bit-exact ports of phoenix-private PoolLib preview functions (verified against
+// Bit-exact ports of phoenix PoolLib preview functions (verified against
 // contracts/libraries/PoolLib.sol). These are PURE: the caller supplies the already-resolved
 // `swapRate` (from previewAdjustedRate) plus decimals/fees/time, so each function can be
 // fork-verified wei-for-wei against the on-chain preview*/previewAdjustedRate pair.

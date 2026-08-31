@@ -1923,7 +1923,7 @@ const CATALOG: Mutant[] = [
     replace: "const canonHit = undefined as string | undefined;",
     tests: [T.cli],
   },
-  // ── RFQ negotiation surface (venue a2b03bd): fraction contract, citation gates, band, view ──
+  // ── RFQ negotiation surface: fraction contract, citation gates, band, view ──
   {
     // The fraction cap regressed to the pre-rework string-decided form: a 17-digit
     // "0.49999999999999999" is < 0.5 as a decimal but parses to exactly 0.5 — the venue's own
@@ -2275,7 +2275,7 @@ const CATALOG: Mutant[] = [
     replace: 'protocolSurplusFeePercent: "1e5 base (under fillability.surplus)"',
     tests: [T.fusion],
   },
-  // ── COR-35 layer split: pattern = contract, bound = policy (Raouf ruling 2026-08-10) ───────
+  // ── Layer split: pattern = contract, bound = policy (owner ruling 2026-08-10) ───────
   {
     // The cap teaches itself as permanent structure — callers over-fit to a pilot bound that a
     // short-tenor distressed market legitimately breaks; when the venue relaxes it, every
@@ -2296,7 +2296,7 @@ const CATALOG: Mutant[] = [
     replace: "POLICY: the current wire shape",
     tests: [T.venue],
   },
-  // ── x-units: the machine-readable unit axis (COR-35) — parity binds wire ↔ table ↔ prose ──
+  // ── x-units: the machine-readable unit axis — parity binds wire ↔ table ↔ prose ──
   {
     // TokenAmount stops emitting its unit: every amount field silently loses the machine-
     // readable axis while descriptions still read fine — exactly the drift x-units exists to
@@ -2779,7 +2779,7 @@ const CATALOG: Mutant[] = [
     replace: "  if (!target || !embedded) return null;",
     tests: [T.hypersync],
   },
-  // ── LOP invalidator READ: the view takes the nonce and shifts itself (COR-175) ───────────
+  // ── LOP invalidator READ: the view takes the nonce and shifts itself ───────────
   {
     // The 2026-08-20 bug reinstated: pass the pre-shifted slot index to bitInvalidatorForOrder.
     // The contract shifts again, reads an empty word, and every dead order looks live.
@@ -2798,7 +2798,7 @@ const CATALOG: Mutant[] = [
     replace: 'return plan.mode === "remaining" ? classifyBitInvalidator(word, 1n) : classifyRemainingRaw(word);',
     tests: [T.invalidator, T.inlineFill, T.hybridVerify],
   },
-  // ── Maker-code probe: "no code" is an answer, not a failed read (COR-175) ─────────────────
+  // ── Maker-code probe: "no code" is an answer, not a failed read ─────────────────
   {
     // Treat viem's `undefined` (no code) as a failed read again — every EOA maker would carry
     // the spurious chain_read_failed.
@@ -2816,7 +2816,7 @@ const CATALOG: Mutant[] = [
     replace: "const TAKER_THRESHOLD_MAX = (1n << 185n) - 1n;",
     tests: [T.orders],
   },
-  // ── 1inch fill/cancel decode (COR-174): the inverse must be bit-exact ────────────────────
+  // ── 1inch fill/cancel decode: the inverse must be bit-exact ────────────────────
   {
     // Receiver flag read from the wrong bit: args would be split without the 20-byte receiver
     // prefix and the extension would be mis-sliced.
@@ -3331,7 +3331,7 @@ const CATALOG: Mutant[] = [
     replace: "const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);",
     tests: [T.decodeTrust],
   },
-  // ── COR-206: a deployed oracle whose rate() reverts is the cause, not the input ──────────
+  // ── A deployed oracle whose rate() reverts is the cause, not the input ──────────
   {
     // The captured revert is dropped: a reverting oracle collapses back to "rate: null", the
     // resolve gate falls through to recipe_refused, and the anchor/deploy misdirection returns.

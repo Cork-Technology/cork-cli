@@ -3,7 +3,7 @@
 // locally, never accepted from the caller].
 //
 // Structs, typehash preimages, and encoding order are ported from the DEPLOYED pin
-// `rollover-private @ 5af1048e` (public tag v0.1.0-rc.2; src/libraries/{Typehashes,
+// `rollover v0.1.0-rc.2` (public tag v0.1.0-rc.2; src/libraries/{Typehashes,
 // LibSettlerHashing,LibAuthenticatedHooks}.sol + src/BaseFiller.sol). The typehash preimages are
 // frozen post-launch on-chain (INV-WIRE-ORDER-STABILITY), and the computed domain separator is
 // proven equal to all four live rc.2 settlers' DOMAIN_SEPARATOR() (Arbitrum + Base, identical
@@ -27,7 +27,7 @@ import {
 type Address = `0x${string}`;
 type Hex = `0x${string}`;
 
-// ── Frozen EIP-712 type strings (verbatim from Typehashes.sol @ 5af1048e) ──────────────────────
+// ── Frozen EIP-712 type strings (verbatim from Typehashes.sol @ v0.1.0-rc.2) ──────────────────────
 const ORDER_DATA_TYPE_STRING =
   "OrderData(address user,address settler,address fillerHint,address exclusiveFiller,address srcCstToken,address dstCstToken,address premiumToken,address rolloverContract,uint64 originChainId,uint64 destinationChainId,uint64 openDeadline,uint64 fillDeadline,uint64 orderSalt,uint256 orderSize,uint256 minPremiumPerShare,bool allowPartialFills,bool allowUnderfill,uint8 premiumPaymentMode,bytes32 rolloverIntentHash,RolloverParams rolloverParams)RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";
 const ROLLOVER_PARAMS_TYPE_STRING =
@@ -51,7 +51,7 @@ export const JIT_MARKET_PARAMS_TYPEHASH: Hex = keccak256(stringToHex(JIT_MARKET_
 export const ZERO_JIT_MARKET_HASH: Hex = zeroHash;
 
 /** Canonical ABI byte length of the static-only OrderData tuple
- *  (LibRolloverOrder.ORDER_DATA_ABI_LENGTH @ 5af1048e — 864 since rc.2, was 832). */
+ *  (LibRolloverOrder.ORDER_DATA_ABI_LENGTH @ v0.1.0-rc.2 — 864 since rc.2, was 832). */
 export const ORDER_DATA_ABI_LENGTH = 864;
 
 // viem-shaped types for hashTypedData/signTypedData. EIP-712 appends referenced structs sorted
@@ -361,7 +361,7 @@ export function encodeOrderData(o: OrderDataStruct): Hex {
 }
 
 /** Just-in-time market instruction a rollover order commits to when the destination pool may not
- *  exist yet (BaseFiller.JITMarketParams @ 5af1048e). The order separately signs
+ *  exist yet (BaseFiller.JITMarketParams @ v0.1.0-rc.2). The order separately signs
  *  `rolloverParams.dstPoolId` (the Phoenix Market commitment) and `rolloverParams.jitMarketHash`
  *  (this struct's commitment, negotiated fees included). Scales: the four constraint rates and
  *  rateOverride are ABSOLUTE 1e18 = 1.0; the two fee fields are PERCENTAGES 1e18 = 1%. */
@@ -423,7 +423,7 @@ const U64 = (1n << 64n) - 1n;
 
 // ── Admission pre-flight (venue parity) ────────────────────────────────────────────────────────
 // The deterministic subset of the venue's POST /rollover/v1/orders admission battery
-// (cork-indexing-api post-order.ts @ 0.3.16), replicated op-for-op so a refusal here lands
+// (cork-api post-order route @ 0.3.16), replicated op-for-op so a refusal here lands
 // exactly where the venue's 400 would. Chain-dependent admission (hook-target getCode, the
 // settler resolveFor preflight) deliberately stays venue-side — this module is pure.
 

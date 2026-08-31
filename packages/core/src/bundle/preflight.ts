@@ -2,7 +2,7 @@
 // bundle revert anyway. Every one is best-effort disclosure — we build the bytes regardless and
 // warn, because a read failure must never turn byte-building into a hard error.
 //
-// All three guards enforced here were read off the deployed source (phoenix-private):
+// All three guards enforced here were read off the deployed source (phoenix):
 //   * expiry     — pre-expiry actions against an expired pool
 //   * pause      — a global circuit breaker AND a per-pool 5-bit map
 //   * whitelist  — gated pools, which check TWO different addresses (see below)

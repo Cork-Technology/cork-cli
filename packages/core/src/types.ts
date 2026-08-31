@@ -1,6 +1,6 @@
 export type Hex40 = `0x${string}`;
 
-/** phoenix-private IPoolManager.Market (8 fields), bigint-typed. */
+/** phoenix IPoolManager.Market (8 fields), bigint-typed. */
 export interface Market {
   collateralAsset: Hex40;
   referenceAsset: Hex40;

@@ -36,7 +36,7 @@ const DeploymentSchema = z
   })
   .strip();
 
-// Rollover venue contracts (rollover-private): the factory that self-deploys per-user clones and
+// Rollover venue contracts (rollover): the factory that self-deploys per-user clones and
 // the two ERC-7683 settlers. `settlerDomain` is the EIP-712 domain OrderData is signed under
 // (verifyingContract = the settler). `seededAtBlock` = the factory seeding block — the backfill
 // start for event reconstruction (settlers deploy + approve within a few blocks of it).

@@ -1,5 +1,5 @@
 // Centralized-mode datasource: the as-built Cork venue at api-phoenix.cork.tech
-// (cork-knowledge: rollover-venue-interface.md + agent-rfq-venue-interface.md, both live).
+// (interface specs: the rollover venue and the agent RFQ venue, both live).
 // Read endpoints are keyless; the fetch implementation is injectable so the entire surface is
 // testable offline. Responses are UNTRUSTED input: shapes are zod-validated before use (lenient —
 // key fields typed, extra fields passed through, because the venue's own zod schemas are the

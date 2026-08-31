@@ -1,4 +1,4 @@
-// The maker-code probe behind finalize-maker-order and the inline taker-fill (COR-175, part 2).
+// The maker-code probe behind finalize-maker-order and the inline taker-fill (part 2).
 // viem's getCode returns `undefined` for an account WITHOUT code — a positive answer, not a
 // failed read. The ladder once used `code === undefined` as "unknown", so every EOA maker drew
 // a `chain_read_failed` ("no RPC resolved…") even with an RPC configured (2026-08-20). These

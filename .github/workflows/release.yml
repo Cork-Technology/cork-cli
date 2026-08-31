@@ -167,6 +167,26 @@ jobs:
           # first audited/production line) drops the flag. An -rc is always pre-release. Version is the
           # sole signal; no external flag.
           case "${{ github.ref_name }}" in v0.*|*-*) PRE="--prerelease";; *) PRE="";; esac
+          # G18: a release names the channels its claims cover. A candidate publishes the ghcr image
+          # only; a stable also publishes the apk repository and moves :latest. The two bodies must
+          # therefore not claim the same set.
+          case "${{ github.ref_name }}" in
+            *-rc.*) CHANNELS="This release covers three:
+
+          - the \`ch-*\` binaries,
+          - the \`cork-*.tgz\` SDK packages,
+          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`.
+
+          Every binary and tarball is attested and listed in \`checksums.txt\`. A candidate does not publish the apk repository or the \`:latest\` image — those are production only." ;;
+            *)      CHANNELS="This release covers four:
+
+          - the \`ch-*\` binaries,
+          - the \`cork-*.tgz\` SDK packages,
+          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`, which also carries \`:latest\`,
+          - the apk repository channel, signed with the key committed as \`packaging/melange.rsa.pub\`.
+
+          Every binary and tarball is attested and listed in \`checksums.txt\`. Each apk carries its own signature and SLSA provenance. One channel is excluded: the hosted MCP deployment is not covered by these checksums — verify it by its own image digest." ;;
+          esac
           gh release create "${{ github.ref_name }}" $PRE \
             --verify-tag \
             --title "${{ github.ref_name }}" \
@@ -204,13 +224,7 @@ jobs:
 
           ### Channels
 
-          This release covers three:
-
-          - the \`ch-*\` binaries,
-          - the \`cork-*.tgz\` SDK packages,
-          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`.
-
-          Every binary and tarball is attested and listed in \`checksums.txt\`. A \`-rc\` release does not publish the apk channel or the \`:latest\` image — those are production only.
+          $CHANNELS
 
           ### Verify
 
@@ -228,7 +242,7 @@ jobs:
 
           ### Compatibility
 
-          The covered surface is the JSON output, the tool names, the input schemas, and the exit codes (policy R11). This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade.
+          The covered surface is the JSON output, the tool names, the input schemas, and the exit codes. This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade.
 
           Cork runs no on-chain deployment of this tool. This is a partner-preview release — unaudited and lightly reviewed; pin the Distribution you integrate against for its stream. A \`-rc\` tag is a release candidate; we flag it pre-release." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt

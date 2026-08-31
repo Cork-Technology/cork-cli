@@ -582,7 +582,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
     // The cap is POLICY (pilot posture, spec-invisible, relaxable) — the message must say so
     // and must NOT teach it as structure, or callers over-fit to a bound expected to move
-    // (COR-35 ruling: pattern = contract, bound = current policy).
+    // (owner ruling: pattern = contract, bound = current policy).
     expect(atCap.warnings[0]?.message).toContain("POLICY");
     expect(atCap.warnings[0]?.message).toContain("relaxable");
     expect(atCap.warnings[0]?.message).not.toContain("STRUCTURE");
@@ -1629,7 +1629,7 @@ describe("taker-fill of an auction-priced resting order", () => {
   });
 });
 
-describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue a2b03bd contract", () => {
+describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue contract", () => {
   const REQUESTER = "0xc0ffee0000000000000000000000000000000001";
   const counter = (over: Record<string, unknown> = {}) => ({
     chainId: 42161,

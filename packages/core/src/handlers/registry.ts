@@ -345,7 +345,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       // already labels its rate at the top level; the pair family was the unlabeled half.
       // A deployed oracle whose rate() reverts is the cheapest catch of the whole read path —
       // said explicitly (rateReadable:false + the revert, plus an info warning), never by
-      // dropping the field (COR-206).
+      // dropping the field.
       if (read.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(probe.address, read.rateError, "Every recipe resolve/verify against this pair, every JIT fill, and CorkMarketCreator.createNewPool would revert the same way.") });
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: true, deployable: true, ...oracleRateEcho(read) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
@@ -507,7 +507,7 @@ interface RecipeResolution {
 
 /** Read a DEPLOYED oracle's rate() and KEEP the failure: a reverting oracle used to collapse to
  *  `rate: null` (indistinguishable from "not read"), which let recipe_refused misdirect a caller
- *  toward anchor/deploy advice when the real fault was the oracle's source contract (COR-206:
+ *  toward anchor/deploy advice when the real fault was the oracle's source contract (
  *  a NAV oracle over an ERC-4626 vault reverting on totalAssets() — on a fork, a block clock
  *  behind the synced state underflows Morpho's accrual, Panic 0x11). */
 async function readOracleRate(client: RegistryClient, oracle: `0x${string}`): Promise<{ rate: bigint | null; rateError?: string }> {
@@ -619,7 +619,7 @@ export async function staticResolveConstraint(
   } catch (err) {
     const o = args.oracle;
     // A deployed oracle whose rate() already reverted is the cause, not the caller's input —
-    // the recipe read the same oracle and fell over the same way (COR-206). Distinct code, so
+    // the recipe read the same oracle and fell over the same way. Distinct code, so
     // callers branch on the oracle/environment instead of re-shaping additionalData.
     if (o.deployed && o.rateError) {
       return { gate: unavailable(chainId, "oracle_rate_unreadable", oracleRateUnreadableMessage(o.address, o.rateError, `The recipe's resolve read that oracle and failed the same way (${revertReason(err)}); so would recipe.verify, a JIT fill, and CorkMarketCreator.createNewPool.`), ctx) };

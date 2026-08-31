@@ -1,5 +1,5 @@
-// Live contract gate for the venue's RFQ NEGOTIATION surface (cork-indexing-api a2b03bd:
-// answer revisions, requester counters, view=current frontier, version change-polling) —
+// Live contract gate for the venue's RFQ NEGOTIATION surface (answer revisions, requester
+// counters, view=current frontier, version change-polling) —
 // asserted against the REAL deployed venue through our own read path, so a venue contract
 // change surfaces here the way the registry redeploy surfaced in rpc-live. Self-skips unless
 // CORK_RPC_LIVE=1 (same convention as rpc-live.test.ts); tolerates an unreachable venue and an
@@ -43,7 +43,7 @@ describe.skipIf(!LIVE)("RFQ negotiation surface — live venue contract", () => 
     const rows = itemsOf(env);
     if (rows.length === 0) return; // fresh venue: shape asserted by state=ok alone
     for (const row of rows) {
-      // `version` is on EVERY read (a2b03bd: bumped in-transaction by every stored
+      // `version` is on EVERY read (the venue bumps it in-transaction on every stored
       // answer/counter). NO relation to answer_count is promised: the migration backfills
       // `DEFAULT 0`, so pre-negotiation answers never counted (observed live: an RFQ with
       // 7 stored answers at version 6). The contract is presence + monotonicity, nothing more.

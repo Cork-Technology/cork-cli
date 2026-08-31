@@ -1,4 +1,4 @@
-// COR-206: a DEPLOYED oracle whose rate() reverts must be diagnosed as the oracle's fault, not
+// A DEPLOYED oracle whose rate() reverts must be diagnosed as the oracle's fault, not
 // the caller's input. Before this, the rate read collapsed to null (indistinguishable from "not
 // read"), recipe_refused told the caller to add an anchor / deploy the oracle (both false), and
 // registry-oracle reported the oracle as healthy by dropping the rate field. Reproduced live on
@@ -50,7 +50,7 @@ const revertingOracleStub = (over: Partial<Record<string, () => unknown>> = {}) 
 };
 const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_789_900_000n, resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" } }) });
 
-describe("a deployed oracle whose rate() reverts is named as the cause (COR-206)", () => {
+describe("a deployed oracle whose rate() reverts is named as the cause", () => {
   it("registry-oracle: rateReadable:false + the revert, plus an oracle_rate_unreadable info — never a silently healthy oracle", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx(revertingOracleStub()));
     expect(env.state).toBe("ok");

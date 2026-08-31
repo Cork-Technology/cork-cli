@@ -1,4 +1,4 @@
-// Live parity for the bit-invalidator read (COR-175). Self-skips unless CORK_RPC_LIVE=1.
+// Live parity for the bit-invalidator read. Self-skips unless CORK_RPC_LIVE=1.
 //
 // The venue lists orders it recorded as FILLED or CANCELLED. For a bit-invalidator order, the
 // chain holds the proof: the order's bit in `_raw[nonce >> 8]` is set. This suite reads the

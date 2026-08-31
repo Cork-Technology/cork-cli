@@ -1,6 +1,6 @@
 // Common non-Cork Bundler3 legs so decodeBundle labels them instead of dumping "unknown":
 // GeneralAdapter1/CoreAdapter fund actions + plain ERC20 ops that appear inside real bundles.
-// Signatures verified against phoenix-private periphery (GeneralAdapter1/CoreAdapter/GeneralAdapter).
+// Signatures verified against phoenix periphery (GeneralAdapter1/CoreAdapter/GeneralAdapter).
 import { parseAbi } from "viem";
 
 export const bundlerLegAbi = parseAbi([

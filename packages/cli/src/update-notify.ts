@@ -90,7 +90,7 @@ export async function refreshUpdateCache(
   const next: UpdateCache = { ...prior, checkedAt: new Date().toISOString() };
   try {
     const res = await fetchImpl(`https://api.github.com/repos/${RELEASE_REPO}/releases/latest`, {
-      headers: { accept: "application/vnd.github+json", "user-agent": "cork-helper-cli-update-check" },
+      headers: { accept: "application/vnd.github+json", "user-agent": "cork-cli-update-check" },
       signal: AbortSignal.timeout(5000),
     });
     if (res.ok) {

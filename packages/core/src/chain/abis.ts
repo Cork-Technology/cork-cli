@@ -1,4 +1,4 @@
-// Minimal read ABIs (subset of phoenix-private interfaces) needed for state reads + parity.
+// Minimal read ABIs (subset of phoenix interfaces) needed for state reads + parity.
 export const poolManagerAbi = [
   {
     // Global circuit breaker (PausableUpgradeable). Every _corkPool*NotPaused helper checks this

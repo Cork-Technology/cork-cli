@@ -1,5 +1,5 @@
 // MarketRegistry + CorkLimitOrderAdapter integration — contracts release 2.1.0 (Arbitrum One,
-// deployed at block 489540043; ABI pinned against market-registry-private tag 2.1.0 commit
+// deployed at block 489540043; ABI pinned against market-registry tag 2.1.0 commit
 // 70c2cf8, cross-checked on-chain 2026-08-03: adapter immutables, recipe membership, factory
 // bindings, predictFixedRateOracle parity with the read API).
 //

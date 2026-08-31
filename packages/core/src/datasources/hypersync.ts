@@ -252,7 +252,7 @@ const lopFilledAbi = parseAbi(["event OrderFilled(bytes32 orderHash, uint256 rem
 // LOP order and moves a Cork share token is a Cork fill (JIT mints included: the mint is a
 // Transfer from the zero address in the same transaction).
 const erc20TransferAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
-// WhitelistManager events, verbatim from phoenix-private IWhitelistManager.sol: the membership
+// WhitelistManager events, verbatim from phoenix IWhitelistManager.sol: the membership
 // mappings are NOT enumerable on-chain, so these six events are the only enumeration source.
 const whitelistAbi = parseAbi([
   "event GlobalWhitelistAdded(address indexed account)",

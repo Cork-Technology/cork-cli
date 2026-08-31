@@ -22,7 +22,7 @@ target
 experiments/fork-harness/cache/
 experiments/fork-harness/out/
 
-# Node / TypeScript (cork-helper-cli monorepo)
+# Node / TypeScript (cork-cli monorepo)
 node_modules/
 dist/
 coverage/

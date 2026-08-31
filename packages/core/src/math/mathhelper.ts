@@ -1,4 +1,4 @@
-// Bit-exact port of phoenix-private/contracts/libraries/MathHelper.sol
+// Bit-exact port of phoenix/contracts/libraries/MathHelper.sol
 import { mulDiv, PCT_DENOM, WAD } from "./fixed.ts";
 
 /** amount * swapRate / 1e18, floor. */

@@ -374,7 +374,7 @@ const QuoteRef = z.strictObject({ rfqId: z.string(), answerId: z.string(), optio
 /** The venue listing's one premium field since cork-api 0.3.15: the percent-number `premium`
  *  completed its scheduled sunset on 2026-08-17 and the venue now answers a pointed 400 on its
  *  presence. `premiumAnnualized` carries the fraction unit the venue minted as a NEW field
- *  (COR-35/R13 — a unit change is a new name), shared verbatim with the RFQ surface, so we
+ *  (a unit change is a new name), shared verbatim with the RFQ surface, so we
  *  mirror name and unit and never convert between them. The removed field stays in this schema
  *  ONLY so a legacy caller gets the relay's pointed teaching instead of a bare shape error —
  *  any value in it is refused before relay, mirroring the venue's own preValidation gate. */

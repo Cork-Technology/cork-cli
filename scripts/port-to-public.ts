@@ -148,7 +148,7 @@ function noteLeakWarnings(repo: string, parentTree: string, tree: string): strin
   return added.length > 0 ? [`new notes/-reference line(s) entering the public tree — keep deliberately or strip:\n  ${added.join("\n  ")}`] : [];
 }
 
-/** Release policy G8 (cork-knowledge policies/releases/github-release-process.md): no AI
+/** Release policy: no AI
  *  co-author trailer on a public commit. A private commit may still carry one (older tooling
  *  added it); the port drops those lines so the public history complies mechanically. Human
  *  co-authors are kept. */

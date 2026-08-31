@@ -72,7 +72,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
   },
   // MarketRegistry 0.3.3 set (42161 block 492983171 / 8453 block 49775886 — identical
   // addresses, ONE AtomicDeployer batch per chain with byte-identical init codes, verified from
-  // both chains' broadcast records) — extracted from the deploy broadcast (market-registry-private
+  // both chains' broadcast records) — extracted from the deploy broadcast (market-registry
   // tag 0.3.3; the redeploy that fixes the cross-generation wrapper-salt collision by keying the
   // wrapper CREATE2 salt on the registry address). The AtomicDeployer itself is Safe-Singleton-
   // Factory CREATE2 (salt ++ initCode calldata; its rawSalt IS the global deployment salt); the

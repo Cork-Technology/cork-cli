@@ -598,7 +598,7 @@ export function buildTakerFill(a: TakerFillArgs): TakerFillResult {
 // ── Decoding LOP calldata (validate-before-broadcast) ────────────────────────
 // The bit-exact inverse of the builders above, for cork_decode: a signed fill or cancel
 // transaction has to label in the same plain English as a Bundler3 bundle, or the signer is
-// left trusting bytes the decoder called UNREADABLE (2026-08-20 rehearsal, COR-174).
+// left trusting bytes the decoder called UNREADABLE (2026-08-20 rehearsal).
 
 // TakerTraitsLib bit layout (1inch v6) — the flags buildTakerFill does not set are decoded too,
 // because a foreign fill may carry them.

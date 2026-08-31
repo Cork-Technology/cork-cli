@@ -1,8 +1,8 @@
 // Known-event decoding for cork_decode event/receipt: label a raw log (topics + data) against
 // the Cork protocol's verified ABI set and return NAMED args. Reconstructs from the bytes;
 // never trusts a caller-supplied parse [K3]. Coverage is exactly the declarations verified
-// verbatim against the pinned sources (phoenix-private, rollover-private @ 5af1048e, 1inch
-// limit-order-protocol, market-registry-private tag 2.1.0) — events whose INDEXED layout is
+// verbatim against the pinned sources (phoenix, rollover v0.1.0-rc.2, 1inch
+// limit-order-protocol, market-registry tag 2.1.0) — events whose INDEXED layout is
 // not source-verified (the LEGACY pre-2.1.0 JITMarketCreated, ERC-7683 Open) are labeled
 // name-only with raw bytes preserved rather than guessed.
 import { decodeEventLog, parseAbi } from "viem";
@@ -12,7 +12,7 @@ type Hex = `0x${string}`;
 
 /** Every event with a SOURCE-VERIFIED full declaration (indexed layout included). */
 export const KNOWN_EVENTS_ABI = parseAbi([
-  // phoenix-private: pool lifecycle + whitelist (IPoolManager / IWhitelistManager)
+  // phoenix: pool lifecycle + whitelist (IPoolManager / IWhitelistManager)
   "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
   "event GlobalWhitelistAdded(address indexed account)",
   "event GlobalWhitelistRemoved(address indexed account)",
@@ -20,7 +20,7 @@ export const KNOWN_EVENTS_ABI = parseAbi([
   "event MarketWhitelistRemoved(bytes32 indexed poolId, address account)",
   "event MarketWhitelistDisabled(bytes32 indexed poolId)",
   "event MarketWhitelistEnabled(bytes32 indexed poolId)",
-  // rollover-private @ 5af1048e: settler lifecycle (ISettler / IPartialSettler) + clone factory
+  // rollover v0.1.0-rc.2: settler lifecycle (ISettler / IPartialSettler) + clone factory
   // (event set unchanged by the rc.2 wire break)
   "event OrderSettled(bytes32 indexed orderId)",
   "event OrderExpired(bytes32 indexed orderId)",
@@ -33,7 +33,7 @@ export const KNOWN_EVENTS_ABI = parseAbi([
   "event DefaulterResidualReclaimedWithSubFiller(bytes32 indexed orderId, address indexed defaulterFiller, bytes32 indexed subFiller, address recipientRolloverContract, uint256 amount)",
   "event FillerSettled(bytes32 indexed orderId, address indexed filler, bytes32 indexed subFiller, uint256 residual)",
   "event RolloverContractDeployed(address indexed user, address indexed rolloverContract)",
-  // market-registry-private tag 2.1.0 (CorkLimitOrderAdapter) — JIT fill lifecycle. MarketId is
+  // market-registry tag 2.1.0 (CorkLimitOrderAdapter) — JIT fill lifecycle. MarketId is
   // a bytes32 user type; the 2.1.0 JITMarketCreated carries the RECIPE ADDRESS (the legacy
   // mode-string form has a different selector and stays name-only below). JITMinted's selector
   // is shared with the legacy adapter — same field layout, so one declaration serves both.

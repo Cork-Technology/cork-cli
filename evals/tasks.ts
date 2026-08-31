@@ -397,7 +397,7 @@ export const TASKS: EvalTask[] = [
     },
   },
   {
-    // cork-api 0.4.1 / COR-182: a resting order can be RESERVED for one filler (makerTraits
+    // cork-api 0.4.1: a resting order can be RESERVED for one filler (makerTraits
     // allowed-sender, low 80 bits). The tool refuses to build bytes that can only revert
     // PrivateOrder(); the grade is that the refusal reaches the user as teaching, not a retry.
     id: "fill-reserved-order",

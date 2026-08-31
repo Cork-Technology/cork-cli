@@ -1,4 +1,4 @@
-// Rollover order construction (rollover-private @ 5af1048e, v0.1.0-rc.2): typehash freezes,
+// Rollover order construction (rollover v0.1.0-rc.2, v0.1.0-rc.2): typehash freezes,
 // domain-separator parity vs the FOUR live rc.2 settlers (Arbitrum + Base), golden digest
 // vectors generated from the release's own Solidity libraries (forge, 2026-08-19),
 // dual-implementation digest cross-check (viem hashTypedData vs a Solidity-faithful manual
@@ -68,7 +68,7 @@ function intentArgs(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof buildRolloverIntent>[0];
 }
 
-describe("typehash freezes (rollover-private @ 5af1048e = v0.1.0-rc.2, INV-WIRE-ORDER-STABILITY)", () => {
+describe("typehash freezes (rollover v0.1.0-rc.2 = v0.1.0-rc.2, INV-WIRE-ORDER-STABILITY)", () => {
   it("constants match the deployed preimages (cast keccak over Typehashes.sol strings, 2026-08-19)", () => {
     expect(ORDER_DATA_TYPEHASH).toBe("0x23937e8e093d96fdc4118fb64533f77e10cd8e8557771334a825ed96cdb5f758");
     expect(ROLLOVER_PARAMS_TYPEHASH).toBe("0xf77bd4e003e4b9acebf51b2fb1fc702de5529ba949e96e8b675dd8848fc7390e");
@@ -395,7 +395,7 @@ describe("input bounds are teachable invalid input, never internal errors (regre
   });
 });
 
-describe("golden digest vectors (generated from rollover-private @ 5af1048e Solidity libraries via forge, 2026-08-19)", () => {
+describe("golden digest vectors (generated from rollover v0.1.0-rc.2 Solidity libraries via forge, 2026-08-19)", () => {
   // Same fixture as intentArgs, with the salt pinned to the forge run's and the premium token
   // the forge sample used (hashing is validation-free; admission rules live in the handlers).
   const golden = () =>
@@ -439,7 +439,7 @@ describe("jitMarketHash semantics (rc.2: the field is signed either way)", () =>
   });
 });
 
-describe("hashJitMarketParams (BaseFiller.hashJITMarketParams @ 5af1048e)", () => {
+describe("hashJitMarketParams (BaseFiller.hashJITMarketParams @ v0.1.0-rc.2)", () => {
   const params = {
     collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" as const,
     referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" as const,

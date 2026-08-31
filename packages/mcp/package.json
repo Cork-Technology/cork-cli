@@ -1,6 +1,6 @@
 {
   "name": "@cork/mcp",
-  "version": "0.5.0-rc.5",
+  "version": "0.5.0",
   "description": "Standard-input/output Model Context Protocol projection of the Cork helper core.",
   "license": "UNLICENSED",
   "private": false,
@@ -31,7 +31,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Cork-Technology/cork-helper-cli.git",
+    "url": "git+https://github.com/Cork-Technology/cork-cli.git",
     "directory": "packages/mcp"
   },
   "dependencies": {

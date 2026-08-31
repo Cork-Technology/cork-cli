@@ -10,7 +10,7 @@ import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, n
 import { venueNoticeWarnings } from "./query.ts";
 
 /**
- * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-indexing-api
+ * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-api
  * src/modules/rfq/v1/schemas/rfq-common.schema.ts): shape by the same regex, the < 0.5 cap by
  * the SAME `Number.parseFloat` its zod refine runs. An earlier form here decided the cap on
  * the string ("first fractional digit >= 5") on the theory that floats falsely rejected a
@@ -19,7 +19,7 @@ import { venueNoticeWarnings } from "./query.ts";
  * predict. Both forms are deterministic; this one is the deployed one.
  * Returns a human-readable violation, or null when the venue would accept the value.
  *
- * The two branches are DIFFERENT LAYERS and the messages say so (COR-35 ruling, 2026-08-10):
+ * The two branches are DIFFERENT LAYERS and the messages say so (owner ruling, 2026-08-10):
  * the regex is STRUCTURE — in the published openapi.json on both write paths, and pinned by
  * R13 (a field's unit never changes in place; a WAD variant would be a NEW field name). The
  * < 0.5 cap is POLICY — server-enforced but spec-invisible (zod refines don't export) and
@@ -466,7 +466,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // demand BUY citing the quote it accepted) or the UNDERWRITER recorded on the cited
         // ANSWER (a maker-mode SELL citing its own quote) — that answer's underwriter, not any
         // underwriter on the RFQ: citing a rival's answer is exactly the stamping the rule
-        // refuses. Identities are declared until COR-125 enforces RFQ signatures; the EIP-712
+        // refuses. Identities are declared until the venue enforces RFQ signatures; the EIP-712
         // maker signature recovered above is what prevents citation theft meanwhile. An
         // identity the embed does not carry cannot be compared, so non-party is PROVEN only
         // when both are present and neither is the maker; otherwise the venue's full store

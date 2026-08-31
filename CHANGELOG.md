@@ -1,41 +1,13 @@
 # Changelog
 
-All notable changes to this component. Versioning follows the
-[Versioning and Distribution Policy](https://github.com/Cork-Technology/cork-knowledge/blob/main/policies/versioning-and-release.md).
-We use plain SemVer per repo. Below `1.0.0`, a breaking change on covered surface bumps the
-**minor** (policy R10). The covered surface for this component is: JSON output, tool names, input
-schemas, and exit codes (policy R11). Human-readable text and log formats are not covered.
+All notable changes to this component. We use plain SemVer per repo. Below `1.0.0`, a breaking
+change on covered surface bumps the **minor**. The covered surface for this component is: JSON
+output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
+covered.
 
-## [0.5.0-rc.5] — 2026-08-31
+## [0.5.0] — 2026-08-31
 
-**Candidate for v0.5.0.** Additive since rc.4; no new breaking change.
-
-### Added
-
-- Oracle-read failures are diagnosed precisely (COR-206). A DEPLOYED oracle whose `rate()` reverts used to collapse to a silent `rate: null`: `registry-oracle` reported it as healthy by dropping the field, and the recipe's resolve revert came back as `recipe_refused` telling the caller to add an anchor or deploy the oracle — both false (the motivating case, COR-205, was a Tenderly fork whose block clock trailed the synced state, so the Morpho vault behind the NAV oracle underflowed; mainnet answered 1.086). Now the revert is captured: `registry-oracle` says `oracle.rateReadable:false` + `rateError` and warns `oracle_rate_unreadable` (a readable oracle says `rateReadable:true` beside its rate); derive-cork-pool, recipe-rate-constraint, and the JIT/create-pool auto-resolve gate as `oracle_rate_unreadable` (new code) naming the oracle, both reverts, and the fork hint; the verify pre-flights with an explicit constraint warn the same instead of a generic `chain_read_failed`; and `recipe_refused` states the oracle's condition (deployed + readable = the recipe's own refusal, check additionalData; undeployed = the anchor/deploy teaching). `revertReason` keeps viem's decoded reason line, which the header alone had hidden. Shared oracle echo (`rateReadable`/`rateError`) on derive, create-pool, and the maker JIT report.
-- `Dockerfile` (repo root, the ship-feature services[] convention): a source-run (Bun) MCP image for a ship-feature sandbox slot, where the current tree must serve before a release exists; pins `CORK_CONFIG_NO_FETCH=1` because remote-first config would otherwise fetch the public repo's trailing `cork-defaults.json` into the sandbox.
-
-## [0.5.0-rc.4] — 2026-08-28
-
-**Candidate for v0.5.0, the breaking minor (R10/R12: the diff decides the bump).** The 0.5.0 break stays the `pre-funded` removal recorded under rc.3. The items below are additions since rc.3 — the immutable rc.3 shipped less than its heading listed, so they move here. No new breaking change.
-
-### Added
-
-- `cork_prepare_market create-pool`: an unsigned `CorkMarketCreator.createNewPool(params)` tx — the pool a JIT order derives, created AHEAD of the fill by the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and idempotent (an existing pool is a lookup returning poolId + share addresses). This is the smart-account path around EOA-only ERC-2612 JIT permits: batch create-pool → `cst.approve(LOP)` → the fill with no permits and `enableJitMint` false. The action mirrors the `jitMarket` wire fields (minus the fill-only mint flag/permits); the constraint auto-resolves via `recipe.resolve` when an RPC resolves, or is passed explicitly for offline byte-building — the creator resolves the ORACLE on-chain, so unlike derive-cork-pool the calldata needs no oracle address. Pre-flights mirror the JIT ladder: creator binding triple (`adapter_binding_mismatch` conflict), controller roles (`roles_not_granted`), recipe/oracle/coherence gates, `recipe.verify` preview, pool existence (`pool_already_exists`, a new info code: safe idempotent no-op), the registry's `maxExpiryDuration` creation bound, a zero live rate (`RateUnavailable`), and predicted cST/cPT via the shared share simulation — so the tx's return triple is known before signing. Contract verified on-chain 2026-08-28: identical runtime code on 42161 + 8453 at `0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C`, wired to the configured pool manager/controller/registry, POOL_CREATOR + FEE_MANAGER granted on both chains; a live Base `eth_call` of tool-built calldata returned the tool's exact predicted `(poolId, cst, cpt)`. Config: `marketRegistry.<chain>.marketCreator` in cork-defaults.json; the guard fingerprints the creator (`marketCreator` role, `CREATE_POOL_IMPLEMENTATION_ROLES`).
-- `cork_decode` recognizes market-infrastructure calls: `MarketRegistry.deploy` / `deployFixedRateOracle` and `CorkMarketCreator.createNewPool` decode to a `kind: "market"` leg (`role: "marketRegistry" | "marketCreator"`) verified against the configured contract, with a plain-English summary line naming the pair, expiry, recipe, and idempotence. Previously this tool's OWN `cork_prepare_market` outputs came back UNREADABLE at the validate-before-broadcast step its `data.execution` prescribes. The tx target book also names `corkMarketCreator`.
-- The JIT ladder pre-flights the registry's `maxExpiryDuration` creation bound (read live: 30 days): an order whose fill must CREATE a pool with expiry beyond `now + maxExpiryDuration` warns `would_revert` naming `ExpiryOutOfRange` and the date the market becomes creatable. The `expiry_far_future` message no longer claims "the chain enforces NO upper bound" — false since the 2.1.0 registry (the JIT adapter, the rollover BaseFiller, and the market creator all enforce the bound at creation).
-- The JIT embedded-permit approval entries (maker + taker, `wallets: "eoa-only"`) teach the contract-wallet path: `cork_prepare_market create-pool` ahead of the fill, then a plain ERC-20 approval.
-- SDK (`@cork/core` `/registry`): `marketCreatorAbi`, `CreatorMarketParams`, `buildCreatorCreatePoolCall`, `rateOverrideCoherence` (the one comparator behind the ladder's and the creator's rateOverride↔source gates), `maxExpiryDuration` on `marketRegistryAbi`; `/config`: `CREATE_POOL_IMPLEMENTATION_ROLES`, the `marketCreator` implementation role, `marketCreator` on the market-registry config block; `/bundle`: the `market` leg kind and `marketRegistry`/`marketCreator` on `DecodeTrustTargets`.
-- `cork_decode` kind:"calldata" takes an optional `to` — the contract you intend to send the bytes to. Supplying it turns shape-only labeling into the same target verification the signed-tx decode runs: the claim is checked against the configured address book (a single call verifies at its role's contract; a multicall's OUTER target must be the configured Bundler3), trusted stays quiet, and a contradiction is a conflict (`target_mismatch`, do not sign). Omitted, behavior is unchanged (`target_unverified`, now also teaching the `to` path). `to` on any other kind refuses with teaching — a signed tx carries its own target, recovered from the bytes.
-- Contract constants are LIVE-READ through a 7-day-TTL cache instead of replicated as source literals (`packages/core/src/chain/constants-cache.ts`, internal; disk twin `contract-constants.json` beside the RPC cache, override `CORK_CONST_CACHE_FILE`): the fee cap the JIT/create-pool value gates enforce now comes from the deployed adapter's/creator's own `MAX_FEE_PERCENTAGE()` (compiled 5e18 as fallback only, and the refusal message names the live cap), the registry's `maxExpiryDuration` bound check reads through the cache (a warm cache even survives a failing RPC), and the controller role hashes the pre-flights and share simulations use are probed from the controller's own views (`readAdapterRoles`/`predictShares` take an opt-in `chainId` for the cache key — identical CREATE2 addresses across chains never share an entry). Value gates keep running FIRST and offline; refreshes are async best-effort where a client already exists, so a redeploy that moves a constant converges one call later. SDK: `MAX_FEE_PERCENTAGE_FALLBACK` (`/registry`); `POOL_CREATOR_ROLE()` joins `controllerViewsAbi`.
-- OUTPUT-side scales gate (`evals/output-scales-gate.test.ts`): every worked example runs against the offline stub and any money-named output field without a units label in scope (`scales`/`scale`/`rateScale`/`unitsTopic`) fails CI — the output twin of schema-lint's x-units input gate, closing the class that let taker-fill's amounts ship unlabeled. Wire-verbatim subtrees (typedData, order, venuePost, intent) and `input`/`examples` echoes are structurally exempt; residual look-alikes join an allowlist WITH a reason. Its first run found and fixed two: `authority-onboard`/`revoke` results label `amount` (base units of the token), and maker-order/finalize results carry a `scales` block covering `makingAmount`/`takingAmount`/`approvals[].amount`.
-- `test:mutation` runs mutants in a DISPOSABLE SANDBOX COPY of the working tree (git ls-files copy + symlinked node_modules, vitest cwd'd there): the tree is never mutated, concurrent test/eval/CLI runs are safe, and a kill mid-mutant strands only tmp garbage — the one-tree-one-runner rule retired (the 2026-08-27 phantom-failure class). Rot checks still read the real files.
-
-## [0.5.0-rc.3] — 2026-08-28
-
-**Candidate for v0.5.0, a breaking minor (policy R10/R11: the diff decides the bump).** The
-`pre-funded` value is removed from `cork_prepare_phoenix.fundingMode`, a covered input schema;
-the SDK changes below reshape covered exports. Checklist A.2 applies.
+Supersedes 0.5.0-rc.1 through 0.5.0-rc.5. This is the breaking minor of the 0.5 line. `pre-funded` is removed from `cork_prepare_phoenix.fundingMode`, a covered input schema, and the SDK entries below reshape covered exports. The diff decides the bump, not the intent behind it.
 
 ### Breaking
 
@@ -55,9 +27,22 @@ the SDK changes below reshape covered exports. Checklist A.2 applies.
 - `MIRRORED_VENUE_LOGIC` (SDK `/venue`): the register of venue ROUTE-LOGIC this tool mirrors op-for-op (quote_ref citation + party rule, premium bands and caps, listing-traits cross-check, rollover admission battery, rfq-counter gates, allowedSender decode, exclude_request_prefix bounds). The live spec tripwire's version-change teaching now enumerates it — a venue release that moves behavior without moving a schema gets a named re-verification list instead of a human noticing on Slack — and an offline test pins each entry to its mirror symbol.
 - `cork_prepare_orders taker-fill` results carry a `scales` block: `requiredMakingAmount`/`requiredTakingAmount` are each token's own base units (both the raw-LOP and ForSelf paths).
 
+- `cork_prepare_market create-pool`: an unsigned `CorkMarketCreator.createNewPool(params)` tx — the pool a JIT order derives, created AHEAD of the fill by the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and idempotent (an existing pool is a lookup returning poolId + share addresses). This is the smart-account path around EOA-only ERC-2612 JIT permits: batch create-pool → `cst.approve(LOP)` → the fill with no permits and `enableJitMint` false. The action mirrors the `jitMarket` wire fields (minus the fill-only mint flag/permits); the constraint auto-resolves via `recipe.resolve` when an RPC resolves, or is passed explicitly for offline byte-building — the creator resolves the ORACLE on-chain, so unlike derive-cork-pool the calldata needs no oracle address. Pre-flights mirror the JIT ladder: creator binding triple (`adapter_binding_mismatch` conflict), controller roles (`roles_not_granted`), recipe/oracle/coherence gates, `recipe.verify` preview, pool existence (`pool_already_exists`, a new info code: safe idempotent no-op), the registry's `maxExpiryDuration` creation bound, a zero live rate (`RateUnavailable`), and predicted cST/cPT via the shared share simulation — so the tx's return triple is known before signing. Contract verified on-chain 2026-08-28: identical runtime code on 42161 + 8453 at `0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C`, wired to the configured pool manager/controller/registry, POOL_CREATOR + FEE_MANAGER granted on both chains; a live Base `eth_call` of tool-built calldata returned the tool's exact predicted `(poolId, cst, cpt)`. Config: `marketRegistry.<chain>.marketCreator` in cork-defaults.json; the guard fingerprints the creator (`marketCreator` role, `CREATE_POOL_IMPLEMENTATION_ROLES`).
+- `cork_decode` recognizes market-infrastructure calls: `MarketRegistry.deploy` / `deployFixedRateOracle` and `CorkMarketCreator.createNewPool` decode to a `kind: "market"` leg (`role: "marketRegistry" | "marketCreator"`) verified against the configured contract, with a plain-English summary line naming the pair, expiry, recipe, and idempotence. Previously this tool's OWN `cork_prepare_market` outputs came back UNREADABLE at the validate-before-broadcast step its `data.execution` prescribes. The tx target book also names `corkMarketCreator`.
+- The JIT ladder pre-flights the registry's `maxExpiryDuration` creation bound (read live: 30 days): an order whose fill must CREATE a pool with expiry beyond `now + maxExpiryDuration` warns `would_revert` naming `ExpiryOutOfRange` and the date the market becomes creatable. The `expiry_far_future` message no longer claims "the chain enforces NO upper bound" — false since the 2.1.0 registry (the JIT adapter, the rollover BaseFiller, and the market creator all enforce the bound at creation).
+- The JIT embedded-permit approval entries (maker + taker, `wallets: "eoa-only"`) teach the contract-wallet path: `cork_prepare_market create-pool` ahead of the fill, then a plain ERC-20 approval.
+- SDK (`@cork/core` `/registry`): `marketCreatorAbi`, `CreatorMarketParams`, `buildCreatorCreatePoolCall`, `rateOverrideCoherence` (the one comparator behind the ladder's and the creator's rateOverride↔source gates), `maxExpiryDuration` on `marketRegistryAbi`; `/config`: `CREATE_POOL_IMPLEMENTATION_ROLES`, the `marketCreator` implementation role, `marketCreator` on the market-registry config block; `/bundle`: the `market` leg kind and `marketRegistry`/`marketCreator` on `DecodeTrustTargets`.
+- `cork_decode` kind:"calldata" takes an optional `to` — the contract you intend to send the bytes to. Supplying it turns shape-only labeling into the same target verification the signed-tx decode runs: the claim is checked against the configured address book (a single call verifies at its role's contract; a multicall's OUTER target must be the configured Bundler3), trusted stays quiet, and a contradiction is a conflict (`target_mismatch`, do not sign). Omitted, behavior is unchanged (`target_unverified`, now also teaching the `to` path). `to` on any other kind refuses with teaching — a signed tx carries its own target, recovered from the bytes.
+- Contract constants are LIVE-READ through a 7-day-TTL cache instead of replicated as source literals (`packages/core/src/chain/constants-cache.ts`, internal; disk twin `contract-constants.json` beside the RPC cache, override `CORK_CONST_CACHE_FILE`): the fee cap the JIT/create-pool value gates enforce now comes from the deployed adapter's/creator's own `MAX_FEE_PERCENTAGE()` (compiled 5e18 as fallback only, and the refusal message names the live cap), the registry's `maxExpiryDuration` bound check reads through the cache (a warm cache even survives a failing RPC), and the controller role hashes the pre-flights and share simulations use are probed from the controller's own views (`readAdapterRoles`/`predictShares` take an opt-in `chainId` for the cache key — identical CREATE2 addresses across chains never share an entry). Value gates keep running FIRST and offline; refreshes are async best-effort where a client already exists, so a redeploy that moves a constant converges one call later. SDK: `MAX_FEE_PERCENTAGE_FALLBACK` (`/registry`); `POOL_CREATOR_ROLE()` joins `controllerViewsAbi`.
+- OUTPUT-side scales gate (`evals/output-scales-gate.test.ts`): every worked example runs against the offline stub and any money-named output field without a units label in scope (`scales`/`scale`/`rateScale`/`unitsTopic`) fails CI — the output twin of schema-lint's x-units input gate, closing the class that let taker-fill's amounts ship unlabeled. Wire-verbatim subtrees (typedData, order, venuePost, intent) and `input`/`examples` echoes are structurally exempt; residual look-alikes join an allowlist WITH a reason. Its first run found and fixed two: `authority-onboard`/`revoke` results label `amount` (base units of the token), and maker-order/finalize results carry a `scales` block covering `makingAmount`/`takingAmount`/`approvals[].amount`.
+- `test:mutation` runs mutants in a DISPOSABLE SANDBOX COPY of the working tree (git ls-files copy + symlinked node_modules, vitest cwd'd there): the tree is never mutated, concurrent test/eval/CLI runs are safe, and a kill mid-mutant strands only tmp garbage — the one-tree-one-runner rule retired (the 2026-08-27 phantom-failure class). Rot checks still read the real files.
+
+- Oracle-read failures are diagnosed precisely. A DEPLOYED oracle whose `rate()` reverts used to collapse to a silent `rate: null`: `registry-oracle` reported it as healthy by dropping the field, and the recipe's resolve revert came back as `recipe_refused` telling the caller to add an anchor or deploy the oracle — both false (the motivating case was a Tenderly fork whose block clock trailed the synced state, so the Morpho vault behind the NAV oracle underflowed; mainnet answered 1.086). Now the revert is captured: `registry-oracle` says `oracle.rateReadable:false` + `rateError` and warns `oracle_rate_unreadable` (a readable oracle says `rateReadable:true` beside its rate); derive-cork-pool, recipe-rate-constraint, and the JIT/create-pool auto-resolve gate as `oracle_rate_unreadable` (new code) naming the oracle, both reverts, and the fork hint; the verify pre-flights with an explicit constraint warn the same instead of a generic `chain_read_failed`; and `recipe_refused` states the oracle's condition (deployed + readable = the recipe's own refusal, check additionalData; undeployed = the anchor/deploy teaching). `revertReason` keeps viem's decoded reason line, which the header alone had hidden. Shared oracle echo (`rateReadable`/`rateError`) on derive, create-pool, and the maker JIT report.
+- `Dockerfile` (repo root, the ship-feature services[] convention): a source-run (Bun) MCP image for a ship-feature sandbox slot, where the current tree must serve before a release exists; pins `CORK_CONFIG_NO_FETCH=1` because remote-first config would otherwise fetch the public repo's trailing `cork-defaults.json` into the sandbox.
+
 ### Changed
 
-- `cork_submit lop-order` mirrors the venue's 0.4.1 `quote_ref` party rule (cork-api PR #61, closes cork-indexing-api#60): the maker may be the RFQ's requester OR the underwriter recorded on the CITED answer — a maker-mode SELL can cite its own quote. The underwriter of a different answer on the same RFQ, and any third party, stay refused (`invalid_order_terms`). The pre-flight resolves the cited ANSWER first, as the venue does; when the embed is truncated and hides that answer, or omits an identity the venue would compare, the party check is deferred to the venue's full store and the order relays with `citation_unresolved` — a relay never out-rejects its venue. A missing option inside an embedded answer is proven absent (the embed carries the whole payload) and refused even on a truncated record.
+- `cork_submit lop-order` mirrors the venue's 0.4.1 `quote_ref` party rule: the maker may be the RFQ's requester OR the underwriter recorded on the CITED answer — a maker-mode SELL can cite its own quote. The underwriter of a different answer on the same RFQ, and any third party, stay refused (`invalid_order_terms`). The pre-flight resolves the cited ANSWER first, as the venue does; when the embed is truncated and hides that answer, or omits an identity the venue would compare, the party check is deferred to the venue's full store and the order relays with `citation_unresolved` — a relay never out-rejects its venue. A missing option inside an embedded answer is proven absent (the embed carries the whole payload) and refused even on a truncated record.
 - The committed venue openapi capture tracks cork-api 0.4.1.
 
 ### Security
@@ -99,7 +84,7 @@ First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the
 
 ### Changed (breaking)
 
-- **Rollover uses the deployed rc.2 wire (rollover-private v0.1.0-rc.2 @ 5af1048e).**
+- **Rollover uses the deployed rc.2 wire (rollover v0.1.0-rc.2).**
   `RolloverParams` gained a trailing `bytes32 jitMarketHash`. Zero means the order does not
   permit just-in-time market creation. Both EIP-712 typehashes changed, and the OrderData ABI
   length grew from 832 to 864 bytes. Every digest this tool computes, verifies, and relays now
@@ -166,7 +151,7 @@ First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the
 
 - **The eval README claimed `needs_indexer` coverage that no task had.** The list now names
   what the suite grades.
-- **LOP liveness checks read the wrong invalidator word (COR-175).** A filled or cancelled
+- **LOP liveness checks read the wrong invalidator word.** A filled or cancelled
   bit-invalidator order looked live. `OrderMixin.bitInvalidatorForOrder(maker, slot)` passes
   its argument to `BitInvalidatorLib.checkSlot(nonce)`, and `checkSlot` shifts by 8 itself.
   Only the `BitInvalidatorUpdated` event carries the shifted slot index. Three call sites
@@ -286,7 +271,7 @@ First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the
   (https://no-color.org), then `TERM=dumb`, then TTY detection per stream. No new dependency
   (`packages/cli/src/ansi.ts`). Tests pin two rules: stripped output equals plain output byte
   for byte, and `--json` output never carries an escape. Not covered surface (policy R11).
-- **`cork_decode` labels 1inch LOP v4 fills and cancels (COR-174).** kind `tx` and kind
+- **`cork_decode` labels 1inch LOP v4 fills and cancels.** kind `tx` and kind
   `calldata` decode `fillOrder`, `fillOrderArgs`, `fillContractOrder`, `fillContractOrderArgs`,
   and `cancelOrder` into a `lop` leg. The leg carries the eight order fields, the fill amount,
   the decoded taker traits (amount denomination, threshold, receiver, extension and
@@ -316,7 +301,7 @@ First production cut of the 0.4 line. It includes 0.4.0-rc.1 (same day) plus the
   the v0.4.0-rc.1 image: 7 packages, no shell, no package manager, no setuid binary, uid 65532,
   one layer; 122 MB is the Bun runtime (89 MB) plus the binding (16.6 MB) — `--minify` saves 1%,
   so the image is as small as this runtime allows.
-- **JIT prepares tell the caller to pin the constraint before the permit re-prepare (COR-176).**
+- **JIT prepares tell the caller to pin the constraint before the permit re-prepare.**
   A maker-side JIT order needs two prepares. The second embeds the permit over the predicted
   cST. The constraint is part of the pool identity. An oracle tick between the two prepares
   derived a different pool and a different cST than the permit covered (`jit_side_mismatch`).
@@ -589,7 +574,7 @@ behavior. Details under Changed.
   x-units (the shared `RateConstraintWire`). Rollover `orderSize`, `minCaReceived`,
   `minSharesOut`, and `dstCstProduced` state their token and decimals. `notionalAssets` names
   its `one_of`-decimals ambiguity and the remediation. The rfq-answer options gate is
-  advertised in the schema, with the structure vs relaxable-policy split per the COR-35 ruling.
+  advertised in the schema, with the structure vs relaxable-policy split per the owner ruling.
 - **Tiered surface-drift gate** (dev-infra). Drift failures now classify mechanically
   (`surface-tier.ts`): a prose change needs a regenerate only; a semantic change needs Layer B
   first, held-out included. An ambiguous change fails expensive by construction. The classifier
@@ -710,7 +695,7 @@ behavior. Details under Changed.
 
 ### Added
 
-- **RFQ negotiation surface** (venue a2b03bd). `cork_submit rfq-counter` is the requester's
+- **RFQ negotiation surface.** `cork_submit rfq-counter` is the requester's
   non-committal counter-bid, with the venue's own gates replicated client-side: the fraction
   contract, and the requester, expiry, and citation pre-flights. `rfq-answer` gains an optional
   `supersedes`. The `rfqs` read gains `filters.view` (`full`|`current`), which serves the

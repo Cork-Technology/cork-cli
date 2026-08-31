@@ -1,4 +1,4 @@
-// cork_decode on 1inch LOP v4 fill/cancel calldata (COR-174). The tool builds these bytes itself
+// cork_decode on 1inch LOP v4 fill/cancel calldata. The tool builds these bytes itself
 // (taker-fill, cancel), so its own validate-before-broadcast decode must label them — the
 // rehearsal of 2026-08-20 found both called UNREADABLE, which under the signing rules means
 // "do not sign". The fixture is REAL output from that rehearsal: a JIT maker order (sell 0.3 cST

@@ -113,7 +113,7 @@
       "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172"
     }
   },
-  "$rolloverComment": "Rollover ERC-7683 stack (rollover-private v0.1.0-rc.2 @ 5af1048e, deployed 2026-08-13; identical CREATE2 addresses on 42161+8453, chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts). rc.2 changed the OrderData/RolloverParams typehashes (jitMarketHash), so the July 2026 generation below is RETIRED: the venue archives it and admits only rc.2 settlers; rc.2-typed digests do not verify on the old settlers. legacyGenerations exists for event-history scans (full-decentralized fills/contracts) and retired-settler teaching only.",
+  "$rolloverComment": "Rollover ERC-7683 stack (rollover v0.1.0-rc.2, deployed 2026-08-13; identical CREATE2 addresses on 42161+8453, chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts). rc.2 changed the OrderData/RolloverParams typehashes (jitMarketHash), so the July 2026 generation below is RETIRED: the venue archives it and admits only rc.2 settlers; rc.2-typed digests do not verify on the old settlers. legacyGenerations exists for event-history scans (full-decentralized fills/contracts) and retired-settler teaching only.",
   "rollover": {
     "42161": {
       "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",

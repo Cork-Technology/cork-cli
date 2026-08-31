@@ -1,4 +1,4 @@
-# CLAUDE.md — cork-helper-cli
+# CLAUDE.md — cork-cli
 
 Cork Phoenix **MCP server + CLI over one typed core** (RFC 011). MCP and CLI are thin projections of
 the same `runTool` dispatch over the same 9-tool registry — no logic forks between surfaces.
@@ -172,7 +172,7 @@ Warning codes:
 | `funding_needs_rpc` / `manual_funding` / `owner_managed_funding` | Info on ok results: a pre-flight that needed an RPC was skipped (the JIT ladder, the oracle-deployability check) / track simulate ran without a sender / the pool burns from a non-adapter `owner`, so there was nothing to fund. Phoenix pool actions never emit `funding_needs_rpc`: they refuse (`requires_rpc`) rather than build without funding legs. |
 | `recipe_not_found` | The recipe ADDRESS isn't approved on the registry (`isRecipe` is the only gate), or a deprecated `mode` name has no configured hint. |
 | `recipe_refused` | `recipe.resolve` reverted — message names the contract's error (e.g. the liquidity recipe needs `args = abi.encode(anchorRate)` while its oracle is undeployed). |
-| `oracle_rate_unreadable` | The pair's oracle is DEPLOYED but `rate()` reverts (COR-206) — the oracle/source is the fault, not the input: gate (unavailable) on resolve paths (derive-cork-pool, recipe-rate-constraint, JIT/create-pool auto-resolve), info on registry-oracle (`oracle.rateReadable:false` + `rateError`) and on the verify pre-flights with an explicit constraint. For a NAV oracle: the ERC-4626 vault behind it reverting (on a FORK, typically a block clock behind the synced state → Morpho accrual underflow, Panic 0x11 — advance the clock). `recipe_refused` now names the oracle's state too: deployed+readable = the recipe's own refusal (check additionalData); undeployed = the anchor/deploy teaching. |
+| `oracle_rate_unreadable` | The pair's oracle is DEPLOYED but `rate()` reverts — the oracle/source is the fault, not the input: gate (unavailable) on resolve paths (derive-cork-pool, recipe-rate-constraint, JIT/create-pool auto-resolve), info on registry-oracle (`oracle.rateReadable:false` + `rateError`) and on the verify pre-flights with an explicit constraint. For a NAV oracle: the ERC-4626 vault behind it reverting (on a FORK, typically a block clock behind the synced state → Morpho accrual underflow, Panic 0x11 — advance the clock). `recipe_refused` now names the oracle's state too: deployed+readable = the recipe's own refusal (check additionalData); undeployed = the anchor/deploy teaching. |
 | `denomination_not_found` / `feed_not_found` | No such label (EXACT BYTES, case-sensitive) / no such DIRECTED base→quote feed. |
 | `deprecated_gated` | unavailable: a deprecated feature without the opt-in (`CORK_ENABLE_DEPRECATED=1`, CLI `--enable-deprecated`); nothing ran. |
 | `deprecated` | Info on ok: a deprecated path DID run — its answers don't describe the current world. |
@@ -398,7 +398,7 @@ stack, `deploymentProfiles["42161"]["arbitrum-v1.1"]` (old PM `0x4d0ab6…`; sha
 correct — `predictShares` follows the CONTROLLER's own `CORK_POOL_MANAGER()` binding,
 mutation-probed).
 
-**Rollover rc.2 (rollover-private v0.1.0-rc.2 @ 5af1048e, deployed 2026-08-13; Arbitrum + Base,
+**Rollover rc.2 (rollover v0.1.0-rc.2, deployed 2026-08-13; Arbitrum + Base,
 identical CREATE2 addresses; binds the v1.3 pool manager).** The wire BROKE: `RolloverParams`
 gained a trailing `bytes32 jitMarketHash` (zero = no JIT market; commit a negotiated
 `JITMarketParams` instruction via `hashJitMarketParams` — the BaseFiller mirror), changing both
@@ -561,7 +561,7 @@ re-asserts it at build time through the same parser.
 
 No AI co-author trailer on any commit in this repo — not `Co-Authored-By: Claude …`, not any
 other assistant identity. This overrides the global instruction to add one. Reason: the
-release policy (cork-knowledge `policies/releases/github-release-process.md`, G8) makes the
+release policy makes the
 engineer the author of record; an AI is a tool. `scripts/port-to-public.ts` also strips such
 trailers when porting, so the public tree complies even if one slips in privately. Human
 `Co-authored-by:` trailers are fine.
