@@ -10,7 +10,7 @@ import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
 import { approvedImplementationGuard, JIT_IMPLEMENTATION_ROLES, LEGACY_JIT_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
-import { resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
+import { oracleRateUnreadableMessage, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
 /** Site-specific WORDS for the shared value gate: the boundary rules are identical wherever a
@@ -268,7 +268,8 @@ export async function runJitPreflightLadder(args: {
       if (ok === false) {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
       } else if (ok === null) {
-        warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
+        if (oracle.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and the fill will too.") });
+        else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
       }
     } else {
       warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });

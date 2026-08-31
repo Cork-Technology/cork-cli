@@ -310,7 +310,13 @@ export function revertReason(err: unknown): string {
     const args = lines[errorAt + 1]?.trim().startsWith("(") ? ` ${lines[errorAt + 1]?.trim()}` : "";
     return `${lines[errorAt]?.trim()}${args}`;
   }
-  return (lines.find((l) => l.includes("reverted")) ?? lines[0] ?? err.message).trim();
+  const at = lines.findIndex((l) => l.includes("reverted"));
+  const head = (at >= 0 ? lines[at] : (lines[0] ?? err.message))!.trim();
+  // viem prints the decoded reason on the NEXT line ("reverted with the following reason:\n<why>")
+  // — the header alone hid the very thing a caller needs (COR-206: a bare "reverted with the
+  // following reason:" where the reason was Panic 0x11).
+  const next = at >= 0 ? (lines[at + 1] ?? "").trim() : "";
+  return head.endsWith(":") && next ? `${head} ${next}` : head;
 }
 
 /** Names a reverted MarketRegistry.deploy simulation precisely, instead of the one-size

@@ -76,6 +76,7 @@ const T = {
   taskFixtures: "evals/task-fixtures.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
   marketCreator: "packages/core/test/market-creator.test.ts",
+  oracleDiag: "packages/core/test/oracle-rate-diagnosis.test.ts",
   constCache: "packages/core/test/constants-cache.test.ts",
   outputScales: "evals/output-scales-gate.test.ts",
   apiSurface: "packages/core/test/api-surface.test.ts",
@@ -3329,6 +3330,32 @@ const CATALOG: Mutant[] = [
     find: "const legs = labelLopLegs(decodeCallOrBundle(data, claimedTo ?? ZERO_ADDR, 0n, claimedTo !== undefined || isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);",
     replace: "const legs = labelLopLegs(decodeCallOrBundle(data, ZERO_ADDR, 0n, isBundlerMulticall(data) ? targets : {}), chainId, jitTrust);",
     tests: [T.decodeTrust],
+  },
+  // ── COR-206: a deployed oracle whose rate() reverts is the cause, not the input ──────────
+  {
+    // The captured revert is dropped: a reverting oracle collapses back to "rate: null", the
+    // resolve gate falls through to recipe_refused, and the anchor/deploy misdirection returns.
+    id: "oracle-rate-error-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    return { rate: null, rateError: revertReason(err) };",
+    replace: "    return { rate: null };",
+    tests: [T.oracleDiag],
+  },
+  {
+    // The oracle-fault branch is unreachable: every resolve revert is again the caller's fault.
+    id: "oracle-rate-gate-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    if (o.deployed && o.rateError) {",
+    replace: "    if (false) {",
+    tests: [T.oracleDiag],
+  },
+  {
+    // rateReadable inverted: a reverting oracle reads as readable and a healthy one as broken.
+    id: "oracle-rate-readable-flag-inverted",
+    file: "packages/core/src/handlers/registry.ts",
+    find: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}) };',
+    replace: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: false } : { rateReadable: true, ...(r.rateError ? { rateError: r.rateError } : {}) };',
+    tests: [T.oracleDiag],
   },
   {
     // The multicall's OUTER target check vanishes: bytes claimed at a non-Bundler3 address

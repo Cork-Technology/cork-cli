@@ -340,10 +340,14 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
     const probe = await probePairWrapper(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName);
     if (probe.address !== null && probe.deployed) {
-      const rate = (await client.readContract({ address: probe.address, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
+      const read = await readOracleRate(client, probe.address);
       // rateScale rides INSIDE the shared oracle shape (audit R1.5): the fixed-rate family
       // already labels its rate at the top level; the pair family was the unlabeled half.
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: true, deployable: true, ...(rate !== null ? { rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+      // A deployed oracle whose rate() reverts is the cheapest catch of the whole read path —
+      // said explicitly (rateReadable:false + the revert, plus an info warning), never by
+      // dropping the field (COR-206).
+      if (read.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(probe.address, read.rateError, "Every recipe resolve/verify against this pair, every JIT fill, and CorkMarketCreator.createNewPool would revert the same way.") });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: true, deployable: true, ...oracleRateEcho(read) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (probe.address !== null) {
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: false, deployable: true }, note: `no ${modeName} oracle yet; registry.deploy(ca, ref, ${modeName}) would succeed (permissionless, idempotent) — cork_prepare_market builds that tx` }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
@@ -496,10 +500,36 @@ interface RecipeResolution {
   gate?: Envelope;
   recipe: `0x${string}`;
   source: RecipeSourceName;
-  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; reason?: string };
+  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; rateError?: string; reason?: string };
   constraint?: ResolvedConstraint;
   warnings: Array<{ code: string; message: string }>;
 }
+
+/** Read a DEPLOYED oracle's rate() and KEEP the failure: a reverting oracle used to collapse to
+ *  `rate: null` (indistinguishable from "not read"), which let recipe_refused misdirect a caller
+ *  toward anchor/deploy advice when the real fault was the oracle's source contract (COR-206:
+ *  a NAV oracle over an ERC-4626 vault reverting on totalAssets() — on a fork, a block clock
+ *  behind the synced state underflows Morpho's accrual, Panic 0x11). */
+async function readOracleRate(client: RegistryClient, oracle: `0x${string}`): Promise<{ rate: bigint | null; rateError?: string }> {
+  try {
+    return { rate: (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint };
+  } catch (err) {
+    return { rate: null, rateError: revertReason(err) };
+  }
+}
+
+/** The shared oracle-rate echo for a DEPLOYED oracle: the live rate with its scale, or an
+ *  explicit `rateReadable: false` + the revert — a deployed-but-reverting oracle must never
+ *  read as healthy by omission (the registry-oracle surface used to drop the field silently). */
+export function oracleRateEcho(r: { rate: bigint | null; rateError?: string }): Record<string, unknown> {
+  return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}) };
+}
+
+/** The oracle_rate_unreadable message, shared by the resolve gate and the verify pre-flights. */
+function oracleRateUnreadableMessage(oracle: `0x${string}` | null, rateError: string, tail: string): string {
+  return `the pair's oracle ${oracle} is DEPLOYED but its rate() reverts: ${rateError}. ${tail} This is an oracle/source fault, not this input: for a NAV oracle it is typically the ERC-4626 vault behind it reverting (e.g. totalAssets()); on a FORK it is commonly a fork artifact — a block clock behind the synced state makes Morpho-backed vaults underflow (Panic 0x11) — compare the same read on mainnet, or advance the fork clock`;
+}
+export { oracleRateUnreadableMessage };
 
 export async function resolveRecipeOracleConstraint(args: {
   client: RegistryClient;
@@ -542,8 +572,8 @@ export async function resolveRecipeOracleConstraint(args: {
   if (args.rateOracle) {
     const code = await client.getCode({ address: args.rateOracle }).catch(() => undefined);
     const deployed = code !== undefined && code !== "0x";
-    const rate = deployed ? ((await client.readContract({ address: args.rateOracle, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null) : null;
-    oracle = { address: args.rateOracle, deployed, deployable: true, mode: null, rate };
+    const read = deployed ? await readOracleRate(client, args.rateOracle) : { rate: null };
+    oracle = { address: args.rateOracle, deployed, deployable: true, mode: null, ...read };
   } else if (source === "fixed") {
     if (args.fixedRate === undefined) {
       oracle = { address: null, deployed: false, deployable: true, mode: null, rate: null, reason: "a FIXED recipe's oracle is keyed on the RATE — pass the rate (rateOverride) to predict it" };
@@ -555,8 +585,8 @@ export async function resolveRecipeOracleConstraint(args: {
     const modeName: OracleModeName = source;
     const probe = await probePairWrapper(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName);
     if (probe.address !== null && probe.deployed) {
-      const rate = (await client.readContract({ address: probe.address, abi: rateOracleAbi, functionName: "rate" }).catch(() => null)) as bigint | null;
-      oracle = { address: probe.address, deployed: true, deployable: true, mode: modeName, rate };
+      const read = await readOracleRate(client, probe.address);
+      oracle = { address: probe.address, deployed: true, deployable: true, mode: modeName, ...read };
     } else if (probe.address !== null) {
       oracle = { address: probe.address, deployed: false, deployable: true, mode: modeName, rate: null };
     } else {
@@ -587,7 +617,17 @@ export async function staticResolveConstraint(
     const c = (await client.readContract({ address: args.recipe, abi: recipeAbi, functionName: "resolve", args: [args.collateralAsset, args.referenceAsset, oracleForCall, args.additionalData ?? "0x"] })) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
     return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
   } catch (err) {
-    return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData`, ctx) };
+    const o = args.oracle;
+    // A deployed oracle whose rate() already reverted is the cause, not the caller's input —
+    // the recipe read the same oracle and fell over the same way (COR-206). Distinct code, so
+    // callers branch on the oracle/environment instead of re-shaping additionalData.
+    if (o.deployed && o.rateError) {
+      return { gate: unavailable(chainId, "oracle_rate_unreadable", oracleRateUnreadableMessage(o.address, o.rateError, `The recipe's resolve read that oracle and failed the same way (${revertReason(err)}); so would recipe.verify, a JIT fill, and CorkMarketCreator.createNewPool.`), ctx) };
+    }
+    const cause = o.deployed && o.rate !== null
+      ? `The pair's oracle ${o.address} is deployed and answers rate() = ${o.rate}, so this is the recipe's own refusal — check additionalData against the recipe's declared args shape (cork_query registry-recipes; the fixed-rate recipe rejects any payload)`
+      : "Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData";
+    return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. ${cause}`, ctx) };
   }
 }
 
@@ -624,7 +664,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     warnings.push(...res.warnings);
     if (res.gate) return res.gate;
     const { recipe, source, oracle, constraint } = res;
-    const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
+    const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.deployed ? oracleRateEcho(oracle) : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
     // Identity needs an oracle ADDRESS, not a deployed oracle: the pool id's only oracle-derived
     // input is the address (already predicted via the simulated deploy — the same one the fill
     // will run), and the constraint can resolve from the recipe's anchor fallback. Nothing has to

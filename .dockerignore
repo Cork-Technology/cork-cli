@@ -1,0 +1,10 @@
+.git
+node_modules
+**/node_modules
+.cqs
+cork-demo
+notes
+experiments
+evals/.last-run.jsonl
+dist
+**/dist

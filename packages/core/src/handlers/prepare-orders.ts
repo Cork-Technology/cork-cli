@@ -14,7 +14,7 @@ import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowS
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
-import { resolveRecipeOracleConstraint } from "./registry.ts";
+import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
 /** Maker-side 2.1.0 JIT report echoed in `data.jit` — the base always rides; the verified half is
@@ -321,7 +321,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
 
         if (ladder.verified) {
           const { client, boundController, source, oracle, derived } = ladder.verified;
-          jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.rate !== null ? { rate: oracle.rate } : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
+          jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.deployed ? oracleRateEcho(oracle) : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
           warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
 
           try {

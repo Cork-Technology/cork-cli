@@ -7,7 +7,7 @@ import { approvedImplementationGuard, CREATE_POOL_IMPLEMENTATION_ROLES, PREPARE_
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
 import { jitValueGate, maxExpiryBoundWarning, resolveFeeCap, type ValueGateSite } from "./jit.ts";
 import { refreshContractConstant } from "../chain/constants-cache.ts";
-import { probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
+import { oracleRateEcho, oracleRateUnreadableMessage, probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
  *  deploy-oracle = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
@@ -264,7 +264,8 @@ async function handleCreatePool(
       if (ok === false) {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — sending this tx would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
       } else if (ok === null) {
-        warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the creator's constraint check could not be previewed" });
+        if (oracle.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and createNewPool will too.") });
+        else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the creator's constraint check could not be previewed" });
       }
     } else {
       warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the tx deploys it automatically (permissionless, idempotent), then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before this tx lands would shift it` });
@@ -298,7 +299,7 @@ async function handleCreatePool(
     const data = {
       ...baseData(constraint),
       source,
-      oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.rate !== null ? { rate: oracle.rate, rateScale: "ABSOLUTE, 1e18 = 1.0" } : {}) },
+      oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.deployed ? oracleRateEcho(oracle) : {}) },
       pool: { poolId: derived.poolId, exists: shares.exists },
       ...(shares.cst || shares.cpt ? { shares: { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } } : {}),
     };
