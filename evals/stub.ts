@@ -439,6 +439,42 @@ export const PREPARED_MAKER_ORDER = preparedEnv.data as { orderHash: string; non
 /** The maker's REAL signature over the prepared order hash — external to the tools [K1]. */
 export const FINALIZE_SIGNATURE = await FINALIZE_MAKER.sign({ hash: PREPARED_MAKER_ORDER.orderHash as `0x${string}` });
 
+// ── grouped-rung fixture: one rung of a REAL one-cancels-the-other ladder ────────────────────
+// Built through the ladder path itself (never a hand-assembled twin): the cancel task hands the
+// agent this rung's SIGNED traits and asks what a cancel retires. Exported so the prompt cannot
+// drift from the fixture, and so the fixture test can check the sibling shares the nonce.
+export const LADDER_REQUEST_ID = "eval-ladder-fixture-0001";
+const ladderEnv = await runTool(
+  "cork_prepare_orders",
+  {
+    chainId: 1,
+    account: DEMO_ACCOUNT_ADDR,
+    clientRequestId: LADDER_REQUEST_ID,
+    action: {
+      type: "maker-ladder",
+      poolId: DEMO_POOL_ID,
+      side: "SELL",
+      makerAsset: SUSDE,
+      takerAsset: VBUSDC,
+      makingAmount: "1000000000000000000",
+      expirySeconds: 600,
+      rungs: [{ takingAmount: "1000000", allowedSender: RESERVED_FILLER }, { takingAmount: "950000", allowedSender: RESERVED_FILLER }, { takingAmount: "980000" }],
+    },
+  },
+  stubContext(),
+);
+if (ladderEnv.state !== "ok") throw new Error(`ladder fixture: maker-ladder answered ${ladderEnv.state} — fixture rot`);
+const ladderRungs = (ladderEnv.data as { rungs: Array<{ orderHash: `0x${string}`; nonce: string; grouped: boolean; typedData: { message: { makerTraits: string } } }> }).rungs;
+/** Rung 0 of the fixture ladder (reserved, grouped with rung 1) plus what a cancel of it must
+ *  report: rung 1 shares the nonce, rung 2 (open, shared-reserved policy) does not. */
+export const GROUPED_RUNG = {
+  orderHash: ladderRungs[0]!.orderHash,
+  makerTraits: ladderRungs[0]!.typedData.message.makerTraits,
+  nonce: ladderRungs[0]!.nonce,
+  siblingNonce: ladderRungs[1]!.nonce,
+  openRungNonce: ladderRungs[2]!.nonce,
+};
+
 // ── decode receipt fixture: GENUINE encoded logs, never hand-pasted hex ──────────────────────
 // Two logs from one plausible fill transaction: the LOP's own OrderFilled and the cST transfer
 // it caused. Encoded here with viem from the same event signatures the decoder's ABI set

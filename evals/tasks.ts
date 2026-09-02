@@ -1,11 +1,11 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 55 active + 7 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 60 active + 8 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
+import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -493,6 +493,93 @@ export const TASKS: EvalTask[] = [
       maxCalls: 3,
     },
   },
+  // ── one-cancels-the-other, ladders, and what a cancel retires (2026-09-02: ocoGroup,
+  //    maker-ladder, cancel.retires, topic:"orders"). Each grades a decision an underwriter
+  //    faces that no other task grades: WHICH rungs share a bit, and what the venue never learns. ──
+  {
+    // The revision ladder for one requester: three reserved prices, only one may fill. The
+    // agent must reach for maker-ladder (one call, one intent) rather than three stand-alone
+    // maker-orders (three bits — all three could fill), and must relay that the first fill
+    // retires the rest.
+    id: "ladder-reserved-revision",
+    prompt: `I am an underwriter answering an RFQ from ${RESERVED_FILLER} on Cork pool ${P}, maker ${A}. Offer them three prices for 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497): 1000000, 970000 and 950000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e), each reserved for that requester only, each valid 10 minutes, and make sure at most ONE of the three can ever fill. Request id "eval-ladder-rev-0001". Build the signable orders and tell me what happens to the other two once one fills.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "maker-ladder" } },
+      state: "ok",
+      code: "oco_group_notice",
+      answer: /(one[- ]cancels|only one|at most one|first (fill|one)|retire|invalidat|dead|cancel(led|s) the other)/i,
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // The opposite intent: a standing offer SPLIT so several takers can each fill one piece.
+    // Single-fill orders make one big order wrong (the first fill kills the rest), and a shared
+    // group makes three orders wrong for the other reason (only one could fill). The grade is
+    // the noncePolicy the agent chooses: distinct.
+    id: "ladder-split-distinct",
+    prompt: `I want to rest a standing offer of 3 sUSDe on Cork pool ${P} (maker ${A}) so that three DIFFERENT takers can each buy 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 1000000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e), open to anyone, valid one hour. All three must be able to fill independently. Request id "eval-ladder-split-0001". How much sUSDe can this consume in total?`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "maker-ladder", noncePolicy: "distinct" } },
+      state: "ok",
+      answer: /\b3[,_]?000[,_]?000[,_]?000[,_]?000[,_]?000[,_]?000\b|3e18|\b3 sUSDe|three sUSDe|all (three|3)/i,
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // One capacity, several requests: two stand-alone maker-orders that must land on ONE bit.
+    // The agent has to carry ocoGroup on both calls, and the honest answer relays what the
+    // notice says: the venue never learns the group, so the loser still reads OPEN on the book.
+    id: "oco-one-capacity",
+    prompt: `Two hedgers sent me RFQs on Cork pool ${P} and I can only honor one of them. Build two separate signable maker orders as ${A}: order A sells 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 1000000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e) reserved for ${RESERVED_FILLER}, request id "eval-cap-a-0001"; order B sells the same 1 sUSDe for 990000 vbUSDC reserved for 0xc0ffee0000000000000000000000000000000002, request id "eval-cap-b-0001". Use the group key "capacity-slot-1" so that whichever fills first cancels the other. Will the venue's order book show the loser as cancelled?`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "maker-order", ocoGroup: "capacity-slot-1" } },
+      state: "ok",
+      code: "oco_group_notice",
+      answer: /(not|never|won't|will not|does not|doesn't)[\s\S]{0,80}(venue|book)|still (show|list|read)s? (it )?(as )?open|dead on[- ]chain|re-?read the bit|invalidator/i,
+      forbid: ["cork_submit"],
+      maxCalls: 4,
+    },
+  },
+  {
+    // What a cancel retires is decided by the signed traits, not the hash: cancelling ONE rung of
+    // a shared-nonce ladder retires every rung. The agent must read `retires` and say so instead
+    // of promising the siblings survive.
+    id: "cancel-grouped-rung",
+    prompt: `I rested a three-rung one-cancels-the-other ladder on Cork (chain 1, maker ${A}). I want to pull just ONE rung: order hash ${GROUPED_RUNG.orderHash}, maker traits ${GROUPED_RUNG.makerTraits}. Build the cancel calldata, request id "eval-cancel-rung-0001", and tell me whether my other two rungs stay live after this cancel.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities"],
+      params: { action: { type: "cancel", orderHash: GROUPED_RUNG.orderHash } },
+      state: "ok",
+      // The siblings do NOT survive — they share the bit. Any register of that fact passes.
+      answer: /(retire|cancel|invalidat|kill|dead|die)[\s\S]{0,120}(other|sibling|all|every|whole|ladder|group|rung)|shared[- ]nonce|share[sd]? (the |one |a )?(same )?(bit|nonce)|same (bit|nonce)/i,
+      forbid: ["cork_submit"],
+      maxCalls: 3,
+    },
+  },
+  {
+    // The order vocabulary as a DOC TOPIC: an integrator who hears "dedicated" and "private" must
+    // learn they are one thing (reserved), that reservation names the FILL SENDER (the adapter,
+    // not the account, on a wrapper fill), and that a sibling of a filled rung is dead while the
+    // venue still lists it.
+    id: "orders-topic",
+    prompt: "A Cork underwriter told me my order is 'dedicated' to me and their bot logs call it 'private'. Are those the same thing? I fill through a ForSelf adapter contract, not from my own account — can I still fill it? And if they posted two such orders as a ladder and someone fills one, what happens to the other?",
+    expect: {
+      tool: "cork_capabilities",
+      // Unpinned params on purpose: topic:"orders", any alias, or a search all answer this.
+      state: "ok",
+      answer: /(?=[\s\S]*(reserved|allowedSender|allowed[- ]sender))(?=[\s\S]*(adapter|msg\.sender|fill sender|calls the LOP|caller))(?=[\s\S]*(dead|retire|invalidat|cancel|die|cannot be filled|no longer fillable))/i,
+      maxCalls: 2,
+    },
+  },
   {
     // The warning vocabulary as a DOC TOPIC (the sprawl lever shipped this round): an
     // integrator writing branch logic must find the families without reading 96 code strings.
@@ -589,4 +676,14 @@ export const TASKS: EvalTask[] = [
   // [K3]. Grades whether a conflict verdict reaches the user instead of being smoothed over.
   { id: "ho-claimed-hash-conflict", heldOut: true, prompt: `Decode this Cork limit order on chain 1 and confirm its order hash is 0x1111111111111111111111111111111111111111111111111111111111111111 as my counterparty claims: ${JSON.stringify({ ...SIGNED_LOP_PAYLOAD.order, orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111" })}`, expect: { tool: "cork_decode", params: { kind: "order" }, state: "conflict", code: "order_hash_mismatch", answer: /(?=[\s\S]*(mismatch|does not match|not the|wrong|differs))(?=[\s\S]*(recomput|local|actual))/i, maxCalls: 3 } },
   { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "chain_read_failed", answer: /not exist|failed|revert|unavailable/i, maxCalls: 3 } },
+  {
+    // Held-out (written 2026-09-02 alongside the ladder; the descriptions were NOT tuned against
+    // it). The policy decision hidden in plain words: "if the exclusive one fills, the public one
+    // must die too, and vice versa" is `shared` — not the default shared-reserved, under which
+    // the open rung would fill in addition.
+    id: "ho-ladder-exclusive-then-open",
+    heldOut: true,
+    prompt: `On Cork pool ${P}, as ${A}: quote ${RESERVED_FILLER} exclusively 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 950000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e) for 10 minutes, and at the same time leave a public order anyone can take at 1000000 vbUSDC for an hour. If the exclusive one fills, the public one must die too, and vice versa. Request id "eval-ho-ladder-0001".`,
+    expect: { tool: "cork_prepare_orders", prelude: ["cork_capabilities"], params: { action: { type: "maker-ladder", noncePolicy: "shared" } }, state: "ok", code: "oco_group_notice", forbid: ["cork_submit"], maxCalls: 3 },
+  },
 ];
