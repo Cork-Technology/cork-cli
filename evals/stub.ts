@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark, premiumAmount } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -149,6 +149,10 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return (corkDefaults as { deployments: Record<string, { poolManager: string }> }).deployments["1"]!.poolManager;
     case "LOP":
       return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
+    // The JIT adapter's own LOP binding (the maker-order pre-flight ladder checks it against the
+    // chain's configured LOP): the real adapter answers its chain's 1inch deployment.
+    case "LIMIT_ORDER_PROTOCOL":
+      return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses[String(chainId)] ?? (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
     case "WHITELIST":
       // A pre-caller-gate adapter has no such view. A REVERT here is explicitly not a conflict
       // (the pre-flight adapts) — serving it proves that branch instead of the happy one.
@@ -188,7 +192,7 @@ const FORSELF_ADAPTER_CODE = "0x60806040523480156100";
 
 /** One rc.2 rollover clone on the venue's contracts feed (the factory-filter task). */
 export const RC2_CLONE = "0x96f126A8503145201A60Bf9BdB29fE26E40cCA14";
-const RC2_CLONE_OWNER = "0x303Dd0B6835b4b4739d35F16A123e77D5A7dCFFF";
+export const RC2_CLONE_OWNER = "0x303Dd0B6835b4b4739d35F16A123e77D5A7dCFFF";
 
 // One REAL signed rc.2 rollover order, ready to relay: built through the SAME builder the
 // prepare path uses (typed-data + venue wire body), signed by a throwaway key that IS the
@@ -274,6 +278,12 @@ const RESTING_ORDER: LopOrder = {
   makerTraits: 0n,
 };
 export const RESTING_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESTING_ORDER);
+/** The answer-rfq task's terms: a pool expiry 20 days out (inside the registry's 30-day creation
+ *  bound) and the kernel-exact takingAmount for 4% on the stub RFQ's notional over that tenor —
+ *  computed HERE with the same function the handler uses, so the prompt and the grader cannot
+ *  drift from the served amounts. */
+export const ANSWER_TASK_EXPIRY = (NOW + 20n * 86_400n).toString();
+export const ANSWER_TASK_TAKING = premiumAmount("0.04", 1000n * 10n ** 18n, 20n * 86_400n).toString();
 /** A watermark from "an earlier look" at the book by DEMO_ACCOUNT_ADDR: its best SELL was a
  *  (since-gone) order at TWICE the resting row's unit price, so today's ranked read finds the
  *  resting row APPEARED and BETTER, and the old best GONE — the watch task's expected changes. */

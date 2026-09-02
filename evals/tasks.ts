@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK } from "./stub.ts";
+import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -615,8 +615,28 @@ export const TASKS: EvalTask[] = [
       prelude: ["cork_capabilities"],
       params: { resource: "offers" },
       state: "ok",
-      answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(indicative|no (live |resting )?order|not (firm|backed|buyable|available)|cannot (be )?(bought|buy)|nobody can buy))`, "i"),
+      // Six hex chars of the hash: agents shorten hashes to `0xf7cee3…` in prose (observed 2026-09-02),
+      // and six still identifies the order among the stub's rows.
+      answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 8)})(?=[\\s\\S]*(indicative|no (live |resting )?order|not (firm|backed|buyable|available)|cannot (be )?(bought|buy)|nobody can buy))`, "i"),
       maxCalls: 3,
+    },
+  },
+  {
+    // The underwriter's every-RFQ move as one call (2026-09-02): answer an open RFQ at a chosen
+    // premium with a firm offer reserved for the requester. The trap: hand-assembling a
+    // maker-order (guessing the cST, the amounts, the reach) instead of the sugar, or relaying
+    // to the venue (cork_submit) — the deliverable is an UNSIGNED artifact. Graded on the sugar,
+    // the kernel-exact takingAmount, and saying the offer is reserved.
+    id: "answer-rfq-firm",
+    prompt: `I am underwriter ${A}. Answer the open RFQ ${RFQ_OPEN_ID} on Arbitrum with a firm cover offer at 4% annualized, pool expiry ${ANSWER_TASK_EXPIRY}, using the liquidity recipe ${LIQUIDITY_RECIPE}, reserved for the requester. Prepare what I need to sign and tell me the exact takingAmount and who can fill it.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { chainId: 42161, action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04" } },
+      state: "ok",
+      forbid: ["cork_submit"],
+      answer: new RegExp(`(?=[\\s\\S]*${ANSWER_TASK_TAKING})(?=[\\s\\S]*(reserv|only the requester|requester (can|may) fill|PrivateOrder))`, "i"),
+      maxCalls: 4,
     },
   },
   {

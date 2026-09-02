@@ -142,7 +142,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     codes: [
       "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
       "oracle_not_deployable", "oracle_not_deployed", "oracle_rate_unreadable", "stale_share_prediction", "share_prediction_unavailable",
-      "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
+      "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "contract_maker_pre_rest", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
     ],
   },
   {
@@ -462,6 +462,12 @@ in price, reach, or expiry: a *revision ladder* re-quotes one request at better 
 with an open worse rung. A rung that dies because a sibling filled is **dead-by-sibling**: the chain
 knows, the venue does not — the row keeps reading OPEN until a status sync, so \`taker-fill\` re-reads the LOP invalidator before it builds (its liveness pre-flight), and any view that ranks or announces orders must do the same [K7].
 
+## The underwriter's moves, as one call each (cork_prepare_orders)
+
+- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; a cited option (\`answerId\` + \`optionId\`, YOUR own answer) or your \`premiumAnnualized\` + \`expiryTimestamp\` supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for the RFQ's fill_sender, else the requester; \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. The tool never chooses a premium.
+- \`refresh-order\` — re-rest a resting order of yours before it expires: the same terms on the SAME nonce (one bit — the old order and the new one cannot both fill) with a new expiry; refused when the bit is already spent (a refresh of a dead order could never fill — post a maker-order).
+- Lifting the best offer is not a sugar: \`offers\` (or the ranked \`orderbook\`) names the order, and \`taker-fill\` with that \`orderHash\` sets the cap from the signed price (the ceiling for a decaying row) — two calls, no derived cap to trust.
+
 ## Watching for a better order
 
 The venue has no push and no \`updated_after\`, so monitoring is client-side polling with a WATERMARK. Every ranked \`orderbook\` read returns \`watermark\`: an opaque token over the live set it served (collapsed group rungs included) and the best order per side, taken for the fill sender in \`filters.account\`.
@@ -605,6 +611,38 @@ export function executionMakerOrder(): ExecutionBlock {
   return executionTypedData([
     "sign the typed-data client-side (eth_signTypedData_v4, LOP v4 domain)",
     "cork_prepare_orders finalize-maker-order (recovers + verifies the signature)",
+    "cork_submit lop-order (pass submitInput verbatim)",
+  ]);
+}
+
+/** Family B, answer-rfq: one maker order that executes an RFQ answer — completed like one, then re-rested. */
+export function executionAnswerRfq(): ExecutionBlock {
+  return executionTypedData([
+    "sign the typed-data client-side (eth_signTypedData_v4, LOP v4 domain)",
+    "cork_prepare_orders finalize-maker-order (recovers + verifies the signature; the listing carries quoteRef when the answer cites an option)",
+    "cork_submit lop-order (pass submitInput verbatim — the venue cross-checks premiumAnnualized against the cited option)",
+    "before the order expires, re-rest it with cork_prepare_orders refresh-order (same terms, same bit, new expiry) until it is lifted or the RFQ lapses",
+  ]);
+}
+
+/** Family B, refresh-order: the re-rested order is completed like the one it replaces. */
+export function executionRefreshOrder(): ExecutionBlock {
+  return executionTypedData([
+    "sign the typed-data client-side (eth_signTypedData_v4, LOP v4 domain)",
+    "cork_prepare_orders finalize-maker-order (the listing carries the SAME nonce as the order it refreshes)",
+    "cork_submit lop-order (pass submitInput verbatim); the old row may keep reading OPEN at the venue — it shares this order's bit, so whichever fills first retires the other",
+  ]);
+}
+
+/** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet: the
+ *  EOA-only ERC-2612 permit path is closed, so the pool is created and the allowances placed
+ *  BEFORE the order rests (cork-periphery CorkMarketCreator, batched by the smart account). */
+export function executionMakerOrderContractMaker(): ExecutionBlock {
+  return executionTypedData([
+    "cork_prepare_market create-pool with this order's jitMarket legs (collateral, reference, expiry, recipe, constraint) — the pool the order derives, created ahead of the fill; simulate, then execute from the maker account",
+    "grant the two allowances from the maker account: the cST (predictedCorkSwapToken) → the LOP for makingAmount, and — with enableJitMint — the collateral → the JIT adapter (data.approvals holds the unsigned grants)",
+    "sign the typed-data client-side (the account's EIP-1271 signing path; the fill verifies with isValidSignature)",
+    "cork_prepare_orders finalize-maker-order (ERC-1271 staticcall — needs an RPC)",
     "cork_submit lop-order (pass submitInput verbatim)",
   ]);
 }

@@ -8,10 +8,9 @@
 import { runTool, ToolInputError } from "@cork/core";
 import { DEMO_ACCOUNT, DEMO_POOL_ID, DEMO_SIGNED_TX, TOOL_EXAMPLES } from "@cork/schemas";
 import type { TraceCall } from "./run.ts";
-import {
-  ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
+import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
   GROUPED_RUNG, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY,
-  RESERVED_FILLER, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, stubContext, WATCH_WATERMARK } from "./stub.ts";
+  RESERVED_FILLER, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, stubContext, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 
 export interface Play {
   id: string;
@@ -86,6 +85,7 @@ export const PLAYS: Play[] = [
   { id: "registry-recipes", calls: [q({ resource: "registry-recipes", chainId: 42161 })], finalText: "The approved recipes are listed above; the liquidity recipe takes abi.encode(uint256 anchorRate) as its additionalData." },
   { id: "predict-market", calls: [q({ resource: "derive-cork-pool", chainId: 42161, filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1900000000", recipe: LIQUIDITY_RECIPE } })], finalText: `Derived pool id as returned; cST ${CST}, cPT as returned.` },
   { id: "book-best-for-me", calls: [q({ resource: "orderbook", chainId: 1, filters: { poolId: P, account: A } })], finalText: `Fill ${RESTING_ORDER_HASH} first: it is the only fillable order for you, ranked best. The other resting order is reserved for a different fill sender and is excluded (PrivateOrder), so you cannot fill it.` },
+  { id: "answer-rfq-firm", calls: [{ tool: "cork_prepare_orders", input: { chainId: 42161, account: A, clientRequestId: "answer-rfq-firm-0001", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: ANSWER_TASK_EXPIRY, jitMarket: { recipe: LIQUIDITY_RECIPE } } } }], finalText: `Sign the typed-data above (unsigned — nothing was relayed). takingAmount is ${ANSWER_TASK_TAKING} collateral base units (4% × the RFQ notional × the 20-day tenor, ACT/365, rounded toward you). The order is reserved for the requester: only that account can fill it (any other caller reverts PrivateOrder). Then finalize-maker-order and submit lop-order; re-rest it with refresh-order before it expires.` },
   { id: "watch-better-order", calls: [q({ resource: "orderbook", chainId: 1, filters: { poolId: P, account: A }, since: WATCH_WATERMARK })], finalText: `Yes — a better order appeared: ${RESTING_ORDER_HASH}, cheaper per unit than your previous best and confirmed live on chain (its invalidator bit read clear). The order you were looking at before is gone: it is no longer served as fillable, so your previous best died.` },
   { id: "offers-firm-vs-indicative", calls: [q({ resource: "offers", chainId: 1, filters: { poolId: P, account: A } })], finalText: `One offer you can buy now: ${RESTING_ORDER_HASH}, a live order citing the firm quote at 5% annualized. The 3% quote on the RFQ feed is indicative: no live order backs it, so nobody can buy it yet.` },
   { id: "rfq-discovery-feed", calls: [q({ resource: "rfqs", chainId: 42161 })], finalText: "Open RFQ rfq_open7 with the notional shown above. These rows are off-chain, venue-claimed data and cannot be verified on-chain." },

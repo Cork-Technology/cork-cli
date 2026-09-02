@@ -329,6 +329,9 @@ export interface MakerOrderArgs {
    *  (namespaced, see ocoGroupNonce) instead of clientRequestId, so every order by this maker that
    *  names the same group shares one bit and the first fill or cancel retires them all. */
   ocoGroup?: string;
+  /** Pin the invalidator nonce EXPLICITLY — the refresh path re-rests an order on the very bit the
+   *  original spends, so the two cannot both fill. Takes precedence over ocoGroup/clientRequestId. */
+  nonce?: bigint;
   /** Cork hook extension bytes (deploy-on-fill / JIT-mint orders). When present, the salt's low
    *  160 bits are BOUND to keccak256(extension) (OrderLib checks this at fill) and
    *  HAS_EXTENSION_FLAG is set; determinism moves to the top 96 bits. */
@@ -404,7 +407,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   // the same group is one-cancels-the-other (a ladder; one capacity answering several requests).
   // The group seed is NAMESPACED so a group key can never collide with a plain order's id-derived
   // bit by accident.
-  const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);
+  const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);
   let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
     allowMultipleFills: false,

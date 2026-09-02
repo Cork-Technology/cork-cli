@@ -705,6 +705,14 @@
       "kind": "value"
     },
     {
+      "name": "RE_REST_MAX_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "RE_REST_MIN_SECONDS",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_FILL_TOPICS",
       "kind": "value"
     },
@@ -866,6 +874,10 @@
     },
     {
       "name": "SETTLER_EVENTS",
+      "kind": "value"
+    },
+    {
+      "name": "SHARE_DECIMALS",
       "kind": "value"
     },
     {
@@ -1097,6 +1109,10 @@
       "kind": "type"
     },
     {
+      "name": "YEAR_SECONDS",
+      "kind": "value"
+    },
+    {
       "name": "ZERO_CALLBACK_HASH",
       "kind": "value"
     },
@@ -1118,6 +1134,10 @@
     },
     {
       "name": "annotateApprovalStatus",
+      "kind": "value"
+    },
+    {
+      "name": "answerOcoGroup",
       "kind": "value"
     },
     {
@@ -1358,6 +1378,10 @@
     },
     {
       "name": "corkSettlerDomainSeparator",
+      "kind": "value"
+    },
+    {
+      "name": "coverMakingAmount",
       "kind": "value"
     },
     {
@@ -1661,6 +1685,10 @@
       "kind": "value"
     },
     {
+      "name": "impliedPremiumWad",
+      "kind": "value"
+    },
+    {
       "name": "intentStructHash",
       "kind": "value"
     },
@@ -1853,6 +1881,14 @@
       "kind": "value"
     },
     {
+      "name": "premiumAmount",
+      "kind": "value"
+    },
+    {
+      "name": "premiumFraction",
+      "kind": "value"
+    },
+    {
       "name": "previewAdjustedRate",
       "kind": "value"
     },
@@ -1894,6 +1930,10 @@
     },
     {
       "name": "rateOverrideCoherence",
+      "kind": "value"
+    },
+    {
+      "name": "reRestExpirySeconds",
       "kind": "value"
     },
     {
@@ -3389,6 +3429,14 @@
       "kind": "type"
     },
     {
+      "name": "RE_REST_MAX_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "RE_REST_MIN_SECONDS",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_INTENT_TYPEHASH",
       "kind": "value"
     },
@@ -3465,6 +3513,10 @@
       "kind": "value"
     },
     {
+      "name": "SHARE_DECIMALS",
+      "kind": "value"
+    },
+    {
       "name": "SettlementClass",
       "kind": "type"
     },
@@ -3509,6 +3561,10 @@
       "kind": "value+type"
     },
     {
+      "name": "YEAR_SECONDS",
+      "kind": "value"
+    },
+    {
       "name": "ZERO_JIT_MARKET_HASH",
       "kind": "value"
     },
@@ -3518,6 +3574,10 @@
     },
     {
       "name": "annotateApprovalStatus",
+      "kind": "value"
+    },
+    {
+      "name": "answerOcoGroup",
       "kind": "value"
     },
     {
@@ -3610,6 +3670,10 @@
     },
     {
       "name": "corkSettlerDomainSeparator",
+      "kind": "value"
+    },
+    {
+      "name": "coverMakingAmount",
       "kind": "value"
     },
     {
@@ -3721,6 +3785,10 @@
       "kind": "value"
     },
     {
+      "name": "impliedPremiumWad",
+      "kind": "value"
+    },
+    {
       "name": "intentStructHash",
       "kind": "value"
     },
@@ -3793,11 +3861,23 @@
       "kind": "value"
     },
     {
+      "name": "premiumAmount",
+      "kind": "value"
+    },
+    {
+      "name": "premiumFraction",
+      "kind": "value"
+    },
+    {
       "name": "protocolEmittersFor",
       "kind": "value"
     },
     {
       "name": "rankBookRows",
+      "kind": "value"
+    },
+    {
+      "name": "reRestExpirySeconds",
       "kind": "value"
     },
     {

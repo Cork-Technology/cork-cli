@@ -41,6 +41,10 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_prepare_orders :: action<oneOf5>.expirySeconds": "relative duration, bounded <= 10y — the ladder default for rungs that set none (traits slot is 40-bit)",
   "cork_prepare_orders :: action<oneOf5>.rungs[].expirySeconds": "relative duration, bounded <= 10y — one rung's own expiry (traits slot is 40-bit)",
   "cork_prepare_orders :: action<oneOf5>.rungs[].auction.durationSeconds": "relative duration, bounded to the 3-byte wire field (~194 days) — the shared MakerAuctionWire under a ladder rung",
+  "cork_prepare_orders :: action<oneOf6>.expirySeconds": "relative duration, bounded <= 10y — the answer's order expiry override (traits slot is 40-bit)",
+  "cork_prepare_orders :: action<oneOf6>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (the shared MakerJitMarketWire minus the RFQ-supplied legs, under answer-rfq)",
+  "cork_prepare_orders :: action<oneOf7>.expirySeconds": "relative duration, bounded <= 10y — the refreshed order's expiry (traits slot is 40-bit)",
+  "cork_prepare_orders :: action<oneOf7>.maxPages": "bounded page knob (1..50)",
   "cork_prepare_orders :: action<oneOf5>.rungs[].auction.points[].timeDelta": "relative duration, bounded to the 2-byte wire field (65535s) — the shared MakerAuctionWire under a ladder rung",
   // Venue-defined wire numerics (the venue's own JSON contract), bounded in schema.
   "cork_prepare_orders :: action<oneOf1>.listing.premium": "REMOVED by the venue 2026-08-17 — the field survives only to refuse with teaching; PERCENT float shape kept so the refusal matches what callers still send",

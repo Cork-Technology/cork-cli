@@ -69,6 +69,8 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "maker-order", text: "limit order maker sign typed data sell buy place resting" },
     { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage" },
     { variant: "maker-ladder", text: "ladder rungs several orders at once one cancels the other oco revision ladder better price reserved then open split standing offer many takers capacity" },
+    { variant: "answer-rfq", text: "answer an rfq quote firm offer underwriter reserved for requester premium notional tenor act 365 kernel amounts cite option quote ref re-rest one capacity many rfqs" },
+    { variant: "refresh-order", text: "re-rest refresh renew extend expiry resting order same nonce same bit revision before expiry ttl window" },
     { variant: "taker-fill", text: "fill take order taker execute against" },
     { variant: "cancel", text: "cancel invalidate order remove resting" },
     { variant: "rollover-intent", text: "rollover intent erc-7683 settler roll position next expiry" },

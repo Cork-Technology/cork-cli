@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, stubContext, WATCH_WATERMARK } from "./stub.ts";
+import { CST, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -499,6 +499,19 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(d.indicative.options[0]).toMatchObject({ answerId: SOFT_ANSWER_ID, premiumAnnualized: "0.03" });
     expect(d.excluded.map((r) => r.orderHash.toLowerCase())).toEqual([RESERVED_ORDER_HASH.toLowerCase()]);
     expect(taskOf("offers-firm-vs-indicative").expect.answer!.test(`buy ${RESTING_ORDER_HASH}; the 3% quote is indicative — no live order backs it`)).toBe(true);
+  });
+
+  it("answer-rfq-firm: the sugar answers the stub RFQ with the kernel-exact amounts, reserved for the requester", async () => {
+    const env = await callOf("answer-rfq-firm");
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as { kind: string; allowedSender: string | null; ocoGroup: string; answer: { takingAmount: string; reservedFor: string; expirySeconds: number } };
+    expect(d.kind).toBe("maker-order");
+    expect(d.answer.takingAmount).toBe(ANSWER_TASK_TAKING);
+    expect(d.allowedSender).not.toBeNull();
+    expect(d.ocoGroup).toBe(`rfq:${RFQ_OPEN_ID}`);
+    expect(d.answer.expirySeconds).toBe(600);
+    expect(taskOf("answer-rfq-firm").expect.answer!.test(`takingAmount ${ANSWER_TASK_TAKING}; reserved for the requester`)).toBe(true);
+    expect(taskOf("answer-rfq-firm").expect.answer!.test(`takingAmount 123; open to anyone`)).toBe(false);
   });
 
   it("watch-better-order: the stub's live order is appeared + better against the task's watermark, and the watermark's best is gone", async () => {

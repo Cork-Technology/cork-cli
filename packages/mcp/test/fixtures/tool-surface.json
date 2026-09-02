@@ -3052,6 +3052,236 @@
                 ],
                 "additionalProperties": false,
                 "description": "a LADDER of signable maker orders in one call (2 to 32 rungs, one pool and side): rungs differ in price, reach (open | reserved), expiry, or decay, and `noncePolicy` decides which rungs are one-cancels-the-other by sharing one invalidator bit. Returns one maker-order artifact per rung (sign each; finalize-maker-order each; cork_submit each), the group each rung landed on, and the maker-asset CAPACITY the ladder can consume (a shared group counts once at its largest rung; distinct rungs add up). Fails as a whole when any rung fails — a ladder is one intent"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "answer-rfq"
+                  },
+                  "rfqId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "the open RFQ to answer ('rfq_…') — its record supplies the pair, the notional, the requester, the expiry window, and (if cited) the option's premium and pool expiry"
+                  },
+                  "answerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "CITED answer: the id of YOUR posted answer on this RFQ (with optionId) — the option's premium_annualized and expiry set the amounts, its market_template the recipe, and the order carries quoteRef so the venue can cross-check the premium. The maker must be the answer's underwriter (cork-api 0.4.1 party rule)"
+                  },
+                  "optionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "CITED answer: the option on that answer to execute"
+                  },
+                  "premiumAnnualized": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "UNCITED answer: the annualized premium as a decimal-fraction STRING (\"0.041\" = 4.1%) when no posted option is cited — this tool never chooses a premium, it computes amounts from yours. Mutually exclusive with answerId/optionId"
+                  },
+                  "expiryTimestamp": {
+                    "description": "UNCITED answer: the pool expiry the cover runs to (unix seconds; the order's tenor is expiry − now). A cited option supplies its own. Outside the RFQ's expiry_window it is a visible counter-proposal (warned, built)",
+                    "$ref": "#/$defs/UnixSeconds"
+                  },
+                  "notionalAssets": {
+                    "description": "cover size in the COLLATERAL asset's base units; default = the RFQ's notional_assets",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "collateralAsset": {
+                    "description": "required only when the RFQ lists several acceptable collateral tokens (collateral_asset.one_of) — pick one; an `exact` RFQ needs nothing",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "reserve": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "true (default): reserve the fill for the requester — the RFQ's fill_sender when it names one, else the requester account (allowedSender low 80 bits; any other LOP caller reverts PrivateOrder). false: an open order any taker may lift"
+                  },
+                  "fillSender": {
+                    "description": "reserve for THIS LOP caller instead (the requester's ForSelf ADAPTER when it fills through one — the adapter is the LOP's msg.sender there)",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "expirySeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 315576000,
+                    "description": "order expiry, RELATIVE seconds; default = the venue's re-rest rule max(90 s, min(10 min, half the RFQ's remaining validity)) — a resting answer is re-rested each window until lifted or the RFQ lapses (refresh-order)"
+                  },
+                  "ocoGroup": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "one-cancels-the-other group key; default 'rfq:<rfqId>' so every rung answering this RFQ shares one bit — a revision at a better price retires the earlier rung on the first fill, and only one answer can ever fill. Pass ONE key across several RFQs to answer them all with one capacity: the first fill wins, the rest die"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS the order names — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "additionalData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "enableJitMint": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"
+                      },
+                      "permits": {
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports",
+                              "$ref": "#/$defs/TokenAmount"
+                            },
+                            "deadline": {
+                              "$ref": "#/$defs/UnixSeconds"
+                            },
+                            "v": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "r": {
+                              "$ref": "#/$defs/Bytes32"
+                            },
+                            "s": {
+                              "$ref": "#/$defs/Bytes32"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "value",
+                            "deadline",
+                            "v",
+                            "r",
+                            "s"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; additionalData/rateOverride/constraint/fees/enableJitMint/permits pass through to the maker-order jitMarket"
+                  },
+                  "usePermit2": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "source the cST through Permit2 at fill time (see maker-order.usePermit2)"
+                  },
+                  "allowsPartialFills": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "cover answers are all-or-nothing by default (the requester asked for one notional); true allows a smaller fill — which still spends the bit"
+                  }
+                },
+                "required": [
+                  "type",
+                  "rfqId"
+                ],
+                "additionalProperties": false,
+                "description": "answer an RFQ with a FIRM, reserved cover offer in one call: reads the RFQ (and the cited option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the requester, cites the option (quoteRef), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns (sign → finalize-maker-order → submit lop-order), plus `answer` with the derivation. Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "refresh-order"
+                  },
+                  "orderHash": {
+                    "description": "the resting order to re-rest — located on the venue book, re-hashed, and read from the LOP invalidator before anything is built",
+                    "$ref": "#/$defs/Bytes32"
+                  },
+                  "expirySeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 315576000,
+                    "default": 600,
+                    "description": "the NEW order's expiry, RELATIVE seconds (default 10 min — the venue's re-rest window)"
+                  },
+                  "maxPages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 10,
+                    "description": "hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete"
+                  }
+                },
+                "required": [
+                  "type",
+                  "orderHash"
+                ],
+                "additionalProperties": false,
+                "description": "re-rest a resting order of yours before it expires: the SAME terms (assets, amounts, reach, partial-fill flag, Permit2 sourcing, extension — a JIT or auction extension verbatim) with a new expiry and a fresh clientRequestId, on the SAME invalidator nonce — so the old order and the new one share one bit and cannot both fill (the refresh is a revision, not a second exposure). Refused when the maker is not `account`, when the row does not hash to orderHash, or when the chain says the bit is already spent (a refresh of a dead order could never fill — post a maker-order). Returns the same signable maker-order artifact, plus `refreshes`"
               }
             ]
           },

@@ -62,6 +62,7 @@ const T = {
   rank: "packages/core/test/orders-rank.test.ts",
   offers: "packages/core/test/offers.test.ts",
   watch: "packages/core/test/orders-watch.test.ts",
+  answer: "packages/core/test/answer-rfq.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -363,6 +364,104 @@ const CATALOG: Mutant[] = [
     find: 'if (inner.status !== undefined && inner.status !== "quoted") continue; // a pass has no price',
     replace: "",
     tests: [T.offers],
+  },
+  // ── answer-rfq / refresh-order: the kernel's amount math and the sugars' defaults ──
+  {
+    // premium_amount rounds TOWARD THE MAKER (ceil): floor shorts the maker by one unit on the golden.
+    id: "answer-premium-floor",
+    file: "packages/core/src/orders-answer.ts",
+    find: "return ceilDiv(num * notionalAssets * tenorSeconds, den * YEAR_SECONDS);",
+    replace: "return (num * notionalAssets * tenorSeconds) / (den * YEAR_SECONDS);",
+    tests: [T.answer],
+  },
+  {
+    // ACT/365, not ACT/360 — the venue and the kernel divide by 31,536,000.
+    id: "answer-year-360",
+    file: "packages/core/src/orders-answer.ts",
+    find: "export const YEAR_SECONDS = 31_536_000n;",
+    replace: "export const YEAR_SECONDS = 31_104_000n;",
+    tests: [T.answer],
+  },
+  {
+    // makingAmount is the notional as 18-decimal cST; a 6-dec collateral must scale up by 1e12.
+    id: "answer-making-not-rescaled",
+    file: "packages/core/src/orders-answer.ts",
+    find: "return normalizeDecimals(notionalAssets, collateralDecimals, SHARE_DECIMALS);",
+    replace: "return notionalAssets;",
+    tests: [T.answer],
+  },
+  {
+    // The re-rest rule has a 90 s floor so a lift has a window to land.
+    id: "answer-rerest-floor-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: "return Math.max(RE_REST_MIN_SECONDS, Math.min(RE_REST_MAX_SECONDS, half));",
+    replace: "return Math.min(RE_REST_MAX_SECONDS, half);",
+    tests: [T.answer],
+  },
+  {
+    // The answer is RESERVED for the requester by default — an open order is a different product.
+    id: "answer-reserve-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "    ...(allowedSender !== undefined ? { allowedSender } : {}),\n    ...(quoteRef ? { quoteRef } : {}),",
+    replace: "    ...(quoteRef ? { quoteRef } : {}),",
+    tests: [T.answer],
+  },
+  {
+    // Every rung answering one RFQ shares one bit by default (ocoGroup 'rfq:<rfqId>').
+    id: "answer-oco-default-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const ocoGroup = action.ocoGroup ?? answerOcoGroup(action.rfqId);",
+    replace: "const ocoGroup = action.ocoGroup ?? `answer:${input.clientRequestId}`;",
+    tests: [T.answer],
+  },
+  {
+    // A maker may cite only its OWN answer (cork-api 0.4.1 party rule) — dropping the check lets
+    // a rival execute someone else's quote at that quote's terms.
+    id: "answer-party-rule-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (underwriter !== undefined && underwriter.toLowerCase() !== input.account.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // The cited option's premium and expiry set the amounts, not the caller's.
+    id: "answer-cited-terms-ignored",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "    premiumAnnualized = p;\n    expiryTimestamp = BigInt(e);",
+    replace: "    premiumAnnualized = \"0.04\";\n    expiryTimestamp = BigInt(e);",
+    tests: [T.answer],
+  },
+  {
+    // The refresh re-rests on the SAME nonce — one bit, the two cannot both fill.
+    id: "refresh-nonce-not-shared",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      nonce: traits.nonce,\n      ...(extension !== \"0x\" ? { extension } : {}),",
+    replace: "      ...(extension !== \"0x\" ? { extension } : {}),",
+    tests: [T.answer],
+  },
+  {
+    // A spent bit REFUSES: a refresh on a dead bit could never fill.
+    id: "refresh-dead-not-refused",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'return envelope({ state: "conflict", data: { orderHash: localHash, nonce: traits.nonce.toString(), venueStatus: "resting", chainStatus: status.status }',
+    replace: 'if (false) return envelope({ state: "conflict", data: { orderHash: localHash, nonce: traits.nonce.toString(), venueStatus: "resting", chainStatus: status.status }',
+    tests: [T.answer],
+  },
+  {
+    // Only the maker refreshes its order (the new order is signed by account).
+    id: "refresh-maker-check-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (old.maker.toLowerCase() !== input.account.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // MakerOrderArgs.nonce is the explicit pin the refresh relies on.
+    id: "orders-nonce-override-ignored",
+    file: "packages/core/src/orders.ts",
+    find: "const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
+    replace: "const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
+    tests: [T.answer],
   },
   // ── watch: the client-side watermark and verify-before-announce ──
   {
