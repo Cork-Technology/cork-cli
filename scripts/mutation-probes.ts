@@ -171,8 +171,8 @@ const CATALOG: Mutant[] = [
     // and the ladder stops being one-cancels-the-other.
     id: "orders-oco-seed-ignored",
     file: "packages/core/src/orders.ts",
-    find: "const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
-    replace: "const nonce = nonceFromSeed(a.clientRequestId);",
+    find: "const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
+    replace: "const nonce = a.nonce !== undefined ? a.nonce : nonceFromSeed(a.clientRequestId);",
     tests: [T.orders],
   },
   {
