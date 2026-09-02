@@ -18,6 +18,8 @@ import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
 import { CST, stubContext } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
+  FIRM_ANSWER_ID,
+  SOFT_ANSWER_ID,
   RESERVED_FILLER,
   GROUPED_RUNG,
   DEMO_RECEIPT,
@@ -485,6 +487,18 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(d.excluded.map((r) => r.orderHash.toLowerCase())).toEqual([RESERVED_ORDER_HASH.toLowerCase()]);
     expect(d.excluded[0]!.whyNotFillable).toContain("PrivateOrder");
     expect(taskOf("book-best-for-me").expect.answer!.test(`fill ${RESTING_ORDER_HASH}; the other is reserved: ${d.excluded[0]!.whyNotFillable}`)).toBe(true);
+  });
+
+  it("offers-firm-vs-indicative: the cited resting row is the one offer; the unbacked cheaper quote is indicative", async () => {
+    const env = await callOf("offers-firm-vs-indicative");
+    expect(env.state).toBe("ok");
+    const d = env.data as { items: Array<{ orderHash: string; provenance: string; quote: { answerId: string; premiumAnnualized: string } }>; indicative: { count: number; options: Array<{ answerId: string; premiumAnnualized: string | null }> }; excluded: Array<{ orderHash: string }> };
+    expect(d.items.map((i) => [i.orderHash.toLowerCase(), i.provenance])).toEqual([[RESTING_ORDER_HASH.toLowerCase(), "cited"]]);
+    expect(d.items[0]!.quote).toMatchObject({ answerId: FIRM_ANSWER_ID, premiumAnnualized: "0.05" });
+    expect(d.indicative.count).toBe(1);
+    expect(d.indicative.options[0]).toMatchObject({ answerId: SOFT_ANSWER_ID, premiumAnnualized: "0.03" });
+    expect(d.excluded.map((r) => r.orderHash.toLowerCase())).toEqual([RESERVED_ORDER_HASH.toLowerCase()]);
+    expect(taskOf("offers-firm-vs-indicative").expect.answer!.test(`buy ${RESTING_ORDER_HASH}; the 3% quote is indicative — no live order backs it`)).toBe(true);
   });
 
   it("orders-topic: the doc topic's own body satisfies the three-part answer regex (reach, fill sender, dead sibling)", async () => {

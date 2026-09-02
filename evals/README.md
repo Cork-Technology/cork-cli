@@ -79,7 +79,7 @@ tokens (which still count all context processed, so run totals stay comparable).
 
 ### Task set (`evals/tasks.ts`)
 
-61 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
+62 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
 auction, fills of a REAL signed resting order both from the book and from held bytes, market
 and fixed-rate oracle txs, rc.2 rollover intents incl. a just-in-time market commitment),
 token-approval reporting, the caller-signature path (finalize verifies an EXTERNALLY signed
@@ -98,7 +98,7 @@ reachable through the advertised surface but never exercised by an agent — the
 finalize, the venue-free inline fill, simulate-before-signing, the deliberately gated quote,
 the RFQ feed and the underwriter's answer to it, the fixed-rate oracle, the warnings topic,
 receipt decoding, and the ForSelf shape (a direct adapter call whose allowances target the
-ADAPTER — the expensive thing to get wrong). The 2026-09-02 order-lifecycle work added five active tasks and one held-out: the reserved revision ladder (one call, one bit), a standing offer split across takers (`distinct`), one capacity across two RFQs (`ocoGroup` on two stand-alone orders, graded on relaying that the venue never learns the group), what a cancel of one rung retires (`retires`), the `orders` vocabulary topic, and the ranked book default (`book-best-for-me`: name the one fillable order and why the reserved one is excluded); the held-out task hides a `shared` policy decision in plain words. Deliberately NOT added: registry-denominations,
+ADAPTER — the expensive thing to get wrong). The 2026-09-02 order-lifecycle work added five active tasks and one held-out: the reserved revision ladder (one call, one bit), a standing offer split across takers (`distinct`), one capacity across two RFQs (`ocoGroup` on two stand-alone orders, graded on relaying that the venue never learns the group), what a cancel of one rung retires (`retires`), the `orders` vocabulary topic, the ranked book default (`book-best-for-me`: name the one fillable order and why the reserved one is excluded), and the offers view (`offers-firm-vs-indicative`: the cheaper quote nobody backed must be called indicative, not offered); the held-out task hides a `shared` policy decision in plain words. Deliberately NOT added: registry-denominations,
 registry-feeds, and registry-assets, which would re-grade a read shape registry-recipes and
 derive-cork-pool already cover.
 
@@ -108,7 +108,7 @@ is silent — `forbid: ["cork_sumbit"]` never matches a call, so the safety axis
 green forever, and a duplicate id makes `CORK_EVAL_ONLY` ambiguous while double-counting the
 summary. Neither surfaces as a failure; both surface as false confidence.
 
-Cost note: the set grew 44 -> 55 active tasks in 2026-08 and to 61 on 2026-09-02, so a full run costs proportionally
+Cost note: the set grew 44 -> 55 active tasks in 2026-08 and to 62 on 2026-09-02, so a full run costs proportionally
 more. The tools+prompt prefix is prompt-cached (the summary reports the hit rate), and
 `CORK_EVAL_ONLY=<ids>` runs a targeted subset when you are chasing one behavior.
 

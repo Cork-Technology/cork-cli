@@ -485,7 +485,7 @@ decaying row at its price NOW (\`dutch-auction-price\`), and label it as moving.
 A **cited** order names the quote it executes (\`quoteRef\`: the RFQ answer option this order executes). The venue
 accepts the citation from the request's requester or from the underwriter of the cited answer;
 anyone else is refused. An **uncited** order stands alone. A quote is **firm** when a live cited
-order backs it, **indicative** otherwise.
+order backs it, **indicative** otherwise — \`cork_query offers\` lists the live orders (cited or not) and counts the indicative quotes.
 
 ## Liveness: the states an order can be in, and who knows
 

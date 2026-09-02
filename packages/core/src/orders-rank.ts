@@ -44,7 +44,11 @@ export interface RankedGroup {
 }
 
 export type RankedRow = BookRow & { rank: number; fillable: true; price: RankedPrice; group?: RankedGroup };
-export type ExcludedRow = BookRow & { fillable: false; whyNotFillable: string };
+/** Why a row is not fillable, as a branchable code beside the prose. `reserved-for-other` is the
+ *  one LIVE exclusion: the order exists and backs whatever quote it cites — only this sender may
+ *  not lift it. The others describe an order that is dead or unreadable. */
+export type BookExclusion = "reserved-for-other" | "expired" | "venue-status" | "unparseable" | "zero-amount";
+export type ExcludedRow = BookRow & { fillable: false; exclusion: BookExclusion; whyNotFillable: string };
 
 export interface RankOptions {
   chainId: number;
@@ -115,34 +119,34 @@ export function rankBookRows(rows: readonly BookRow[], opts: RankOptions): RankR
   const account = opts.account;
   const scored: Scored[] = [];
   const excluded: ExcludedRow[] = [];
-  const exclude = (row: BookRow, why: string) => excluded.push({ ...row, fillable: false, whyNotFillable: why });
+  const exclude = (row: BookRow, exclusion: BookExclusion, why: string) => excluded.push({ ...row, fillable: false, exclusion, whyNotFillable: why });
 
   for (const row of rows) {
     const parsed = parseSignedLopOrder(row);
     if (!parsed.ok) {
-      exclude(row, `row could not be parsed as a signed order (${parsed.error}) — served venue-claimed, not ranked`);
+      exclude(row, "unparseable", `row could not be parsed as a signed order (${parsed.error}) — served venue-claimed, not ranked`);
       continue;
     }
     const { order, extension } = parsed.value;
     const hash = hashLopOrder(opts.chainId, opts.lop, order).toLowerCase();
     const status = str(row.status)?.toUpperCase();
     if (status !== undefined && status !== "OPEN" && status !== "PARTIALLY_FILLED") {
-      exclude(row, `venue status ${status}`);
+      exclude(row, "venue-status", `venue status ${status}`);
       continue;
     }
     const traits = decodeMakerTraits(order.makerTraits);
     // MakerTraitsLib.isExpired: `expiration != 0 && expiration < block.timestamp` — a row whose
     // expiry equals `now` is still fillable in this block, so the rule is `<`, not `<=`.
     if (traits.expiry !== 0n && traits.expiry < opts.nowSeconds) {
-      exclude(row, `expired at ${traits.expiry.toString()} (signed makerTraits expiry; the LOP reverts OrderExpired once block.timestamp passes it)`);
+      exclude(row, "expired", `expired at ${traits.expiry.toString()} (signed makerTraits expiry; the LOP reverts OrderExpired once block.timestamp passes it)`);
       continue;
     }
     if (traits.allowedSender !== null && account !== undefined && !isAllowedSender(order.makerTraits, account)) {
-      exclude(row, `reserved for a fill sender whose address ends in ${traits.allowedSender}; ${account} cannot fill it (PrivateOrder)`);
+      exclude(row, "reserved-for-other", `reserved for a fill sender whose address ends in ${traits.allowedSender}; ${account} cannot fill it (PrivateOrder)`);
       continue;
     }
     if (order.makingAmount === 0n) {
-      exclude(row, "makingAmount is zero — no price");
+      exclude(row, "zero-amount", "makingAmount is zero — no price");
       continue;
     }
 

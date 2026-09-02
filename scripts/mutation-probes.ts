@@ -60,6 +60,7 @@ const T = {
   handlers: "packages/core/test/handlers.test.ts",
   ladder: "packages/core/test/maker-ladder.test.ts",
   rank: "packages/core/test/orders-rank.test.ts",
+  offers: "packages/core/test/offers.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -336,6 +337,48 @@ const CATALOG: Mutant[] = [
     find: 'if (input.sort !== undefined && input.resource !== "orderbook") {',
     replace: 'if (false) {',
     tests: [T.rank],
+  },
+  {
+    // A citation resolves on BOTH ids: keying the join on the answer alone lets an order claim
+    // the terms of a sibling option.
+    id: "offers-join-answer-only",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : null;",
+    replace: "const quote = ref ? ([...quotes.values()].find((q) => q.answerId === ref.answerId) ?? null) : null;",
+    tests: [T.offers],
+  },
+  {
+    // Indicative = served options NO live order cites; counting cited ones too inflates the tally.
+    id: "offers-indicative-counts-cited",
+    file: "packages/core/src/handlers/query.ts",
+    find: "if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push(",
+    replace: "if (true) indicative.push(",
+    tests: [T.offers],
+  },
+  {
+    // A pass has no price: treating it as quoted invents an indicative option.
+    id: "offers-pass-counted",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'if (inner.status !== undefined && inner.status !== "quoted") continue; // a pass has no price',
+    replace: "",
+    tests: [T.offers],
+  },
+  {
+    // A live-but-reserved row still backs its quote; counting that quote as indicative would tell a
+    // hedger a firm price "cannot be bought" because THEY cannot lift it.
+    id: "offers-reserved-live-not-firm",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;',
+    replace: "continue;",
+    tests: [T.offers],
+  },
+  {
+    // filters.rfqId must scope to offers executing THAT request.
+    id: "offers-rfq-scope-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const scoped = filters.rfqId ? items.filter((it) => it.quote !== null && (it.quote as { rfqId: string }).rfqId === filters.rfqId) : items;",
+    replace: "const scoped = items;",
+    tests: [T.offers],
   },
   {
     id: "orders-taker-interaction-offset",

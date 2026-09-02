@@ -1,6 +1,6 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 61 active + 8 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 62 active + 8 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
@@ -599,6 +599,23 @@ export const TASKS: EvalTask[] = [
       params: { resource: "orderbook", filters: { account: A } },
       state: "ok",
       answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(reserv|private|not (available|fillable)|cannot fill|excluded))`, "i"),
+      maxCalls: 3,
+    },
+  },
+  {
+    // The unified discovery view (2026-09-02): a hedger wants the prices that can actually be
+    // bought. The stub holds one live order citing a quote (firm) and one quote nobody backed
+    // (indicative, and CHEAPER — the trap: an agent reading the RFQ feed alone would report the
+    // 3% price as the best deal). Graded on naming the fillable order and on calling the
+    // unbacked quote out as not buyable.
+    id: "offers-firm-vs-indicative",
+    prompt: `I am ${A}. Show me the cover offers I can actually buy right now on Cork pool ${P} on mainnet — and if any quoted price on the RFQ feed has no order behind it, say so instead of presenting it as available.`,
+    expect: {
+      tool: "cork_query",
+      prelude: ["cork_capabilities"],
+      params: { resource: "offers" },
+      state: "ok",
+      answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(indicative|no (live |resting )?order|not (firm|backed|buyable|available)|cannot (be )?(bought|buy)|nobody can buy))`, "i"),
       maxCalls: 3,
     },
   },

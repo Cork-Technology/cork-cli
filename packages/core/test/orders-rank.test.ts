@@ -97,6 +97,7 @@ describe("rankBookRows — what is not fillable, and why", () => {
     const withMe = rank([theirs], ME);
     expect(withMe.items).toHaveLength(0);
     expect(withMe.excluded[0]!.whyNotFillable).toContain("PrivateOrder");
+    expect(withMe.excluded[0]!.exclusion).toBe("reserved-for-other");
     expect(withMe.excluded[0]!.fillable).toBe(false);
     const nobody = rank([theirs]);
     expect(nobody.items).toHaveLength(1);
@@ -109,6 +110,7 @@ describe("rankBookRows — what is not fillable, and why", () => {
     const r = rank([past, atNow], ME);
     expect(hashes(r)).toEqual([atNow.orderHash]);
     expect(r.excluded[0]!.whyNotFillable).toContain("expired");
+    expect(r.excluded[0]!.exclusion).toBe("expired");
   });
 
   it("venue status FILLED/CANCELLED/EXPIRED excludes; OPEN and PARTIALLY_FILLED rank", async () => {
@@ -117,12 +119,14 @@ describe("rankBookRows — what is not fillable, and why", () => {
     const r = rank([filled, partial], ME);
     expect(hashes(r)).toEqual([partial.orderHash]);
     expect(r.excluded[0]!.whyNotFillable).toContain("FILLED");
+    expect(r.excluded[0]!.exclusion).toBe("venue-status");
   });
 
   it("an unparseable row is excluded, not dropped: it stays served with the reason", () => {
     const r = rank([{ orderHash: `0x${"9c".repeat(32)}`, status: "OPEN" }], ME);
     expect(r.items).toHaveLength(0);
     expect(r.excluded[0]!.whyNotFillable).toContain("could not be parsed");
+    expect(r.excluded[0]!.exclusion).toBe("unparseable");
     expect(r.excluded[0]!.orderHash).toBe(`0x${"9c".repeat(32)}`);
   });
 });

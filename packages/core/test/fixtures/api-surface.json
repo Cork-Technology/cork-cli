@@ -65,6 +65,10 @@
       "kind": "value"
     },
     {
+      "name": "BookExclusion",
+      "kind": "type"
+    },
+    {
       "name": "BookRow",
       "kind": "type"
     },
@@ -3091,6 +3095,10 @@
     {
       "name": "BOOK_SORTS",
       "kind": "value"
+    },
+    {
+      "name": "BookExclusion",
+      "kind": "type"
     },
     {
       "name": "BookRow",

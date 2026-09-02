@@ -34,6 +34,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "registry-feeds", text: "conversion feeds chainlink aggregator edges base quote live answer decimals drift usd graph" },
     { variant: "derive-cork-pool", text: "predict market pool id cST cPT shares principal token before it exists jit derive oracle rate constraint preview what pool would a fill create addresses market-predict derive-market" },
     { variant: "rfqs", text: "rfq request for quote list open requests answers underwriter discovery feed poll" },
+    { variant: "offers", text: "offers what can i buy firm quote indicative quote executable price nobody can buy best offer for me cited order quote ref discovery view" },
   ],
   cork_compute: [
     { variant: "cst-swap-rate", text: "swap rate cost quote price collateral out preview how much" },

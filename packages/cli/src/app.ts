@@ -193,6 +193,7 @@ const VARIANT_ALIAS_TARGET: Record<string, string> = Object.fromEntries(
  *  Blobs stay wire-exact — aliases apply to the positional and flag forms only. */
 const RESOURCE_ALIASES: Record<string, string> = {
   rfq: "rfqs",
+  offer: "offers",
   pool: "cork-pool",
   pools: "cork-pools",
   "market-instance": "cork-pool", // the taxonomy-teaching synonym: a pool is an INSTANCE of a market

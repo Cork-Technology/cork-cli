@@ -292,12 +292,21 @@ export const SIGNED_LOP_PAYLOAD = {
 };
 // The venue book row is the SAME payload plus row metadata — one signature, one source of
 // truth (the sign-twice duplication this replaced could drift if the order fixture changes).
-const RESTING_ROW: Record<string, string> = {
+/** The RFQ answer the resting row CITES (quoteRef) — the firm quote of the offers view — and the
+ *  answer nobody backed with an order (indicative). Both ride on the stub RFQ when the feed is
+ *  read with answers embedded, so the join has real ids on both sides. */
+export const FIRM_ANSWER_ID = "ans_firm1";
+export const SOFT_ANSWER_ID = "ans_soft1";
+export const SOFT_UNDERWRITER = "0x000000000000000000000000000000000000dEaD";
+const RESTING_ROW: Record<string, unknown> = {
   ...SIGNED_LOP_PAYLOAD.order,
   signature: SIGNED_LOP_PAYLOAD.signature,
   extension: "0x",
   makerAccountType: "EOA",
   orderHash: RESTING_ORDER_HASH,
+  side: "SELL",
+  status: "OPEN",
+  quoteRef: { rfq_id: RFQ_OPEN_ID, answer_id: FIRM_ANSWER_ID, option_id: "opt1" },
 };
 
 // A RESERVED sibling on the same book: same maker, same economics, but its signed makerTraits
@@ -307,7 +316,7 @@ const RESTING_ROW: Record<string, string> = {
 export const RESERVED_FILLER = "0x00000000000000000000badbadbadbadbadbadb1";
 const RESERVED_ORDER: LopOrder = { ...RESTING_ORDER, salt: 8n, makerTraits: BigInt(allowedSenderSuffix(RESERVED_FILLER)) };
 export const RESERVED_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESERVED_ORDER);
-const RESERVED_ROW: Record<string, string> = {
+const RESERVED_ROW: Record<string, unknown> = {
   ...SIGNED_LOP_PAYLOAD.order,
   salt: RESERVED_ORDER.salt.toString(),
   makerTraits: RESERVED_ORDER.makerTraits.toString(),
@@ -351,11 +360,18 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     // GET /rfqs/v1/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
     // then reads back as rfq_not_found, and an agent that verifies before it submits is told
     // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
+    // Answers embed only when asked (with_answers, or the single-record read): one FIRM answer
+    // (the resting row cites it) and one SOFT answer nobody backed — the offers view's two cases.
+    const answers = [
+      { answer_id: FIRM_ANSWER_ID, underwriter: RESTING_MAKER.address, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.05", expiry: 1900000000 }] } },
+      { answer_id: SOFT_ANSWER_ID, underwriter: SOFT_UNDERWRITER, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.03", expiry: 1900000000 }] } },
+    ];
+    const withAnswers = new URL(url).searchParams.get("with_answers") === "true";
     const single = /\/rfqs\/v1\/([^/?]+)/.exec(url)?.[1];
     if (single !== undefined) {
-      return decodeURIComponent(single) === RFQ_OPEN_ID ? r(200, row) : r(404, { message: `unknown rfq ${single}` });
+      return decodeURIComponent(single) === RFQ_OPEN_ID ? r(200, { ...row, answers, answer_count: answers.length }) : r(404, { message: `unknown rfq ${single}` });
     }
-    return r(200, { items: state === "open" ? [row] : [], nextCursor: null, hasMore: false });
+    return r(200, { items: state === "open" ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });
   }
   if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW, RESERVED_ROW] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });

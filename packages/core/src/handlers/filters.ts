@@ -106,6 +106,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "registry-feeds": ["base", "quote", "legacy"],
   "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle"],
   "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix"],
+  "offers": ["poolId", "side", "account", "rfqId"],
 };
 
 /** Refuse a KNOWN filter key the named resource does not consume. Runs after parseQueryFilters

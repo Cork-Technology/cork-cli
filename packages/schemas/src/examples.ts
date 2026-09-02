@@ -126,6 +126,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       "cork-pool": { status: "activated" },
+      "offers": { status: "activated", reason: "composes the ranked orderbook (hybrid-verified, best-first for filters.account) with the RFQ feed's current answers and joins on quoteRef: cited | uncited offers, plus an `indicative` tally of answer options no live order backs" },
       "account-state": { status: "activated", reason: "balances + funding allowances (corkAdapter + Permit2 spenders)" },
       "pool-whitelist": { status: "activated" },
       "protocol-config": { status: "activated" },
