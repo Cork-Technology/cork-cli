@@ -4,7 +4,7 @@
 // comparator mutation fails the rule it breaks, not a blur of "order changed".
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder, ocoGroupNonce, rankBookRows, runTool, ToolInputError } from "@cork/core";
+import { buildMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder, ocoGroupNonce, parseSignedLopOrder, rankBookRows, runTool, ToolInputError } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
@@ -128,6 +128,24 @@ describe("rankBookRows — what is not fillable, and why", () => {
     expect(r.excluded[0]!.whyNotFillable).toContain("could not be parsed");
     expect(r.excluded[0]!.exclusion).toBe("unparseable");
     expect(r.excluded[0]!.orderHash).toBe(`0x${"9c".repeat(32)}`);
+  });
+});
+
+describe("rankBookRows — pre-parsed rows (the verifier's results) rank identically to a fresh parse", () => {
+  it("a parsed map keyed by hash is used verbatim; rows absent from it are parsed; the ranking is the same either way", async () => {
+    const a = await row("p-1", { taking: 6n * 10n ** 16n });
+    const b = await row("p-2", { taking: 4n * 10n ** 16n, allowedSender: ME });
+    const c = await row("p-3", { taking: 5n * 10n ** 16n, ocoGroup: "pp" });
+    const fresh = rank([a, b, c], ME);
+    const parsed = new Map<string, { signed: import("@cork/core").SignedLopOrder; localHash: `0x${string}` }>();
+    for (const r of [a, b]) {
+      const p = parseSignedLopOrder(r);
+      if (p.ok) parsed.set(r.orderHash.toLowerCase(), { signed: p.value, localHash: hashLopOrder(1, LOP, p.value.order) });
+    }
+    const pre = rankBookRows([a, b, c], { chainId: 1, lop: LOP, account: ME, nowSeconds: NOW, parsed });
+    expect(hashes(pre)).toEqual(hashes(fresh));
+    expect(pre.items.map((x) => [x.rank, x.price.unitPrice, x.exclusivity])).toEqual(fresh.items.map((x) => [x.rank, x.price.unitPrice, x.exclusivity]));
+    expect(pre.excluded).toEqual(fresh.excluded);
   });
 });
 

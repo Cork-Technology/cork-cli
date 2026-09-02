@@ -18,7 +18,7 @@
 // until the chain says otherwise, which is why the hybrid liveness leg runs before this.
 import { decodeMakerTraits, hashLopOrder, isAllowedSender, type LopOrder, lopInvalidatorPlan } from "./orders.ts";
 import { auctionPhase, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "./fusion.ts";
-import { parseSignedLopOrder } from "./datasources/venue.ts";
+import { parseSignedLopOrder, type SignedLopOrder } from "./datasources/venue.ts";
 
 export type BookSort = "best" | "venue";
 export const BOOK_SORTS = ["best", "venue"] as const;
@@ -58,6 +58,10 @@ export interface RankOptions {
    *  whether they are fillable. */
   account?: `0x${string}` | undefined;
   nowSeconds: bigint;
+  /** Parse results the hybrid verifier already produced, keyed by lowercase order hash: a row
+   *  found here is not parsed or hashed again (same bytes, same verdict). Rows absent from the
+   *  map — or any row when the map is omitted — take the parse path. */
+  parsed?: ReadonlyMap<string, { signed: SignedLopOrder; localHash: `0x${string}` }> | undefined;
 }
 
 export interface RankResult {
@@ -122,13 +126,14 @@ export function rankBookRows(rows: readonly BookRow[], opts: RankOptions): RankR
   const exclude = (row: BookRow, exclusion: BookExclusion, why: string) => excluded.push({ ...row, fillable: false, exclusion, whyNotFillable: why });
 
   for (const row of rows) {
-    const parsed = parseSignedLopOrder(row);
+    const pre = opts.parsed?.get(typeof row.orderHash === "string" ? row.orderHash.toLowerCase() : "");
+    const parsed = pre ? ({ ok: true, value: pre.signed } as const) : parseSignedLopOrder(row);
     if (!parsed.ok) {
       exclude(row, "unparseable", `row could not be parsed as a signed order (${parsed.error}) — served venue-claimed, not ranked`);
       continue;
     }
     const { order, extension } = parsed.value;
-    const hash = hashLopOrder(opts.chainId, opts.lop, order).toLowerCase();
+    const hash = pre ? pre.localHash.toLowerCase() : hashLopOrder(opts.chainId, opts.lop, order).toLowerCase();
     const status = str(row.status)?.toUpperCase();
     if (status !== undefined && status !== "OPEN" && status !== "PARTIALLY_FILLED") {
       exclude(row, "venue-status", `venue status ${status}`);

@@ -583,7 +583,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       if (input.resource === "orderbook" && (input.sort ?? "best") === "best") {
         const lop = LOP_ADDRESSES[chainId];
         if (lop) {
-          const ranked = rankBookRows(items as Record<string, unknown>[], { chainId, lop, ...(filters.account !== undefined ? { account: filters.account } : {}), nowSeconds: nowSecondsOf(ctx) });
+          const ranked = rankBookRows(items as Record<string, unknown>[], { chainId, lop, ...(filters.account !== undefined ? { account: filters.account } : {}), nowSeconds: nowSecondsOf(ctx), ...(verification?.parsed ? { parsed: verification.parsed } : {}) });
           items = ranked.items;
           // Watch: every ranked read returns the next watermark; a `since` diffs this read against
           // the one it followed. Announcements (`appeared`, `better`) are CONFIRMED rows only —

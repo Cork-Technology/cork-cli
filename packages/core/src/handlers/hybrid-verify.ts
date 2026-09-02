@@ -35,12 +35,21 @@ export const HYBRID_VERIFY_BUDGET = 50;
 type Row = Record<string, unknown>;
 type Warning = { code: string; message: string };
 
+/** One book row's signed order, parsed and re-hashed ONCE by the verifier and handed to the ranker. */
+export interface ParsedBookRow {
+  signed: SignedLopOrder;
+  localHash: `0x${string}`;
+}
+
 export interface HybridVerification {
   items: Row[];
   warnings: Warning[];
   confirmed: number;
   unverified: number;
   dropped: number;
+  /** orderbook only: parse results keyed by lowercase order hash, so the ranker that follows
+   *  never parses or hashes a row a second time (the same bytes, the same verdict). */
+  parsed?: ReadonlyMap<string, ParsedBookRow>;
 }
 
 /** Every configured Phoenix pool manager on the chain (primary + named profiles) — venue rows
@@ -165,6 +174,9 @@ export async function verifyVenueRows(a: {
     book = annotateBookRows(a.rows, chainId, lop, a.account);
   }
   const rows = book ? book.rows : a.rows;
+  // Re-key the parse results by hash: `kept` rows are relabeled copies, so identity keys would
+  // not survive to the ranker; the hash is what both sides already hold.
+  const parsedByHash = book ? new Map([...book.parsed.values()].map((p) => [p.localHash.toLowerCase(), p] as const)) : undefined;
 
   const resolved = await getRpc(ctx, chainId).catch(() => null);
   if (!resolved) {
@@ -172,7 +184,7 @@ export async function verifyVenueRows(a: {
     // but every one says it is venue-claimed only. What the rows' own bytes already settled
     // (the book's self-contradictions) stays settled.
     const out = allUnverified(rows, { code: "chain_read_failed", message: "no RPC resolved — hybrid verification did not run; every row is venue-claimed only (verification:'unverified')" });
-    return book ? { ...out, warnings: [...book.warnings, ...out.warnings], dropped: book.dropped } : out;
+    return book ? { ...out, warnings: [...book.warnings, ...out.warnings], dropped: book.dropped, ...(parsedByHash ? { parsed: parsedByHash } : {}) } : out;
   }
   const client = resolved.client;
 
@@ -400,5 +412,5 @@ export async function verifyVenueRows(a: {
   if (transportUnverified > 0) {
     warnings.push({ code: "chain_read_failed", message: `${String(transportUnverified)} row(s) could not be verified (transport failure) — kept, labeled verification:'unverified'` });
   }
-  return { items: kept, warnings, confirmed, unverified: kept.length - confirmed, dropped };
+  return { items: kept, warnings, confirmed, unverified: kept.length - confirmed, dropped, ...(parsedByHash ? { parsed: parsedByHash } : {}) };
 }
