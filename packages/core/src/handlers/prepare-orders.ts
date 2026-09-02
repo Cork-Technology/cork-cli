@@ -848,6 +848,8 @@ type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-ord
 async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderAction, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
   const ladderId = input.clientRequestId;
+  // ladderRungClientRequestId throws on an over-long id; checked here first so the caller gets a
+  // teaching envelope (invalid_order_terms), not an internal_error from a thrown helper.
   if (ladderId.length > LADDER_ID_MAX) {
     return unavailable(chainId, "invalid_order_terms", `ladder clientRequestId is ${ladderId.length} chars; rung ids are '<ladderId>:<index>' and must stay within 128 characters — use at most ${LADDER_ID_MAX}`, ctx);
   }

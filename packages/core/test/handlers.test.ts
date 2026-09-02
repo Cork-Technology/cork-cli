@@ -22,6 +22,7 @@ import { poolTokensRpc, stubResolved } from "./helpers.ts";
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
 const NOW = 1_800_000_000n; // deterministic clock
+const A = "0xc0ffee0000000000000000000000000000000001" as const;
 
 const SUSDE = "0x9d39a5de30e57443bff2a8307a4256c8797a3497" as const;
 const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e" as const;
@@ -100,7 +101,6 @@ describe("runTool: cork_capabilities", () => {
   });
 
   it("maker-order ocoGroup: two rungs share the nonce, the result echoes the group, and the notice teaches sibling death", async () => {
-    const A = "0xc0ffee0000000000000000000000000000000001" as const;
     const rung = (id: string, taking: string, group?: string) => runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: id, action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: taking, ...(group ? { ocoGroup: group } : {}) } }, { nowSeconds: NOW });
     const r1 = await rung("ladder-rung-1", "1000000", "rfq_m1");
     const r2 = await rung("ladder-rung-2", "950000", "rfq_m1");
@@ -120,7 +120,6 @@ describe("runTool: cork_capabilities", () => {
   });
 
   it("cancel names what it retires from the SIGNED traits: a grouped rung's cancel retires the whole ocoGroup", async () => {
-    const A = "0xc0ffee0000000000000000000000000000000001" as const;
     const rung = await runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: "ladder-cancel-1", action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", ocoGroup: "rfq_m2" } }, { nowSeconds: NOW });
     expect(rung.state).toBe("ok");
     const built = rung.data as { nonce: string; orderHash: `0x${string}`; typedData: { message: { makerTraits: string } } };

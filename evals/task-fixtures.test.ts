@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
+import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
 import { CST, stubContext } from "./stub.ts";
 import {
@@ -426,11 +427,14 @@ describe("task fixture: fill-reserved-order", () => {
 });
 
 describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires, topic orders (2026-09-02)", () => {
-  const ladderBase = { poolId: DEMO_POOL_ID, side: "SELL" as const, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000" };
+  // These tests run the SAME calls the built-in self-drive plays make (self-drive-plays.ts) and
+  // assert the deeper properties the winnability gate does not: nonce sharing, capacity, the
+  // regex↔ground-truth bind. One source of canonical calls, two gates.
   const taskOf = (id: string) => TASKS.find((t) => t.id === id)!;
+  const callOf = (id: string, i = 0) => { const p = PLAYS.find((x) => x.id === id)!; const c = p.calls[i]!; return runTool(c.tool, c.input, stubContext()); };
 
   it("ladder-reserved-revision: three reserved rungs share one bit, the notice rides, and the ground-truth notice satisfies the answer regex", async () => {
-    const env = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-ladder-rev-0001", action: { type: "maker-ladder", ...ladderBase, expirySeconds: 600, rungs: [{ takingAmount: "1000000", allowedSender: RESERVED_FILLER }, { takingAmount: "970000", allowedSender: RESERVED_FILLER }, { takingAmount: "950000", allowedSender: RESERVED_FILLER }] } }, stubContext());
+    const env = await callOf("ladder-reserved-revision");
     expect(env.state).toBe("ok");
     const notice = env.warnings.find((w) => w.code === "oco_group_notice");
     expect(notice).toBeDefined();
@@ -441,7 +445,7 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
   });
 
   it("ladder-split-distinct: three open rungs on three bits; capacity is the SUM and the regex accepts it", async () => {
-    const env = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-ladder-split-0001", action: { type: "maker-ladder", ...ladderBase, expirySeconds: 3600, noncePolicy: "distinct", rungs: [{ takingAmount: "1000000" }, { takingAmount: "1000000" }, { takingAmount: "1000000" }] } }, stubContext());
+    const env = await callOf("ladder-split-distinct");
     expect(env.state).toBe("ok");
     const d = env.data as { rungs: Array<{ nonce: string }>; capacity: { makerAssetRequired: string } };
     expect(new Set(d.rungs.map((r) => r.nonce)).size).toBe(3);
@@ -451,9 +455,8 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
   });
 
   it("oco-one-capacity: two stand-alone orders naming one ocoGroup land on one bit; the notice's own words satisfy the answer regex", async () => {
-    const mk = (id: string, taking: string, reserved: `0x${string}`) => runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: id, action: { type: "maker-order", ...ladderBase, takingAmount: taking, allowedSender: reserved, ocoGroup: "capacity-slot-1" } }, stubContext());
-    const a = await mk("eval-cap-a-0001", "1000000", RESERVED_FILLER);
-    const b = await mk("eval-cap-b-0001", "990000", "0xc0ffee0000000000000000000000000000000002");
+    const a = await callOf("oco-one-capacity", 0);
+    const b = await callOf("oco-one-capacity", 1);
     expect(a.state).toBe("ok");
     expect(b.state).toBe("ok");
     expect((a.data as { nonce: string }).nonce).toBe((b.data as { nonce: string }).nonce);
@@ -465,7 +468,7 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
   it("cancel-grouped-rung: the fixture rung's cancel names the shared nonce in `retires`, and that scope satisfies the answer regex", async () => {
     expect(GROUPED_RUNG.siblingNonce).toBe(GROUPED_RUNG.nonce); // the fixture is a real group
     expect(GROUPED_RUNG.openRungNonce).not.toBe(GROUPED_RUNG.nonce); // the open rung is not
-    const env = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-cancel-rung-0001", action: { type: "cancel", orderHash: GROUPED_RUNG.orderHash, makerTraits: GROUPED_RUNG.makerTraits } }, stubContext());
+    const env = await callOf("cancel-grouped-rung");
     expect(env.state).toBe("ok");
     const retires = (env.data as { retires: { invalidator: string; nonce: string; scope: string } }).retires;
     expect(retires.invalidator).toBe("bit");
@@ -474,13 +477,13 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
   });
 
   it("orders-topic: the doc topic's own body satisfies the three-part answer regex (reach, fill sender, dead sibling)", async () => {
-    const env = await runTool("cork_capabilities", { topic: "orders" }, stubContext());
+    const env = await callOf("orders-topic");
     expect(env.state).toBe("ok");
     expect(taskOf("orders-topic").expect.answer!.test((env.data as { body: string }).body)).toBe(true);
   });
 
   it("ho-ladder-exclusive-then-open [held-out]: `shared` puts the reserved and the open rung on ONE bit", async () => {
-    const env = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-ho-ladder-0001", action: { type: "maker-ladder", ...ladderBase, noncePolicy: "shared", rungs: [{ takingAmount: "950000", allowedSender: RESERVED_FILLER, expirySeconds: 600 }, { takingAmount: "1000000", expirySeconds: 3600 }] } }, stubContext());
+    const env = await callOf("ho-ladder-exclusive-then-open");
     expect(env.state).toBe("ok");
     const d = env.data as { rungs: Array<{ nonce: string; grouped: boolean; reach: string }> };
     expect(d.rungs.map((r) => r.reach)).toEqual(["reserved", "open"]);
@@ -488,6 +491,7 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(env.warnings.some((w) => w.code === "oco_group_notice")).toBe(true);
     // Under the DEFAULT policy the same prompt would let the open rung fill in addition — the
     // held-out task exists to grade that the agent notices the difference.
+    const ladderBase = { poolId: DEMO_POOL_ID, side: "SELL" as const, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000000000000000000" };
     const dflt = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-ho-ladder-0001-dflt", action: { type: "maker-ladder", ...ladderBase, rungs: [{ takingAmount: "950000", allowedSender: RESERVED_FILLER, expirySeconds: 600 }, { takingAmount: "1000000", expirySeconds: 3600 }] } }, stubContext());
     const dd = dflt.data as { rungs: Array<{ nonce: string }> };
     expect(dd.rungs[0]!.nonce).not.toBe(dd.rungs[1]!.nonce);
