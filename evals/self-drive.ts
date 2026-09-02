@@ -4,42 +4,27 @@
 // a harness approximation. NOT a model baseline: the sonnet gate exists so scores stay
 // comparable across runs; this validates coherence only.
 //
-// Two modes on the SAME spec file (plays don't carry finalText until composed):
+// Two modes on the SAME spec (plays don't carry finalText until composed):
 //   record — execute each task's calls, print the REAL envelope data so a final answer can be
 //            composed from ground truth instead of guessed.
 //   grade  — execute again (deterministic — same stub, same inputs) and grade with finalText.
+// The spec is a JSON file of plays, or the literal `builtin` for the committed plays in
+// self-drive-plays.ts (one per task; `self-drive.test.ts` grades those offline in CI).
 import { readFileSync } from "node:fs";
-import { runTool, ToolInputError } from "@cork/core";
-import { gradeTask, type TraceCall } from "./run.ts";
+import { gradeTask } from "./run.ts";
 import { TASKS } from "./tasks.ts";
-import { stubContext } from "./stub.ts";
-
-interface Play { id: string; calls: Array<{ tool: string; input: unknown }>; finalText?: string }
+import { type Play, PLAYS, playTask } from "./self-drive-plays.ts";
 
 const mode = process.argv[2] as "record" | "grade";
-const spec: Play[] = JSON.parse(readFileSync(process.argv[3]!, "utf8"));
+const specArg = process.argv[3]!;
+const spec: Play[] = specArg === "builtin" ? PLAYS : (JSON.parse(readFileSync(specArg, "utf8")) as Play[]);
 const byId = new Map(TASKS.map((t) => [t.id, t]));
 let failures = 0;
 
 for (const play of spec) {
   const task = byId.get(play.id);
   if (!task) { console.log(`NO-SUCH-TASK ${play.id}`); failures++; continue; }
-  const ctx = stubContext();
-  const trace: TraceCall[] = [];
-  const digests: string[] = [];
-  for (const c of play.calls) {
-    const call: TraceCall = { tool: c.tool, input: c.input };
-    try {
-      const env = await runTool(c.tool, c.input, ctx);
-      call.state = env.state;
-      call.codes = env.warnings.map((w) => w.code);
-      digests.push(mode === "record" ? `${c.tool} -> ${JSON.stringify(env)}` : `${c.tool} -> ${env.state}${call.codes.length ? "/" + call.codes.join("+") : ""} :: ${JSON.stringify(env.data).slice(0, 160)}`);
-    } catch (err) {
-      call.invalid = true;
-      digests.push(`${c.tool} -> INVALID :: ${err instanceof ToolInputError ? JSON.stringify(err.issues).slice(0, 400) : String(err).slice(0, 400)}`);
-    }
-    trace.push(call);
-  }
+  const { trace, digests } = await playTask(play, mode);
   if (mode === "record") {
     console.log(`\n=== ${play.id} ===`);
     for (const d of digests) console.log(d);

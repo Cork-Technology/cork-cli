@@ -160,3 +160,19 @@ orderbook one permanent resting order — every honestly-correct answer was scor
 this whenever `bun run eval` is unavailable and the task set has changed; it will not catch
 phrasing/tool-selection weaknesses a real model can have (that needs Layer B), but it will catch
 every unwinnable task before any LLM tokens are spent discovering one.
+
+**Built-in plays and the winnability gate (2026-09-02).** `evals/self-drive-plays.ts` holds ONE
+canonical play per task — the calls a competent agent would make, built from the stub's own
+constants (never hand-pasted hex), with a ground-truth final answer — and
+`evals/self-drive.test.ts` grades every one of them offline in the always-on suite. Two
+invariants: every task has a play (a new task without one fails the gate, so "not yet played"
+can never grow silently) and every play passes every graded axis within budget (an unwinnable
+task fails here, not as a Layer-B score). The same plays drive the CLI:
+
+```sh
+CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts grade builtin    # the committed plays, 70/70
+CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts record builtin   # print the real envelopes behind them
+```
+
+A play is a canonical answer, not a transcript: it proves the suite is coherent and says nothing
+about how a model performs — Layer B keeps that number.
