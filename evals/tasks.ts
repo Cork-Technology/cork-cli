@@ -571,12 +571,17 @@ export const TASKS: EvalTask[] = [
     // not the account, on a wrapper fill), and that a sibling of a filled rung is dead while the
     // venue still lists it.
     id: "orders-topic",
-    prompt: "A Cork underwriter told me my order is 'dedicated' to me and their bot logs call it 'private'. Are those the same thing? I fill through a ForSelf adapter contract, not from my own account — can I still fill it? And if they posted two such orders as a ladder and someone fills one, what happens to the other?",
+    // First Layer-B run (2026-09-02): the agent answered from general 1inch knowledge with ZERO
+    // tool calls and still matched the regex — the task graded prior knowledge, not the surface.
+    // Now the question needs facts only these tools hold: the canonical term THIS surface uses,
+    // and the orderbook row FIELD plus its VALUES that classify an order for a given account.
+    prompt: "A Cork underwriter told me my order is 'dedicated' to me and their bot logs call it 'private'. Using the Cork tools' own documentation: are those the same thing, what is the canonical term these tools use, and which field on an orderbook row tells me whether a given order is open or reserved for me — with what exact values? I fill through a ForSelf adapter contract, not from my own account — can I still fill it? And if they posted two such orders as a ladder and someone fills one, what happens to the other?",
     expect: {
       tool: "cork_capabilities",
       // Unpinned params on purpose: topic:"orders", any alias, or a search all answer this.
       state: "ok",
-      answer: /(?=[\s\S]*(reserved|allowedSender|allowed[- ]sender))(?=[\s\S]*(adapter|msg\.sender|fill sender|calls the LOP|caller))(?=[\s\S]*(dead|retire|invalidat|cancel|die|cannot be filled|no longer fillable))/i,
+      // Four facts, the second of which (the row field / its values) exists only on this surface.
+      answer: /(?=[\s\S]*(reserved|allowedSender|allowed[- ]sender))(?=[\s\S]*(exclusivity|reserved-for-account|reserved-for-other))(?=[\s\S]*(adapter|msg\.sender|fill sender|calls the LOP|caller))(?=[\s\S]*(dead|retire|invalidat|cancel|die|cannot be filled|no longer fillable))/i,
       maxCalls: 2,
     },
   },
