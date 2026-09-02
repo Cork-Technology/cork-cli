@@ -65,6 +65,14 @@
       "kind": "value"
     },
     {
+      "name": "BestChange",
+      "kind": "type"
+    },
+    {
+      "name": "BookChanges",
+      "kind": "type"
+    },
+    {
       "name": "BookExclusion",
       "kind": "type"
     },
@@ -73,7 +81,15 @@
       "kind": "type"
     },
     {
+      "name": "BookSide",
+      "kind": "type"
+    },
+    {
       "name": "BookSort",
+      "kind": "type"
+    },
+    {
+      "name": "BookWatermark",
       "kind": "type"
     },
     {
@@ -1041,6 +1057,18 @@
       "kind": "value"
     },
     {
+      "name": "WATCH_POLL_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "WATCH_WAIT_MAX_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "WATERMARK_PREFIX",
+      "kind": "value"
+    },
+    {
       "name": "WHITELIST_TOPICS",
       "kind": "value"
     },
@@ -1051,6 +1079,14 @@
     {
       "name": "WINDOWED_RPC_WINDOW_BLOCKS",
       "kind": "value"
+    },
+    {
+      "name": "WatchBest",
+      "kind": "type"
+    },
+    {
+      "name": "WatermarkError",
+      "kind": "value+type"
     },
     {
       "name": "WhitelistEventRow",
@@ -1098,6 +1134,10 @@
     },
     {
       "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "bookWatermarkOf",
       "kind": "value"
     },
     {
@@ -1333,6 +1373,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeBookWatermark",
+      "kind": "value"
+    },
+    {
       "name": "decodeBundle",
       "kind": "value"
     },
@@ -1413,7 +1457,15 @@
       "kind": "value"
     },
     {
+      "name": "diffBook",
+      "kind": "value"
+    },
+    {
       "name": "encodeAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeBookWatermark",
       "kind": "value"
     },
     {
@@ -1614,6 +1666,10 @@
     },
     {
       "name": "isAllowedSender",
+      "kind": "value"
+    },
+    {
+      "name": "isBetterOffer",
       "kind": "value"
     },
     {
@@ -3097,6 +3153,14 @@
       "kind": "value"
     },
     {
+      "name": "BestChange",
+      "kind": "type"
+    },
+    {
+      "name": "BookChanges",
+      "kind": "type"
+    },
+    {
       "name": "BookExclusion",
       "kind": "type"
     },
@@ -3105,7 +3169,15 @@
       "kind": "type"
     },
     {
+      "name": "BookSide",
+      "kind": "type"
+    },
+    {
       "name": "BookSort",
+      "kind": "type"
+    },
+    {
+      "name": "BookWatermark",
       "kind": "type"
     },
     {
@@ -3417,6 +3489,26 @@
       "kind": "type"
     },
     {
+      "name": "WATCH_POLL_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "WATCH_WAIT_MAX_SECONDS",
+      "kind": "value"
+    },
+    {
+      "name": "WATERMARK_PREFIX",
+      "kind": "value"
+    },
+    {
+      "name": "WatchBest",
+      "kind": "type"
+    },
+    {
+      "name": "WatermarkError",
+      "kind": "value+type"
+    },
+    {
       "name": "ZERO_JIT_MARKET_HASH",
       "kind": "value"
     },
@@ -3438,6 +3530,10 @@
     },
     {
       "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "bookWatermarkOf",
       "kind": "value"
     },
     {
@@ -3517,6 +3613,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeBookWatermark",
+      "kind": "value"
+    },
+    {
       "name": "decodeExtensionFields",
       "kind": "value"
     },
@@ -3541,7 +3641,15 @@
       "kind": "value"
     },
     {
+      "name": "diffBook",
+      "kind": "value"
+    },
+    {
       "name": "encodeAuctionGetterData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeBookWatermark",
       "kind": "value"
     },
     {
@@ -3618,6 +3726,10 @@
     },
     {
       "name": "isAllowedSender",
+      "kind": "value"
+    },
+    {
+      "name": "isBetterOffer",
       "kind": "value"
     },
     {

@@ -198,6 +198,23 @@ export interface CliErrorPayload {
 }
 
 /** Structured failures, for a person. The JSON form stays on stderr when JSON is requested. */
+/**
+ * One `--watch` tick. The first read prints as a normal envelope (the full ranked book plus its
+ * watermark); a later tick that changed prints ONLY what changed — the reader is watching for a
+ * better order, not re-reading the book — with the new best per side and the next watermark.
+ */
+export function renderWatchTick(tick: number, env: unknown, tool: ToolDef, s: Style = PLAIN): string {
+  if (tick === 1 || !isPlainObject(env)) return renderEnvelope(env, tool, s);
+  const e = env as Envelope;
+  const data = (isPlainObject(e.data) ? e.data : {}) as Record<string, unknown>;
+  const changes = data["changes"];
+  const parts: string[] = [s.dim(`${GLYPH.sep} watch tick ${tick}`) + (e.state && e.state !== "ok" ? `  ${stateBadge(e.state, s)}` : "")];
+  if (isPlainObject(changes)) parts.push(renderValue(changes, 2, s));
+  if (typeof data["watermark"] === "string") parts.push(`  ${s.cyan("watermark")}: ${data["watermark"]}`);
+  for (const w of e.warnings ?? []) parts.push(`  ${s.yellow(`${w.code}: ${w.message}`)}`);
+  return `${parts.join("\n")}\n\n`;
+}
+
 export function renderError(payload: CliErrorPayload, s: Style = PLAIN): string {
   const e = payload.error;
   const parts: string[] = [`${s.red(s.bold(`${GLYPH.fail} ERROR`))}  ${s.red(scalar(e.code ?? "error"))}`];

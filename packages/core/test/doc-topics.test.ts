@@ -215,6 +215,8 @@ describe("doc topic: orders", () => {
       { field: "auction", marker: "DECAYING" },
       { field: "quoteRef", marker: "RFQ answer option" },
       { field: "sort", marker: "reserved-for-account row wins a price tie" },
+      { field: "since", marker: "invalidator bit read CLEAR" },
+      { field: "wait", marker: "re-read the book every 2 s" },
     ];
     const byField = new Map<string, string[]>();
     for (const tool of REGISTRY) {

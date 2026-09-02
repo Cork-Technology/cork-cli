@@ -461,6 +461,14 @@ in price, reach, or expiry: a *revision ladder* re-quotes one request at better 
 (the taker takes the best, the rest die); an *exclusive-then-open* ladder pairs a reserved best rung
 with an open worse rung. A rung that dies because a sibling filled is **dead-by-sibling**: the chain
 knows, the venue does not — the row keeps reading OPEN until a status sync, so \`taker-fill\` re-reads the LOP invalidator before it builds (its liveness pre-flight), and any view that ranks or announces orders must do the same [K7].
+
+## Watching for a better order
+
+The venue has no push and no \`updated_after\`, so monitoring is client-side polling with a WATERMARK. Every ranked \`orderbook\` read returns \`watermark\`: an opaque token over the live set it served (collapsed group rungs included) and the best order per side, taken for the fill sender in \`filters.account\`.
+- \`since\` (the prior read's watermark) adds \`changes\`: \`appeared\` names new fillable orders whose invalidator bit read CLEAR this call, \`gone\` the orders no longer served, \`best\` per side (\`changed\`, \`died\`), and \`better\` the confirmed rows the taker would rather fill than the watermark's best. Verify before announce: a new row nobody could confirm on chain rides under \`unconfirmed\` — a set change, not an announcement.
+- "Better" is a lower unit price on a SELL row (higher on a BUY row, where the maker pays), or the same price reserved for this fill sender instead of open — an order nobody can race.
+- \`wait\` long-polls: re-read the book every 2 s until \`changes.changed\` or the seconds run out (max 25, under the HTTP ingress deadline); \`waited\` says how it ended. The CLI's \`ch query orderbook --watch [--interval s] [--iterations n]\` loops this, printing the first read and then only the ticks that changed.
+- A watermark is per fill sender: reach and exclusion differ per sender, so a token taken for another account is refused.
 Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key, namespaced so a group can never collide with a stand-alone order by accident); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
 Because the rungs share one bit, cancelling ANY rung (\`cancel\`) retires the whole group; \`bitsInvalidateForOrder(makerTraits, mask)\` additionally spends other bits of the same 256-bit slot word in one transaction — a sweep across orders whose nonces share a slot, not built here.
 
@@ -516,7 +524,7 @@ The invalidator bit says only SPENT: filled, cancelled, and dead-by-sibling read
 | dead-by-sibling | invalidated, orphaned rung, stale row | invisible to the venue |
 `,
     searchText:
-      "reserved order dedicated order private order single taker allowed sender allowedSender who can fill this order reserve for one taker fill sender msg.sender adapter PrivateOrder one cancels the other oco oca ladder rung group shared nonce bit invalidator partial fill single fill multiple fills all or nothing epoch series mass cancel decaying price auction dutch cited quote quoteRef firm quote indicative offer resting live dead order sibling liveness expired cancelled filled order lifecycle exclusivity",
+      "reserved order dedicated order private order single taker allowed sender allowedSender who can fill this order reserve for one taker fill sender msg.sender adapter PrivateOrder one cancels the other oco oca ladder rung group shared nonce bit invalidator partial fill single fill multiple fills all or nothing epoch series mass cancel decaying price auction dutch cited quote quoteRef firm quote indicative offer resting live dead order sibling liveness expired cancelled filled order lifecycle exclusivity watch monitor poll long-poll watermark since wait better order appeared gone changes notify",
   },
   warnings: {
     name: "warnings",

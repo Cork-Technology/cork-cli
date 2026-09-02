@@ -23,7 +23,17 @@ import { envFlag } from "./env.ts";
 import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
 import { colorEnabled, makeStyle } from "./ansi.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
-import { renderEnvelope, renderError } from "./render.ts";
+import { renderEnvelope, renderError, renderWatchTick } from "./render.ts";
+
+/** The CLI's own pause for --watch (the core's default sleep is handler-internal): a timer that resolves early on abort. */
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const t = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(t); resolve(); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 import { runSelfUpdate } from "./self-update.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
@@ -227,7 +237,7 @@ const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbit
 
 /** Option names owned by the CLI itself (canonicalised spellings) — a schema field must never
  *  register over them. The collision lint in cli.test.ts duplicates this set as a tripwire. */
-const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help"]);
+const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help", "watch", "interval", "iterations"]);
 
 /** The digits-only filter keys that get the CLI's amount sugar (`--rate 1e18`); imported from
  *  filters.ts so the sugar list and parseQueryFilters' bigint fields cannot drift apart. */
@@ -482,7 +492,7 @@ export async function runCli(
     // blobs) keep working on the parent command — the subcommands are additive sugar.
     const union = discriminatedUnion(props, defs);
 
-    const baseOptions = (c: Command): Command =>
+    const baseOptions = (c: Command): Command => {
       c
         // commander v12 silently ignores extra positional args by default — a typo like
         // `ch query cork-pool <poolId>` (input belongs in a flag) must error, not half-run.
@@ -492,6 +502,16 @@ export async function runCli(
         .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
         .option("--enable-deprecated", "unlock DEPRECATED features (e.g. the pre-2.1.0 registry generation via legacy:true) — same effect as CORK_ENABLE_DEPRECATED=1; every result they produce is labelled")
         .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)");
+      // `ch query orderbook --watch`: the CLI projection of `since`/`wait` — re-read the ranked
+      // book on an interval, threading each read's watermark into the next as `since`, and print
+      // only the ticks that changed. A poll is the same cork_query read a script would make by hand.
+      if (tool.name === "cork_query") {
+        c.option("--watch", "orderbook only: keep re-reading the ranked book, threading each read's watermark into the next as `since`; print the first read, then only ticks whose `changes.changed` is true (appeared/gone/better are chain-CONFIRMED rows; `unconfirmed` needs your own check). Ctrl-C to stop")
+          .option("--interval <seconds>", "seconds between --watch reads (default 15)")
+          .option("--iterations <n>", "stop --watch after this many reads (default: until interrupted) — for scripts and tests");
+      }
+      return c;
+    };
 
     const fieldOption = (c: Command, registered: Set<string>, name: string, node: SchemaNode): void => {
       const canon = flagFor(name);
@@ -761,11 +781,46 @@ export async function runCli(
         const prevDeprecated = process.env["CORK_ENABLE_DEPRECATED"];
         if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
         const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
+        const stateCode = (envelope: unknown): number => {
+          const state = (envelope as { state?: string }).state;
+          return state === "ok" ? EXIT.ok : state === "conflict" ? EXIT.conflict : EXIT.unavailable;
+        };
         try {
+          if (opts["watch"]) {
+            if (tool.name !== "cork_query" || input["resource"] !== "orderbook") {
+              fail({ error: { code: "invalid_input", tool: tool.name, issues: [{ path: ["--watch"], message: "--watch applies to `ch query orderbook` only: it threads the ranked book's watermark (`since`) read after read; other resources have no watermark" }] } }, EXIT.invalid);
+              return;
+            }
+            if (input["wait"] !== undefined || input["since"] !== undefined) {
+              fail({ error: { code: "invalid_input", tool: tool.name, issues: [{ path: ["--watch"], message: "--watch owns `since` and `wait`: it threads the watermark itself and paces reads with --interval — drop --since/--wait, or call `ch query orderbook --since <watermark> --wait <s>` once without --watch" }] } }, EXIT.invalid);
+              return;
+            }
+            const interval = opts["interval"] === undefined ? 15 : Number(opts["interval"]);
+            const iterations = opts["iterations"] === undefined ? Number.POSITIVE_INFINITY : Number(opts["iterations"]);
+            if (!Number.isFinite(interval) || interval <= 0 || !(iterations >= 1) || (Number.isFinite(iterations) && !Number.isInteger(iterations))) {
+              fail({ error: { code: "invalid_input", tool: tool.name, issues: [{ path: ["--interval", "--iterations"], message: "--interval must be a positive number of seconds and --iterations a positive integer" }] } }, EXIT.invalid);
+              return;
+            }
+            const pause = ctx.sleep ?? sleepMs;
+            let since: string | undefined;
+            for (let tick = 1; tick <= iterations; tick++) {
+              const envelope = await runTool(tool.name, since === undefined ? input : { ...input, since }, callCtx);
+              const data = (envelope as { data?: Record<string, unknown> | null }).data ?? {};
+              const changed = (data["changes"] as { changed?: boolean } | undefined)?.changed === true;
+              code = stateCode(envelope);
+              if (tick === 1 || changed || code !== EXIT.ok) {
+                out += wantsJson ? `${JSON.stringify({ tick, ...(envelope as Record<string, unknown>) }, null, 2)}\n` : renderWatchTick(tick, envelope, tool, outStyle);
+              }
+              if (code !== EXIT.ok || typeof data["watermark"] !== "string") break;
+              since = data["watermark"];
+              if (tick < iterations) await pause(interval * 1000, ctx.signal);
+              if (ctx.signal?.aborted) break;
+            }
+            return;
+          }
           const envelope = await runTool(tool.name, input, callCtx);
           out += wantsJson ? `${JSON.stringify(envelope, null, 2)}\n` : renderEnvelope(envelope, tool, outStyle);
-          const state = (envelope as { state?: string }).state;
-          code = state === "ok" ? EXIT.ok : state === "conflict" ? EXIT.conflict : EXIT.unavailable;
+          code = stateCode(envelope);
         } catch (e) {
           // Errors are structured on stderr with the same closed codes as the envelope, so
           // scripts parse failures the way they parse stdout.

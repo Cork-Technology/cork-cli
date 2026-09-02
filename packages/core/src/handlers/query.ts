@@ -2,6 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { rankBookRows } from "../orders-rank.ts";
+import { bookWatermarkOf, decodeBookWatermark, diffBook, encodeBookWatermark, WATCH_POLL_SECONDS, WatermarkError } from "../orders-watch.ts";
 import { type CorkAddresses, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
 import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
@@ -11,7 +12,7 @@ import { resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets 
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, defaultSleep, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
@@ -478,6 +479,21 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.sort !== undefined && input.resource !== "orderbook") {
     throw new ToolInputError("cork_query", [{ path: ["sort"], message: `sort applies to resource 'orderbook' only (it ranks resting orders best-first for filters.account); '${input.resource}' has no ranking — omit sort` }]);
   }
+  // `since`/`wait` are the ranked orderbook's watch switches: a watermark over the RANKED view
+  // (venue order carries no price and no reach, so there is nothing to compare), and a long-poll
+  // that only makes sense against a watermark.
+  for (const key of ["since", "wait"] as const) {
+    if (input[key] !== undefined && input.resource !== "orderbook") {
+      throw new ToolInputError("cork_query", [{ path: [key], message: `${key} applies to resource 'orderbook' only (it diffs the ranked view against a prior read's watermark); '${input.resource}' has no watermark — omit ${key}` }]);
+    }
+    if (input[key] !== undefined && input.sort === "venue") {
+      throw new ToolInputError("cork_query", [{ path: [key], message: `${key} needs the ranked view (sort 'best', the default): the venue order carries no price or reach to compare — omit sort` }]);
+    }
+  }
+  if (input.wait !== undefined && input.since === undefined) {
+    throw new ToolInputError("cork_query", [{ path: ["wait"], message: "wait long-polls for a CHANGE since a watermark — pass `since` (the data.watermark a prior orderbook read returned); a first read needs no wait" }]);
+  }
+  if (input.wait !== undefined) return handleQueryWait(input, ctx);
   if (input.resource === "offers") return handleQueryOffers(input, filters, chainId, ctx);
 
   if (VENUE_RESOURCES.has(input.resource)) {
@@ -569,12 +585,29 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         if (lop) {
           const ranked = rankBookRows(items as Record<string, unknown>[], { chainId, lop, ...(filters.account !== undefined ? { account: filters.account } : {}), nowSeconds: nowSecondsOf(ctx) });
           items = ranked.items;
+          // Watch: every ranked read returns the next watermark; a `since` diffs this read against
+          // the one it followed. Announcements (`appeared`, `better`) are CONFIRMED rows only —
+          // the hybrid leg already dropped chain-dead rows, and an unverified row rides under
+          // `unconfirmed` (owner ruling 2026-09-02: verify before announce).
+          const watermark = encodeBookWatermark(bookWatermarkOf(ranked));
+          let changes: Record<string, unknown> | undefined;
+          if (input.since !== undefined) {
+            try {
+              changes = { ...diffBook(decodeBookWatermark(input.since), ranked) };
+            } catch (e) {
+              if (!(e instanceof WatermarkError)) throw e;
+              throw new ToolInputError("cork_query", [{ path: ["since"], message: e.message }]);
+            }
+          }
           ranking = {
             sort: "best",
+            watermark,
+            ...(changes ? { changes } : {}),
             rankedFor: ranked.rankedFor,
             fillableCount: ranked.fillableCount,
             excluded: ranked.excluded,
             scales: { unitPrice: "takerAsset base units per 1e18 makerAsset base units (exact integer, floor); a decaying row's price is its price NOW", takerPaysNow: "takerAsset base units for the full makingAmount at nowSeconds", unitsTopic: UNITS_TOPIC_REFERENCE },
+            watchNote: "pass `watermark` back as `since` to get `changes` (appeared/gone/better are chain-CONFIRMED rows only; `unconfirmed` names new rows nobody could confirm — confirm before acting); add `wait` to long-poll for a change",
             rankingNote: ranked.rankedFor === null
               ? "price-only ranking: no filters.account was given, so `reserved` rows are kept and flagged — pass the FILL SENDER (the ForSelf adapter on a wrapper fill) to partition fillable from not"
               : "ranked over the rows this bounded walk fetched (see pagination); a group rung whose sibling filled reads OPEN at the venue until a chain read retires it",
@@ -905,6 +938,29 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
     });
   } catch (err) {
     return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${firstLine(err)}`, ctx);
+  }
+}
+
+// ── watch: long-poll the ranked book until it changes ────────────────────────────────────────
+// Driven by poll COUNT, not the wall clock: `wait` seconds at WATCH_POLL_SECONDS cadence is
+// ceil(wait / cadence) reads, so an injected instant sleep makes the loop deterministic and a
+// real one paces it. Each poll is the same ranked read a caller would make by hand; the loop
+// returns on the first read whose `changes.changed` is true, on a non-ok state, on abort, or when
+// the polls run out — and says which under `waited`.
+async function handleQueryWait(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
+  const { wait, ...single } = input;
+  const polls = Math.max(1, Math.ceil((wait as number) / WATCH_POLL_SECONDS));
+  const pause = ctx.sleep ?? defaultSleep;
+  for (let poll = 1; ; poll++) {
+    const env = await handleQuery(single as QueryInput, ctx);
+    const data = env.data as Record<string, unknown>;
+    const changed = (data.changes as { changed?: boolean } | undefined)?.changed === true;
+    const exhausted = poll >= polls;
+    const aborted = ctx.signal?.aborted === true;
+    if (env.state !== "ok" || changed || exhausted || aborted) {
+      return { ...env, data: { ...data, waited: { requestedSeconds: wait, pollIntervalSeconds: WATCH_POLL_SECONDS, polls, pollsMade: poll, changed, endedBy: changed ? "change" : aborted ? "abort" : exhausted ? "timeout" : "state" } } };
+    }
+    await pause(WATCH_POLL_SECONDS * 1000, ctx.signal);
   }
 }
 

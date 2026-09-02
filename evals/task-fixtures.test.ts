@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, stubContext } from "./stub.ts";
+import { CST, stubContext, WATCH_WATERMARK } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -499,6 +499,21 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(d.indicative.options[0]).toMatchObject({ answerId: SOFT_ANSWER_ID, premiumAnnualized: "0.03" });
     expect(d.excluded.map((r) => r.orderHash.toLowerCase())).toEqual([RESERVED_ORDER_HASH.toLowerCase()]);
     expect(taskOf("offers-firm-vs-indicative").expect.answer!.test(`buy ${RESTING_ORDER_HASH}; the 3% quote is indicative — no live order backs it`)).toBe(true);
+  });
+
+  it("watch-better-order: the stub's live order is appeared + better against the task's watermark, and the watermark's best is gone", async () => {
+    const env = await callOf("watch-better-order");
+    expect(env.state).toBe("ok");
+    const d = env.data as { watermark: string; changes: { changed: boolean; appeared: string[]; gone: string[]; unconfirmed: string[]; better: Array<{ orderHash: string }>; best: { SELL: { changed: boolean; died: boolean } } } };
+    expect(d.changes.changed).toBe(true);
+    expect(d.changes.appeared).toEqual([RESTING_ORDER_HASH.toLowerCase()]);
+    expect(d.changes.better.map((b) => b.orderHash)).toEqual([RESTING_ORDER_HASH.toLowerCase()]);
+    expect(d.changes.unconfirmed).toEqual([]);
+    expect(d.changes.gone).toHaveLength(1);
+    expect(d.changes.best.SELL).toMatchObject({ changed: true, died: true });
+    expect(d.watermark).not.toBe(WATCH_WATERMARK);
+    expect(taskOf("watch-better-order").expect.answer!.test(`a better order appeared: ${RESTING_ORDER_HASH} (cheaper); your previous best is gone`)).toBe(true);
+    expect(taskOf("watch-better-order").expect.answer!.test(`the best order is still ${RESTING_ORDER_HASH}`)).toBe(false);
   });
 
   it("orders-topic: the doc topic's own body satisfies the three-part answer regex (reach, fill sender, dead sibling)", async () => {

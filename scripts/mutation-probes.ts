@@ -61,6 +61,7 @@ const T = {
   ladder: "packages/core/test/maker-ladder.test.ts",
   rank: "packages/core/test/orders-rank.test.ts",
   offers: "packages/core/test/offers.test.ts",
+  watch: "packages/core/test/orders-watch.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -362,6 +363,99 @@ const CATALOG: Mutant[] = [
     find: 'if (inner.status !== undefined && inner.status !== "quoted") continue; // a pass has no price',
     replace: "",
     tests: [T.offers],
+  },
+  // ── watch: the client-side watermark and verify-before-announce ──
+  {
+    // SELL: a LOWER unit price is better for the taker. Inverting it announces dearer orders.
+    id: "watch-better-sell-inverted",
+    file: "packages/core/src/orders-watch.ts",
+    find: 'if (c !== p) return side === "SELL" ? c < p : c > p;',
+    replace: 'if (c !== p) return side === "SELL" ? c > p : c < p;',
+    tests: [T.watch],
+  },
+  {
+    // Equal price: reserved-for-account beats open (nobody can race it). Dropping the reach rule
+    // hides the one improvement a same-price order can bring.
+    id: "watch-reach-ignored",
+    file: "packages/core/src/orders-watch.ts",
+    find: "return cand.reservedForAccount && !prev.reservedForAccount;",
+    replace: "return false;",
+    tests: [T.watch],
+  },
+  {
+    // Verify before announce: a new row nobody confirmed on chain must ride under `unconfirmed`,
+    // never `appeared`.
+    id: "watch-unconfirmed-announced",
+    file: "packages/core/src/orders-watch.ts",
+    find: "if (isNew) (confirmed(row) ? appeared : unconfirmed).push(h);",
+    replace: "if (isNew) appeared.push(h);",
+    tests: [T.watch],
+  },
+  {
+    // `better` is confirmed rows only — an unconfirmed better row is the corpse-announcement the
+    // ruling forbids.
+    id: "watch-better-unconfirmed",
+    file: "packages/core/src/orders-watch.ts",
+    find: "if (side && confirmed(row) && isBetterOffer(side, bestOf(row), prev.best[side])) {",
+    replace: "if (side && isBetterOffer(side, bestOf(row), prev.best[side])) {",
+    tests: [T.watch],
+  },
+  {
+    // `gone` is the watermark's live set minus this read's — dropping it hides a filled best.
+    id: "watch-gone-dropped",
+    file: "packages/core/src/orders-watch.ts",
+    find: "const gone = prev.live.filter((h) => !nowLive.has(h));",
+    replace: "const gone: string[] = [];",
+    tests: [T.watch],
+  },
+  {
+    // Collapsed group rungs are part of the live set: without them a rung displaced as the
+    // group's representative reads as "gone".
+    id: "watch-live-excludes-collapsed",
+    file: "packages/core/src/orders-watch.ts",
+    find: "for (const sib of row.group?.collapsed ?? []) live.push(lower(sib));",
+    replace: "",
+    tests: [T.watch],
+  },
+  {
+    // A watermark taken for another fill sender does not compare (reach and exclusion differ).
+    id: "watch-account-mismatch-ignored",
+    file: "packages/core/src/orders-watch.ts",
+    find: "if (prev.account !== account) {",
+    replace: "if (false) {",
+    tests: [T.watch],
+  },
+  {
+    // The long-poll returns on the first read that CHANGED; ignoring the change polls to timeout.
+    id: "query-wait-ignores-change",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'const changed = (data.changes as { changed?: boolean } | undefined)?.changed === true;',
+    replace: "const changed = false;",
+    tests: [T.watch],
+  },
+  {
+    // ceil(wait / cadence) polls: `wait: 5` at 2 s is 3 reads, not 2.
+    id: "query-wait-polls-floored",
+    file: "packages/core/src/handlers/query.ts",
+    find: "const polls = Math.max(1, Math.ceil((wait as number) / WATCH_POLL_SECONDS));",
+    replace: "const polls = Math.max(1, Math.floor((wait as number) / WATCH_POLL_SECONDS));",
+    tests: [T.watch],
+  },
+  {
+    // --watch prints the first read and the ticks that CHANGED; printing every tick buries the change.
+    id: "cli-watch-quiet-tick-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "if (tick === 1 || changed || code !== EXIT.ok) {",
+    replace: "if (true) {",
+    tests: [T.cli],
+  },
+  {
+    // --watch threads each read's watermark into the next as `since`; without it no tick can diff.
+    id: "cli-watch-since-not-threaded",
+    file: "packages/cli/src/app.ts",
+    find: 'since = data["watermark"];',
+    replace: "since = undefined;",
+    tests: [T.cli],
   },
   {
     // A live-but-reserved row still backs its quote; counting that quote as indicative would tell a

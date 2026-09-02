@@ -4,6 +4,7 @@
 // ForSelf adapter call builders for parameter-blind session-key wallets.
 export * from "../orders.ts";
 export * from "../orders-rank.ts";
+export * from "../orders-watch.ts";
 export * from "../order-approvals.ts";
 export * from "../forself.ts";
 export * from "../fusion.ts";

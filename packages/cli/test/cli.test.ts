@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
-import { poolTokensRpc } from "../../core/test/helpers.ts";
+import { poolTokensRpc, stubRpc } from "../../core/test/helpers.ts";
+import { privateKeyToAccount } from "viem/accounts";
+import { buildMakerOrder, LOP_ADDRESSES } from "@cork/core";
 
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
@@ -813,5 +815,74 @@ describe("code-smell audit fixes (2026-08-11)", () => {
     expect(() => JSON.parse(asTrue.stdout)).not.toThrow();
     const asYes = await runCli(["query", "--explain"], { nowSeconds: NOW }, { CORK_EXPLAIN_JSON: "yes" });
     expect(() => JSON.parse(asYes.stdout)).toThrow(); // prose — 'yes' is not a CORK_* truthy value
+  });
+});
+
+describe("ch query orderbook --watch (2026-09-02)", () => {
+  // Real signed rows so the ranked read (hash re-check, traits decode) is the production path;
+  // the venue is a stub whose book grows between reads; the chain a stub answering "live".
+  const LOP = LOP_ADDRESSES[1]!;
+  const maker = privateKeyToAccount(`0x${"2f".repeat(32)}`);
+  const ME = "0xc0ffee0000000000000000000000000000000001";
+  const bookRow = async (id: string, taking: bigint) => {
+    const built = buildMakerOrder({ chainId: 1, lop: LOP, maker: maker.address, makerAsset: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", takerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", makingAmount: 10n ** 18n, takingAmount: taking, clientRequestId: id });
+    const o = built.order;
+    return { orderHash: built.orderHash, order: { salt: o.salt.toString(), maker: o.maker, receiver: o.receiver, makerAsset: o.makerAsset, takerAsset: o.takerAsset, makingAmount: o.makingAmount.toString(), takingAmount: o.takingAmount.toString(), makerTraits: o.makerTraits.toString() }, signature: await maker.sign({ hash: built.orderHash }), extension: "0x", makerAccountType: "EOA", side: "SELL", status: "OPEN" };
+  };
+  const venueSeq = (books: unknown[][]) => {
+    let call = 0;
+    return async (url: string) => {
+      if (!url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      return new Response(JSON.stringify({ items: books[Math.min(call++, books.length - 1)], hasMore: false }), { status: 200 });
+    };
+  };
+  const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); });
+
+  it("prints the first read, stays quiet on an unchanged tick, prints the tick a better order appears, and threads the watermark", async () => {
+    const old = await bookRow("cw-1", 5n * 10n ** 16n);
+    const cheaper = await bookRow("cw-2", 4n * 10n ** 16n);
+    const sleeps: number[] = [];
+    const r = await runCli(["query", "orderbook", "--chain-id", "1", "--account", ME, "--watch", "--interval", "3", "--iterations", "3", "--json"], { nowSeconds: NOW, venueFetch: venueSeq([[old], [old], [old, cheaper]]), resolveRpc: live, sleep: async (ms) => { sleeps.push(ms); } });
+    expect(r.code).toBe(EXIT.ok);
+    // Two JSON documents on stdout: tick 1 (the book) and tick 3 (the change); tick 2 was silent.
+    const docs = r.stdout.trim().split("\n}\n").map((d, i, all) => JSON.parse(i < all.length - 1 ? `${d}\n}` : d));
+    expect(docs.map((d: { tick: number }) => d.tick)).toEqual([1, 3]);
+    expect(docs[0].data.changes).toBeUndefined();
+    expect(docs[1].data.changes.changed).toBe(true);
+    expect(docs[1].data.changes.better.map((b: { orderHash: string }) => b.orderHash)).toEqual([cheaper.orderHash.toLowerCase()]);
+    expect(sleeps).toEqual([3000, 3000]); // paced between reads, never after the last
+  });
+
+  it("prose: a changed tick prints only the changes and the next watermark, headed by its tick number", async () => {
+    const old = await bookRow("cw-3", 5n * 10n ** 16n);
+    const cheaper = await bookRow("cw-4", 4n * 10n ** 16n);
+    const r = await runCli(["query", "orderbook", "--chain-id", "1", "--account", ME, "--watch", "--iterations", "2"], { nowSeconds: NOW, venueFetch: venueSeq([[old], [old, cheaper]]), resolveRpc: live, sleep: async () => {} });
+    expect(r.code).toBe(EXIT.ok);
+    expect(r.stdout).toContain("watch tick 2");
+    expect(r.stdout).toContain("better");
+    expect(r.stdout.split("watch tick 2")[1]).toContain("watermark: bw1.");
+  });
+
+  it("refuses --watch off the orderbook, alongside --since/--wait, and with a bad interval — exit 2, nothing read", async () => {
+    let calls = 0;
+    const venueFetch = async () => { calls++; return new Response(JSON.stringify({ items: [] }), { status: 200 }); };
+    const off = await runCli(["query", "rfqs", "--chain-id", "1", "--watch", "--json"], { nowSeconds: NOW, venueFetch });
+    expect(off.code).toBe(EXIT.invalid);
+    expect(JSON.parse(off.stderr).error.issues[0].message).toContain("orderbook");
+    const both = await runCli(["query", "orderbook", "--chain-id", "1", "--watch", "--wait", "5", "--json"], { nowSeconds: NOW, venueFetch });
+    expect(both.code).toBe(EXIT.invalid);
+    const bad = await runCli(["query", "orderbook", "--chain-id", "1", "--watch", "--interval", "0", "--json"], { nowSeconds: NOW, venueFetch });
+    expect(bad.code).toBe(EXIT.invalid);
+    expect(calls).toBe(0);
+  });
+
+  it("--since and --wait are ordinary flags without --watch: one read, one long-poll, the same envelope as MCP", async () => {
+    const old = await bookRow("cw-5", 5n * 10n ** 16n);
+    const first = await runCli(["query", "orderbook", "--chain-id", "1", "--account", ME, "--json"], { nowSeconds: NOW, venueFetch: venueSeq([[old]]), resolveRpc: live });
+    const wm = JSON.parse(first.stdout).data.watermark as string;
+    expect(wm.startsWith("bw1.")).toBe(true);
+    const polled = await runCli(["query", "orderbook", "--chain-id", "1", "--account", ME, "--since", wm, "--wait", "3", "--json"], { nowSeconds: NOW, venueFetch: venueSeq([[old]]), resolveRpc: live, sleep: async () => {} });
+    expect(polled.code).toBe(EXIT.ok);
+    expect(JSON.parse(polled.stdout).data.waited).toMatchObject({ pollsMade: 2, changed: false, endedBy: "timeout" });
   });
 });

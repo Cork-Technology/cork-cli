@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST } from "./stub.ts";
+import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -616,6 +616,23 @@ export const TASKS: EvalTask[] = [
       params: { resource: "offers" },
       state: "ok",
       answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(indicative|no (live |resting )?order|not (firm|backed|buyable|available)|cannot (be )?(bought|buy)|nobody can buy))`, "i"),
+      maxCalls: 3,
+    },
+  },
+  {
+    // Watching the book (2026-09-02): an agent that looked earlier holds a watermark and asks
+    // whether a BETTER order appeared. The right move is one read with `since` and the answer
+    // from `changes.better` — the stub's live order is cheaper than the watermark's (gone) best.
+    // The trap: re-reading the whole book and eyeballing it, or reporting the old best as still
+    // there.
+    id: "watch-better-order",
+    prompt: `I am ${A}. Earlier I read the resting cover orders on Cork pool ${P} on mainnet and kept the watermark the read gave me: ${WATCH_WATERMARK} — check whether a better order for me has appeared since then, and tell me which order and what happened to the one I was looking at before.`,
+    expect: {
+      tool: "cork_query",
+      prelude: ["cork_capabilities"],
+      params: { resource: "orderbook", since: WATCH_WATERMARK },
+      state: "ok",
+      answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(better|cheaper|lower))(?=[\\s\\S]*(gone|died|no longer|disappeared|not (there|served|live)|filled|cancelled|removed))`, "i"),
       maxCalls: 3,
     },
   },

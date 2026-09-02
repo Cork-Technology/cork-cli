@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -274,6 +274,11 @@ const RESTING_ORDER: LopOrder = {
   makerTraits: 0n,
 };
 export const RESTING_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESTING_ORDER);
+/** A watermark from "an earlier look" at the book by DEMO_ACCOUNT_ADDR: its best SELL was a
+ *  (since-gone) order at TWICE the resting row's unit price, so today's ranked read finds the
+ *  resting row APPEARED and BETTER, and the old best GONE — the watch task's expected changes. */
+const EARLIER_BEST_HASH = `0x${"a5".repeat(32)}`;
+export const WATCH_WATERMARK = encodeBookWatermark({ v: 1, account: DEMO_ACCOUNT_ADDR.toLowerCase(), live: [EARLIER_BEST_HASH], best: { SELL: { orderHash: EARLIER_BEST_HASH, unitPrice: (RESTING_ORDER.takingAmount * 2n).toString(), reservedForAccount: false }, BUY: null } });
 
 /** The same real signed order as a CALLER-HELD payload for the relay task (the fraction-premium
  *  translation probe): order wire fields + genuine signature, ready for cork_submit lop-order. */

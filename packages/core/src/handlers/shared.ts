@@ -55,6 +55,22 @@ export interface HandlerContext {
    * clients keep their own per-call timeouts and are NOT wired to it yet.
    */
   signal?: AbortSignal;
+  /**
+   * Sleep between long-poll reads (`cork_query orderbook` with `wait`). Defaults to a real timer
+   * that resolves early on `signal`; tests inject an instant sleep so a poll loop is driven by its
+   * poll COUNT, never by the wall clock.
+   */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+/** The default `HandlerContext.sleep`: a timer that resolves early when `signal` aborts. */
+export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const t = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(t); resolve(); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function venueDepsOf(ctx: HandlerContext): VenueDeps {
