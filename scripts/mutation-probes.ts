@@ -1490,8 +1490,8 @@ const CATALOG: Mutant[] = [
     // populated — and the discovery task would grade a filter that never ran (green no-op, C13).
     id: "eval-stub-rfq-state-filter-ignored",
     file: "evals/stub.ts",
-    find: 'return r(200, { items: state === "open" ? [row] : [], nextCursor: null, hasMore: false });',
-    replace: "return r(200, { items: [row], nextCursor: null, hasMore: false });",
+    find: 'return r(200, { items: state === "open" ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });',
+    replace: 'return r(200, { items: [withAnswers ? { ...row, answers, answer_count: answers.length } : row], nextCursor: null, hasMore: false });',
     tests: [T.taskFixtures],
   },
   {
