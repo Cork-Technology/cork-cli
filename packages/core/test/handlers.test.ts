@@ -85,12 +85,17 @@ describe("runTool: cork_capabilities", () => {
     expect(d.matches[0]?.inputSchema).toBeTruthy();
   });
 
-  it("topic resolves canonical CLI leaves AND their aliases (pool/phoenix, order/orders)", async () => {
-    for (const [topic, name] of [["pool", "cork_prepare_phoenix"], ["phoenix", "cork_prepare_phoenix"], ["order", "cork_prepare_orders"], ["orders", "cork_prepare_orders"]] as const) {
+  it("topic resolves canonical CLI leaves AND their aliases (pool/phoenix, order/prepare order)", async () => {
+    for (const [topic, name] of [["pool", "cork_prepare_phoenix"], ["phoenix", "cork_prepare_phoenix"], ["order", "cork_prepare_orders"], ["prepare order", "cork_prepare_orders"]] as const) {
       const env = await runTool("cork_capabilities", { topic }, { nowSeconds: NOW });
       expect(env.state, topic).toBe("ok");
       expect((env.data as { name: string }).name, topic).toBe(name);
     }
+    // Doc topics resolve BEFORE tool names, so the cli alias "orders" now lands on the order
+    // VOCABULARY topic (the better landing for that word); the tool card keeps its other keys.
+    const vocab = await runTool("cork_capabilities", { topic: "orders" }, { nowSeconds: NOW });
+    expect(vocab.state).toBe("ok");
+    expect((vocab.data as { topic: string }).topic).toBe("orders");
   });
 
   it("topic resolves a tool (by name, cork_ prefix, or cli leaf)", async () => {

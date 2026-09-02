@@ -1825,7 +1825,7 @@
                     "$ref": "#/$defs/Hex"
                   },
                   "allowedSender": {
-                    "description": "reserve the fill for ONE filler (1inch LOP v4 allowed sender): only the LOW 80 BITS — the last 10 bytes — of this address are stored in makerTraits, and the LOP reverts PrivateOrder() unless the FILLING msg.sender's last 10 bytes match. Name the address that will CALL the LOP: the taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the adapter is the LOP's msg.sender there). Omit for an order any taker may lift. The book row and this result show the stored suffix as `allowedSender`; the requester of the RFQ this order answers is the natural value when the cover is meant for them",
+                    "description": "reserve the fill for ONE filler (1inch LOP v4 allowed sender): only the LOW 80 BITS — the last 10 bytes — of this address are stored in makerTraits, and the LOP reverts PrivateOrder() unless the FILLING msg.sender's last 10 bytes match. Name the address that will CALL the LOP: the taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the adapter is the LOP's msg.sender there). Omit for an order any taker may lift. The book row and this result show the stored suffix as `allowedSender`; the requester of the RFQ this order answers is the natural value when the cover is meant for them (reach, groups, and liveness vocabulary: cork_capabilities topic:\"orders\")",
                     "$ref": "#/$defs/Address"
                   },
                   "auction": {

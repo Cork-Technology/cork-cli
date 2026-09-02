@@ -26,6 +26,10 @@ export const SIGNING_TOPIC_REFERENCE = 'cork_capabilities topic:"signing"' as co
  *  prompt-engineering surface — it should demonstrate the correct form, not just reject). */
 export const UNITS_TOPIC_REFERENCE = 'cork_capabilities topic:"units"' as const;
 
+/** Referenced from the reach/group teaching (private_order, allowedSender, the group key) so a
+ *  refusal routes to the whole vocabulary — one term per concept — instead of re-teaching inline. */
+export const ORDERS_TOPIC_REFERENCE = 'cork_capabilities topic:"orders"' as const;
+
 /** The two-axis unit notation (precision prefix + dimension in braces, Reserve/ToB style with the
  *  Cork extensions the units topic declares) as MACHINE-READABLE values: emitted as `x-units` on
  *  every scaled schema field, valued with the SAME strings the topic table's Notation column uses,
@@ -398,6 +402,123 @@ plausible nonsense rather than failing.
   (\`Date.now()\`) is rejected with teaching rather than accepted as an immortal deadline.`,
     searchText:
       "units unit scale scales scaling decimals decimal precision wad 1e18 fixed point ray percent percentage fraction basis points bps what scale is this field is this wad how many decimals do i multiply by 1e18 premium percent or fraction rate bump base 1e7 token amount base units smallest unit convert amount 18 decimals usdc 6 decimals off by 100 scale mismatch",
+  },
+  orders: {
+    name: "orders",
+    aliases: ["order-lifecycle", "reservation", "oco", "one-cancels-the-other", "ladder", "liveness", "exclusivity"],
+    summary:
+      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and the kernel, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so candidates are re-read from the invalidator before they are ranked. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
+    body: `# Orders — reach, fill regime, groups, price shape, provenance, liveness
+
+One vocabulary for a 1inch LOP v4 order as this surface, the venue, and the kernel use it. One term
+per concept; the synonyms table at the end maps every other word you will meet onto it. Everything
+below is read from the SIGNED order (makerTraits, extension, amounts), never from venue metadata —
+the venue discovers rows, the signature and the chain decide what they mean [K3, K7]. This page is the VOCABULARY; the tool that builds and fills orders is documented at topic:\"prepare order\".
+
+## The entities, in the order they happen
+
+| term | what it is | where it lives |
+|---|---|---|
+| **request** (RFQ) | a hedger asks for cover: pair, notional, expiry window, validity | venue (\`cork_query rfqs\`) |
+| **answer** | an underwriter's reply on a request: quoted options, or a pass with a reason code | venue |
+| **quote** | one priced option inside an answer; a price, not a commitment | venue |
+| **counter** | the requester's non-committal bid on the request; an **echo** is a counter at exactly a quoted price naming that option (a kernel convention, not a venue rule) | venue |
+| **order** | a signed 1inch LOP v4 maker order: the only authenticated statement of price on this surface | signed bytes; listed by the venue book |
+| **offer** | an order somebody can actually buy: a live order, or a quote a live order cites. A quote with no live order behind it is a price nobody can buy | derived |
+| **fill** | an on-chain execution of an order by a taker | chain (\`cork_query fills\`) |
+
+## Reach: open or reserved
+
+An order is **open** (any taker) or **reserved** (one taker).
+Reservation is \`allowedSender\`: the LOW 80 BITS — the last 10 bytes — of one address, packed into makerTraits; at fill time the LOP compares those bits with \`msg.sender\` and reverts \`PrivateOrder()\` on any other caller.
+So the value names the **fill sender** — the address that CALLS the LOP — never the beneficiary: the
+taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the
+adapter is the LOP's caller there). A reservation for an account that fills through an adapter locks
+that account out. Book rows carry \`exclusivity\`, classified against \`filters.account\` as the fill
+sender: \`open\`, \`reserved\` (no account given), \`reserved-for-account\`, \`reserved-for-other\`. A
+\`taker-fill\` whose sender does not match refuses with \`private_order\` — bytes that can only revert
+are not built.
+
+## Fill regime: single-fill or multi-fill
+
+1inch remembers a spent order in one of two ways, chosen per order by the maker:
+
+- **single-fill (bit invalidator)** — the order carries a 40-bit \`nonce\`; filling or cancelling it
+  flips one bit keyed on \`(maker, nonce)\`. The contract never records WHICH order spent the bit.
+  The first fill of ANY size spends it: post 100, get 1 filled, and the remaining 99 are dead.
+  Every Cork-built order is single-fill (\`allowMultipleFills\` is off).
+- **multi-fill (remaining invalidator)** — keyed on the order hash, tracks the remaining amount,
+  allows many partial fills. Not used by this surface today.
+
+\`allowsPartialFills\` does NOT change the regime: the LOP condition is an OR, so a partial-fill, single-fill order still lives on the BIT invalidator, and one partial fill retires the remainder.
+
+## Groups: one nonce, one-cancels-the-other
+
+Orders by one maker that share a \`nonce\` share one bit. The first fill or cancel of any of them
+retires all of them: a **group** (one-cancels-the-other). A **ladder** is a group whose rungs differ
+in price, reach, or expiry: a *revision ladder* re-quotes one request at better prices on one nonce
+(the taker takes the best, the rest die); an *exclusive-then-open* ladder pairs a reserved best rung
+with an open worse rung. A rung that dies because a sibling filled is **dead-by-sibling**: the chain
+knows, the venue does not — the row keeps reading OPEN until a status sync, so every candidate is
+re-read from the LOP invalidator before it is ranked or announced [K7]. Sharing a nonce is a CHOICE
+made through the maker-order group key; without one, each request derives its own nonce from its
+idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]). One transaction
+can cancel a whole group: \`bitsInvalidateForOrder\` spends every bit of the group's slot word.
+
+## Series and epoch: mass cancel
+
+A maker with many independent orders can stamp them with a \`series\` and require the maker's
+current **epoch** (flag 250, \`needCheckEpochManager\`): bumping the epoch (\`increaseEpoch\`) retires
+every order of that series at once. Orders retired this way are **dead-by-epoch** — like
+dead-by-sibling, invisible to the venue until it re-syncs. This surface decodes \`series\`; it does
+not yet prepare the bump.
+
+## Price shape: fixed or decaying
+
+A **fixed** order names its price once: \`takingAmount / makingAmount\`.
+A **decaying** order (\`auction\` — a DECAYING-PREMIUM order in the schema's words) uses the 1inch Fusion settlement as a pure amount getter: the price starts at a
+ceiling (\`initialRateBump\` above the signed \`takingAmount\`) and decays to that floor; the signed
+\`takingAmount\` is the maker's WORST case, and a fill's default cap is the curve's ceiling. Rank a
+decaying row at its price NOW (\`dutch-auction-price\`), and label it as moving.
+
+## Provenance: cited or uncited
+
+A **cited** order names the quote it executes (\`quoteRef\`: the RFQ answer option this order executes). The venue
+accepts the citation from the request's requester or from the underwriter of the cited answer;
+anyone else is refused. An **uncited** order stands alone. A quote is **firm** when a live cited
+order backs it, **indicative** otherwise.
+
+## Liveness: the states an order can be in, and who knows
+
+| state | meaning | who knows first | how this surface learns it |
+|---|---|---|---|
+| live | signed, unexpired, bit clear | chain | invalidator read (\`readLopInvalidator\`) |
+| filled | the bit was spent by THIS order's fill | chain, then venue | fills feed + invalidator |
+| cancelled | the maker spent the bit | chain, then venue | invalidator; the venue after sync |
+| expired | past the makerTraits expiry | both, from the clock | the signed expiry |
+| dead-by-sibling | a group sibling filled or was cancelled | chain only | invalidator; the venue row still says OPEN |
+| dead-by-epoch | the maker bumped the series epoch | chain only | epoch read; the venue row still says OPEN |
+
+\`cork_track reconcile\` resolves an order hash to one of these with the chain outranking the venue;
+\`status_mismatch\` (conflict) is the venue disagreeing with the chain.
+
+## Synonyms — say the left column
+
+| use this | you will also see | note |
+|---|---|---|
+| reserved | dedicated, private, single-taker, allowed-sender order, \`PrivateOrder\` | the board and the kernel say dedicated; 1inch says allowed sender |
+| open | public, unreserved, any-taker | |
+| fill sender | taker, \`msg.sender\`, caller | the beneficiary may differ (adapter fills) |
+| group | OCO, OCA, one-cancels-the-other, shared nonce, bracket | the mechanism is the nonce bit |
+| ladder | price ladder, quote ladder, rungs, revision ladder | a group with a purpose |
+| single-fill | bit invalidator, all-or-nothing, fill-or-kill (loosely) | partial fills still spend the bit |
+| decaying | auction, dutch auction, Fusion order, time-decay | the settlement is only an amount getter here |
+| cited | quote-linked, executing a quote, \`quoteRef\` | |
+| firm quote | quote with an order, executable quote, answer with offer | an indicative quote is the opposite |
+| dead-by-sibling | invalidated, orphaned rung, stale row | invisible to the venue |
+`,
+    searchText:
+      "reserved order dedicated order private order single taker allowed sender allowedSender who can fill this order reserve for one taker fill sender msg.sender adapter PrivateOrder one cancels the other oco oca ladder rung group shared nonce bit invalidator partial fill single fill multiple fills all or nothing epoch series mass cancel decaying price auction dutch cited quote quoteRef firm quote indicative offer resting live dead order sibling liveness expired cancelled filled order lifecycle exclusivity",
   },
   warnings: {
     name: "warnings",

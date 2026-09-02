@@ -7,7 +7,7 @@ import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
 import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
-import { TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
+import { ORDERS_TOPIC_REFERENCE, TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
@@ -1319,6 +1319,9 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("private_order");
     expect(env.warnings[0]?.message).toContain("PrivateOrder");
+    // The refusal routes to the order vocabulary (fill sender vs beneficiary) — behavioral, so a
+    // deleted interpolation fails here, not in an integrator's lap.
+    expect(env.warnings[0]?.message).toContain(ORDERS_TOPIC_REFERENCE);
     expect(env.data).toMatchObject({ orderHash: reservedHash, allowedSender: allowedSenderSuffix(STRANGER), fillSender: TAKER, fillSenderSuffix: allowedSenderSuffix(TAKER) });
   });
 

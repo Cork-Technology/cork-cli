@@ -79,7 +79,10 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v.leng
  *  makerTraits name a filler and no fill sender was given to compare; `reserved-for-account` /
  *  `reserved-for-other` = compared against `filters.account` (the taker account on a raw fill,
  *  the ForSelf adapter on a wrapper fill — whoever calls the LOP). */
-export type BookExclusivity = "open" | "reserved" | "reserved-for-account" | "reserved-for-other";
+/** The reach vocabulary a book row can carry — one runtime list so the `orders` doc topic can be
+ *  held to it by a test (a value added here without a topic line fails offline). */
+export const BOOK_EXCLUSIVITY = ["open", "reserved", "reserved-for-account", "reserved-for-other"] as const;
+export type BookExclusivity = (typeof BOOK_EXCLUSIVITY)[number];
 
 interface AnnotatedBook {
   lop: `0x${string}`;

@@ -2,8 +2,9 @@
 // every alias AND via search, and every prepare result carries the data.execution completion
 // pointer. All offline (config-only paths).
 import { describe, expect, it } from "vitest";
-import { DOC_TOPICS, inputJsonSchema, REGISTRY, UNITS_TOPIC_REFERENCE, X_UNITS } from "@cork/schemas";
+import { DOC_TOPICS, inputJsonSchema, ORDERS_TOPIC_REFERENCE, REGISTRY, UNITS_TOPIC_REFERENCE, X_UNITS } from "@cork/schemas";
 import { runTool } from "@cork/core";
+import { BOOK_EXCLUSIVITY } from "../src/handlers/hybrid-verify.ts";
 
 const NOW = 1_800_000_000n;
 const A = "0xc0ffee0000000000000000000000000000000001" as const;
@@ -178,6 +179,85 @@ describe("doc topic: units", () => {
   // premium_scale_mismatch / quote_ref_unverifiable each assert their emitted message contains
   // UNITS_TOPIC_REFERENCE on the real handler path). A constant-level check here would stay green
   // with the interpolation deleted — exactly the placebo this suite exists to prevent.
+});
+
+describe("doc topic: orders", () => {
+  it("resolves by name and by every alias, case-insensitively", async () => {
+    for (const key of ["orders", "ORDERS", "order-lifecycle", "reservation", "oco", "one-cancels-the-other", "ladder", "liveness", "exclusivity"]) {
+      const env = await runTool("cork_capabilities", { topic: key }, { nowSeconds: NOW });
+      expect(env.state).toBe("ok");
+      const d = env.data as { topic: string; summary: string; body: string };
+      expect(d.topic).toBe("orders");
+      expect(d.summary).toBe(DOC_TOPICS.orders!.summary);
+      expect(d.body).toContain("dead-by-sibling");
+    }
+  });
+
+  it("surfaces in search results as a topic card for the words people actually use", async () => {
+    for (const q of ["who can fill this order", "dedicated order for one taker", "one cancels the other", "is this order still live"]) {
+      const env = await runTool("cork_capabilities", { search: q }, { nowSeconds: NOW });
+      expect(env.state).toBe("ok");
+      const matches = (env.data as { matches: Array<Record<string, unknown>> }).matches;
+      const topic = matches.find((m) => m.topic === "orders");
+      expect(topic, `search: ${q}`).toBeDefined();
+      expect(topic!.reference).toBe(ORDERS_TOPIC_REFERENCE);
+    }
+  });
+
+  // The topic is a SECOND statement of facts each field's schema description already states. Same
+  // guard as the units table: for every (field, marker) the schema description states the marker
+  // AND a topic-body line pairs the field name with the SAME marker — so the topic cannot state a
+  // different rule beside a right name and stay green.
+  it("vocabulary parity: every order field the topic names states the same rule in its schema description", () => {
+    const VOCAB: Array<{ field: string; marker: string }> = [
+      { field: "allowedSender", marker: "PrivateOrder()" },
+      { field: "allowsPartialFills", marker: "BIT invalidator" },
+      { field: "auction", marker: "DECAYING" },
+      { field: "quoteRef", marker: "RFQ answer option" },
+    ];
+    const byField = new Map<string, string[]>();
+    for (const tool of REGISTRY) {
+      const schema = inputJsonSchema(tool.name) as Record<string, unknown>;
+      const walk = (node: unknown): void => {
+        if (node === null || typeof node !== "object") return;
+        const n = node as Record<string, unknown>;
+        const props = n.properties as Record<string, Record<string, unknown>> | undefined;
+        if (props) for (const [name, prop] of Object.entries(props)) if (typeof prop.description === "string") byField.set(name, [...(byField.get(name) ?? []), prop.description]);
+        for (const v of Object.values(n)) { if (Array.isArray(v)) v.forEach(walk); else walk(v); }
+      };
+      walk(schema);
+    }
+    const lines = DOC_TOPICS.orders!.body.split("\n");
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    for (const { field, marker } of VOCAB) {
+      const descs = byField.get(field);
+      expect(descs, `${field} is not a property on any tool schema — rename or drop it from the orders topic`).toBeDefined();
+      expect(descs!.some((d) => d.includes(marker)), `${field}: no schema description states '${marker}'`).toBe(true);
+      const wordRe = new RegExp(`\\b${escape(field)}\\b`);
+      expect(lines.some((l) => wordRe.test(l) && l.includes(marker)), `orders topic: no line pairs ${field} with '${marker}'`).toBe(true);
+    }
+  });
+
+  it("the reach vocabulary the book emits is exactly what the topic teaches, and every synonym maps onto it", () => {
+    const body = DOC_TOPICS.orders!.body;
+    // The four exclusivity values the book row can carry, on ONE topic line (the classification rule).
+    const line = body.split("\n").find((l) => l.includes("`exclusivity`") && l.includes("classified"));
+    expect(line, "the topic states how exclusivity is classified").toBeDefined();
+    for (const v of BOOK_EXCLUSIVITY) expect(body, `exclusivity value '${v}' is taught`).toContain(`\`${v}\``);
+    // Synonyms the board, the kernel, and 1inch use all resolve to the canonical column.
+    for (const syn of ["dedicated", "private", "single-taker", "OCO", "one-cancels-the-other", "dutch auction", "allowed sender"]) {
+      expect(body, `synonym '${syn}' is mapped`).toContain(syn);
+    }
+    // The canonical terms head the synonyms table.
+    for (const canon of ["| reserved |", "| open |", "| fill sender |", "| group |", "| ladder |", "| single-fill |", "| decaying |", "| cited |", "| firm quote |", "| dead-by-sibling |"]) {
+      expect(body, `canonical term row ${canon}`).toContain(canon);
+    }
+  });
+
+  // private_order → topic routing is asserted BEHAVIORALLY in venue.test.ts ("exclusivity
+  // pre-flight ... private_order"), on the real refusal path with a real signature — the same
+  // placement as the units tripwires; a constant-level check here would stay green with the
+  // interpolation deleted.
 });
 
 describe("data.execution on prepare results (offline-buildable variants)", () => {

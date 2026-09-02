@@ -5,6 +5,13 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [0.5.1-rc.1] — unreleased
+
+### Added
+
+- `cork_capabilities topic:"orders"` (aliases `order-lifecycle`, `reservation`, `oco`, `one-cancels-the-other`, `ladder`, `liveness`, `exclusivity`): the ORDER vocabulary, one term per concept — the entities from request to fill; reach (open, or reserved for a FILL SENDER: the low 80 bits of the address that calls the LOP, the ForSelf adapter on a wrapper fill); fill regime (every Cork order is single-fill on the bit invalidator; partial-fill orders still spend the bit); groups (orders sharing a nonce are one-cancels-the-other; a ladder is a group whose rungs differ in price, reach, or expiry; dead-by-sibling is known to the chain and not the venue); series and epoch; price shape (fixed or decaying); provenance (cited or uncited; a quote is firm only when a live cited order backs it); a liveness table naming who knows each state first; and a synonyms table (dedicated, private, single-taker → reserved; OCO, OCA → group; dutch auction → decaying). Served through the no-args catalog, search cards, and `/docs/orders`. Doc topics resolve before tool names, so `topic:"orders"` now answers this page instead of the `cork_prepare_orders` tool card, which keeps `order`, `prepare order`, and `cork_prepare_orders`. A parity test holds each order field the topic names to the same rule in its schema description, and the reach values to the book's `BOOK_EXCLUSIVITY` list.
+- `private_order` refusals and the `maker-order.allowedSender` description route to the topic (`ORDERS_TOPIC_REFERENCE`, exported by `@cork/schemas`).
+
 ## [0.5.0] — 2026-08-31
 
 Supersedes 0.5.0-rc.1 through 0.5.0-rc.5. This is the breaking minor of the 0.5 line. `pre-funded` is removed from `cork_prepare_phoenix.fundingMode`, a covered input schema, and the SDK entries below reshape covered exports. The diff decides the bump, not the intent behind it.

@@ -1,7 +1,7 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
-import { UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
+import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
@@ -845,7 +845,7 @@ async function buildTakerFillArtifact(a: {
       data: { orderHash: localOrderHash, allowedSender, fillSender, fillSenderSuffix: allowedSenderSuffix(fillSender) },
       chainId,
       source: "config",
-      warnings: [{ code: "private_order", message: `this order is reserved for a filler whose address ends in ${allowedSender} (the signed makerTraits allowed-sender slot), but ${action.forSelf ? `a ForSelf fill is sent to the LOP by the ADAPTER ${fillSender}` : `this fill would be sent by ${fillSender}`}, whose last 10 bytes are ${allowedSenderSuffix(fillSender)} — the LOP reverts PrivateOrder(), so no fill bytes were built. If you control the reserved sender, prepare again with it as ${action.forSelf ? "the adapter (the LOP sees the adapter, never the account, on the wrapper path)" : "account"}; otherwise this order is not yours to lift` }],
+      warnings: [{ code: "private_order", message: `this order is reserved for a filler whose address ends in ${allowedSender} (the signed makerTraits allowed-sender slot), but ${action.forSelf ? `a ForSelf fill is sent to the LOP by the ADAPTER ${fillSender}` : `this fill would be sent by ${fillSender}`}, whose last 10 bytes are ${allowedSenderSuffix(fillSender)} — the LOP reverts PrivateOrder(), so no fill bytes were built. If you control the reserved sender, prepare again with it as ${action.forSelf ? "the adapter (the LOP sees the adapter, never the account, on the wrapper path)" : "account"}; otherwise this order is not yours to lift. Reach vocabulary (fill sender vs beneficiary): ${ORDERS_TOPIC_REFERENCE}` }],
       ctx,
     });
   }
