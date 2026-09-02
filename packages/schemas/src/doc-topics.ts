@@ -600,6 +600,15 @@ export function executionMakerOrder(): ExecutionBlock {
   ]);
 }
 
+/** Family B, maker-ladder: N typed-data artifacts, each completed like one maker order. */
+export function executionMakerLadder(): ExecutionBlock {
+  return executionTypedData([
+    "sign EACH rung's typedData client-side (eth_signTypedData_v4, LOP v4 domain) — one signature per rung",
+    "cork_prepare_orders finalize-maker-order per rung (its own clientRequestId; the listing carries that rung's nonce)",
+    "cork_submit lop-order per rung (pass each submitInput verbatim); order of posting does not matter — grouped rungs share one bit either way",
+  ]);
+}
+
 /** Family B, rollover-intent path. */
 export function executionRolloverIntent(): ExecutionBlock {
   return executionTypedData([

@@ -67,6 +67,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   cork_prepare_orders: [
     { variant: "maker-order", text: "limit order maker sign typed data sell buy place resting" },
     { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage" },
+    { variant: "maker-ladder", text: "ladder rungs several orders at once one cancels the other oco revision ladder better price reserved then open split standing offer many takers capacity" },
     { variant: "taker-fill", text: "fill take order taker execute against" },
     { variant: "cancel", text: "cancel invalidate order remove resting" },
     { variant: "rollover-intent", text: "rollover intent erc-7683 settler roll position next expiry" },

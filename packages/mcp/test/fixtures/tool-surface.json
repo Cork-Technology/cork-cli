@@ -2722,6 +2722,317 @@
                 ],
                 "additionalProperties": false,
                 "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "maker-ladder"
+                  },
+                  "poolId": {
+                    "$ref": "#/$defs/MarketId"
+                  },
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "BUY",
+                      "SELL"
+                    ],
+                    "description": "side from the MAKER's perspective for the venue listing — one side for the whole ladder"
+                  },
+                  "makerAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "takerAsset": {
+                    "$ref": "#/$defs/Address"
+                  },
+                  "makingAmount": {
+                    "description": "the amount every rung makes unless the rung overrides it — base units of makerAsset",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "expirySeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 315576000,
+                    "description": "RELATIVE expiry for rungs that do not set their own, seconds from now (omit for no expiry)"
+                  },
+                  "allowsPartialFills": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "applies to every rung; a partial fill still spends the rung's invalidator bit (see maker-order.allowsPartialFills)"
+                  },
+                  "usePermit2": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "applies to every rung (see maker-order.usePermit2)"
+                  },
+                  "ocoGroup": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 124,
+                    "description": "the group key the grouped rungs share (see noncePolicy); omitted = this ladder's own clientRequestId, so the ladder is its own group"
+                  },
+                  "noncePolicy": {
+                    "type": "string",
+                    "enum": [
+                      "shared-reserved",
+                      "shared",
+                      "distinct"
+                    ],
+                    "default": "shared-reserved",
+                    "description": "which rungs share ONE invalidator bit (one-cancels-the-other). shared-reserved (default): every RESERVED rung (allowedSender set) shares the group — a revision ladder for one taker, the first fill retires the rest — while each OPEN rung gets its own bit, so an open rung can fill IN ADDITION to one reserved rung (the maker signs for that capacity; `capacity` states it). shared: every rung shares the group — exactly one rung of the whole ladder can ever fill. distinct: every rung has its own bit — independent orders that can all fill (a standing offer split across many takers)"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "collateralAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "referenceAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "expiryTimestamp": {
+                        "description": "pool expiry — must be in the future at creation",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS the order names — required in 2.1.0 (no unverified path; discover with cork_query resource:'registry-recipes'). Omittable only when `mode` sugar is used",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "mode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "DEPRECATED sugar: a legacy mode name ('liquidity', 'fixed') mapped to a configured recipe address, with a deprecation_notice — pass `recipe` instead. With legacy:true this is the OLD registry's exact mode string (required there)"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0; zero reverts). For price/nav recipes this MUST stay 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "additionalData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "enableJitMint": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "maker-side just-in-time mint of the cST being sold, funded by the maker's own collateral; false = market-creation only (maker must already hold the cST). IGNORED on the taker path, which always mints"
+                      },
+                      "permits": {
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports",
+                              "$ref": "#/$defs/TokenAmount"
+                            },
+                            "deadline": {
+                              "$ref": "#/$defs/UnixSeconds"
+                            },
+                            "v": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            "r": {
+                              "$ref": "#/$defs/Bytes32"
+                            },
+                            "s": {
+                              "$ref": "#/$defs/Bytes32"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "value",
+                            "deadline",
+                            "v",
+                            "r",
+                            "s"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"
+                      },
+                      "legacy": {
+                        "type": "boolean",
+                        "description": "build against the DEPRECATED pre-2.1.0 adapter/registry generation (mode-string extraData, constraint derived at FILL time) — requires CORK_ENABLE_DEPRECATED=1 and `mode`. Kept because that adapter still holds the controller roles until governance grants the 2.1.0 ones"
+                      }
+                    },
+                    "required": [
+                      "collateralAsset",
+                      "referenceAsset",
+                      "expiryTimestamp"
+                    ],
+                    "additionalProperties": false,
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool"
+                  },
+                  "rungs": {
+                    "minItems": 2,
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "takingAmount": {
+                          "description": "this rung's price: what the taker pays for the rung's makingAmount — base units of takerAsset",
+                          "$ref": "#/$defs/TokenAmount"
+                        },
+                        "makingAmount": {
+                          "description": "override the ladder makingAmount for this rung",
+                          "$ref": "#/$defs/TokenAmount"
+                        },
+                        "allowedSender": {
+                          "description": "reserve this rung for ONE fill sender (low 80 bits, see maker-order.allowedSender); omit for an open rung",
+                          "$ref": "#/$defs/Address"
+                        },
+                        "expirySeconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 315576000,
+                          "description": "this rung's RELATIVE expiry, seconds from now; omitted = the ladder's"
+                        },
+                        "auction": {
+                          "type": "object",
+                          "properties": {
+                            "startTime": {
+                              "description": "when the price starts decaying, absolute unix SECONDS — omitted = prepare time (the price then decays from the first moment the order can rest)",
+                              "$ref": "#/$defs/UnixSeconds"
+                            },
+                            "durationSeconds": {
+                              "type": "integer",
+                              "minimum": 60,
+                              "maximum": 16777215,
+                              "description": "how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"
+                            },
+                            "initialRateBump": {
+                              "type": "string",
+                              "pattern": "^[0-9]+$",
+                              "description": "the premium ABOVE the signed takingAmount at auction start, base 1e7 = +100% — '500000' starts the price 5% above the floor and decays linearly to it (piecewise-linear with points). The signed takingAmount IS the floor",
+                              "x-units": "D7{%}",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "points": {
+                              "maxItems": 255,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "rateBump": {
+                                    "type": "string",
+                                    "pattern": "^[0-9]+$",
+                                    "description": "bump at this point, base 1e7; must be NON-INCREASING — each point <= the preceding point's bump (<= initialRateBump for the first). The getters interpolate linearly between points, so a point higher than its predecessor would make the price RISE across that segment; a dutch auction only decays.",
+                                    "x-units": "D7{%}",
+                                    "$ref": "#/$defs/UintStr"
+                                  },
+                                  "timeDelta": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 65535,
+                                    "description": "seconds since the previous point (2-byte wire field)"
+                                  }
+                                },
+                                "required": [
+                                  "rateBump",
+                                  "timeDelta"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "description": "piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"
+                            }
+                          },
+                          "required": [
+                            "durationSeconds",
+                            "initialRateBump"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Cork-native DECAYING-PREMIUM order (the modeled-quote-free answer to rfq-quote): the deployed 1inch Fusion settlement is used purely as an AMOUNT GETTER — no postInteraction, so ANY taker fills at the current decayed price through the plain LOP fill path; the auction discovers the premium instead of a pricing model. Composes with jitMarket (one extension, one salt binding). Mutually exclusive with raw `extension`. Price the resting order any time with cork_compute dutch-auction-price"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "description": "a caller-chosen name echoed on the rung's result (e.g. 'best-reserved', 'open-decay')"
+                        }
+                      },
+                      "required": [
+                        "takingAmount"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "the rungs, in the order you want them reported; each becomes one signable maker order with its own clientRequestId derived from the ladder's (`<ladderId>:<index>`)"
+                  }
+                },
+                "required": [
+                  "type",
+                  "poolId",
+                  "side",
+                  "makerAsset",
+                  "takerAsset",
+                  "makingAmount",
+                  "rungs"
+                ],
+                "additionalProperties": false,
+                "description": "a LADDER of signable maker orders in one call (2 to 32 rungs, one pool and side): rungs differ in price, reach (open | reserved), expiry, or decay, and `noncePolicy` decides which rungs are one-cancels-the-other by sharing one invalidator bit. Returns one maker-order artifact per rung (sign each; finalize-maker-order each; cork_submit each), the group each rung landed on, and the maker-asset CAPACITY the ladder can consume (a shared group counts once at its largest rung; distinct rungs add up). Fails as a whole when any rung fails — a ladder is one intent"
               }
             ]
           },

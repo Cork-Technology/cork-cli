@@ -433,6 +433,10 @@
       "kind": "value"
     },
     {
+      "name": "LADDER_ID_MAX",
+      "kind": "value"
+    },
+    {
       "name": "LEGACY_JIT_IMPLEMENTATION_ROLES",
       "kind": "value"
     },
@@ -1594,6 +1598,10 @@
     },
     {
       "name": "knownVenueStatus",
+      "kind": "value"
+    },
+    {
+      "name": "ladderRungClientRequestId",
       "kind": "value"
     },
     {
@@ -3145,6 +3153,10 @@
       "kind": "type"
     },
     {
+      "name": "LADDER_ID_MAX",
+      "kind": "value"
+    },
+    {
       "name": "LOP_ADDRESSES",
       "kind": "value"
     },
@@ -3522,6 +3534,10 @@
     },
     {
       "name": "knownVenueStatus",
+      "kind": "value"
+    },
+    {
+      "name": "ladderRungClientRequestId",
       "kind": "value"
     },
     {

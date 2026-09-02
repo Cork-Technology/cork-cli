@@ -425,21 +425,9 @@ const LopOrderStructWire = z.strictObject({
   makerTraits: UintStr,
 });
 
-export const OrdersAction = z.discriminatedUnion("type", [
-  A("maker-order", {
-    poolId: MarketId,
-    side: z.enum(["BUY", "SELL"]).describe("side from the MAKER's perspective for the venue listing"),
-    makerAsset: Address,
-    takerAsset: Address,
-    makingAmount: TokenAmount,
-    takingAmount: TokenAmount,
-    expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"),
-    allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId and no shared ocoGroup — the invalidator bit is derived from the id (or from ocoGroup when given), and orders sharing a bit invalidate together"),
-    usePermit2: z.boolean().default(false).describe("source the maker asset through Permit2 at fill time (makerTraits bit 248) — the pull becomes IPermit2.transferFrom, which needs BOTH layers in place before the order rests: an ERC-20 approve of the maker asset to the canonical Permit2 contract, AND a Permit2 internal allowance (maker, makerAsset, spender = the LOP) under the uint160 cap with a LIVE expiration. The result's data.approvals states both layers with unsigned grant payloads. Default false = one plain ERC-20 allowance to the LOP, the simpler grant for a single order; Permit2 suits a maker running standing, expiring, centrally-revocable allowances across many orders"),
-    extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket and auction, which BUILD the extension"),
-    allowedSender: Address.optional().describe("reserve the fill for ONE filler (1inch LOP v4 allowed sender): only the LOW 80 BITS — the last 10 bytes — of this address are stored in makerTraits, and the LOP reverts PrivateOrder() unless the FILLING msg.sender's last 10 bytes match. Name the address that will CALL the LOP: the taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the adapter is the LOP's msg.sender there). Omit for an order any taker may lift. The book row and this result show the stored suffix as `allowedSender`; the requester of the RFQ this order answers is the natural value when the cover is meant for them (reach, groups, and liveness vocabulary: cork_capabilities topic:\"orders\")"),
-    ocoGroup: z.string().min(1).max(128).optional().describe("make this order ONE-CANCELS-THE-OTHER with every other order by this maker that names the same group: the 40-bit invalidator nonce is derived from this key instead of clientRequestId, so the orders share one bit and the first fill or cancel of any of them retires all of them (a ladder of rungs at different prices, reach, or expiry; or one capacity answering several requests). Each rung keeps its OWN clientRequestId (idempotency, salt, venue 409s). Omit for an order that stands alone: the nonce then derives from clientRequestId and distinct requests land on distinct bits. The venue does not learn the group — a rung whose sibling filled stays OPEN on the book until a chain read retires it (cork_capabilities topic:\"orders\")"),
-    auction: z
+/** The decaying-price block a maker order (and every ladder rung) can carry. One definition for
+ *  both variants so the wire cannot drift between them. */
+const MakerAuctionWire = z
       .strictObject({
         startTime: UnixSeconds.optional().describe("when the price starts decaying, absolute unix SECONDS — omitted = prepare time (the price then decays from the first moment the order can rest)"),
         durationSeconds: z.number().int().min(60).max(16_777_215).describe("how long the decay runs, RELATIVE seconds (3-byte wire field, max ~194 days). After start+duration the price sits at the signed floor until the order expires"),
@@ -451,8 +439,10 @@ export const OrdersAction = z.discriminatedUnion("type", [
           .describe("piecewise-linear curve knees; omitted = one straight line from initialRateBump to 0 over the duration"),
       })
       .optional()
-      .describe("Cork-native DECAYING-PREMIUM order (the modeled-quote-free answer to rfq-quote): the deployed 1inch Fusion settlement is used purely as an AMOUNT GETTER — no postInteraction, so ANY taker fills at the current decayed price through the plain LOP fill path; the auction discovers the premium instead of a pricing model. Composes with jitMarket (one extension, one salt binding). Mutually exclusive with raw `extension`. Price the resting order any time with cork_compute dutch-auction-price"),
-    jitMarket: z
+      .describe("Cork-native DECAYING-PREMIUM order (the modeled-quote-free answer to rfq-quote): the deployed 1inch Fusion settlement is used purely as an AMOUNT GETTER — no postInteraction, so ANY taker fills at the current decayed price through the plain LOP fill path; the auction discovers the premium instead of a pricing model. Composes with jitMarket (one extension, one salt binding). Mutually exclusive with raw `extension`. Price the resting order any time with cork_compute dutch-auction-price");
+
+/** The JIT market block a maker order (and a ladder, once for all its rungs) can carry. */
+const MakerJitMarketWire = z
       .strictObject({
         collateralAsset: Address,
         referenceAsset: Address,
@@ -477,7 +467,24 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .optional()
       .describe(
         "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool",
-      ),
+      );
+
+export const OrdersAction = z.discriminatedUnion("type", [
+  A("maker-order", {
+    poolId: MarketId,
+    side: z.enum(["BUY", "SELL"]).describe("side from the MAKER's perspective for the venue listing"),
+    makerAsset: Address,
+    takerAsset: Address,
+    makingAmount: TokenAmount,
+    takingAmount: TokenAmount,
+    expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry, seconds from now (omit for no expiry; max 10 years — the trait slot is 40-bit and an absolute/ms value pasted here would otherwise silently wrap)"),
+    allowsPartialFills: z.boolean().default(true).describe("true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId and no shared ocoGroup — the invalidator bit is derived from the id (or from ocoGroup when given), and orders sharing a bit invalidate together"),
+    usePermit2: z.boolean().default(false).describe("source the maker asset through Permit2 at fill time (makerTraits bit 248) — the pull becomes IPermit2.transferFrom, which needs BOTH layers in place before the order rests: an ERC-20 approve of the maker asset to the canonical Permit2 contract, AND a Permit2 internal allowance (maker, makerAsset, spender = the LOP) under the uint160 cap with a LIVE expiration. The result's data.approvals states both layers with unsigned grant payloads. Default false = one plain ERC-20 allowance to the LOP, the simpler grant for a single order; Permit2 suits a maker running standing, expiring, centrally-revocable allowances across many orders"),
+    extension: Hex.optional().describe("raw 1inch LOP v4 extension bytes; when set, the salt is derived to commit to it (OrderLib InvalidExtension check). Mutually exclusive with jitMarket and auction, which BUILD the extension"),
+    allowedSender: Address.optional().describe("reserve the fill for ONE filler (1inch LOP v4 allowed sender): only the LOW 80 BITS — the last 10 bytes — of this address are stored in makerTraits, and the LOP reverts PrivateOrder() unless the FILLING msg.sender's last 10 bytes match. Name the address that will CALL the LOP: the taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the adapter is the LOP's msg.sender there). Omit for an order any taker may lift. The book row and this result show the stored suffix as `allowedSender`; the requester of the RFQ this order answers is the natural value when the cover is meant for them (reach, groups, and liveness vocabulary: cork_capabilities topic:\"orders\")"),
+    ocoGroup: z.string().min(1).max(128).optional().describe("make this order ONE-CANCELS-THE-OTHER with every other order by this maker that names the same group: the 40-bit invalidator nonce is derived from this key instead of clientRequestId, so the orders share one bit and the first fill or cancel of any of them retires all of them (a ladder of rungs at different prices, reach, or expiry; or one capacity answering several requests). Each rung keeps its OWN clientRequestId (idempotency, salt, venue 409s). Omit for an order that stands alone: the nonce then derives from clientRequestId and distinct requests land on distinct bits. The venue does not learn the group — a rung whose sibling filled stays OPEN on the book until a chain read retires it (cork_capabilities topic:\"orders\")"),
+    auction: MakerAuctionWire,
+    jitMarket: MakerJitMarketWire,
   }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then finalize-maker-order, then pass its submitInput verbatim to cork_submit); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
   A("finalize-maker-order", {
     prepared: PreparedMakerOrderWire.describe("the exact data object returned by cork_prepare_orders maker-order"),
@@ -580,6 +587,33 @@ export const OrdersAction = z.discriminatedUnion("type", [
     orderSalt: Uint64Str.optional().describe("pin for byte-stable retries; omitted = derived from clientRequestId"),
     nonce: Uint64Str.optional(),
   }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"),
+  A("maker-ladder", {
+    poolId: MarketId,
+    side: z.enum(["BUY", "SELL"]).describe("side from the MAKER's perspective for the venue listing — one side for the whole ladder"),
+    makerAsset: Address,
+    takerAsset: Address,
+    makingAmount: TokenAmount.describe("the amount every rung makes unless the rung overrides it — base units of makerAsset"),
+    expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("RELATIVE expiry for rungs that do not set their own, seconds from now (omit for no expiry)"),
+    allowsPartialFills: z.boolean().default(true).describe("applies to every rung; a partial fill still spends the rung's invalidator bit (see maker-order.allowsPartialFills)"),
+    usePermit2: z.boolean().default(false).describe("applies to every rung (see maker-order.usePermit2)"),
+    ocoGroup: z.string().min(1).max(124).optional().describe("the group key the grouped rungs share (see noncePolicy); omitted = this ladder's own clientRequestId, so the ladder is its own group"),
+    noncePolicy: z.enum(["shared-reserved", "shared", "distinct"]).default("shared-reserved").describe("which rungs share ONE invalidator bit (one-cancels-the-other). shared-reserved (default): every RESERVED rung (allowedSender set) shares the group — a revision ladder for one taker, the first fill retires the rest — while each OPEN rung gets its own bit, so an open rung can fill IN ADDITION to one reserved rung (the maker signs for that capacity; `capacity` states it). shared: every rung shares the group — exactly one rung of the whole ladder can ever fill. distinct: every rung has its own bit — independent orders that can all fill (a standing offer split across many takers)"),
+    jitMarket: MakerJitMarketWire,
+    rungs: z
+      .array(
+        z.strictObject({
+          takingAmount: TokenAmount.describe("this rung's price: what the taker pays for the rung's makingAmount — base units of takerAsset"),
+          makingAmount: TokenAmount.optional().describe("override the ladder makingAmount for this rung"),
+          allowedSender: Address.optional().describe("reserve this rung for ONE fill sender (low 80 bits, see maker-order.allowedSender); omit for an open rung"),
+          expirySeconds: z.number().int().min(1).max(315_576_000).optional().describe("this rung's RELATIVE expiry, seconds from now; omitted = the ladder's"),
+          auction: MakerAuctionWire,
+          label: z.string().min(1).max(64).optional().describe("a caller-chosen name echoed on the rung's result (e.g. 'best-reserved', 'open-decay')"),
+        }),
+      )
+      .min(2)
+      .max(32)
+      .describe("the rungs, in the order you want them reported; each becomes one signable maker order with its own clientRequestId derived from the ladder's (`<ladderId>:<index>`)"),
+  }).describe("a LADDER of signable maker orders in one call (2 to 32 rungs, one pool and side): rungs differ in price, reach (open | reserved), expiry, or decay, and `noncePolicy` decides which rungs are one-cancels-the-other by sharing one invalidator bit. Returns one maker-order artifact per rung (sign each; finalize-maker-order each; cork_submit each), the group each rung landed on, and the maker-asset CAPACITY the ladder can consume (a shared group counts once at its largest rung; distinct rungs add up). Fails as a whole when any rung fails — a ladder is one intent"),
 ]);
 export const PrepareOrdersInput = z.object({
   chainId: ChainId,

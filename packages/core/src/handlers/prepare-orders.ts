@@ -1,8 +1,8 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
-import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
+import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
+import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -125,6 +125,8 @@ async function verifyMakerSignatureLadder(a: { ctx: HandlerContext; chainId: Pre
 export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
   const action = input.action;
+
+  if (action.type === "maker-ladder") return handleMakerLadder(input, action, ctx);
 
   if (action.type === "finalize-maker-order") {
     const lop = LOP_ADDRESSES[chainId];
@@ -832,6 +834,124 @@ type TakerFillAction = Extract<PrepareOrdersInput["action"], { type: "taker-fill
  *  interaction building, auction pricing, and the fill-bytes envelope. Identical whichever way
  *  the signed order was acquired: the venue book search, or the caller-supplied `signedOrder`
  *  (which never contacts the venue). */
+type MakerLadderAction = Extract<PrepareOrdersInput["action"], { type: "maker-ladder" }>;
+type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-order" }>;
+
+/**
+ * A ladder is a FAN-OUT over the maker-order path, not a second implementation: every rung is
+ * built by re-entering handlePrepareOrders with a derived maker-order input, so JIT, auction,
+ * approvals, and every pre-flight behave rung-for-rung exactly as they do for one order. This
+ * function owns only what is ladder-shaped — the rung ids, the nonce policy, the capacity
+ * accounting, the one notice, and the fail-closed rule (a ladder is one intent: any rung's
+ * refusal is the ladder's refusal, no partial artifacts).
+ */
+async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderAction, ctx: HandlerContext): Promise<Envelope> {
+  const chainId = input.chainId;
+  const ladderId = input.clientRequestId;
+  if (ladderId.length > LADDER_ID_MAX) {
+    return unavailable(chainId, "invalid_order_terms", `ladder clientRequestId is ${ladderId.length} chars; rung ids are '<ladderId>:<index>' and must stay within 128 characters — use at most ${LADDER_ID_MAX}`, ctx);
+  }
+  const group = action.ocoGroup ?? ladderId;
+  const policy = action.noncePolicy;
+  // The nonce policy, as ONE predicate: which rungs share the group's bit. shared-reserved is the
+  // ruled default (a revision ladder for one taker; an open rung fills independently).
+  const grouped = (reserved: boolean): boolean => policy === "shared" || (policy === "shared-reserved" && reserved);
+
+  const rungs: Array<{ index: number; clientRequestId: string; reach: "open" | "reserved"; grouped: boolean; label?: string; makingAmount: bigint; env: Envelope }> = [];
+  for (const [index, rung] of action.rungs.entries()) {
+    const reserved = rung.allowedSender !== undefined;
+    const isGrouped = grouped(reserved);
+    const rungAction: MakerOrderAction = {
+      type: "maker-order",
+      poolId: action.poolId,
+      side: action.side,
+      makerAsset: action.makerAsset,
+      takerAsset: action.takerAsset,
+      makingAmount: rung.makingAmount ?? action.makingAmount,
+      takingAmount: rung.takingAmount,
+      allowsPartialFills: action.allowsPartialFills,
+      usePermit2: action.usePermit2,
+      ...(rung.expirySeconds !== undefined ? { expirySeconds: rung.expirySeconds } : action.expirySeconds !== undefined ? { expirySeconds: action.expirySeconds } : {}),
+      ...(rung.allowedSender !== undefined ? { allowedSender: rung.allowedSender } : {}),
+      ...(isGrouped ? { ocoGroup: group } : {}),
+      ...(rung.auction !== undefined ? { auction: rung.auction } : {}),
+      ...(action.jitMarket !== undefined ? { jitMarket: action.jitMarket } : {}),
+    };
+    const clientRequestId = ladderRungClientRequestId(ladderId, index);
+    const env = await handlePrepareOrders({ ...input, clientRequestId, action: rungAction }, ctx);
+    if (env.state !== "ok") {
+      // Fail closed, and say which rung: the rung's own code and message carry the fix.
+      return envelope({
+        state: env.state,
+        data: { kind: "maker-ladder", failedRung: { index, clientRequestId, ...(rung.label !== undefined ? { label: rung.label } : {}) }, rung: env.data },
+        warnings: env.warnings.map((w, i) => ({ ...w, message: `rung ${index}${rung.label ? ` (${rung.label})` : ""}: ${w.message}${i === 0 ? " — no ladder artifact was built; a ladder is one intent" : ""}` })),
+        chainId,
+        source: "config",
+        ctx,
+      });
+    }
+    rungs.push({ index, clientRequestId, reach: reserved ? "reserved" : "open", grouped: isGrouped, ...(rung.label !== undefined ? { label: rung.label } : {}), makingAmount: BigInt(rungAction.makingAmount), env });
+  }
+
+  // CAPACITY: the maker asset the ladder can consume. Rungs on one bit can fill at most once
+  // between them, so a group counts once at its LARGEST rung; every ungrouped rung is its own
+  // group and adds up.
+  const groupMax = new Map<string, bigint>();
+  for (const r of rungs) {
+    const bucket = r.grouped ? `group:${group}` : `rung:${r.index}`;
+    const prev = groupMax.get(bucket) ?? 0n;
+    if (r.makingAmount > prev) groupMax.set(bucket, r.makingAmount);
+  }
+  const makerAssetRequired = [...groupMax.values()].reduce((s, v) => s + v, 0n);
+  const groupedIdx = rungs.filter((r) => r.grouped).map((r) => r.index);
+  const openIdx = rungs.filter((r) => !r.grouped).map((r) => r.index);
+  const capacityRule =
+    groupedIdx.length > 0 && openIdx.length > 0
+      ? `rungs ${groupedIdx.join(",")} share one bit (count once, at the largest) and rungs ${openIdx.join(",")} each fill independently (each counts): ${makerAssetRequired} base units of makerAsset can be consumed in total`
+      : groupedIdx.length > 0
+        ? `every rung shares one bit: at most one fills, so the largest rung (${makerAssetRequired}) is the whole exposure`
+        : `every rung has its own bit: all can fill, so the sum (${makerAssetRequired}) is the exposure`;
+
+  // Warnings: rung warnings are collapsed by (code, message) with the rungs that raised them,
+  // and the per-rung oco_group_notice is replaced by ONE ladder-level notice.
+  const collapsed = new Map<string, { code: string; message: string; rungs: number[] }>();
+  for (const r of rungs) {
+    for (const w of r.env.warnings) {
+      if (w.code === "oco_group_notice") continue;
+      const bucket = `${w.code}|${w.message}`;
+      const e = collapsed.get(bucket);
+      if (e) e.rungs.push(r.index);
+      else collapsed.set(bucket, { code: w.code, message: w.message, rungs: [r.index] });
+    }
+  }
+  const warnings: Array<{ code: string; message: string }> = [...collapsed.values()].map((e) => ({ code: e.code, message: `rung${e.rungs.length > 1 ? "s" : ""} ${e.rungs.join(",")}: ${e.message}` }));
+  if (groupedIdx.length > 0) {
+    const nonce = (rungs[groupedIdx[0]!]!.env.data as { nonce: string }).nonce;
+    warnings.push({
+      code: "oco_group_notice",
+      message: `rungs ${groupedIdx.join(",")} share invalidator nonce ${nonce} (ocoGroup '${group}'): the first fill or cancel of ANY of them retires ALL of them (one-cancels-the-other), and a PARTIAL fill spends the bit too${openIdx.length > 0 ? `; rungs ${openIdx.join(",")} are on their own bits and can fill in addition` : ""}. The venue does not learn the group — a rung left OPEN on the book after a sibling filled is dead on chain; re-read the bit before ranking or filling it. To withdraw the group, cancel any one grouped rung. Vocabulary: ${ORDERS_TOPIC_REFERENCE}`,
+    });
+  }
+
+  const lop = (rungs[0]!.env.data as { lop: string }).lop;
+  return envelope({
+    state: "ok",
+    data: {
+      kind: "maker-ladder",
+      lop,
+      ladder: { clientRequestId: ladderId, ocoGroup: group, noncePolicy: policy, rungCount: rungs.length },
+      rungs: rungs.map((r) => ({ index: r.index, clientRequestId: r.clientRequestId, reach: r.reach, grouped: r.grouped, ...(r.label !== undefined ? { label: r.label } : {}), ...(r.env.data as Record<string, unknown>) })),
+      capacity: { makerAssetRequired: makerAssetRequired.toString(), rule: capacityRule },
+      scales: { makerAssetRequired: "base units of makerAsset (the token's own decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
+      execution: executionMakerLadder(),
+    },
+    warnings,
+    chainId,
+    source: "config",
+    ctx,
+  });
+}
+
 async function buildTakerFillArtifact(a: {
   ctx: HandlerContext;
   chainId: PrepareOrdersInput["chainId"];

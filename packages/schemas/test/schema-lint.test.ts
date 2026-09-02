@@ -37,6 +37,10 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_prepare_orders :: action<oneOf0>.expirySeconds": "relative duration, bounded <= 10y (traits slot is 40-bit)",
   "cork_prepare_orders :: action<oneOf0>.auction.durationSeconds": "relative duration, bounded to the 3-byte wire field (~194 days)",
   "cork_prepare_orders :: action<oneOf0>.auction.points[].timeDelta": "relative duration, bounded to the 2-byte wire field (65535s)",
+  "cork_prepare_orders :: action<oneOf5>.expirySeconds": "relative duration, bounded <= 10y — the ladder default for rungs that set none (traits slot is 40-bit)",
+  "cork_prepare_orders :: action<oneOf5>.rungs[].expirySeconds": "relative duration, bounded <= 10y — one rung's own expiry (traits slot is 40-bit)",
+  "cork_prepare_orders :: action<oneOf5>.rungs[].auction.durationSeconds": "relative duration, bounded to the 3-byte wire field (~194 days) — the shared MakerAuctionWire under a ladder rung",
+  "cork_prepare_orders :: action<oneOf5>.rungs[].auction.points[].timeDelta": "relative duration, bounded to the 2-byte wire field (65535s) — the shared MakerAuctionWire under a ladder rung",
   // Venue-defined wire numerics (the venue's own JSON contract), bounded in schema.
   "cork_prepare_orders :: action<oneOf1>.listing.premium": "REMOVED by the venue 2026-08-17 — the field survives only to refuse with teaching; PERCENT float shape kept so the refusal matches what callers still send",
   "cork_prepare_orders :: action<oneOf1>.listing.expiry": "venue book field: absolute unix int, bounded <= year 2100",
@@ -48,6 +52,7 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_submit :: action<oneOf4>.freshUntil": "venue RFQ counter field: absolute unix int, bounded <= year 2100 (advisory freshness clock, same semantics as answer options)",
   // Tiny fixed-width protocol values.
   "cork_prepare_orders :: action<oneOf0>.jitMarket.permits[].v": "ECDSA recovery byte 0..255",
+  "cork_prepare_orders :: action<oneOf5>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (the shared MakerJitMarketWire under a ladder)",
   "cork_prepare_orders :: action<oneOf2>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (taker-fill jitMarket)",
   "cork_prepare_orders :: action<oneOf4>.premiumPaymentMode<anyOf0>": "literal 0|1",
   "cork_prepare_orders :: action<oneOf4>.premiumPaymentMode<anyOf1>": "literal 0|1",

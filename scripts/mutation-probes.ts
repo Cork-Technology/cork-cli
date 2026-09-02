@@ -58,6 +58,7 @@ const T = {
   breaker: "packages/core/test/breaker.test.ts",
   rpc: "packages/core/test/rpc.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
+  ladder: "packages/core/test/maker-ladder.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -203,6 +204,71 @@ const CATALOG: Mutant[] = [
     find: "nonce: plan.nonceOrEpoch.toString(), scope: `every order by",
     replace: "nonce: \"0\", scope: `every order by",
     tests: [T.handlers],
+  },
+  {
+    // shared-reserved must leave OPEN rungs on their own bit — grouping them silently turns a
+    // "reserved ladder + open rung" into a strict one-of, and the capacity claim becomes false.
+    id: "ladder-policy-open-grouped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'policy === "shared" || (policy === "shared-reserved" && reserved)',
+    replace: 'policy !== "distinct"',
+    tests: [T.ladder],
+  },
+  {
+    // distinct must never group.
+    id: "ladder-policy-distinct-grouped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'policy === "shared" || (policy === "shared-reserved" && reserved)',
+    replace: 'policy === "shared" || policy === "distinct" || (policy === "shared-reserved" && reserved)',
+    tests: [T.ladder],
+  },
+  {
+    // Capacity: a group counts ONCE at its largest rung — summing a group overstates exposure.
+    id: "ladder-capacity-group-summed",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const bucket = r.grouped ? `group:${group}` : `rung:${r.index}`;",
+    replace: "const bucket = `rung:${r.index}`;",
+    tests: [T.ladder],
+  },
+  {
+    // Capacity: the largest rung, not the last one seen.
+    id: "ladder-capacity-last-not-max",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (r.makingAmount > prev) groupMax.set(bucket, r.makingAmount);",
+    replace: "groupMax.set(bucket, r.makingAmount);",
+    tests: [T.ladder],
+  },
+  {
+    // Rung ids must carry the index — a constant suffix collides every rung on one idempotency key.
+    id: "ladder-rung-id-index-dropped",
+    file: "packages/core/src/orders.ts",
+    find: "return `${ladderId}:${index}`;",
+    replace: "return `${ladderId}:0`;",
+    tests: [T.ladder],
+  },
+  {
+    // Fail closed: a refused rung must end the ladder, never be skipped.
+    id: "ladder-fail-open",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'if (env.state !== "ok") {\n      // Fail closed, and say which rung: the rung\'s own code and message carry the fix.\n      return envelope({',
+    replace: 'if (env.state !== "ok") {\n      // Fail closed, and say which rung: the rung\'s own code and message carry the fix.\n      continue; return envelope({',
+    tests: [T.ladder],
+  },
+  {
+    // One ladder-level notice: leaking the per-rung copies is the noise the collapse exists to remove.
+    id: "ladder-notice-not-collapsed",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'if (w.code === "oco_group_notice") continue;',
+    replace: 'if (false) continue;',
+    tests: [T.ladder],
+  },
+  {
+    // The grouped flag on a rung must reflect the policy outcome, not a constant.
+    id: "ladder-grouped-flag-constant",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'reach: reserved ? "reserved" : "open", grouped: isGrouped,',
+    replace: 'reach: reserved ? "reserved" : "open", grouped: true,',
+    tests: [T.ladder],
   },
   {
     id: "orders-taker-interaction-offset",

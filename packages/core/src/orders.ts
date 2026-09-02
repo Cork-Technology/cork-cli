@@ -364,6 +364,19 @@ export function ocoGroupNonce(ocoGroup: string): bigint {
   return nonceFromSeed(`oco-group:${ocoGroup}`);
 }
 
+/** Longest ladder clientRequestId whose rung ids still fit the 128-char idempotency-key bound. */
+export const LADDER_ID_MAX = 124;
+
+/** The idempotency key of rung `index` of the ladder `ladderId`: `<ladderId>:<index>`. Deterministic,
+ *  so a retried ladder re-derives the same rung ids (and bytes [K2]); distinct across rungs, so
+ *  the venue's per-id idempotency never 409s a sibling. Exported so an integrator can address a
+ *  rung (finalize, submit, cancel) without the ladder result in hand. */
+export function ladderRungClientRequestId(ladderId: string, index: number): string {
+  if (!Number.isInteger(index) || index < 0 || index > 31) throw new Error(`ladder rung index ${index} out of range 0..31`);
+  if (ladderId.length > LADDER_ID_MAX) throw new Error(`ladder clientRequestId is ${ladderId.length} chars; rung ids append ':<index>' and must stay within 128 — use at most ${LADDER_ID_MAX}`);
+  return `${ladderId}:${index}`;
+}
+
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const hasExtension = a.extension !== undefined && a.extension !== "0x";

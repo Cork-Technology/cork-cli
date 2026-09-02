@@ -339,6 +339,20 @@ describe("variant subcommands (English-first grammar, 2026-08-06)", () => {
     expect(r.stdout).not.toContain("authority-onboard");
   });
 
+  it("prepare orders maker-ladder: the composite is a variant subcommand; --rungs takes JSON and the result carries one artifact per rung", async () => {
+    const rungs = JSON.stringify([{ takingAmount: "1000000", allowedSender: "0xc0ffee0000000000000000000000000000000002" }, { takingAmount: "950000" }]);
+    const r = await runCli(["prepare", "orders", "maker-ladder", "--chain-id", "1", "--account", "0xc0ffee0000000000000000000000000000000001", "--client-request-id", "cli-ladder-0001", "--pool-id", `0x${"ce".repeat(32)}`, "--side", "SELL", "--maker-asset", "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", "--taker-asset", "0x53E82ABbb12638F09d9e624578ccB666217a765e", "--making-amount", "1e18", "--rungs", rungs, "--json"], { nowSeconds: NOW });
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { state: string; data: { kind: string; rungs: Array<{ clientRequestId: string; grouped: boolean }>; capacity: { makerAssetRequired: string } } };
+    expect(out.state).toBe("ok");
+    expect(out.data.kind).toBe("maker-ladder");
+    expect(out.data.rungs.map((x) => x.clientRequestId)).toEqual(["cli-ladder-0001:0", "cli-ladder-0001:1"]);
+    expect(out.data.rungs.map((x) => x.grouped)).toEqual([true, false]);
+    expect(out.data.capacity.makerAssetRequired).toBe("2000000000000000000");
+    const h = await runCli(["prepare", "orders", "maker-ladder", "--help"], { nowSeconds: NOW });
+    expect(h.stdout + h.stderr).toContain("--nonce-policy");
+  });
+
   it("variant --help lists the variant's own flattened flags, in kebab-case", async () => {
     const r = await runCli(["prepare", "orders", "taker-fill", "--help"], { nowSeconds: NOW });
     expect(r.stdout).toContain("--order-hash");
