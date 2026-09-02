@@ -311,7 +311,9 @@ describe("hybrid verification — orderbook exclusivity and self-consistency (ch
   it("without an RPC, every parsed row still carries allowedSender + exclusivity decoded from its signed makerTraits", async () => {
     const open = await bookRow(1n);
     const reserved = await bookRow(2n, { makerTraits: reservedTraits });
-    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [open, reserved]), resolveRpc: async () => null });
+    // sort:"venue": these two fixtures share (maker, nonce 0) on the bit invalidator, so the ranked
+    // default would rightly collapse them into one group; this test grades the per-row annotation.
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [open, reserved]), resolveRpc: async () => null }, { sort: "venue" });
     expect(env.state).toBe("ok");
     const d = rowsOf(env);
     expect(d.items[0]).toMatchObject({ allowedSender: null, exclusivity: "open", verification: "unverified" });
@@ -322,11 +324,19 @@ describe("hybrid verification — orderbook exclusivity and self-consistency (ch
   it("filters.account classifies a reserved row against the FILL SENDER by its last 10 bytes: twin = for-account, stranger = for-other", async () => {
     const reserved = await bookRow(2n, { makerTraits: reservedTraits });
     const open = await bookRow(1n);
-    const mine = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved, open]), resolveRpc: async () => null }, { filters: { account: TAKER_TWIN } });
+    const mine = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved, open]), resolveRpc: async () => null }, { filters: { account: TAKER_TWIN }, sort: "venue" });
     expect(rowsOf(mine).items[0]!.exclusivity).toBe("reserved-for-account");
     expect(rowsOf(mine).items[1]!.exclusivity).toBe("open"); // an open row is open for everyone
+    // For a stranger the reserved row is NOT fillable: the ranked default moves it to `excluded`,
+    // still classified, with the reason spelled out.
     const theirs = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved]), resolveRpc: async () => null }, { filters: { account: STRANGER } });
-    expect(rowsOf(theirs).items[0]!.exclusivity).toBe("reserved-for-other");
+    expect(rowsOf(theirs).items).toHaveLength(0);
+    const ex = (theirs.data as { excluded: Array<{ exclusivity: string; whyNotFillable: string }> }).excluded;
+    expect(ex[0]!.exclusivity).toBe("reserved-for-other");
+    expect(ex[0]!.whyNotFillable).toContain("PrivateOrder");
+    // `sort:"venue"` keeps the pre-ranking shape: every row in items, classified in place.
+    const verbatim = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved]), resolveRpc: async () => null }, { filters: { account: STRANGER }, sort: "venue" });
+    expect(rowsOf(verbatim).items[0]!.exclusivity).toBe("reserved-for-other");
   });
 
   it("the annotation survives the liveness leg: a live reserved row is 'confirmed' AND still classified", async () => {

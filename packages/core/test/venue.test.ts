@@ -131,7 +131,9 @@ describe("cork_query venue-backed resources", () => {
     const seen: Seen[] = [];
     const env = await runTool(
       "cork_query",
-      { resource: "orderbook", chainId: 42161, filters: { orderHash: target.toUpperCase().replace("0X", "0x") }, pageSize: 25, format: "concise" },
+      // sort:"venue" — these skeletal rows carry no signed order, so the ranked default would file
+      // them under `excluded`; the filter's application is what this test grades.
+      { resource: "orderbook", chainId: 42161, filters: { orderHash: target.toUpperCase().replace("0X", "0x") }, pageSize: 25, sort: "venue", format: "concise" },
       ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [{ orderHash: target, status: "OPEN" }, { orderHash: other, status: "OPEN" }] } }], seen),
     );
     expect(env.state).toBe("ok");

@@ -214,6 +214,7 @@ describe("doc topic: orders", () => {
       { field: "allowsPartialFills", marker: "BIT invalidator" },
       { field: "auction", marker: "DECAYING" },
       { field: "quoteRef", marker: "RFQ answer option" },
+      { field: "sort", marker: "reserved-for-account row wins a price tie" },
     ];
     const byField = new Map<string, string[]>();
     for (const tool of REGISTRY) {

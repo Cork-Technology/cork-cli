@@ -438,6 +438,7 @@ that account out. Book rows carry \`exclusivity\`, classified against \`filters.
 sender: \`open\`, \`reserved\` (no account given), \`reserved-for-account\`, \`reserved-for-other\`. A
 \`taker-fill\` whose sender does not match refuses with \`private_order\` — bytes that can only revert
 are not built.
+\`cork_query orderbook\` ranks by default (\`sort\` best): fillable rows only, by unit price from the signed amounts, and a reserved-for-account row wins a price tie; rows you cannot fill ride in \`excluded\` with \`whyNotFillable\`, and \`sort\` venue restores the venue's own order.
 
 ## Fill regime: single-fill or multi-fill
 

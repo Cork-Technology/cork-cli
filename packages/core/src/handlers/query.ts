@@ -1,6 +1,7 @@
 // Split from handlers.ts (2026-08-05): query handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
+import { rankBookRows } from "../orders-rank.ts";
 import { type CorkAddresses, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
 import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
@@ -10,7 +11,7 @@ import { resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets 
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
@@ -472,6 +473,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   // key on the wrong resource is refused here with that resource's key list.
   assertFiltersApplicable(input.resource, input.filters);
 
+  // `sort` is the orderbook's ranking switch; on any other resource it would be silently
+  // unapplied — the parameter-ignored green no-op (C13) — so it is refused with teaching.
+  if (input.sort !== undefined && input.resource !== "orderbook") {
+    throw new ToolInputError("cork_query", [{ path: ["sort"], message: `sort applies to resource 'orderbook' only (it ranks resting orders best-first for filters.account); '${input.resource}' has no ranking — omit sort` }]);
+  }
   if (VENUE_RESOURCES.has(input.resource)) {
     // Explicit full-decentralized mode: serve the EVENT-DERIVED subset over HyperSync.
     if (input.mode === "full-decentralized") {
@@ -550,7 +556,31 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // consumers). null = a resource with no on-chain footprint (rfqs; rollover fills/contracts
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
       const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
-      const items = verification ? verification.items : traversal.items;
+      let items = verification ? verification.items : traversal.items;
+      // The orderbook's DEFAULT shape is the ranked view (owner ruling 2026-09-02): the taker's
+      // question is "what can I fill best, as this sender?", and the venue's newest-first order
+      // does not answer it. Ranking runs AFTER verification so dead rows are already gone and
+      // exclusivity is already decoded; `sort:"venue"` restores the verbatim rows.
+      let ranking: Record<string, unknown> = {};
+      if (input.resource === "orderbook" && (input.sort ?? "best") === "best") {
+        const lop = LOP_ADDRESSES[chainId];
+        if (lop) {
+          const ranked = rankBookRows(items as Record<string, unknown>[], { chainId, lop, ...(filters.account !== undefined ? { account: filters.account } : {}), nowSeconds: nowSecondsOf(ctx) });
+          items = ranked.items;
+          ranking = {
+            sort: "best",
+            rankedFor: ranked.rankedFor,
+            fillableCount: ranked.fillableCount,
+            excluded: ranked.excluded,
+            scales: { unitPrice: "takerAsset base units per 1e18 makerAsset base units (exact integer, floor); a decaying row's price is its price NOW", takerPaysNow: "takerAsset base units for the full makingAmount at nowSeconds", unitsTopic: UNITS_TOPIC_REFERENCE },
+            rankingNote: ranked.rankedFor === null
+              ? "price-only ranking: no filters.account was given, so `reserved` rows are kept and flagged — pass the FILL SENDER (the ForSelf adapter on a wrapper fill) to partition fillable from not"
+              : "ranked over the rows this bounded walk fetched (see pagination); a group rung whose sibling filled reads OPEN at the venue until a chain read retires it",
+          };
+        }
+      } else if (input.resource === "orderbook") {
+        ranking = { sort: "venue" };
+      }
       return envelope({
         // A merely-partial read is honest evidence (state ok + warning); only a self-contradicting
         // venue cursor (repeated) is a conflict.
@@ -558,8 +588,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         data: {
           resource: input.resource,
           ...(input.resource === "rollover-orders" ? { kind: filters.kind ?? "orders" } : {}),
-          count: items.length,
+          count: verification ? verification.items.length : traversal.items.length,
           items,
+          ...ranking,
           ...(verification
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),

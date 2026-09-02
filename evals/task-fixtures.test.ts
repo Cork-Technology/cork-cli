@@ -476,6 +476,17 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(taskOf("cancel-grouped-rung").expect.answer!.test(retires.scope)).toBe(true);
   });
 
+  it("book-best-for-me: the ranked default puts the open row first and files the reserved row under excluded with the reason", async () => {
+    const env = await callOf("book-best-for-me");
+    expect(env.state).toBe("ok");
+    const d = env.data as { sort: string; items: Array<{ orderHash: string; rank: number }>; excluded: Array<{ orderHash: string; whyNotFillable: string }> };
+    expect(d.sort).toBe("best");
+    expect(d.items.map((r) => r.orderHash.toLowerCase())).toEqual([RESTING_ORDER_HASH.toLowerCase()]);
+    expect(d.excluded.map((r) => r.orderHash.toLowerCase())).toEqual([RESERVED_ORDER_HASH.toLowerCase()]);
+    expect(d.excluded[0]!.whyNotFillable).toContain("PrivateOrder");
+    expect(taskOf("book-best-for-me").expect.answer!.test(`fill ${RESTING_ORDER_HASH}; the other is reserved: ${d.excluded[0]!.whyNotFillable}`)).toBe(true);
+  });
+
   it("orders-topic: the doc topic's own body satisfies the three-part answer regex (reach, fill sender, dead sibling)", async () => {
     const env = await callOf("orders-topic");
     expect(env.state).toBe("ok");

@@ -1,6 +1,6 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 60 active + 8 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 61 active + 8 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
@@ -583,6 +583,23 @@ export const TASKS: EvalTask[] = [
       // Four facts, the second of which (the row field / its values) exists only on this surface.
       answer: /(?=[\s\S]*(reserved|allowedSender|allowed[- ]sender))(?=[\s\S]*(exclusivity|reserved-for-account|reserved-for-other))(?=[\s\S]*(adapter|msg\.sender|fill sender|calls the LOP|caller))(?=[\s\S]*(dead|retire|invalidat|cancel|die|cannot be filled|no longer fillable))/i,
       maxCalls: 2,
+    },
+  },
+  {
+    // The ranked default (2026-09-02): the book answers "what can I fill best, as this sender?"
+    // The stub book holds an open row and a row reserved for another filler; for this account the
+    // reserved one is NOT fillable, so the best (and only) fillable order is the open one — and the
+    // agent must not offer the reserved hash. Graded on naming the open hash and on relaying WHY
+    // the other is excluded.
+    id: "book-best-for-me",
+    prompt: `I am ${A} and I want to buy cover on Cork pool ${P} on mainnet. Read the resting orders and tell me which single order I should fill first and why — and if any resting order is not available to me, say which one and why not.`,
+    expect: {
+      tool: "cork_query",
+      prelude: ["cork_capabilities"],
+      params: { resource: "orderbook", filters: { account: A } },
+      state: "ok",
+      answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 14)})(?=[\\s\\S]*(reserv|private|not (available|fillable)|cannot fill|excluded))`, "i"),
+      maxCalls: 3,
     },
   },
   {

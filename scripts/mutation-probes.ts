@@ -59,6 +59,7 @@ const T = {
   rpc: "packages/core/test/rpc.test.ts",
   handlers: "packages/core/test/handlers.test.ts",
   ladder: "packages/core/test/maker-ladder.test.ts",
+  rank: "packages/core/test/orders-rank.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -269,6 +270,72 @@ const CATALOG: Mutant[] = [
     find: 'reach: reserved ? "reserved" : "open", grouped: isGrouped,',
     replace: 'reach: reserved ? "reserved" : "open", grouped: true,',
     tests: [T.ladder],
+  },
+  {
+    // Price direction: a BUY row is better when the maker pays MORE — dropping the flip ranks
+    // BUY rows cheapest-first, the wrong way round for the taker.
+    id: "rank-buy-direction-dropped",
+    file: "packages/core/src/orders-rank.ts",
+    find: 'if (p !== 0) return a.side === "BUY" ? -p : p;',
+    replace: "if (p !== 0) return p;",
+    tests: [T.rank],
+  },
+  {
+    // Reserved-for-account wins a price tie (no race); flipping it hands the tie to the open row.
+    id: "rank-reserved-tie-flipped",
+    file: "packages/core/src/orders-rank.ts",
+    find: "if (a.reservedForAccount !== b.reservedForAccount) return a.reservedForAccount ? -1 : 1;",
+    replace: "if (a.reservedForAccount !== b.reservedForAccount) return a.reservedForAccount ? 1 : -1;",
+    tests: [T.rank],
+  },
+  {
+    // Chain-confirmed beats unverified.
+    id: "rank-confirmed-tie-flipped",
+    file: "packages/core/src/orders-rank.ts",
+    find: "if (a.confirmed !== b.confirmed) return a.confirmed ? -1 : 1;",
+    replace: "if (a.confirmed !== b.confirmed) return a.confirmed ? 1 : -1;",
+    tests: [T.rank],
+  },
+  {
+    // Expiry boundary mirrors MakerTraitsLib.isExpired (`expiration < block.timestamp`): a row
+    // expiring exactly now is still fillable; tightening to `<=` hides a live order.
+    id: "rank-expiry-boundary-tightened",
+    file: "packages/core/src/orders-rank.ts",
+    find: "if (traits.expiry !== 0n && traits.expiry < opts.nowSeconds) {",
+    replace: "if (traits.expiry !== 0n && traits.expiry <= opts.nowSeconds) {",
+    tests: [T.rank],
+  },
+  {
+    // A reserved-for-other row must be EXCLUDED, not ranked.
+    id: "rank-reserved-other-kept",
+    file: "packages/core/src/orders-rank.ts",
+    find: "if (traits.allowedSender !== null && account !== undefined && !isAllowedSender(order.makerTraits, account)) {",
+    replace: "if (false) {",
+    tests: [T.rank],
+  },
+  {
+    // Group collapse must keep the BEST rung and hide the rest, not serve every rung.
+    id: "rank-group-collapse-dropped",
+    file: "packages/core/src/orders-rank.ts",
+    find: "        rep.group!.collapsed.push(s.hash);\n        continue;",
+    replace: "        rep.group!.collapsed.push(s.hash);",
+    tests: [T.rank],
+  },
+  {
+    // The ranked view is the DEFAULT; making `best` opt-in silently restores newest-first.
+    id: "query-orderbook-default-sort-venue",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'if (input.resource === "orderbook" && (input.sort ?? "best") === "best") {',
+    replace: 'if (input.resource === "orderbook" && input.sort === "best") {',
+    tests: [T.rank],
+  },
+  {
+    // `sort` on another resource must be refused, never silently unapplied (C13).
+    id: "query-sort-refusal-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: 'if (input.sort !== undefined && input.resource !== "orderbook") {',
+    replace: 'if (false) {',
+    tests: [T.rank],
   },
   {
     id: "orders-taker-interaction-offset",

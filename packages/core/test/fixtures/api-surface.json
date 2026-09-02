@@ -45,6 +45,10 @@
       "kind": "type"
     },
     {
+      "name": "BOOK_SORTS",
+      "kind": "value"
+    },
+    {
       "name": "BUILD_COMMIT",
       "kind": "value"
     },
@@ -59,6 +63,14 @@
     {
       "name": "BUNDLED_DEFAULTS",
       "kind": "value"
+    },
+    {
+      "name": "BookRow",
+      "kind": "type"
+    },
+    {
+      "name": "BookSort",
+      "kind": "type"
     },
     {
       "name": "CALL_TYPEHASH",
@@ -242,6 +254,10 @@
     },
     {
       "name": "EnvioProduct",
+      "kind": "type"
+    },
+    {
+      "name": "ExcludedRow",
       "kind": "type"
     },
     {
@@ -679,6 +695,26 @@
     {
       "name": "ROLLOVER_PARAMS_TYPEHASH",
       "kind": "value"
+    },
+    {
+      "name": "RankOptions",
+      "kind": "type"
+    },
+    {
+      "name": "RankResult",
+      "kind": "type"
+    },
+    {
+      "name": "RankedGroup",
+      "kind": "type"
+    },
+    {
+      "name": "RankedPrice",
+      "kind": "type"
+    },
+    {
+      "name": "RankedRow",
+      "kind": "type"
     },
     {
       "name": "RateBumpParts",
@@ -1218,6 +1254,10 @@
     },
     {
       "name": "collectVerification",
+      "kind": "value"
+    },
+    {
+      "name": "compareRanked",
       "kind": "value"
     },
     {
@@ -1782,6 +1822,10 @@
     },
     {
       "name": "protocolEmittersFor",
+      "kind": "value"
+    },
+    {
+      "name": "rankBookRows",
       "kind": "value"
     },
     {
@@ -3045,6 +3089,18 @@
       "kind": "type"
     },
     {
+      "name": "BOOK_SORTS",
+      "kind": "value"
+    },
+    {
+      "name": "BookRow",
+      "kind": "type"
+    },
+    {
+      "name": "BookSort",
+      "kind": "type"
+    },
+    {
       "name": "CALL_TYPEHASH",
       "kind": "value"
     },
@@ -3082,6 +3138,10 @@
     },
     {
       "name": "EmitterRole",
+      "kind": "type"
+    },
+    {
+      "name": "ExcludedRow",
       "kind": "type"
     },
     {
@@ -3257,6 +3317,26 @@
       "kind": "value"
     },
     {
+      "name": "RankOptions",
+      "kind": "type"
+    },
+    {
+      "name": "RankResult",
+      "kind": "type"
+    },
+    {
+      "name": "RankedGroup",
+      "kind": "type"
+    },
+    {
+      "name": "RankedPrice",
+      "kind": "type"
+    },
+    {
+      "name": "RankedRow",
+      "kind": "type"
+    },
+    {
       "name": "RateBumpParts",
       "kind": "type"
     },
@@ -3410,6 +3490,10 @@
     },
     {
       "name": "classifySettlement",
+      "kind": "value"
+    },
+    {
+      "name": "compareRanked",
       "kind": "value"
     },
     {
@@ -3590,6 +3674,10 @@
     },
     {
       "name": "protocolEmittersFor",
+      "kind": "value"
+    },
+    {
+      "name": "rankBookRows",
       "kind": "value"
     },
     {
