@@ -1813,7 +1813,7 @@
                   "allowsPartialFills": {
                     "type": "boolean",
                     "default": true,
-                    "description": "true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId — the invalidator bit is derived from it, and orders sharing an id would share a bit, so filling one would invalidate the others"
+                    "description": "true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId and no shared ocoGroup — the invalidator bit is derived from the id (or from ocoGroup when given), and orders sharing a bit invalidate together"
                   },
                   "usePermit2": {
                     "type": "boolean",
@@ -1827,6 +1827,12 @@
                   "allowedSender": {
                     "description": "reserve the fill for ONE filler (1inch LOP v4 allowed sender): only the LOW 80 BITS — the last 10 bytes — of this address are stored in makerTraits, and the LOP reverts PrivateOrder() unless the FILLING msg.sender's last 10 bytes match. Name the address that will CALL the LOP: the taker's own account on a raw fill, but the ForSelf ADAPTER when the taker fills through one (the adapter is the LOP's msg.sender there). Omit for an order any taker may lift. The book row and this result show the stored suffix as `allowedSender`; the requester of the RFQ this order answers is the natural value when the cover is meant for them (reach, groups, and liveness vocabulary: cork_capabilities topic:\"orders\")",
                     "$ref": "#/$defs/Address"
+                  },
+                  "ocoGroup": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "make this order ONE-CANCELS-THE-OTHER with every other order by this maker that names the same group: the 40-bit invalidator nonce is derived from this key instead of clientRequestId, so the orders share one bit and the first fill or cancel of any of them retires all of them (a ladder of rungs at different prices, reach, or expiry; or one capacity answering several requests). Each rung keeps its OWN clientRequestId (idempotency, salt, venue 409s). Omit for an order that stands alone: the nonce then derives from clientRequestId and distinct requests land on distinct bits. The venue does not learn the group — a rung whose sibling filled stays OPEN on the book until a chain read retires it (cork_capabilities topic:\"orders\")"
                   },
                   "auction": {
                     "type": "object",
@@ -2507,7 +2513,7 @@
                     "$ref": "#/$defs/Bytes32"
                   },
                   "makerTraits": {
-                    "description": "the order's makerTraits value, verbatim from the resting order",
+                    "description": "the order's makerTraits value, verbatim from the resting order — the traits decide what the cancel retires: on the bit invalidator (every Cork-built order) the (maker, nonce) bit, so a shared-nonce ocoGroup ladder is retired by cancelling ANY one rung",
                     "$ref": "#/$defs/UintStr"
                   }
                 },
@@ -2517,7 +2523,7 @@
                   "makerTraits"
                 ],
                 "additionalProperties": false,
-                "description": "on-chain cancel calldata for a resting LOP order you made"
+                "description": "on-chain cancel calldata for a resting LOP order you made; the result names what the cancel retires (`retires`: the invalidator mode, the nonce, and the scope)"
               },
               {
                 "type": "object",

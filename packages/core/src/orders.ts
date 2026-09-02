@@ -325,6 +325,10 @@ export interface MakerOrderArgs {
   /** Reserve the fill for one msg.sender (its low 80 bits are what the order stores and the LOP
    *  compares) — see MakerTraitsParts.allowedSender. */
   allowedSender?: `0x${string}`;
+  /** One-cancels-the-other group key: when set, the 40-bit invalidator nonce derives from this key
+   *  (namespaced, see ocoGroupNonce) instead of clientRequestId, so every order by this maker that
+   *  names the same group shares one bit and the first fill or cancel retires them all. */
+  ocoGroup?: string;
   /** Cork hook extension bytes (deploy-on-fill / JIT-mint orders). When present, the salt's low
    *  160 bits are BOUND to keccak256(extension) (OrderLib checks this at fill) and
    *  HAS_EXTENSION_FLAG is set; determinism moves to the top 96 bits. */
@@ -346,6 +350,20 @@ export interface MakerOrderResult {
   nonce: bigint;
 }
 
+/** The 40-bit invalidator nonce for a seed string: the top bits of its keccak, outside the range
+ *  the plain-order salt uses. */
+function nonceFromSeed(seed: string): bigint {
+  return (BigInt(keccak256(stringToHex(seed))) >> 160n) & U40;
+}
+
+/** The invalidator nonce every order naming `ocoGroup` shares (the group's bit). Exported so an
+ *  integrator can predict the bit — and read it with readLopInvalidator — before signing a rung.
+ *  Namespaced: a group named "x" and a stand-alone order whose clientRequestId is "x" land on
+ *  DIFFERENT bits, so sharing only ever happens on purpose. */
+export function ocoGroupNonce(ocoGroup: string): bigint {
+  return nonceFromSeed(`oco-group:${ocoGroup}`);
+}
+
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const hasExtension = a.extension !== undefined && a.extension !== "0x";
@@ -365,9 +383,15 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   // would collide with each other.
   //
   // Derived from the idempotency key so retries stay byte-identical [K2] while genuinely
-  // genuinely different requests land on different bits (a 40-bit slot: collisions are birthday-rare, not impossible — two live orders on one bit invalidate together). 40 bits of space, from a range of the hash the
-  // plain-order salt does not use.
-  const nonce = (BigInt(keccak256(stringToHex(a.clientRequestId))) >> 160n) & U40;
+  // different requests land on different bits (a 40-bit slot: collisions are birthday-rare, not
+  // impossible — two live orders on one bit invalidate together). 40 bits of space, from a range
+  // of the hash the plain-order salt does not use.
+  //
+  // Sharing a bit is also a CHOICE: `ocoGroup` seeds the nonce instead, so every order that names
+  // the same group is one-cancels-the-other (a ladder; one capacity answering several requests).
+  // The group seed is NAMESPACED so a group key can never collide with a plain order's id-derived
+  // bit by accident.
+  const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);
   let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
     allowMultipleFills: false,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decodeFunctionData, parseAbi, toFunctionSelector, zeroAddress } from "viem";
+import { decodeFunctionData, keccak256, parseAbi, stringToHex, toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { ALLOWED_SENDER_MASK, allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, decodeMakerTraits, finalizeMakerOrder, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder } from "@cork/core";
+import { ALLOWED_SENDER_MASK, allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, decodeMakerTraits, finalizeMakerOrder, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, ocoGroupNonce } from "@cork/core";
+import { lopInvalidatorPlan } from "../src/orders.ts";
 
 const MAKER = "0x0000000000000000000000000000000000000abc" as const;
 const MAKER_ASSET = "0x0000000000000000000000000000000000000001" as const;
@@ -237,6 +238,44 @@ describe("buildCancelOrder", () => {
   it("encodes LOP.cancelOrder(makerTraits, orderHash)", () => {
     const { data } = buildCancelOrder(0n, `0x${"1".repeat(64)}`);
     expect(data.slice(0, 10)).toBe(toFunctionSelector("function cancelOrder(uint256 makerTraits, bytes32 orderHash)"));
+  });
+});
+
+describe("ocoGroup — a shared invalidator nonce is one-cancels-the-other", () => {
+  const base = { chainId: 1 as const, lop: LOP_ADDRESSES[1]!, maker: MAKER, makerAsset: MAKER_ASSET, takerAsset: TAKER_ASSET, makingAmount: 100n, takingAmount: 200n };
+  const U40 = (1n << 40n) - 1n;
+
+  it("without a group the nonce is the id-derived bit, unchanged from before the field existed (golden)", () => {
+    const o = buildMakerOrder({ ...base, clientRequestId: "req-oco-golden-0001" });
+    expect(o.nonce).toBe((BigInt(keccak256(stringToHex("req-oco-golden-0001"))) >> 160n) & U40);
+    expect(o.nonce).toBe(buildMakerOrder({ ...base, clientRequestId: "req-oco-golden-0001" }).nonce); // retries: identical
+    expect(o.nonce).not.toBe(buildMakerOrder({ ...base, clientRequestId: "req-oco-golden-0002" }).nonce); // distinct requests: distinct bits
+  });
+
+  it("two rungs naming the same group share the nonce while keeping their own salt and hash", () => {
+    const r1 = buildMakerOrder({ ...base, clientRequestId: "rung-1", ocoGroup: "rfq_abc" });
+    const r2 = buildMakerOrder({ ...base, clientRequestId: "rung-2", ocoGroup: "rfq_abc", takingAmount: 190n });
+    expect(r1.nonce).toBe(r2.nonce);
+    expect(r1.nonce).toBe(ocoGroupNonce("rfq_abc"));
+    expect(decodeMakerTraits(r1.order.makerTraits).nonce).toBe(r2.nonce);
+    expect(r1.order.salt).not.toBe(r2.order.salt); // idempotency stays per rung
+    expect(r1.orderHash).not.toBe(r2.orderHash);
+    expect(buildMakerOrder({ ...base, clientRequestId: "rung-3", ocoGroup: "rfq_xyz" }).nonce).not.toBe(r1.nonce);
+  });
+
+  it("the group seed is namespaced: a group named like a stand-alone order's id lands on a DIFFERENT bit", () => {
+    const alone = buildMakerOrder({ ...base, clientRequestId: "shared-key" });
+    const grouped = buildMakerOrder({ ...base, clientRequestId: "other-id", ocoGroup: "shared-key" });
+    expect(grouped.nonce).not.toBe(alone.nonce);
+    expect(ocoGroupNonce("shared-key")).not.toBe(alone.nonce);
+  });
+
+  it("the group nonce fits the 40-bit trait slot and round-trips through the invalidator plan", () => {
+    const o = buildMakerOrder({ ...base, clientRequestId: "rung-1", ocoGroup: "g" });
+    expect(o.nonce).toBeLessThanOrEqual(U40);
+    const plan = lopInvalidatorPlan(o.order.makerTraits);
+    expect(plan.mode).toBe("bit");
+    expect((plan as { nonceOrEpoch: bigint }).nonceOrEpoch).toBe(ocoGroupNonce("g"));
   });
 });
 

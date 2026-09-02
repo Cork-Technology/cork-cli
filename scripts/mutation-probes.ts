@@ -153,6 +153,58 @@ const CATALOG: Mutant[] = [
     tests: [T.orders, T.invalidator],
   },
   {
+    // The group seed is namespaced: a group named "x" must NOT land on the bit a stand-alone order
+    // with clientRequestId "x" uses — sharing is a choice, never an accident.
+    id: "orders-oco-namespace-dropped",
+    file: "packages/core/src/orders.ts",
+    find: "return nonceFromSeed(`oco-group:${ocoGroup}`);",
+    replace: "return nonceFromSeed(ocoGroup);",
+    tests: [T.orders],
+  },
+  {
+    // ocoGroup must actually seed the nonce — ignoring it silently gives every rung its own bit
+    // and the ladder stops being one-cancels-the-other.
+    id: "orders-oco-seed-ignored",
+    file: "packages/core/src/orders.ts",
+    find: "const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
+    replace: "const nonce = nonceFromSeed(a.clientRequestId);",
+    tests: [T.orders],
+  },
+  {
+    // The handler must hand ocoGroup to the builder — dropping the pass-through gives every rung
+    // its own bit while the result still claims a group.
+    id: "handler-oco-passthrough-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "...(action.ocoGroup !== undefined ? { ocoGroup: action.ocoGroup } : {}),",
+    replace: "",
+    tests: [T.handlers],
+  },
+  {
+    // The result must echo the group it built for, never a constant.
+    id: "handler-oco-echo-null",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "ocoGroup: action.ocoGroup ?? null,",
+    replace: "ocoGroup: null,",
+    tests: [T.handlers],
+  },
+  {
+    // The notice is a LABEL on grouped orders only; firing it on every order is noise that hides
+    // the real signal.
+    id: "handler-oco-notice-ungated",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (action.ocoGroup !== undefined) {",
+    replace: "if (action.ocoGroup !== undefined || true) {",
+    tests: [T.handlers],
+  },
+  {
+    // cancel's `retires` must come from the SIGNED traits' nonce, not a placeholder.
+    id: "handler-cancel-retires-nonce",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "nonce: plan.nonceOrEpoch.toString(), scope: `every order by",
+    replace: "nonce: \"0\", scope: `every order by",
+    tests: [T.handlers],
+  },
+  {
     id: "orders-taker-interaction-offset",
     file: "packages/core/src/orders.ts",
     find: "const TAKER_ARGS_INTERACTION_LENGTH_OFFSET = 200n;",

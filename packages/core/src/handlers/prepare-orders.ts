@@ -431,6 +431,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         allowPartialFills: action.allowsPartialFills,
         usePermit2: action.usePermit2,
         ...(action.allowedSender !== undefined ? { allowedSender: action.allowedSender } : {}),
+        ...(action.ocoGroup !== undefined ? { ocoGroup: action.ocoGroup } : {}),
         ...(extension !== undefined ? { extension } : {}),
       });
     } catch (err) {
@@ -476,6 +477,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     }));
     const makerApprovalWarn = approvalMissingWarning(approvals, "before signing and listing this order");
     if (makerApprovalWarn) warnings.push(makerApprovalWarn);
+    if (action.ocoGroup !== undefined) {
+      warnings.push({ code: "oco_group_notice", message: `this order shares invalidator nonce ${built.nonce} with every order by ${input.account} that names ocoGroup '${action.ocoGroup}': the first fill or cancel of ANY of them retires ALL of them (one-cancels-the-other), and a PARTIAL fill spends the bit too. The venue does not learn the group — a sibling left OPEN on the book after another rung filled is dead on chain; re-read the bit (readLopInvalidator, or cork_track reconcile) before ranking or filling it. To withdraw the group, cancel any one rung: they share the bit. Vocabulary: ${ORDERS_TOPIC_REFERENCE}` });
+    }
     return envelope({
       state: "ok",
       data: {
@@ -487,6 +491,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // The venue listing must carry this exact value: cork_submit compares the listing's nonce
         // against what the signed makerTraits encode and refuses to relay a mismatch.
         nonce: built.nonce,
+        // The group this order's bit belongs to (null = stands alone on its id-derived bit).
+        ocoGroup: action.ocoGroup ?? null,
         // Exclusivity as the signed traits STORE it (decoded back from the built word, not echoed
         // from the input): the 10-byte suffix the book will show, null = any taker.
         allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSender,
@@ -507,8 +513,17 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "cancel") {
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
-    const cancel = buildCancelOrder(BigInt(action.makerTraits), action.orderHash);
-    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash, execution: executionEthTransaction() }, chainId, source: "config", ctx });
+    const traits = BigInt(action.makerTraits);
+    const cancel = buildCancelOrder(traits, action.orderHash);
+    // What this cancel retires is decided by the SIGNED traits, not the hash: on the bit
+    // invalidator, cancelOrder spends the (maker, nonce) bit, so every order by this maker that
+    // carries the same nonce — a one-cancels-the-other group — is retired by this one transaction.
+    // On the remaining-amount invalidator only this order hash is retired.
+    const plan = lopInvalidatorPlan(traits);
+    const retires = plan.mode === "bit"
+      ? { invalidator: "bit" as const, nonce: plan.nonceOrEpoch.toString(), scope: `every order by ${input.account} whose makerTraits carry nonce ${plan.nonceOrEpoch} — a shared-nonce (ocoGroup) ladder is retired as one` }
+      : { invalidator: "remaining" as const, nonce: null, scope: "this order hash only (remaining-amount invalidator)" };
+    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash, retires, execution: executionEthTransaction() }, chainId, source: "config", ctx });
   }
 
   if (action.type === "rollover-intent") {

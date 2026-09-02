@@ -1669,6 +1669,10 @@
       "kind": "value"
     },
     {
+      "name": "ocoGroupNonce",
+      "kind": "value"
+    },
+    {
       "name": "oracleModeForSource",
       "kind": "value"
     },
@@ -3546,6 +3550,10 @@
     },
     {
       "name": "makerApprovalRequirements",
+      "kind": "value"
+    },
+    {
+      "name": "ocoGroupNonce",
       "kind": "value"
     },
     {

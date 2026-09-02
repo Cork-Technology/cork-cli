@@ -142,7 +142,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     codes: [
       "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
       "oracle_not_deployable", "oracle_not_deployed", "oracle_rate_unreadable", "stale_share_prediction", "share_prediction_unavailable",
-      "rate_drift_notice", "constraint_window_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
+      "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "expiry_far_future", "roles_not_granted", "implementation_not_approved",
     ],
   },
   {
@@ -407,7 +407,7 @@ plausible nonsense rather than failing.
     name: "orders",
     aliases: ["order-lifecycle", "reservation", "oco", "one-cancels-the-other", "ladder", "liveness", "exclusivity"],
     summary:
-      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and the kernel, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so candidates are re-read from the invalidator before they are ranked. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
+      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and the kernel, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so a rung is re-read from the invalidator before it is filled, and any view that ranks orders must do the same. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
     body: `# Orders — reach, fill regime, groups, price shape, provenance, liveness
 
 One vocabulary for a 1inch LOP v4 order as this surface, the venue, and the kernel use it. One term
@@ -459,11 +459,9 @@ retires all of them: a **group** (one-cancels-the-other). A **ladder** is a grou
 in price, reach, or expiry: a *revision ladder* re-quotes one request at better prices on one nonce
 (the taker takes the best, the rest die); an *exclusive-then-open* ladder pairs a reserved best rung
 with an open worse rung. A rung that dies because a sibling filled is **dead-by-sibling**: the chain
-knows, the venue does not — the row keeps reading OPEN until a status sync, so every candidate is
-re-read from the LOP invalidator before it is ranked or announced [K7]. Sharing a nonce is a CHOICE
-made through the maker-order group key; without one, each request derives its own nonce from its
-idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]). One transaction
-can cancel a whole group: \`bitsInvalidateForOrder\` spends every bit of the group's slot word.
+knows, the venue does not — the row keeps reading OPEN until a status sync, so \`taker-fill\` re-reads the LOP invalidator before it builds (its liveness pre-flight), and any view that ranks or announces orders must do the same [K7].
+Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key, namespaced so a group can never collide with a stand-alone order by accident); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
+Because the rungs share one bit, cancelling ANY rung (\`cancel\`) retires the whole group; \`bitsInvalidateForOrder(makerTraits, mask)\` additionally spends other bits of the same 256-bit slot word in one transaction — a sweep across orders whose nonces share a slot, not built here.
 
 ## Series and epoch: mass cancel
 
@@ -499,8 +497,7 @@ order backs it, **indicative** otherwise.
 | dead-by-sibling | a group sibling filled or was cancelled | chain only | invalidator; the venue row still says OPEN |
 | dead-by-epoch | the maker bumped the series epoch | chain only | epoch read; the venue row still says OPEN |
 
-\`cork_track reconcile\` resolves an order hash to one of these with the chain outranking the venue;
-\`status_mismatch\` (conflict) is the venue disagreeing with the chain.
+The invalidator bit says only SPENT: filled, cancelled, and dead-by-sibling read the same on chain. \`cork_track reconcile\` reads the bit and the fills feed and reports \`filled-or-cancelled\` for a spent bit (with this order's fills, if any) while the venue still lists the row OPEN — that disagreement is \`status_mismatch\` (conflict), chain outranking venue [K7]. Telling cancelled from dead-by-sibling needs the sibling's own fill or cancel event.
 
 ## Synonyms — say the left column
 

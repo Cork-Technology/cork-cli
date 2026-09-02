@@ -14,6 +14,7 @@ import {
   MAINNET_DEPLOYMENT,
   type LopOrder,
   type SafeSwapParams,
+  ocoGroupNonce,
 } from "@cork/core";
 import { UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { poolTokensRpc, stubResolved } from "./helpers.ts";
@@ -96,6 +97,41 @@ describe("runTool: cork_capabilities", () => {
     const vocab = await runTool("cork_capabilities", { topic: "orders" }, { nowSeconds: NOW });
     expect(vocab.state).toBe("ok");
     expect((vocab.data as { topic: string }).topic).toBe("orders");
+  });
+
+  it("maker-order ocoGroup: two rungs share the nonce, the result echoes the group, and the notice teaches sibling death", async () => {
+    const A = "0xc0ffee0000000000000000000000000000000001" as const;
+    const rung = (id: string, taking: string, group?: string) => runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: id, action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: taking, ...(group ? { ocoGroup: group } : {}) } }, { nowSeconds: NOW });
+    const r1 = await rung("ladder-rung-1", "1000000", "rfq_m1");
+    const r2 = await rung("ladder-rung-2", "950000", "rfq_m1");
+    const alone = await rung("stand-alone-1", "1000000");
+    for (const e of [r1, r2, alone]) expect(e.state).toBe("ok");
+    const d = (e: typeof r1) => e.data as { nonce: string; ocoGroup: string | null; orderHash: string };
+    expect(d(r1).nonce).toBe(d(r2).nonce);
+    expect(d(r1).ocoGroup).toBe("rfq_m1");
+    expect(d(r1).orderHash).not.toBe(d(r2).orderHash);
+    expect(d(alone).ocoGroup).toBeNull();
+    expect(d(alone).nonce).not.toBe(d(r1).nonce);
+    const notice = r1.warnings.find((w) => w.code === "oco_group_notice");
+    expect(notice).toBeDefined();
+    expect(notice!.message).toContain("one-cancels-the-other");
+    expect(notice!.message).toContain('topic:"orders"');
+    expect(alone.warnings.some((w) => w.code === "oco_group_notice")).toBe(false);
+  });
+
+  it("cancel names what it retires from the SIGNED traits: a grouped rung's cancel retires the whole ocoGroup", async () => {
+    const A = "0xc0ffee0000000000000000000000000000000001" as const;
+    const rung = await runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: "ladder-cancel-1", action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", ocoGroup: "rfq_m2" } }, { nowSeconds: NOW });
+    expect(rung.state).toBe("ok");
+    const built = rung.data as { nonce: string; orderHash: `0x${string}`; typedData: { message: { makerTraits: string } } };
+    const cancel = await runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: "ladder-cancel-2", action: { type: "cancel", orderHash: built.orderHash, makerTraits: built.typedData.message.makerTraits } }, { nowSeconds: NOW });
+    expect(cancel.state).toBe("ok");
+    const retires = (cancel.data as { retires: { invalidator: string; nonce: string | null; scope: string } }).retires;
+    expect(retires.invalidator).toBe("bit");
+    expect(retires.nonce).toBe(built.nonce);
+    expect(retires.nonce).toBe(ocoGroupNonce("rfq_m2").toString());
+    expect(retires.scope).toContain(`nonce ${built.nonce}`);
+    expect(retires.scope).toContain("ocoGroup");
   });
 
   it("topic resolves a tool (by name, cork_ prefix, or cli leaf)", async () => {

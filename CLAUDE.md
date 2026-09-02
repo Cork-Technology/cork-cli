@@ -177,6 +177,7 @@ Warning codes:
 | `deprecated_gated` | unavailable: a deprecated feature without the opt-in (`CORK_ENABLE_DEPRECATED=1`, CLI `--enable-deprecated`); nothing ran. |
 | `deprecated` | Info on ok: a deprecated path DID run — its answers don't describe the current world. |
 | `deprecation_notice` | Info on ok: still-supported sugar used (e.g. `mode` → recipe address); message teaches the new shape. |
+| `oco_group_notice` | Info on ok maker-order results that name `ocoGroup`: the shared invalidator nonce; the first fill or cancel of ANY rung (a PARTIAL fill included) retires all of them; the venue never learns the group, so a sibling left OPEN after another rung filled is dead on chain — re-read the bit before ranking or filling; withdraw the group by cancelling any one rung. Routes to topic:"orders". |
 | `constraint_window_notice` | Info on JIT prepares AND create-pool: staleness guards via `recipe.verify` at fill/creation time — a rate outside the carried window reverts `RecipeRejectedConstraint` until a fresh constraint is signed (JIT) or the tx is rebuilt (create-pool). |
 | `decaying_price_notice` | Info on auction maker-orders and auction taker-fills: the price DECAYS from initialRateBump (base 1e7) above the signed takingAmount to that floor — the maker's WORST case. Fill-side default cap is the curve ceiling; re-price with dutch-auction-price + simulate. |
 | `oracle_already_deployed` / `oracle_not_deployable` | Info on prepare_market: the pair's oracle exists (safe idempotent no-op) / the deploy simulation reverted — message names the exact failure via `diagnoseOracleDeployFailure` (registry typed error, unregistered leg, or the cross-generation CREATE2 collision — observed on sUSDe/sUSDS@42161; FIXED-recipe markets only there). Same diagnosis on derive-cork-pool and the JIT gates. |
@@ -264,13 +265,20 @@ venue + your RPC; lite-decentralized = your RPC only; full-decentralized = RPC +
 never the venue. `cork_prepare_phoenix` `account` is load-bearing (sweep-back recipient) — set it to the
 address that actually funds the bundle.
 
-**Maker-order nonces are per-request.** Cork-built orders set `allowMultipleFills: false`, so they
-live in the 1inch **bit** invalidator — keyed on `(maker, nonce)`, NOT orderHash. The nonce derives
-from `clientRequestId` (40-bit slot: retries stay byte-identical [K2]; distinct requests land on
-distinct bits — birthday-rare 40-bit collisions, not a guarantee). Orders sharing an id share one bit — filling or cancelling either reverts the
-other `BitInvalidatedOrder` — so give every concurrently-live order its own id. maker-order
-returns the derived `nonce`; the venue listing must carry it exactly or submit refuses
-`listing_traits_mismatch`.
+**Maker-order nonces: per-request by default, shared by choice.** Cork-built orders set
+`allowMultipleFills: false`, so they live in the 1inch **bit** invalidator — keyed on
+`(maker, nonce)`, NOT orderHash. Without `ocoGroup` the nonce derives from `clientRequestId`
+(40-bit slot: retries stay byte-identical [K2]; distinct requests land on distinct bits —
+birthday-rare 40-bit collisions, not a guarantee), so every concurrently-live stand-alone order
+needs its own id. With `ocoGroup` (2026-09-02) the nonce derives from the group key instead —
+NAMESPACED (`ocoGroupNonce`, SDK `/orders`), so a group can never collide with an id-derived bit by
+accident — and every order by the maker naming that group is one-cancels-the-other: the first
+fill or cancel of any rung retires all of them (a ladder; one capacity answering several RFQs).
+Each rung keeps its own `clientRequestId`. The venue never learns the group: a sibling left OPEN
+after another rung filled is dead on chain (`oco_group_notice`, info, routes to topic:"orders");
+re-read the bit before ranking or filling. maker-order returns the derived `nonce` and echoes
+`ocoGroup` (null = stand-alone); the venue listing must carry the nonce exactly or submit refuses
+`listing_traits_mismatch`. `cancel` results carry `retires` (invalidator mode, nonce, scope): on the bit invalidator a cancel of ANY rung retires the whole shared-nonce ladder — `bitsInvalidateForOrder(traits, mask)` is the slot-wide sweep across OTHER bits of the same 256-bit word, not built. Mutation-probed (`orders-oco-namespace-dropped`, `orders-oco-seed-ignored`, `handler-oco-*`, `handler-cancel-retires-nonce`).
 
 **`data.execution` — the completion pointer on every prepare result** (typed once in
 `packages/schemas/src/doc-topics.ts`): kind (eth-transaction | eip712-typed-data), sign method,
