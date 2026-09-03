@@ -5,11 +5,15 @@
 // through our own decoder — so the TS encoder, the TS decoder, and the EVM decoder are held to
 // one layout from two sides.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeJitExtraData, diffJitExtraData, encodeJitExtraData, type JITMarketParams, type PermitParams } from "@cork/core";
 
-const FIXTURE = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data.json");
+// The fixture lives in the PUBLIC test tree: a test that reads excluded content at runtime fails
+// the published suite (the port excludes the fork harness). The harness keeps its own copy for
+// forge, written by the same run whenever that directory exists; both must agree.
+const FIXTURE = resolve(import.meta.dirname, "./fixtures/jit-extra-data.json");
+const HARNESS_COPY = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data.json");
 
 /** Fixed, non-degenerate params: every field non-zero and distinct, so a swapped or dropped
  *  field cannot hide behind an equal neighbour. */
@@ -49,12 +53,16 @@ function fixtureDocument(): Record<string, unknown> {
 describe("JIT extraData fixture — one layout, held from the TS and the EVM side", () => {
   it("the committed fixture equals a fresh encoding (UPDATE_JIT_FIXTURE=1 to regenerate deliberately)", () => {
     const fresh = fixtureDocument();
+    const doc = `${JSON.stringify(fresh, null, 2)}\n`;
     if (process.env["UPDATE_JIT_FIXTURE"] === "1" || !existsSync(FIXTURE)) {
-      writeFileSync(FIXTURE, `${JSON.stringify(fresh, null, 2)}\n`);
+      writeFileSync(FIXTURE, doc);
+      if (existsSync(dirname(HARNESS_COPY))) writeFileSync(HARNESS_COPY, doc);
     }
     const committed = JSON.parse(readFileSync(FIXTURE, "utf8")) as { extraData: string; expected: unknown };
     expect(committed.extraData, "extraData bytes drifted from the encoder — a layout change; regenerate on purpose and re-run the forge decoder test").toBe(fresh.extraData);
     expect(committed.expected).toEqual(fresh.expected);
+    // The harness copy (private tree only) must be the same bytes the forge decoder test reads.
+    if (existsSync(HARNESS_COPY)) expect(readFileSync(HARNESS_COPY, "utf8")).toBe(readFileSync(FIXTURE, "utf8"));
   });
 
   it("the bytes round-trip through our own decoder with no differing field", () => {
