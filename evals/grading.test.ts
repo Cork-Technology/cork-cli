@@ -164,6 +164,11 @@ describe("capacity retry — a run survives an overloaded upstream, and never re
     expect(isCapacityError({ status: 400, error: { type: "invalid_request_error" } })).toBe(false);
     expect(isCapacityError({ status: 401 })).toBe(false);
     expect(isCapacityError(new Error("boom"))).toBe(false);
+    // The SDK's connection-error classes (no status) are transient too.
+    class APIConnectionError extends Error {}
+    class APIConnectionTimeoutError extends APIConnectionError {}
+    expect(isCapacityError(new APIConnectionError("Connection error."))).toBe(true);
+    expect(isCapacityError(new APIConnectionTimeoutError("timeout"))).toBe(true);
   });
   it("withCapacityRetry: retries with exponential delay until success, gives up after the bound, and rethrows a non-capacity error at once", async () => {
     const sleeps: number[] = [];

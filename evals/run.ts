@@ -123,7 +123,12 @@ export function isCapacityError(err: unknown): boolean {
   const status = typeof e?.status === "number" ? e.status : undefined;
   if (status === 429 || status === 529 || (status !== undefined && status >= 500)) return true;
   const type = e?.error?.error?.type ?? e?.error?.type;
-  return type === "overloaded_error" || type === "rate_limit_error" || type === "api_error";
+  if (type === "overloaded_error" || type === "rate_limit_error" || type === "api_error") return true;
+  // A dropped socket / DNS blip / gateway restart: the SDK surfaces it as APIConnectionError with
+  // no status. It is a wait-it-out condition too (observed 2026-09-03: the local gateway refused
+  // the socket at task 9 of a run).
+  const name = (err as { constructor?: { name?: string } } | undefined)?.constructor?.name;
+  return name === "APIConnectionError" || name === "APIConnectionTimeoutError";
 }
 
 /** Bounded outer retry for capacity errors: 5 attempts, 5 s → 80 s exponential, one log line each. */

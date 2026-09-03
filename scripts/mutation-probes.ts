@@ -1483,6 +1483,14 @@ const CATALOG: Mutant[] = [
     tests: [T.evalHygiene],
   },
   {
+    // A dropped socket is transient; not retrying it loses a whole run to one gateway restart.
+    id: "eval-run-retry-connection-dropped",
+    file: "evals/run.ts",
+    find: 'return name === "APIConnectionError" || name === "APIConnectionTimeoutError";',
+    replace: "return false;",
+    tests: [T.evalGrading],
+  },
+  {
     // A 4xx is a request the server will refuse again — retrying it burns the budget and hides
     // the real error; only capacity conditions wait.
     id: "eval-run-retry-4xx",
