@@ -18,7 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     # The mutation-probe step alone runs ~11-14 min at 254 probes (each probe re-runs the killer
     # suite); 15 was outgrown 2026-08-19 and cancelled three green trees in a row.
-    timeout-minutes: 25
+    # The mutation catalogue grew past what 25 minutes holds on the 2-vCPU runner (427 probes,
+    # ~24 min on 2026-09-03; 373 probes took 14 min on 2026-08-31). The step is deliberately
+    # serial per mutant; the bound is the guard against a hung run, not a budget.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
