@@ -63,6 +63,8 @@ const T = {
   offers: "packages/core/test/offers.test.ts",
   watch: "packages/core/test/orders-watch.test.ts",
   answer: "packages/core/test/answer-rfq.test.ts",
+  gate: "packages/core/test/jit-bytes-gate.test.ts",
+  extraData: "packages/core/test/jit-extra-data-fixture.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
@@ -364,6 +366,113 @@ const CATALOG: Mutant[] = [
     find: 'if (inner.status !== undefined && inner.status !== "quoted") continue; // a pass has no price',
     replace: "",
     tests: [T.offers],
+  },
+  // ── the bytes-decoder gate (policy R12a): refuse off-list adapter code, read our bytes back ──
+  {
+    // No refusal at all: off-list adapter code would build bytes that code may misread.
+    id: "gate-refusal-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if (refusals.length === 0) return { warnings: [] };",
+    replace: "  return { warnings: [] };",
+    tests: [T.gate],
+  },
+  {
+    // The operator override must actually be read; a dead switch is a silent refusal forever.
+    id: "gate-env-ignored",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if (unapprovedCodeAllowed()) {",
+    replace: "  if (false) {",
+    tests: [T.gate],
+  },
+  {
+    // The gate acts on what the guard SAW: an unreadable code must never refuse.
+    id: "gate-unreadable-refused",
+    file: "packages/core/src/implementations.ts",
+    find: 'return checks.filter((c) => roles.includes(c.role) && (c.verdict === "not_approved" || c.verdict === "no_code" || c.verdict === "proxy_unresolved"));',
+    replace: 'return checks.filter((c) => roles.includes(c.role) && c.verdict !== "approved");',
+    tests: [T.gate],
+  },
+  {
+    // Refusal is scoped to the roles that DECODE bytes; the registry stays build-and-warn.
+    id: "gate-roles-ignored",
+    file: "packages/core/src/implementations.ts",
+    find: 'return checks.filter((c) => roles.includes(c.role) && (c.verdict === "not_approved" || c.verdict === "no_code" || c.verdict === "proxy_unresolved"));',
+    replace: 'return checks.filter((c) => c.verdict === "not_approved" || c.verdict === "no_code" || c.verdict === "proxy_unresolved");',
+    tests: [T.gate],
+  },
+  {
+    // The env value is a closed set: "1" or "true".
+    id: "gate-env-any-value",
+    file: "packages/core/src/implementations.ts",
+    find: '  return v === "1" || v === "true";\n}\n\n/** Render positive findings',
+    replace: '  return v !== undefined;\n}\n\n/** Render positive findings',
+    tests: [T.gate],
+  },
+  {
+    // A decoder that disagrees on a field must GATE, not be echoed as verified.
+    id: "layout-mismatch-not-gated",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '  if (differing.length === 0) return { status: "verified-on-chain: the adapter\'s decodeExtraData read these bytes back field for field" };',
+    replace: '  return { status: "verified-on-chain: the adapter\'s decodeExtraData read these bytes back field for field" };',
+    tests: [T.gate],
+  },
+  {
+    // A missing helper (pre-0.4.0) is "unchecked", never a refusal — rethrowing would gate every
+    // current adapter.
+    id: "layout-absent-refused",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  } catch (err) {\n    return { status: `unchecked: the adapter exposes no decodeExtraData helper",
+    replace: "  } catch (err) {\n    throw err;\n    return { status: `unchecked: the adapter exposes no decodeExtraData helper",
+    tests: [T.gate],
+  },
+  {
+    // The comparator must see the two address legs — swapping them is THE silent failure.
+    id: "layout-diff-collateral-blind",
+    file: "packages/core/src/market-registry.ts",
+    find: '  if (lc(e.collateralAsset) !== lc(d.collateralAsset)) out.push("collateralAsset");\n  if (lc(e.referenceAsset) !== lc(d.referenceAsset)) out.push("referenceAsset");',
+    replace: "",
+    tests: [T.extraData, T.gate],
+  },
+  {
+    // The comparator must see the fee legs — the other same-typed pair a swap could hide in.
+    id: "layout-diff-fees-blind",
+    file: "packages/core/src/market-registry.ts",
+    find: '  if (e.swapFeePercentage !== d.swapFeePercentage) out.push("swapFeePercentage");\n  if (e.unwindSwapFeePercentage !== d.unwindSwapFeePercentage) out.push("unwindSwapFeePercentage");',
+    replace: "",
+    tests: [T.extraData, T.gate],
+  },
+  {
+    // Permits are part of the layout too.
+    id: "layout-diff-permits-blind",
+    file: "packages/core/src/market-registry.ts",
+    find: '  if (encoded.permits.length !== decoded.permits.length) out.push("permits.length");',
+    replace: '  if (false) out.push("permits.length");',
+    tests: [T.extraData],
+  },
+  {
+    // The TAKER path must gate on its own round-trip, not only the maker path.
+    id: "layout-taker-not-gated",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '    if ("gate" in layout) return { gate: layout.gate };\n    jit.extraDataLayout = layout.status;',
+    replace: '    jit.extraDataLayout = "gate" in layout ? "mismatch" : layout.status;',
+    tests: [T.gate],
+  },
+  {
+    // The MAKER path must gate on its round-trip.
+    id: "layout-maker-not-gated",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: '          if ("gate" in layout) return layout.gate;\n          jitData = { ...jitData, extraDataLayout: layout.status };',
+    replace: '          jitData = { ...jitData, extraDataLayout: "gate" in layout ? "mismatch" : layout.status };',
+    tests: [T.gate],
+  },
+  {
+    // The CLI flag must not leak past its own invocation (runCli is capture-everything/never-exit;
+    // a stuck override would bypass the gate for every later call in the process).
+    id: "cli-gate-flag-not-restored",
+    file: "packages/cli/src/app.ts",
+    find: '          if (opts["allowUnapprovedCode"]) {\n            if (prevUnapproved === undefined) delete process.env["CORK_ALLOW_UNAPPROVED_CODE"];\n            else process.env["CORK_ALLOW_UNAPPROVED_CODE"] = prevUnapproved;\n          }',
+    replace: "",
+    tests: [T.cli],
   },
   // ── answer-rfq / refresh-order: the kernel's amount math and the sugars' defaults ──
   {

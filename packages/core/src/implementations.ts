@@ -181,6 +181,39 @@ export async function approvedImplementationGuard(
   }
 }
 
+/** The guard's findings AND its warnings, for callers that REFUSE on some roles: the JIT hook
+ *  paths gate on the adapter (below), every other path stays build-and-warn. Same trust split,
+ *  same swallow-own-failures posture as approvedImplementationGuard. */
+export async function approvedImplementationChecks(
+  client: CodeReader,
+  chainId: number,
+  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock"> = {},
+): Promise<{ checks: ImplementationCheck[]; warnings: Array<{ code: string; message: string }> }> {
+  try {
+    const cfg = await resolveConfig();
+    const checks = await checkApprovedImplementations(client, chainId, { allowlist: BUNDLED_DEFAULTS, addresses: cfg.defaults, ...opts });
+    return { checks, warnings: implementationWarnings(checks) };
+  } catch {
+    return { checks: [], warnings: [] };
+  }
+}
+
+/** The positive findings among `roles` — the ones a bytes-decoding path refuses on. A role that
+ *  reads `approved` or `unreadable` never refuses: the guard gates on what it SAW, not on what it
+ *  could not read (a dead RPC must not turn byte-building into a hard error). */
+export function implementationRefusals(checks: readonly ImplementationCheck[], roles: readonly string[]): ImplementationCheck[] {
+  return checks.filter((c) => roles.includes(c.role) && (c.verdict === "not_approved" || c.verdict === "no_code" || c.verdict === "proxy_unresolved"));
+}
+
+/** `CORK_ALLOW_UNAPPROVED_CODE=1` (CLI `--allow-unapproved-code`) downgrades the bytes-decoder
+ *  refusal to build-and-warn — for the window between a redeploy and the release that ships its
+ *  hash, when the operator has verified the new code by other means. Same shape as the
+ *  deprecation gate. */
+export function unapprovedCodeAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env["CORK_ALLOW_UNAPPROVED_CODE"];
+  return v === "1" || v === "true";
+}
+
 /** Render positive findings as build-and-warn messages; `approved` and `unreadable` are silent
  *  (the guard discloses drift, it does not gate on its own availability). */
 export function implementationWarnings(checks: ImplementationCheck[]): Array<{ code: string; message: string }> {

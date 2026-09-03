@@ -237,7 +237,7 @@ const CHAIN_NAMES: Record<string, string> = { mainnet: "1", ethereum: "1", arbit
 
 /** Option names owned by the CLI itself (canonicalised spellings) — a schema field must never
  *  register over them. The collision lint in cli.test.ts duplicates this set as a tripwire. */
-const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "help", "watch", "interval", "iterations"]);
+const RESERVED = new Set(["json", "input", "rpcurl", "explain", "enabledeprecated", "allowunapprovedcode", "help", "watch", "interval", "iterations"]);
 
 /** The digits-only filter keys that get the CLI's amount sugar (`--rate 1e18`); imported from
  *  filters.ts so the sugar list and parseQueryFilters' bigint fields cannot drift apart. */
@@ -501,7 +501,8 @@ export async function runCli(
         .option("--input <json>", "tool input as a JSON string (unambiguous form of --json <json>)")
         .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
         .option("--enable-deprecated", "unlock DEPRECATED features (e.g. the pre-2.1.0 registry generation via legacy:true) — same effect as CORK_ENABLE_DEPRECATED=1; every result they produce is labelled")
-        .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)");
+        .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)")
+        .option("--allow-unapproved-code", "build JIT bytes even when the adapter's live code is NOT on this build's approved-implementations list — same effect as CORK_ALLOW_UNAPPROVED_CODE=1; every such result is labeled implementation_gate_bypassed. For the window between a redeploy and the release that ships its hash, after you verified the code yourself");
       // `ch query orderbook --watch`: the CLI projection of `since`/`wait` — re-read the ranked
       // book on an interval, threading each read's watermark into the next as `since`, and print
       // only the ticks that changed. A poll is the same cork_query read a script would make by hand.
@@ -780,6 +781,8 @@ export async function runCli(
         // isolation would mean threading the opt-in through HandlerContext into deprecation.ts.
         const prevDeprecated = process.env["CORK_ENABLE_DEPRECATED"];
         if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
+        const prevUnapproved = process.env["CORK_ALLOW_UNAPPROVED_CODE"];
+        if (opts["allowUnapprovedCode"]) process.env["CORK_ALLOW_UNAPPROVED_CODE"] = "1";
         const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
         const stateCode = (envelope: unknown): number => {
           const state = (envelope as { state?: string }).state;
@@ -836,6 +839,10 @@ export async function runCli(
           if (opts["enableDeprecated"]) {
             if (prevDeprecated === undefined) delete process.env["CORK_ENABLE_DEPRECATED"];
             else process.env["CORK_ENABLE_DEPRECATED"] = prevDeprecated;
+          }
+          if (opts["allowUnapprovedCode"]) {
+            if (prevUnapproved === undefined) delete process.env["CORK_ALLOW_UNAPPROVED_CODE"];
+            else process.env["CORK_ALLOW_UNAPPROVED_CODE"] = prevUnapproved;
           }
         }
       };

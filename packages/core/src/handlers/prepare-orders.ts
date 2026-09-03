@@ -4,7 +4,7 @@ import { isAddressEqual, recoverAddress } from "viem";
 import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionAnswerRfq, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRefreshOrder, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, predictShares } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
@@ -15,7 +15,7 @@ import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, premiumAmount, pr
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 
@@ -30,6 +30,8 @@ type MakerJitReport = {
   source?: NonNullable<Extract<JitLadderResult, { gate?: undefined }>["verified"]>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
   derivedPoolId?: `0x${string}`;
+  /** R12a round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
+  extraDataLayout?: string;
   constraint?: Extract<JitLadderResult, { gate?: undefined }>["constraint"];
   identity?: string;
   predictedCorkSwapToken?: `0x${string}`;
@@ -392,13 +394,16 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           }
         }
         const permits = parsePermitWires(jm.permits);
-        extension = buildJitExtension(
-          ladder.adapter,
-          encodeJitExtraData(
-            { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
-            permits,
-          ),
-        );
+        const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
+        const extraData = encodeJitExtraData(jitParams, permits);
+        if (ladder.verified) {
+          // R12a round-trip: the deployed adapter's own decoder is the layout oracle for the
+          // bytes this build produced. A disagreement is the finding's failure class — refused.
+          const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
+          if ("gate" in layout) return layout.gate;
+          jitData = { ...jitData, extraDataLayout: layout.status };
+        }
+        extension = buildJitExtension(ladder.adapter, extraData);
       }
     }
 

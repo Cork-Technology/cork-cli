@@ -3,12 +3,12 @@
 import { type ChainId, Envelope } from "@cork/schemas";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, encodeJitExtraData, jitAdapterAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, encodeJitExtraData, jitAdapterAbi, type JITMarketParams, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
-import { approvedImplementationGuard, JIT_IMPLEMENTATION_ROLES, LEGACY_JIT_IMPLEMENTATION_ROLES } from "../implementations.ts";
+import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, LEGACY_JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
 import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
 import { oracleRateUnreadableMessage, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
@@ -218,7 +218,13 @@ export async function runJitPreflightLadder(args: {
   const client = resolved.client;
   // Interface-first guard on the two contracts the hook executes (adapter + registry): the
   // binding reads below prove WHICH contracts, this proves their CODE is the admitted one.
-  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
+  {
+    const impl = await approvedImplementationChecks(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    warnings.push(...impl.warnings);
+    const gate = bytesDecoderGate({ checks: impl.checks, roles: ["jitAdapter"], chainId, ctx, artifact: words.artifact, adapterName: "JIT adapter" });
+    if (gate.gate) return { gate: gate.gate };
+    warnings.push(...gate.warnings);
+  }
   try {
     const [boundLop, boundRegistry, boundController] = await Promise.all([
       client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
@@ -364,10 +370,13 @@ export async function buildTakerJitInteraction(args: {
     }
   }
   const permits = parsePermitWires(jm.permits);
-  const extraData = encodeJitExtraData(
-    { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint },
-    permits,
-  );
+  const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
+  const extraData = encodeJitExtraData(jitParams, permits);
+  if (ladder.verified) {
+    const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, extraData, params: jitParams, permits, chainId, ctx, artifact: "interaction" });
+    if ("gate" in layout) return { gate: layout.gate };
+    jit.extraDataLayout = layout.status;
+  }
   const interaction = `0x${ladder.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;
   return { interaction, jit, warnings };
 }
@@ -380,6 +389,8 @@ export type TakerJitReport = {
   adapter: `0x${string}`;
   hook: string;
   recipe: `0x${string}`;
+  /** R12a round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
+  extraDataLayout?: string;
   source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean };
   derivedPoolId?: `0x${string}`;
@@ -449,7 +460,13 @@ export async function prepareJitLegacy(args: {
   const client = resolved.client;
   // The deprecated lane is held to the same standard as the current one: its adapter and
   // registry have their own allowlist roles, so a swapped implementation warns here too.
-  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: LEGACY_JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
+  {
+    const impl = await approvedImplementationChecks(client, chainId, { roles: LEGACY_JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    warnings.push(...impl.warnings);
+    const gate = bytesDecoderGate({ checks: impl.checks, roles: ["legacyJitAdapter"], chainId, ctx, artifact: "extension", adapterName: "legacy JIT adapter" });
+    if (gate.gate) return { gate: gate.gate };
+    warnings.push(...gate.warnings);
+  }
   try {
     const [boundLop, boundRegistry, boundController] = await Promise.all([
       client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
@@ -493,3 +510,89 @@ export async function prepareJitLegacy(args: {
   }
   return { extension, jitData, warnings };
 }
+
+// ── The bytes-decoder gate (policy R12a, finding 2026-09-03) ────────────────────────────────
+// An ABI names a `bytes` parameter but cannot describe its layout, so a hook that DECODES bytes
+// this tool ENCODES is the one place where code drift can silently re-read a market or a fee —
+// a revert is the good outcome there, a wrong market is the bad one. The interface-first guard
+// is therefore a REFUSAL on the adapter roles of the JIT paths (conflict, no bytes), while every
+// ABI-typed path stays build-and-warn: a shape change there fails loudly at the call. The
+// operator override exists for the window between a redeploy and the release that ships its
+// hash; it is labeled on every result it produces.
+export function bytesDecoderGate(a: {
+  checks: readonly ImplementationCheck[];
+  roles: readonly string[];
+  chainId: ChainId;
+  ctx: HandlerContext;
+  artifact: string;
+  adapterName: string;
+}): { gate?: Envelope; warnings: Array<{ code: string; message: string }> } {
+  const refusals = implementationRefusals(a.checks, a.roles);
+  if (refusals.length === 0) return { warnings: [] };
+  const describe = (c: ImplementationCheck) =>
+    c.verdict === "not_approved"
+      ? `${c.role} ${c.address} runs code hashing to ${c.codehash}, which is NOT on the approved-implementations list bundled into this build`
+      : c.verdict === "no_code"
+        ? `${c.role} ${c.implementation ?? c.address} has NO code on chain`
+        : `${c.role} ${c.address} is configured as an EIP-1967 proxy whose implementation slot is empty`;
+  if (unapprovedCodeAllowed()) {
+    return {
+      warnings: refusals.map((c) => ({
+        code: "implementation_gate_bypassed",
+        message: `CORK_ALLOW_UNAPPROVED_CODE is set: ${describe(c)} — the ${a.artifact} was built anyway, for the extraData layout THIS BUILD knows. The ${a.adapterName} decodes those bytes with code this build never tested; verify the layout against the deployed decodeExtraData (or a fork fill) before signing`,
+      })),
+    };
+  }
+  return {
+    warnings: [],
+    gate: envelope({
+      state: "conflict",
+      data: { refused: refusals.map((c) => ({ role: c.role, address: c.address, ...(c.implementation ? { implementation: c.implementation } : {}), ...(c.codehash ? { codehash: c.codehash } : {}), verdict: c.verdict })), override: "CORK_ALLOW_UNAPPROVED_CODE=1 (CLI --allow-unapproved-code) builds anyway, labeled implementation_gate_bypassed" },
+      chainId: a.chainId,
+      source: "chain",
+      warnings: refusals.map((c) => ({
+        code: "implementation_not_approved",
+        message: `${describe(c)}. The ${a.adapterName} DECODES the extraData this tool encodes — a \`bytes\` layout no ABI describes (policy R12a) — so code this build never tested against could read these bytes as a different market or a different fee, silently. No ${a.artifact} was built. If the address moved ahead of a release and you have verified the new code yourself, set CORK_ALLOW_UNAPPROVED_CODE=1 (CLI --allow-unapproved-code) to build anyway; every such result is labeled implementation_gate_bypassed`,
+      })),
+      ctx: a.ctx,
+    }),
+  };
+}
+
+/** The R12a round-trip: hand the bytes we built to the adapter's own `decodeExtraData` and
+ *  compare what it read back, field for field, with what we meant. Verified = the deployed
+ *  decoder agrees on every field; unchecked = the adapter exposes no helper (pre-0.4.0) or the
+ *  read failed, said in words, never guessed; a disagreement is a conflict with no bytes — the
+ *  exact failure class the finding describes, caught before anyone signs. */
+export async function verifyExtraDataLayout(a: {
+  client: { readContract: (args: { address: `0x${string}`; abi: typeof jitAdapterAbi; functionName: "decodeExtraData"; args: [`0x${string}`] }) => Promise<unknown> };
+  adapter: `0x${string}`;
+  extraData: `0x${string}`;
+  params: JITMarketParams;
+  permits: readonly PermitParams[];
+  chainId: ChainId;
+  ctx: HandlerContext;
+  artifact: string;
+}): Promise<{ status: string } | { gate: Envelope }> {
+  let decoded: { params: JITMarketParams; permits: PermitParams[] };
+  try {
+    const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams, readonly PermitParams[]];
+    decoded = { params: { ...out[0], constraint: { ...out[0].constraint } }, permits: out[1].map((p) => ({ ...p })) };
+  } catch (err) {
+    return { status: `unchecked: the adapter exposes no decodeExtraData helper (pre-0.4.0 generation) or the read failed (${revertReason(err)}) — the bytes follow the layout this build knows` };
+  }
+  const differing = diffJitExtraData({ params: a.params, permits: a.permits }, decoded);
+  if (differing.length === 0) return { status: "verified-on-chain: the adapter's decodeExtraData read these bytes back field for field" };
+  return {
+    gate: envelope({
+      state: "conflict",
+      data: { adapter: a.adapter, differing, encoded: jsonSafe({ params: a.params, permits: a.permits }), decoded: jsonSafe(decoded) },
+      chainId: a.chainId,
+      source: "chain",
+      warnings: [{ code: "extra_data_layout_mismatch", message: `the deployed adapter's decodeExtraData read the extraData this tool encoded DIFFERENTLY on ${differing.join(", ")} — the bytes layout this build encodes is not the layout the adapter at ${a.adapter} decodes (policy R12a: a \`bytes\` layout change the ABI cannot show). No ${a.artifact} was built: a fill would create or mint against a market other than the one you meant. Update cork-cli to a build that targets this adapter generation` }],
+      ctx: a.ctx,
+    }),
+  };
+}
+
+const jsonSafe = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x)));

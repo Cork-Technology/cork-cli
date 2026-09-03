@@ -1145,6 +1145,10 @@
       "kind": "value"
     },
     {
+      "name": "approvedImplementationChecks",
+      "kind": "value"
+    },
+    {
       "name": "approvedImplementationGuard",
       "kind": "value"
     },
@@ -1421,6 +1425,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeJitExtraData",
+      "kind": "value"
+    },
+    {
       "name": "decodeKnownLog",
       "kind": "value"
     },
@@ -1482,6 +1490,10 @@
     },
     {
       "name": "diffBook",
+      "kind": "value"
+    },
+    {
+      "name": "diffJitExtraData",
       "kind": "value"
     },
     {
@@ -1674,6 +1686,10 @@
     },
     {
       "name": "impairmentFloor",
+      "kind": "value"
+    },
+    {
+      "name": "implementationRefusals",
       "kind": "value"
     },
     {
@@ -2110,6 +2126,10 @@
     },
     {
       "name": "tokenNativeDecimalsToFixed",
+      "kind": "value"
+    },
+    {
+      "name": "unapprovedCodeAllowed",
       "kind": "value"
     },
     {
@@ -2667,6 +2687,10 @@
       "kind": "type"
     },
     {
+      "name": "approvedImplementationChecks",
+      "kind": "value"
+    },
+    {
       "name": "approvedImplementationGuard",
       "kind": "value"
     },
@@ -2696,6 +2720,10 @@
     },
     {
       "name": "extractDockerComposeFile",
+      "kind": "value"
+    },
+    {
+      "name": "implementationRefusals",
       "kind": "value"
     },
     {
@@ -2760,6 +2788,10 @@
     },
     {
       "name": "sha256Hex",
+      "kind": "value"
+    },
+    {
+      "name": "unapprovedCodeAllowed",
       "kind": "value"
     }
   ],
@@ -4063,6 +4095,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeJitExtraData",
+      "kind": "value"
+    },
+    {
       "name": "deprecatedEnabled",
       "kind": "value"
     },
@@ -4072,6 +4108,10 @@
     },
     {
       "name": "deriveJitMarket",
+      "kind": "value"
+    },
+    {
+      "name": "diffJitExtraData",
       "kind": "value"
     },
     {

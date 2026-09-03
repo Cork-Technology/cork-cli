@@ -3,7 +3,9 @@ import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
 import { poolTokensRpc, stubRpc } from "../../core/test/helpers.ts";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildMakerOrder, LOP_ADDRESSES } from "@cork/core";
+import { buildMakerOrder, LOP_ADDRESSES, resolveMarketRegistry, unapprovedCodeAllowed } from "@cork/core";
+import { DEMO_ACCOUNT } from "@cork/schemas";
+import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
 
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
@@ -884,5 +886,38 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
     const polled = await runCli(["query", "orderbook", "--chain-id", "1", "--account", ME, "--since", wm, "--wait", "3", "--json"], { nowSeconds: NOW, venueFetch: venueSeq([[old]]), resolveRpc: live, sleep: async () => {} });
     expect(polled.code).toBe(EXIT.ok);
     expect(JSON.parse(polled.stdout).data.waited).toMatchObject({ pollsMade: 2, changed: false, endedBy: "timeout" });
+  });
+});
+
+describe("--allow-unapproved-code — the bytes-decoder gate's operator override (2026-09-03)", () => {
+  // The eval stub's full chain with ONE view replaced: the JIT adapter's code hashes off the list.
+  const OFF_LIST_CODE = "0x60806040deadbeef";
+  const offListAdapter = () => {
+    const base = stubContext();
+    return {
+      ...base,
+      resolveRpc: async (chainId: 42161, url: string | undefined) => {
+        const r = await base.resolveRpc!(chainId, url);
+        if (!r) return r;
+        const adapter = (await resolveMarketRegistry(chainId)).marketRegistry!.adapter!.toLowerCase();
+        const client = r.client as unknown as { getCode: (a: { address?: string }) => Promise<string> } & Record<string, unknown>;
+        return { ...r, client: { ...client, getCode: async (a: { address?: string }) => (String(a?.address ?? "").toLowerCase() === adapter ? OFF_LIST_CODE : client.getCode(a)) } as never };
+      },
+    };
+  };
+  const input = JSON.stringify({ chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "cli-gate-0001", action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: "1000000000000000000", takingAmount: "50000000000000000", jitMarket: { ...JIT_TASK_PAIR, expiryTimestamp: (1_790_000_000n + 20n * 86_400n).toString(), recipe: LIQUIDITY_RECIPE, constraint: JIT_TASK_CONSTRAINT } } });
+
+  it("without the flag the JIT order is refused (conflict, exit 4); with it the order builds, labeled, and the setting is restored afterwards", async () => {
+    const refused = await runCli(["prepare", "orders", "--json", input], offListAdapter() as never);
+    expect(refused.code).toBe(EXIT.conflict);
+    expect(JSON.parse(refused.stdout).warnings[0].code).toBe("implementation_not_approved");
+    const built = await runCli(["prepare", "orders", "--allow-unapproved-code", "--json", input], offListAdapter() as never);
+    expect(built.code).toBe(EXIT.ok);
+    const env = JSON.parse(built.stdout);
+    expect(env.data.typedData).toBeDefined();
+    expect(env.warnings.some((w: { code: string }) => w.code === "implementation_gate_bypassed")).toBe(true);
+    expect(unapprovedCodeAllowed()).toBe(false); // the flag never leaks past its own invocation
+    const again = await runCli(["prepare", "orders", "--json", input], offListAdapter() as never);
+    expect(again.code).toBe(EXIT.conflict);
   });
 });

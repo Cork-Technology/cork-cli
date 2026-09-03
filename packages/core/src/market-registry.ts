@@ -129,6 +129,15 @@ export const jitAdapterAbi = parseAbi([
   "function POOL_MANAGER() view returns (address)",
   "function CONTROLLER() view returns (address)",
   "function MARKET_REGISTRY() view returns (address)",
+  // Policy R12a (2026-09-03): every externally supplied `bytes` parameter gets an external pure
+  // decode helper sharing the hook's own decoder, so the layout is visible in the shipped ABI.
+  // Shipped from the 0.4.0 adapter (market-registry-private#43); this tool reads it back as the
+  // layout ORACLE for the bytes it encodes — a pre-0.4.0 adapter has no such view and the check
+  // degrades to "unchecked", never to a guess.
+  "struct RateConstraint_ { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+  "struct JITMarketParams_ { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; RateConstraint_ constraint; bytes additionalData; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; bool enableJitMint; }",
+  "struct PermitParams_ { address token; uint256 value; uint256 deadline; uint8 v; bytes32 r; bytes32 s; }",
+  "function decodeExtraData(bytes extraData) pure returns (JITMarketParams_ params, PermitParams_[] permits)",
 ]);
 
 export const accessControlAbi = parseAbi([
@@ -356,14 +365,10 @@ export function buildJitExtension(adapter: `0x${string}`, extraData: `0x${string
 
 /** Round-trip reader for tests + decode paths: extract field 6 (PreInteractionData) per
  *  ExtensionLib._get semantics, then split target/extraData. */
-export function decodeJitExtension(extension: `0x${string}`): { adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
-  const offsets = BigInt(sliceHex(extension, 0, 32));
-  const concat = sliceHex(extension, 32);
-  const begin = Number((offsets >> (32n * 5n)) & 0xffffffffn);
-  const end = Number((offsets >> (32n * 6n)) & 0xffffffffn);
-  const pre = sliceHex(concat, begin, end);
-  const adapter = getAddress(sliceHex(pre, 0, 20));
-  const [p, permits] = decodeAbiParameters(JIT_PARAMS_ABI, sliceHex(pre, 20)) as [
+/** Decode the adapter's extraData alone — `abi.decode(extraData, (JITMarketParams, PermitParams[]))`,
+ *  the same layout the on-chain decodeExtraData helper (R12a) returns. */
+export function decodeJitExtraData(extraData: `0x${string}`): { params: JITMarketParams; permits: PermitParams[] } {
+  const [p, permits] = decodeAbiParameters(JIT_PARAMS_ABI, extraData) as [
     {
       collateralAsset: `0x${string}`;
       referenceAsset: `0x${string}`;
@@ -378,7 +383,44 @@ export function decodeJitExtension(extension: `0x${string}`): { adapter: `0x${st
     },
     Array<{ token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` }>,
   ];
-  return { adapter, params: { ...p, constraint: { ...p.constraint } }, permits: permits.map((x) => ({ ...x })) };
+  return { params: { ...p, constraint: { ...p.constraint } }, permits: permits.map((x) => ({ ...x })) };
+}
+
+/** Field-by-field difference between the params this tool ENCODED and what a decoder READ back:
+ *  the names of every field that disagrees (empty = the two layouts agree). Addresses and hex
+ *  compare case-insensitively; everything else exactly. */
+export function diffJitExtraData(encoded: { params: JITMarketParams; permits: readonly PermitParams[] }, decoded: { params: JITMarketParams; permits: readonly PermitParams[] }): string[] {
+  const out: string[] = [];
+  const lc = (s: string) => s.toLowerCase();
+  const e = encoded.params, d = decoded.params;
+  if (lc(e.collateralAsset) !== lc(d.collateralAsset)) out.push("collateralAsset");
+  if (lc(e.referenceAsset) !== lc(d.referenceAsset)) out.push("referenceAsset");
+  if (e.expiryTimestamp !== d.expiryTimestamp) out.push("expiryTimestamp");
+  if (lc(e.recipe) !== lc(d.recipe)) out.push("recipe");
+  if (e.rateOverride !== d.rateOverride) out.push("rateOverride");
+  for (const k of ["rateMin", "rateMax", "rateChangePerDayMax", "rateChangeCapacityMax"] as const) if (e.constraint[k] !== d.constraint[k]) out.push(`constraint.${k}`);
+  if (lc(e.additionalData) !== lc(d.additionalData)) out.push("additionalData");
+  if (e.swapFeePercentage !== d.swapFeePercentage) out.push("swapFeePercentage");
+  if (e.unwindSwapFeePercentage !== d.unwindSwapFeePercentage) out.push("unwindSwapFeePercentage");
+  if (e.enableJitMint !== d.enableJitMint) out.push("enableJitMint");
+  if (encoded.permits.length !== decoded.permits.length) out.push("permits.length");
+  else {
+    encoded.permits.forEach((ep, i) => {
+      const dp = decoded.permits[i]!;
+      if (lc(ep.token) !== lc(dp.token) || ep.value !== dp.value || ep.deadline !== dp.deadline || ep.v !== dp.v || lc(ep.r) !== lc(dp.r) || lc(ep.s) !== lc(dp.s)) out.push(`permits[${i}]`);
+    });
+  }
+  return out;
+}
+
+export function decodeJitExtension(extension: `0x${string}`): { adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
+  const offsets = BigInt(sliceHex(extension, 0, 32));
+  const concat = sliceHex(extension, 32);
+  const begin = Number((offsets >> (32n * 5n)) & 0xffffffffn);
+  const end = Number((offsets >> (32n * 6n)) & 0xffffffffn);
+  const pre = sliceHex(concat, begin, end);
+  const adapter = getAddress(sliceHex(pre, 0, 20));
+  return { adapter, ...decodeJitExtraData(sliceHex(pre, 20)) };
 }
 
 // ── Market derivation (what the fill will compute) ──────────────────────────────────────────

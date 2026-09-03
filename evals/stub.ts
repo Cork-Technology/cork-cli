@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark, premiumAmount } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark, premiumAmount, decodeJitExtraData } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -151,6 +151,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
     // The JIT adapter's own LOP binding (the maker-order pre-flight ladder checks it against the
     // chain's configured LOP): the real adapter answers its chain's 1inch deployment.
+    // Policy R12a: the adapter's pure decode helper reads the bytes back with the hook's own
+    // decoder. The stub answers as a FAITHFUL 0.4.0 adapter would; tests wrap it to lie.
+    case "decodeExtraData": {
+      const d = decodeJitExtraData((args.args as [`0x${string}`])[0]);
+      return [d.params, d.permits];
+    }
     case "LIMIT_ORDER_PROTOCOL":
       return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses[String(chainId)] ?? (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
     case "WHITELIST":
