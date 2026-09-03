@@ -173,12 +173,7 @@ export async function approvedImplementationGuard(
   chainId: number,
   opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock"> = {},
 ): Promise<Array<{ code: string; message: string }>> {
-  try {
-    const cfg = await resolveConfig();
-    return implementationWarnings(await checkApprovedImplementations(client, chainId, { allowlist: BUNDLED_DEFAULTS, addresses: cfg.defaults, ...opts }));
-  } catch {
-    return [];
-  }
+  return (await approvedImplementationChecks(client, chainId, opts)).warnings;
 }
 
 /** The guard's findings AND its warnings, for callers that REFUSE on some roles: the JIT hook
