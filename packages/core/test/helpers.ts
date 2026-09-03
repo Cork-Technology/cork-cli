@@ -8,7 +8,7 @@ import corkDefaults from "../../../cork-defaults.json";
 /** Every address the approved-implementations guard fingerprints, read from the same config the
  *  guard resolves them from. A stub that holds no bytecode must not answer "0x" for these — that
  *  would be the FALSE statement "the adapter is an empty account", which the bytes-decoder gate
- *  (policy R12a) now REFUSES on. Throwing is the honest answer: unreadable, silent degradation.
+ *  (the versioning policy's bytes-layout rule) now REFUSES on. Throwing is the honest answer: unreadable, silent degradation.
  *  A test that wants a verdict passes real (or off-list) code through opts.code. */
 const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
   Object.values((corkDefaults as { deployments: Record<string, { corkAdapter?: string; whitelistManager?: string }> }).deployments)

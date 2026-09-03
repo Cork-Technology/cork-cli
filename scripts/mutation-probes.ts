@@ -367,7 +367,7 @@ const CATALOG: Mutant[] = [
     replace: "",
     tests: [T.offers],
   },
-  // ── the bytes-decoder gate (policy R12a): refuse off-list adapter code, read our bytes back ──
+  // ── the bytes-decoder gate: refuse off-list adapter code, read our bytes back ──
   {
     // No refusal at all: off-list adapter code would build bytes that code may misread.
     id: "gate-refusal-dropped",

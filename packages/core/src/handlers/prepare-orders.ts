@@ -32,7 +32,7 @@ type MakerJitReport = {
   source?: NonNullable<Extract<JitLadderResult, { gate?: undefined }>["verified"]>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
   derivedPoolId?: `0x${string}`;
-  /** R12a round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
+  /** Decode round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
   extraDataLayout?: string;
   constraint?: Extract<JitLadderResult, { gate?: undefined }>["constraint"];
   identity?: string;
@@ -399,7 +399,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
         const extraData = encodeJitExtraData(jitParams, permits);
         if (ladder.verified) {
-          // R12a round-trip: the deployed adapter's own decoder is the layout oracle for the
+          // Decode round-trip: the deployed adapter's own decoder is the layout oracle for the
           // bytes this build produced. A disagreement is the finding's failure class — refused.
           const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
           if ("gate" in layout) return layout.gate;

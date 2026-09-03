@@ -1,5 +1,5 @@
 // answer-rfq and refresh-order — the underwriter's two most frequent moves as one call each.
-// The amount math is pinned to the kernel's golden (cork-indexing-api scripts/golden-units.mjs);
+// The amount math is pinned to the kernel's golden (the venue's golden-units script);
 // the handler runs against the eval stub's full chain + venue (the same stack the JIT tasks use:
 // registry, recipe.resolve, share prediction via eth_simulateV1, decimals), so the derivation is
 // the production path, not a mock of it.

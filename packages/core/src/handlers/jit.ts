@@ -389,7 +389,7 @@ export type TakerJitReport = {
   adapter: `0x${string}`;
   hook: string;
   recipe: `0x${string}`;
-  /** R12a round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
+  /** Decode round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
   extraDataLayout?: string;
   source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean };
@@ -511,7 +511,7 @@ export async function prepareJitLegacy(args: {
   return { extension, jitData, warnings };
 }
 
-// ── The bytes-decoder gate (policy R12a, finding 2026-09-03) ────────────────────────────────
+// ── The bytes-decoder gate (finding 2026-09-03) ────────────────────────────────
 // An ABI names a `bytes` parameter but cannot describe its layout, so a hook that DECODES bytes
 // this tool ENCODES is the one place where code drift can silently re-read a market or a fee —
 // a revert is the good outcome there, a wrong market is the bad one. The interface-first guard
@@ -552,14 +552,14 @@ export function bytesDecoderGate(a: {
       source: "chain",
       warnings: refusals.map((c) => ({
         code: "implementation_not_approved",
-        message: `${describe(c)}. The ${a.adapterName} DECODES the extraData this tool encodes — a \`bytes\` layout no ABI describes (policy R12a) — so code this build never tested against could read these bytes as a different market or a different fee, silently. No ${a.artifact} was built. If the address moved ahead of a release and you have verified the new code yourself, set CORK_ALLOW_UNAPPROVED_CODE=1 (CLI --allow-unapproved-code) to build anyway; every such result is labeled implementation_gate_bypassed`,
+        message: `${describe(c)}. The ${a.adapterName} DECODES the extraData this tool encodes — a \`bytes\` layout no ABI describes — so code this build never tested against could read these bytes as a different market or a different fee, silently. No ${a.artifact} was built. If the address moved ahead of a release and you have verified the new code yourself, set CORK_ALLOW_UNAPPROVED_CODE=1 (CLI --allow-unapproved-code) to build anyway; every such result is labeled implementation_gate_bypassed`,
       })),
       ctx: a.ctx,
     }),
   };
 }
 
-/** The R12a round-trip: hand the bytes we built to the adapter's own `decodeExtraData` and
+/** The decode round-trip: hand the bytes we built to the adapter's own `decodeExtraData` and
  *  compare what it read back, field for field, with what we meant. Verified = the deployed
  *  decoder agrees on every field; unchecked = the adapter exposes no helper (pre-0.4.0) or the
  *  read failed, said in words, never guessed; a disagreement is a conflict with no bytes — the
@@ -589,7 +589,7 @@ export async function verifyExtraDataLayout(a: {
       data: { adapter: a.adapter, differing, encoded: jsonSafe({ params: a.params, permits: a.permits }), decoded: jsonSafe(decoded) },
       chainId: a.chainId,
       source: "chain",
-      warnings: [{ code: "extra_data_layout_mismatch", message: `the deployed adapter's decodeExtraData read the extraData this tool encoded DIFFERENTLY on ${differing.join(", ")} — the bytes layout this build encodes is not the layout the adapter at ${a.adapter} decodes (policy R12a: a \`bytes\` layout change the ABI cannot show). No ${a.artifact} was built: a fill would create or mint against a market other than the one you meant. Update cork-cli to a build that targets this adapter generation` }],
+      warnings: [{ code: "extra_data_layout_mismatch", message: `the deployed adapter's decodeExtraData read the extraData this tool encoded DIFFERENTLY on ${differing.join(", ")} — the bytes layout this build encodes is not the layout the adapter at ${a.adapter} decodes (a \`bytes\` layout change the ABI cannot show). No ${a.artifact} was built: a fill would create or mint against a market other than the one you meant. Update cork-cli to a build that targets this adapter generation` }],
       ctx: a.ctx,
     }),
   };

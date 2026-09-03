@@ -1,5 +1,5 @@
 // The bytes cork-cli encodes for the JIT adapter, frozen as a fixture the fork harness decodes
-// with a Solidity reference of the R12a helper (experiments/fork-harness/test/JitExtraDataDecoder.t.sol).
+// with a Solidity reference of the helper (experiments/fork-harness/test/JitExtraDataDecoder.t.sol).
 // This test is the drift gate on that fixture: the committed bytes must equal a fresh encoding of
 // the same params (regenerate deliberately with UPDATE_JIT_FIXTURE=1), and they must round-trip
 // through our own decoder — so the TS encoder, the TS decoder, and the EVM decoder are held to

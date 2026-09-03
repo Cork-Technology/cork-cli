@@ -151,7 +151,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
     // The JIT adapter's own LOP binding (the maker-order pre-flight ladder checks it against the
     // chain's configured LOP): the real adapter answers its chain's 1inch deployment.
-    // Policy R12a: the adapter's pure decode helper reads the bytes back with the hook's own
+    // The adapter's pure decode helper reads the bytes back with the hook's own
     // decoder. The stub answers as a FAITHFUL 0.4.0 adapter would; tests wrap it to lie.
     case "decodeExtraData": {
       const d = decodeJitExtraData((args.args as [`0x${string}`])[0]);

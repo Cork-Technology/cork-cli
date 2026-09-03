@@ -1,4 +1,4 @@
-// The bytes-decoder gate (policy R12a, finding 2026-09-03): the JIT paths REFUSE to build the
+// The bytes-decoder gate (finding 2026-09-03): the JIT paths REFUSE to build the
 // extraData a hook decodes when the adapter's live code is off this build's approved list, and
 // they read their own bytes back through the adapter's decodeExtraData when it exists. The
 // handler runs against the eval stub's full chain and venue (the same stack the JIT tasks use);
@@ -62,7 +62,7 @@ describe("implementationRefusals + the env override (pure)", () => {
 describe("the JIT maker path refuses off-list adapter code (conflict, no bytes) — and the override labels instead", () => {
   afterEach(() => { delete process.env["CORK_ALLOW_UNAPPROVED_CODE"]; });
 
-  it("baseline: against the stub's adapter the JIT order builds, and the R12a round-trip reads the bytes back verbatim", async () => {
+  it("baseline: against the stub's adapter the JIT order builds, and the round-trip reads the bytes back verbatim", async () => {
     const env = await makerJit(stubContext());
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as { typedData: unknown; jit: { extraDataLayout: string } };
@@ -75,7 +75,7 @@ describe("the JIT maker path refuses off-list adapter code (conflict, no bytes) 
     const env = await makerJit(offListAdapter());
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]!.code).toBe("implementation_not_approved");
-    expect(env.warnings[0]!.message).toContain("R12a");
+    expect(env.warnings[0]!.message).toContain("layout no ABI describes");
     expect(env.warnings[0]!.message).toMatch(/No [a-z-]+ was built/);
     const d = env.data as { refused: Array<{ role: string; verdict: string; codehash?: string }>; override: string; typedData?: unknown };
     expect(d.typedData).toBeUndefined();
@@ -101,7 +101,7 @@ describe("the JIT maker path refuses off-list adapter code (conflict, no bytes) 
   });
 });
 
-describe("the R12a round-trip: the adapter's own decodeExtraData is the layout oracle", () => {
+describe("the round-trip: the adapter's own decodeExtraData is the layout oracle", () => {
   it("a decoder that reads the bytes back DIFFERENTLY (collateral and reference swapped) is a conflict naming both fields — no bytes", async () => {
     const ctx = wrapped((client) => ({
       readContract: async (a) => {

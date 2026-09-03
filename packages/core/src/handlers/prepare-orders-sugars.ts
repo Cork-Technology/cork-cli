@@ -19,7 +19,7 @@ export interface SugarDeps {
   annotateApprovals: (ctx: HandlerContext, chainId: PrepareOrdersInput["chainId"], entries: ApprovalRequirement[]) => Promise<ApprovalRequirement[]>;
 }
 
-// ── answer-rfq: the underwriter's every-RFQ sequence as ONE call (design §9 U1/U4, cli#16) ──
+// ── answer-rfq: the underwriter's every-RFQ sequence as ONE call (the underwriter use cases U1/U4) ──
 // Reads the RFQ (and the cited option) from the venue, derives the pool the cover creates on fill,
 // computes the kernel's amounts, and re-enters the maker-order path with the derived action — so
 // every pre-flight, approval, JIT and auction rule the maker-order path applies is applied here

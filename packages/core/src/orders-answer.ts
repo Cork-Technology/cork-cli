@@ -2,7 +2,7 @@
 // applies on every answer, as pure functions so the sugar (`cork_prepare_orders answer-rfq`) and
 // its tests share one source with nothing hidden in a handler.
 //
-// The kernel's convention (cork-indexing-api scripts/golden-units.mjs, the venue RFC §"Buyer"):
+// The kernel's convention (the venue's golden-units script and its RFC, "Buyer" section):
 //   premium_amount = premium_fraction × notional × tenor_seconds / YEAR   (ACT/365, integer math,
 //                    rounded TOWARD THE MAKER — ceil), in the collateral asset's native units;
 //   makingAmount   = notional rescaled to the 18-decimal cST;
@@ -15,7 +15,7 @@ import { ceilDiv, normalizeDecimals } from "./math/fixed.ts";
 export const YEAR_SECONDS = 31_536_000n;
 /** cST and cPT are always 18 decimals (protocol invariant, same claim as the compute labels). */
 export const SHARE_DECIMALS = 18;
-/** The venue's re-rest rule (COR-212 / venue#67): an answer rests for at most this long … */
+/** The venue's re-rest rule: an answer rests for at most this long … */
 export const RE_REST_MAX_SECONDS = 600;
 /** … and at least this long, so a lift has a window to land. */
 export const RE_REST_MIN_SECONDS = 90;

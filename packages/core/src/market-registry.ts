@@ -129,9 +129,9 @@ export const jitAdapterAbi = parseAbi([
   "function POOL_MANAGER() view returns (address)",
   "function CONTROLLER() view returns (address)",
   "function MARKET_REGISTRY() view returns (address)",
-  // Policy R12a (2026-09-03): every externally supplied `bytes` parameter gets an external pure
+  // Versioning policy (2026-09-03): every externally supplied `bytes` parameter gets an external pure
   // decode helper sharing the hook's own decoder, so the layout is visible in the shipped ABI.
-  // Shipped from the 0.4.0 adapter (market-registry-private#43); this tool reads it back as the
+  // Shipped from the 0.4.0 adapter; this tool reads it back as the
   // layout ORACLE for the bytes it encodes — a pre-0.4.0 adapter has no such view and the check
   // degrades to "unchecked", never to a guess.
   "struct RateConstraint_ { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
@@ -366,7 +366,7 @@ export function buildJitExtension(adapter: `0x${string}`, extraData: `0x${string
 /** Round-trip reader for tests + decode paths: extract field 6 (PreInteractionData) per
  *  ExtensionLib._get semantics, then split target/extraData. */
 /** Decode the adapter's extraData alone — `abi.decode(extraData, (JITMarketParams, PermitParams[]))`,
- *  the same layout the on-chain decodeExtraData helper (R12a) returns. */
+ *  the same layout the on-chain decodeExtraData helper returns. */
 export function decodeJitExtraData(extraData: `0x${string}`): { params: JITMarketParams; permits: PermitParams[] } {
   const [p, permits] = decodeAbiParameters(JIT_PARAMS_ABI, extraData) as [
     {
