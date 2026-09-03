@@ -538,7 +538,10 @@ Layer B (`EVAL_HELD_OUT=1`) → regenerate.
 
 `packages/schemas` (zod v4 source of truth + registry, examples/maturity/teaching) · `packages/core`
 (math ports, chain reads, Bundler3 encode/decode, remote config, `runTool` dispatch — handlers
-split per tool under `src/handlers/`) · `packages/mcp` (stdio server) · `packages/cli` (commander
+split per tool under `src/handlers/`; a tool's self-contained sub-features live beside it and
+RE-ENTER the dispatcher through an injected function, never an import back — `query-offers.ts`,
+`query-watch.ts` take `read` = handleQuery, `prepare-orders-sugars.ts` takes `SugarDeps`, so no
+import cycle exists) · `packages/mcp` (stdio server) · `packages/cli` (commander
 projection) · `evals/` (agent-eval suite). Tests: `packages/core/test/` (unit +
 `fork-parity`/`bundle-sim` vnet suites), `packages/mcp/test/` (integration + surface-drift gate),
 `packages/schemas/test/`.

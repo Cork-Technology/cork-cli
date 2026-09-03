@@ -346,7 +346,7 @@ const CATALOG: Mutant[] = [
     // A citation resolves on BOTH ids: keying the join on the answer alone lets an order claim
     // the terms of a sibling option.
     id: "offers-join-answer-only",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-offers.ts",
     find: "const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : null;",
     replace: "const quote = ref ? ([...quotes.values()].find((q) => q.answerId === ref.answerId) ?? null) : null;",
     tests: [T.offers],
@@ -354,7 +354,7 @@ const CATALOG: Mutant[] = [
   {
     // Indicative = served options NO live order cites; counting cited ones too inflates the tally.
     id: "offers-indicative-counts-cited",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-offers.ts",
     find: "if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push(",
     replace: "if (true) indicative.push(",
     tests: [T.offers],
@@ -362,7 +362,7 @@ const CATALOG: Mutant[] = [
   {
     // A pass has no price: treating it as quoted invents an indicative option.
     id: "offers-pass-counted",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-offers.ts",
     find: 'if (inner.status !== undefined && inner.status !== "quoted") continue; // a pass has no price',
     replace: "",
     tests: [T.offers],
@@ -510,7 +510,7 @@ const CATALOG: Mutant[] = [
   {
     // The answer is RESERVED for the requester by default — an open order is a different product.
     id: "answer-reserve-dropped",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "    ...(allowedSender !== undefined ? { allowedSender } : {}),\n    ...(quoteRef ? { quoteRef } : {}),",
     replace: "    ...(quoteRef ? { quoteRef } : {}),",
     tests: [T.answer],
@@ -518,7 +518,7 @@ const CATALOG: Mutant[] = [
   {
     // Every rung answering one RFQ shares one bit by default (ocoGroup 'rfq:<rfqId>').
     id: "answer-oco-default-dropped",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "const ocoGroup = action.ocoGroup ?? answerOcoGroup(action.rfqId);",
     replace: "const ocoGroup = action.ocoGroup ?? `answer:${input.clientRequestId}`;",
     tests: [T.answer],
@@ -527,7 +527,7 @@ const CATALOG: Mutant[] = [
     // A maker may cite only its OWN answer (cork-api 0.4.1 party rule) — dropping the check lets
     // a rival execute someone else's quote at that quote's terms.
     id: "answer-party-rule-dropped",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "if (underwriter !== undefined && underwriter.toLowerCase() !== input.account.toLowerCase()) {",
     replace: "if (false) {",
     tests: [T.answer],
@@ -535,7 +535,7 @@ const CATALOG: Mutant[] = [
   {
     // The cited option's premium and expiry set the amounts, not the caller's.
     id: "answer-cited-terms-ignored",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "    premiumAnnualized = p;\n    expiryTimestamp = BigInt(e);",
     replace: "    premiumAnnualized = \"0.04\";\n    expiryTimestamp = BigInt(e);",
     tests: [T.answer],
@@ -543,7 +543,7 @@ const CATALOG: Mutant[] = [
   {
     // The refresh re-rests on the SAME nonce — one bit, the two cannot both fill.
     id: "refresh-nonce-not-shared",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "      nonce: traits.nonce,\n      ...(extension !== \"0x\" ? { extension } : {}),",
     replace: "      ...(extension !== \"0x\" ? { extension } : {}),",
     tests: [T.answer],
@@ -551,7 +551,7 @@ const CATALOG: Mutant[] = [
   {
     // A spent bit REFUSES: a refresh on a dead bit could never fill.
     id: "refresh-dead-not-refused",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: 'return envelope({ state: "conflict", data: { orderHash: localHash, nonce: traits.nonce.toString(), venueStatus: "resting", chainStatus: status.status }',
     replace: 'if (false) return envelope({ state: "conflict", data: { orderHash: localHash, nonce: traits.nonce.toString(), venueStatus: "resting", chainStatus: status.status }',
     tests: [T.answer],
@@ -559,7 +559,7 @@ const CATALOG: Mutant[] = [
   {
     // Only the maker refreshes its order (the new order is signed by account).
     id: "refresh-maker-check-dropped",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "if (old.maker.toLowerCase() !== input.account.toLowerCase()) {",
     replace: "if (false) {",
     tests: [T.answer],
@@ -636,7 +636,7 @@ const CATALOG: Mutant[] = [
   {
     // The long-poll returns on the first read that CHANGED; ignoring the change polls to timeout.
     id: "query-wait-ignores-change",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-watch.ts",
     find: 'const changed = (data.changes as { changed?: boolean } | undefined)?.changed === true;',
     replace: "const changed = false;",
     tests: [T.watch],
@@ -644,7 +644,7 @@ const CATALOG: Mutant[] = [
   {
     // ceil(wait / cadence) polls: `wait: 5` at 2 s is 3 reads, not 2.
     id: "query-wait-polls-floored",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-watch.ts",
     find: "const polls = Math.max(1, Math.ceil((wait as number) / WATCH_POLL_SECONDS));",
     replace: "const polls = Math.max(1, Math.floor((wait as number) / WATCH_POLL_SECONDS));",
     tests: [T.watch],
@@ -669,7 +669,7 @@ const CATALOG: Mutant[] = [
     // A live-but-reserved row still backs its quote; counting that quote as indicative would tell a
     // hedger a firm price "cannot be bought" because THEY cannot lift it.
     id: "offers-reserved-live-not-firm",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-offers.ts",
     find: 'if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;',
     replace: "continue;",
     tests: [T.offers],
@@ -677,7 +677,7 @@ const CATALOG: Mutant[] = [
   {
     // filters.rfqId must scope to offers executing THAT request.
     id: "offers-rfq-scope-dropped",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-offers.ts",
     find: "const scoped = filters.rfqId ? items.filter((it) => it.quote !== null && (it.quote as { rfqId: string }).rfqId === filters.rfqId) : items;",
     replace: "const scoped = items;",
     tests: [T.offers],
