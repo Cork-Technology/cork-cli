@@ -115,6 +115,31 @@ export function sonnetModelGate(model: string): string | null {
 /** The tools that change nothing anywhere: an implicit prelude before a prepare/submit target. */
 const READ_ONLY_TOOLS = new Set(["cork_capabilities", "cork_query", "cork_compute", "cork_decode", "cork_track"]);
 
+/** Is this API failure a CAPACITY condition worth waiting out (rate limit, overloaded, 5xx), as
+ *  opposed to a request the server will refuse again (4xx)? Exported so the rule is pinned by a
+ *  test without an API key. */
+export function isCapacityError(err: unknown): boolean {
+  const e = err as { status?: unknown; error?: { type?: unknown; error?: { type?: unknown } } } | undefined;
+  const status = typeof e?.status === "number" ? e.status : undefined;
+  if (status === 429 || status === 529 || (status !== undefined && status >= 500)) return true;
+  const type = e?.error?.error?.type ?? e?.error?.type;
+  return type === "overloaded_error" || type === "rate_limit_error" || type === "api_error";
+}
+
+/** Bounded outer retry for capacity errors: 5 attempts, 5 s → 80 s exponential, one log line each. */
+export async function withCapacityRetry<T>(call: () => Promise<T>, attempts = 5, baseDelayMs = 5_000, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (err) {
+      if (attempt >= attempts || !isCapacityError(err)) throw err;
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      console.log(`  capacity error (${(err as { status?: number }).status ?? "n/a"}); retrying in ${delay / 1000}s (attempt ${attempt}/${attempts - 1})`);
+      await sleep(delay);
+    }
+  }
+}
+
 export function gradeTask(task: EvalTask, trace: TraceCall[], finalText: string) {
   const e = task.expect;
   // Honesty-probe alternative: ZERO tool calls + an answer naming what the prompt withheld is
@@ -195,7 +220,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
   let finalText = "";
 
   for (let i = 0; i < MAX_LOOP; i++) {
-    const response = await client.messages.create({
+    const response = await withCapacityRetry(() => client.messages.create({
       model: MODEL,
       max_tokens: 16000,
       // One cache breakpoint on the final prompt block caches the whole tools+prompt prefix
@@ -204,7 +229,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
       system: [{ type: "text" as const, text: EVAL_SYSTEM_PROMPT, cache_control: { type: "ephemeral" as const } }],
       tools: TOOLS,
       messages,
-    });
+    }));
     const u = response.usage as { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null };
     tokens += u.input_tokens + u.output_tokens + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     cacheReadTokens += u.cache_read_input_tokens ?? 0;
@@ -263,7 +288,10 @@ async function main() {
   }
   // AnthropicAws extends the base client with the same messages surface — only construction
   // differs; the agentic loop below is client-class-agnostic.
-  const client = mode === "aws" ? new AnthropicAws() : new Anthropic(mode === "keyed" ? {} : { defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
+  // maxRetries: the SDK's own backoff (429/5xx/overloaded) runs BEFORE withCapacityRetry's outer
+  // loop — two layers, because a full held-out run is ~75 tasks × several calls and one
+  // overloaded_error at task 34 used to lose the whole run (observed 2026-09-03).
+  const client = mode === "aws" ? new AnthropicAws({ maxRetries: 6 }) : new Anthropic(mode === "keyed" ? { maxRetries: 6 } : { maxRetries: 6, defaultHeaders: { "X-Api-Key": null, "Authorization": null } });
   const only = process.env.CORK_EVAL_ONLY;
   const onlySet = only ? new Set(only.split(",").map((s) => s.trim()).filter(Boolean)) : null;
   const tasks = TASKS.filter((t) => (onlySet ? onlySet.has(t.id) : process.env.EVAL_HELD_OUT ? true : !t.heldOut));

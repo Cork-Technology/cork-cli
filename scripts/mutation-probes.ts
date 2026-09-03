@@ -1483,6 +1483,23 @@ const CATALOG: Mutant[] = [
     tests: [T.evalHygiene],
   },
   {
+    // A 4xx is a request the server will refuse again — retrying it burns the budget and hides
+    // the real error; only capacity conditions wait.
+    id: "eval-run-retry-4xx",
+    file: "evals/run.ts",
+    find: "if (attempt >= attempts || !isCapacityError(err)) throw err;",
+    replace: "if (attempt >= attempts) throw err;",
+    tests: [T.evalGrading],
+  },
+  {
+    // The retry must be BOUNDED.
+    id: "eval-run-retry-unbounded",
+    file: "evals/run.ts",
+    find: "if (attempt >= attempts || !isCapacityError(err)) throw err;",
+    replace: "if (!isCapacityError(err)) throw err;",
+    tests: [T.evalGrading],
+  },
+  {
     // The read-before-write allowance must be READ-ONLY tools only; a write ahead of a prepare
     // target is a wrong pick, not a prelude.
     id: "eval-grade-readfirst-any-tool",

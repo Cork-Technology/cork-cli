@@ -3,7 +3,7 @@
 // untestable without an API key, which meant a grading regression could only be noticed as an
 // unexplained score shift. These tests make the verdict semantics a contract.
 import { describe, expect, it } from "vitest";
-import { gradeTask, sonnetModelGate, type TraceCall } from "./run.ts";
+import { gradeTask, isCapacityError, sonnetModelGate, type TraceCall, withCapacityRetry } from "./run.ts";
 import type { EvalTask } from "./tasks.ts";
 
 const task = (expect_: Partial<EvalTask["expect"]>): EvalTask => ({
@@ -152,5 +152,32 @@ describe("sonnetModelGate — the owner ruling as a gate", () => {
     expect(sonnetModelGate("claude-haiku-4-5-20251001")).toContain("sonnet");
     expect(sonnetModelGate("claude-opus-5")).toContain("owner ruling");
     expect(sonnetModelGate("claude-fable-5")).not.toBeNull();
+  });
+});
+
+describe("capacity retry — a run survives an overloaded upstream, and never retries a refused request", () => {
+  it("isCapacityError: 429/529/5xx and the overloaded/rate-limit/api_error bodies are capacity; 4xx and unknown shapes are not", () => {
+    expect(isCapacityError({ status: 529, error: { type: "error", error: { type: "overloaded_error" } } })).toBe(true);
+    expect(isCapacityError({ status: 429 })).toBe(true);
+    expect(isCapacityError({ status: 503 })).toBe(true);
+    expect(isCapacityError({ error: { type: "overloaded_error" } })).toBe(true);
+    expect(isCapacityError({ status: 400, error: { type: "invalid_request_error" } })).toBe(false);
+    expect(isCapacityError({ status: 401 })).toBe(false);
+    expect(isCapacityError(new Error("boom"))).toBe(false);
+  });
+  it("withCapacityRetry: retries with exponential delay until success, gives up after the bound, and rethrows a non-capacity error at once", async () => {
+    const sleeps: number[] = [];
+    const sleep = async (ms: number) => { sleeps.push(ms); };
+    let n = 0;
+    const flaky = async () => { n++; if (n < 3) throw { status: 529, error: { type: "overloaded_error" } }; return "ok"; };
+    await expect(withCapacityRetry(flaky, 5, 1000, sleep)).resolves.toBe("ok");
+    expect(sleeps).toEqual([1000, 2000]);
+    const dead = async () => { throw { status: 529 }; };
+    await expect(withCapacityRetry(dead, 3, 1000, sleep)).rejects.toMatchObject({ status: 529 });
+    expect(sleeps).toEqual([1000, 2000, 1000, 2000]); // 3 attempts = 2 sleeps
+    let calls = 0;
+    const refused = async () => { calls++; throw { status: 400 }; };
+    await expect(withCapacityRetry(refused, 5, 1000, sleep)).rejects.toMatchObject({ status: 400 });
+    expect(calls).toBe(1);
   });
 });
