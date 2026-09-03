@@ -334,7 +334,10 @@ const RESTING_ROW: Record<string, unknown> = {
 // carry an allowed-sender suffix that is NOT the eval taker's — so the exclusivity refusal
 // (private_order) grades end-to-end against real signed bytes, exactly as the tool judges it.
 // The reserved filler is a nobody: only its LAST 10 BYTES exist in the order.
-export const RESERVED_FILLER = "0x00000000000000000000badbadbadbadbadbadb1";
+// A REALISTIC-looking address (no 20-zero prefix): agents miscounted the zero-padded form as 41
+// hex chars twice (2026-09-02/03) and refused to build. The low 80 bits — the reserved suffix the
+// makerTraits store — are unchanged, so every hash and every suffix assertion stays put.
+export const RESERVED_FILLER = "0x5eed5eed5eed5eed5eedbadbadbadbadbadbadb1";
 const RESERVED_ORDER: LopOrder = { ...RESTING_ORDER, salt: 8n, makerTraits: BigInt(allowedSenderSuffix(RESERVED_FILLER)) };
 export const RESERVED_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESERVED_ORDER);
 const RESERVED_ROW: Record<string, unknown> = {

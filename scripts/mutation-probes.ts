@@ -1483,6 +1483,23 @@ const CATALOG: Mutant[] = [
     tests: [T.evalHygiene],
   },
   {
+    // The read-before-write allowance must be READ-ONLY tools only; a write ahead of a prepare
+    // target is a wrong pick, not a prelude.
+    id: "eval-grade-readfirst-any-tool",
+    file: "evals/run.ts",
+    find: "const readFirst = first !== undefined && READ_ONLY_TOOLS.has(first.tool) && !READ_ONLY_TOOLS.has(e.tool);",
+    replace: "const readFirst = first !== undefined && !READ_ONLY_TOOLS.has(e.tool);",
+    tests: [T.evalGrading],
+  },
+  {
+    // …and it must not excuse a wrong first pick on a READ target either.
+    id: "eval-grade-readfirst-read-target",
+    file: "evals/run.ts",
+    find: "const readFirst = first !== undefined && READ_ONLY_TOOLS.has(first.tool) && !READ_ONLY_TOOLS.has(e.tool);",
+    replace: "const readFirst = first !== undefined && READ_ONLY_TOOLS.has(first.tool);",
+    tests: [T.evalGrading],
+  },
+  {
     // The multi-step axis must gate `ok`: without it a task whose second step never ran passes
     // on the strength of an answer describing work the trace does not contain.
     id: "eval-grade-require-not-gating-ok",

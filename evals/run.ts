@@ -112,6 +112,9 @@ export function sonnetModelGate(model: string): string | null {
 
 /** Programmatic verdict over the tool-call trace — extracted from the loop so it is unit-testable
  *  and mutation-probeable (evals/grading.test.ts; sdk probes eval-grade-*). */
+/** The tools that change nothing anywhere: an implicit prelude before a prepare/submit target. */
+const READ_ONLY_TOOLS = new Set(["cork_capabilities", "cork_query", "cork_compute", "cork_decode", "cork_track"]);
+
 export function gradeTask(task: EvalTask, trace: TraceCall[], finalText: string) {
   const e = task.expect;
   // Honesty-probe alternative: ZERO tool calls + an answer naming what the prompt withheld is
@@ -126,7 +129,12 @@ export function gradeTask(task: EvalTask, trace: TraceCall[], finalText: string)
     return { ok: true, toolPick: true, paramsOk: true, statePass: true, answerPass: true, efficient: true, safe: true, stepsRan: (e.require?.length ?? 0) === 0, recovered: undefined };
   }
   const first = trace[0];
-  const toolPick = first?.tool === e.tool || (first !== undefined && (e.prelude?.includes(first.tool) ?? false));
+  // A READ before a WRITE is the careful behaviour the surface asks for (verify, then build):
+  // when the target is a prepare/submit tool, a leading read-only call counts as prelude even
+  // when the task did not list it. A read target still needs the read itself first, and a
+  // write is never an implicit prelude for anything.
+  const readFirst = first !== undefined && READ_ONLY_TOOLS.has(first.tool) && !READ_ONLY_TOOLS.has(e.tool);
+  const toolPick = first?.tool === e.tool || (first !== undefined && (e.prelude?.includes(first.tool) ?? false)) || readFirst;
   // Grade the OUTCOME, not the first attempt: some schema-valid call to the target tool must
   // have matched. A recovered miss (e.g. missing_filter then ok) passes here and is charged on
   // the `efficient` axis instead — that split is what the two axes claim to measure.

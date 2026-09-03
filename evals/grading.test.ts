@@ -98,6 +98,13 @@ describe("gradeTask — verdict semantics", () => {
     const t = task({ prelude: ["cork_capabilities"] });
     expect(gradeTask(t, [call({ tool: "cork_capabilities" }), call({})], "").toolPick).toBe(true);
     expect(gradeTask(t, [call({ tool: "cork_decode" }), call({})], "").toolPick).toBe(false);
+    // Read-before-write (2026-09-03): a read-only tool ahead of a PREPARE target is an implicit
+    // prelude — verifying the pool before building a ladder is careful, not a wrong pick …
+    const prep = task({ tool: "cork_prepare_orders" });
+    expect(gradeTask(prep, [call({ tool: "cork_query" }), call({ tool: "cork_prepare_orders" })], "").toolPick).toBe(true);
+    // … but a read target still needs the read itself first (above: decode before query fails),
+    // and a WRITE is never an implicit prelude.
+    expect(gradeTask(prep, [call({ tool: "cork_submit" }), call({ tool: "cork_prepare_orders" })], "").toolPick).toBe(false);
   });
 
   it("state+params must match on the SAME call (a matching state on a different call is a miss)", () => {
