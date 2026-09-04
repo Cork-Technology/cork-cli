@@ -5,6 +5,18 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [0.5.1-rc.2] — 2026-09-04
+
+### Added
+
+- `cork_query rfqs` takes `filters.underwriter`: only RFQs that underwriter has ANSWERED (at least one stored answer row by the address), server-side — the answering side's mirror of `filters.account` (the requester), so an underwriter polls its own book in one call. The venue added the parameter under its 0.4.1 label; the committed OpenAPI capture is refreshed, and the spec tripwire now runs in the public `live-smoke` job so the next unlabeled contract change fails CI instead of passing silently. CLI: `--underwriter`.
+- `cork_query rfqs` rows read WITH answers (`filters.withAnswers` or `filters.rfqId`) carry `firm: true|false` on every answer and every option, plus `firmQuotes` / `indicativeQuotes` per RFQ and a `firmness` block: an option is FIRM when a LIVE resting order cites it via `quoteRef`, from the same ranked-book join `offers` makes (one bounded extra book read, only when answers ride along). The venue serves no firm label; a quote nobody can buy must not read like one. If the book leg does not answer, the rows are served without flags and a warning says so.
+- Warning registry: `fill_sender_unknown` (info, on ok answer-rfq) — see Changed.
+
+### Changed
+
+- **answer-rfq reach when nobody declared a fill sender.** `reserve: true` (the default) now reserves for `fillSender` or the RFQ's declared `fill_sender`, and otherwise builds an OPEN order labeled `fill_sender_unknown` — it no longer falls back to the requester account. The LOP compares `allowedSender` with the address that CALLS it; a requester that fills through a ForSelf adapter is not that caller, so an order reserved for the account would revert `PrivateOrder()` for the only party it was meant for. The venue serves no `fill_sender` yet, so before this change every default answer to an adapter-bound requester was unfillable by that requester. `data.answer` gains `reach` and `reservationRule`. Pass `fillSender` (the requester's own address when it calls the LOP itself, or its adapter) to reserve. This is the kernel's rule for the same case; the sugar is new in 0.5.1-rc.1, so no stable carries the old default.
+
 ## [0.5.1-rc.1] — 2026-09-03
 
 ### Added

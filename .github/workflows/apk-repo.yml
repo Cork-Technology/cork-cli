@@ -60,7 +60,7 @@
 #       docker/podman pull a candidate without the apk repository ever carrying it.
 #     - production tags additionally publish the slices to the cumulative Pages repository
 #       (index built and signed in melange-build), compose the image FROM that published
-#       channel, move :latest, and then — in the separately gated deploy-cvm job — deploy the
+#       channel, move :latest (v1.0.0+ only — a v0.x stable never does), and then — in the separately gated deploy-cvm job — deploy the
 #       Phala CVM. Same `publish` job either way; the kind gates four steps and one tag.
 #   apk version grammar has no hyphen: vX.Y.Z-rc.N maps to X.Y.Z_rcN (apk pre-release ordering
 #   keeps it below X.Y.Z); any OTHER hyphen suffix fails loudly instead of guessing.
