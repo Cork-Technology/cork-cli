@@ -101,7 +101,10 @@ jobs:
       - name: RPC resolver + registry parity + venue negotiation contract against the real network
         env:
           CORK_RPC_LIVE: "1"
-        run: bunx vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts
+        # venue-spec-live is the OpenAPI tripwire: the venue changed its contract under one version
+        # label once already (0.4.1 gained an rfqs `underwriter` parameter, 2026-09-04) while this job
+        # stayed green because the tripwire was not in it. It self-skips without CORK_RPC_LIVE.
+        run: bunx vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts packages/core/test/venue-spec-live.test.ts
 
       # Compiles `ch` for this (glibc x64) host with the release script and proves the embedded
       # HyperSync binding gets past the native loader — the bare-image finding of 2026-08-20.

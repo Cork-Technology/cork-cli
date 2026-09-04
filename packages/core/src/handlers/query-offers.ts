@@ -44,6 +44,63 @@ function* rfqOptions(rfqs: Array<Record<string, unknown>>): Generator<{ rfq: Rec
   }
 }
 
+/** A book row's citation (quoteRef), snake or camel, or null. */
+export function quoteRefOf(row: Record<string, unknown>): { answerId: string; optionId: string; rfqId: string } | null {
+  const ref = row.quoteRef ?? row.quote_ref;
+  if (!ref || typeof ref !== "object") return null;
+  const r = ref as Record<string, unknown>;
+  const answerId = r.answer_id ?? r.answerId;
+  const optionId = r.option_id ?? r.optionId;
+  const rfqId = r.rfq_id ?? r.rfqId;
+  return typeof answerId === "string" && typeof optionId === "string" ? { answerId, optionId, rfqId: typeof rfqId === "string" ? rfqId : "" } : null;
+}
+
+/** The (answer_id|option_id) keys LIVE resting rows cite: every ranked row, plus rows excluded
+ *  ONLY for being reserved for another sender — live, just not yours. Dead or unreadable
+ *  exclusions back nothing. Shared by `offers` and the `firm` flag on `rfqs` rows, so the two
+ *  views never disagree on what backs a quote. */
+export function citedOptionKeys(bookData: { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>> }): Set<string> {
+  const cited = new Set<string>();
+  for (const row of bookData.items) {
+    const ref = quoteRefOf(row);
+    if (ref) cited.add(`${ref.answerId}|${ref.optionId}`);
+  }
+  for (const row of bookData.excluded ?? []) {
+    if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;
+    const ref = quoteRefOf(row);
+    if (ref) cited.add(`${ref.answerId}|${ref.optionId}`);
+  }
+  return cited;
+}
+
+/** Label every embedded answer option `firm` (a live resting order cites it) or not, and
+ *  count per RFQ. Rows without an `answers` embed pass through untouched. A pass has no options
+ *  and is never firm. */
+export function markFirmOptions(rows: Array<Record<string, unknown>>, cited: ReadonlySet<string>): Array<Record<string, unknown>> {
+  return rows.map((rfq) => {
+    if (!Array.isArray(rfq.answers)) return rfq;
+    let firmQuotes = 0;
+    let indicativeQuotes = 0;
+    const answers = (rfq.answers as unknown[]).map((a) => {
+      if (!a || typeof a !== "object") return a;
+      const answer = a as Record<string, unknown>;
+      const nested = answer.answer && typeof answer.answer === "object" ? (answer.answer as Record<string, unknown>) : null;
+      const inner = nested ?? answer;
+      const options = Array.isArray(inner.options) ? (inner.options as unknown[]) : [];
+      let anyFirm = false;
+      const labeled = options.map((o) => {
+        if (!o || typeof o !== "object") return o;
+        const option = o as Record<string, unknown>;
+        const firm = cited.has(`${String(answer.answer_id)}|${String(option.option_id)}`);
+        if (firm) { anyFirm = true; firmQuotes += 1; } else indicativeQuotes += 1;
+        return { ...option, firm };
+      });
+      return nested ? { ...answer, firm: anyFirm, answer: { ...nested, options: labeled } } : { ...answer, firm: anyFirm, options: labeled };
+    });
+    return { ...rfq, answers, firmQuotes, indicativeQuotes };
+  });
+}
+
 export async function handleQueryOffers(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext, read: (input: QueryInput, ctx: HandlerContext) => Promise<Envelope>): Promise<Envelope> {
   if (input.mode !== undefined && input.mode !== "hybrid") {
     return unavailable(chainId, "mode_unavailable", "cork_query('offers') is venue-backed (it joins the orderbook with the RFQ feed); omit mode or use 'hybrid'", ctx);
@@ -65,30 +122,15 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
     quotes.set(`${q.answerId}|${q.optionId}`, q);
   }
   const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; count: number; fillableCount?: number; rankedFor?: string | null; verification?: unknown; pagination?: unknown; scales?: Record<string, string> };
-  const cited = new Set<string>();
-  const quoteRefOf = (row: Record<string, unknown>): { answerId: string; optionId: string; rfqId: string } | null => {
-    const ref = row.quoteRef ?? row.quote_ref;
-    if (!ref || typeof ref !== "object") return null;
-    const r = ref as Record<string, unknown>;
-    const answerId = r.answer_id ?? r.answerId;
-    const optionId = r.option_id ?? r.optionId;
-    const rfqId = r.rfq_id ?? r.rfqId;
-    return typeof answerId === "string" && typeof optionId === "string" ? { answerId, optionId, rfqId: typeof rfqId === "string" ? rfqId : "" } : null;
-  };
   // A row this sender may not fill but that is LIVE (reserved for someone else) still backs the
   // quote it cites: firmness is about the order existing, not about who may lift it. Dead or
-  // unreadable exclusions back nothing.
-  for (const row of bookData.excluded ?? []) {
-    if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;
-    const ref = quoteRefOf(row);
-    if (ref && quotes.has(`${ref.answerId}|${ref.optionId}`)) cited.add(`${ref.answerId}|${ref.optionId}`);
-  }
+  // unreadable exclusions back nothing. (citedOptionKeys — the same set the rfqs `firm` flag uses.)
+  const cited = citedOptionKeys(bookData);
   const items = bookData.items.map((row) => {
     const ref = quoteRefOf(row);
     // A row is FIRM-cited only when BOTH ids resolve to an option the venue currently serves;
     // an answer id alone could name a different option's terms.
     const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : null;
-    if (quote) cited.add(`${quote.answerId}|${quote.optionId}`);
     return { ...row, provenance: ref ? (quote ? "cited" : "cited-unresolved") : "uncited", quote: quote ?? (ref ? { rfqId: ref.rfqId, answerId: ref.answerId, optionId: ref.optionId, resolved: false } : null) };
   });
   // If an rfqId was asked for, only offers executing THAT request qualify.

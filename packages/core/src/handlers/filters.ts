@@ -28,6 +28,7 @@ export interface QueryFilters {
   withAnswers?: boolean;
   view?: "full" | "current";
   excludeRequestPrefix?: string;
+  underwriter?: `0x${string}`;
   recipe?: `0x${string}`;
   args?: `0x${string}`;
   rate?: bigint;
@@ -63,6 +64,7 @@ export const KNOWN_FILTER_KEYS = [
   "withAnswers",
   "view",
   "excludeRequestPrefix",
+  "underwriter",
   "recipe",
   "args",
   "rate",
@@ -105,7 +107,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "registry-denominations": ["label", "legacy"],
   "registry-feeds": ["base", "quote", "legacy"],
   "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle"],
-  "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix"],
+  "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix", "underwriter"],
   "offers": ["poolId", "side", "account", "rfqId"],
 };
 
@@ -142,7 +144,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     if (!r.success) fail("poolId", "not a valid 32-byte pool id");
     else out.poolId = r.data;
   }
-  for (const key of ["account", "filler", "address", "factory", "settler"] as const) {
+  for (const key of ["account", "filler", "address", "factory", "settler", "underwriter"] as const) {
     if (raw?.[key] !== undefined) {
       const r = Address.safeParse(raw[key]);
       if (!r.success) fail(key, "not a valid EVM address");

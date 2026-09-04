@@ -187,6 +187,10 @@ export const ARCHIVED_DIGEST = `0x${"5e".repeat(32)}`;
 
 /** The one open RFQ on the venue stub's discovery feed (the rfq-read task's ground truth). */
 export const RFQ_OPEN_ID = "rfq_open7";
+/** An open RFQ that declares NO fill_sender — served on the single-record read only (the feed
+ *  keeps its one row so every count the eval fixtures pin stays put). answer-rfq must build it
+ *  OPEN with `fill_sender_unknown`, never reserved for the requester account by guess. */
+export const RFQ_NOSENDER_ID = "rfq_open8nosender";
 /** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
 export const RFQ_ANSWER_ID = "ans_eval1";
 
@@ -380,7 +384,12 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     // The discovery feed: ONE open RFQ. The venue filters state server-side (default open);
     // the stub mirrors that — a state the row doesn't match answers empty, not unfiltered.
     const state = new URL(url).searchParams.get("state") ?? "open";
-    const row = { rfq_id: RFQ_OPEN_ID, state: "open", chain_id: 42161, requester: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, version: 3 };
+    // underwriter= (venue 0.4.1): only RFQs this underwriter has ANSWERED. The stub RFQ's two
+    // answers come from the resting maker and the soft underwriter; any other address gets an
+    // honestly empty feed, never an unfiltered one.
+    const underwriter = new URL(url).searchParams.get("underwriter");
+    const answeredBy = new Set([RESTING_MAKER.address.toLowerCase(), SOFT_UNDERWRITER.toLowerCase()]);
+    const row = { rfq_id: RFQ_OPEN_ID, state: "open", chain_id: 42161, requester: RC2_CLONE_OWNER, fill_sender: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, version: 3 };
     // GET /rfqs/v1/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
     // then reads back as rfq_not_found, and an agent that verifies before it submits is told
     // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
@@ -393,9 +402,16 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     const withAnswers = new URL(url).searchParams.get("with_answers") === "true";
     const single = /\/rfqs\/v1\/([^/?]+)/.exec(url)?.[1];
     if (single !== undefined) {
-      return decodeURIComponent(single) === RFQ_OPEN_ID ? r(200, { ...row, answers, answer_count: answers.length }) : r(404, { message: `unknown rfq ${single}` });
+      const id = decodeURIComponent(single);
+      if (id === RFQ_OPEN_ID) return r(200, { ...row, answers, answer_count: answers.length });
+      if (id === RFQ_NOSENDER_ID) {
+        const { fill_sender: _omit, ...noSender } = row;
+        return r(200, { ...noSender, rfq_id: RFQ_NOSENDER_ID, answers: [], answer_count: 0 });
+      }
+      return r(404, { message: `unknown rfq ${single}` });
     }
-    return r(200, { items: state === "open" ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });
+    const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()));
+    return r(200, { items: listed ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });
   }
   if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW, RESERVED_ROW] });
   if (url.includes("/limit-orders/")) return r(200, { items: [] });

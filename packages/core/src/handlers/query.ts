@@ -17,7 +17,7 @@ import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from ".
 import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
-import { handleQueryOffers } from "./query-offers.ts";
+import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
 import { handleQueryWait } from "./query-watch.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
@@ -544,6 +544,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ...(filters.state ? { state: filters.state } : {}),
             ...(filters.referenceAsset ? { referenceAsset: filters.referenceAsset.toLowerCase() } : {}),
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
+            ...(filters.underwriter ? { underwriter: filters.underwriter.toLowerCase() } : {}),
             ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
             ...(filters.view ? { view: filters.view } : {}),
             ...(filters.excludeRequestPrefix !== undefined ? { excludeRequestPrefix: filters.excludeRequestPrefix } : {}),
@@ -577,6 +578,22 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
       const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
       let items = verification ? verification.items : traversal.items;
+      // rfqs with answers embedded: label every option FIRM (a LIVE resting order cites it via
+      // quoteRef) or indicative, from the same ranked-book read `offers` makes — the venue serves
+      // no firm label, and a quote nobody can buy must not read like one (owner ruling
+      // 2026-09-02). One extra bounded book read, only when answers ride along.
+      let firmness: Record<string, unknown> = {};
+      const firmWarnings: Array<{ code: string; message: string }> = [];
+      if (input.resource === "rfqs" && (filters.withAnswers === true || filters.rfqId !== undefined)) {
+        const book = await handleQuery({ resource: "orderbook", chainId, format: input.format, pageSize: input.pageSize, maxPages: input.maxPages, sort: "best", filters: {}, ...(input.mode ? { mode: input.mode } : {}) }, ctx);
+        if (book.state === "ok") {
+          const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; pagination?: unknown };
+          items = markFirmOptions(items as Array<Record<string, unknown>>, citedOptionKeys(bookData));
+          firmness = { firmness: { source: "orderbook join: an answer option is FIRM when a LIVE resting order cites it (quoteRef) — the venue serves no firm label; `firmQuotes`/`indicativeQuotes` count per RFQ, `firm` rides on each answer and option", orderbookPagination: bookData.pagination ?? null } };
+        } else {
+          firmWarnings.push({ code: book.warnings[0]?.code ?? "needs_service", message: `rfqs: the orderbook read that labels firm quotes did not answer (${book.warnings[0]?.message ?? book.state}); answers are served WITHOUT \`firm\` flags — read offers when the book is back` });
+        }
+      }
       // The orderbook's DEFAULT shape is the ranked view (owner ruling 2026-09-02): the taker's
       // question is "what can I fill best, as this sender?", and the venue's newest-first order
       // does not answer it. Ranking runs AFTER verification so dead rows are already gone and
@@ -628,6 +645,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           count: verification ? verification.items.length : traversal.items.length,
           items,
           ...ranking,
+          ...firmness,
           ...(verification
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),
@@ -648,6 +666,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ? []
             : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }]),
           ...(verification ? verification.warnings : []),
+          ...firmWarnings,
           ...venueNoticeWarnings(traversal),
         ],
         ctx,

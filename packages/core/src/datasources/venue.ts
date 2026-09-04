@@ -373,6 +373,9 @@ export interface RfqListParams extends PageParams {
   state?: "open" | "expired";
   referenceAsset?: string;
   requester?: string;
+  /** Only RFQs this underwriter has ANSWERED (>= 1 stored answer row by the address) — the
+   *  answering side's mirror of `requester` (venue 0.4.1, added 2026-09-04). */
+  underwriter?: string;
   withAnswers?: boolean;
   view?: "full" | "current";
   /** Drop RFQs whose request_id starts with this LITERAL prefix (venue 0.4.1 escapes LIKE
@@ -392,7 +395,7 @@ export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueL
   return asList(
     await getJson(
       deps,
-      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
+      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, underwriter: p.underwriter, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );

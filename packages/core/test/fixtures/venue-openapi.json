@@ -9350,6 +9350,15 @@
      },
      {
       "in": "query",
+      "name": "underwriter",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
       "name": "cursor",
       "required": false,
       "schema": {

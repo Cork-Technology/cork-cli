@@ -8,7 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, impliedPremiumWad, LOP_ADDRESSES, premiumAmount, premiumFraction, RE_REST_MAX_SECONDS, RE_REST_MIN_SECONDS, reRestExpirySeconds, runTool, ToolInputError, YEAR_SECONDS } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext } from "../../../evals/stub.ts";
+import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext } from "../../../evals/stub.ts";
 
 describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
   it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
@@ -44,7 +44,7 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
   const NOW = 1_790_000_000n; // the eval stub's clock
   const ctx = stubContext();
   const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-0001" };
-  type Answered = { kind: string; orderHash: string; nonce: string; ocoGroup: string; allowedSender: string | null; typedData: { message: Record<string, string> }; jit?: { derivedPoolId: string; predictedCorkSwapToken?: string }; answer: { takingAmount: string; makingAmount: string; tenorSeconds: string; reservedFor: string; expirySeconds: number; expiryRule: string; quoteRef: unknown; pool: { poolId: string; corkSwapToken: string; exists: boolean }; collateralDecimals: number; impliedPremiumWad: string }; execution: { then: string[] } };
+  type Answered = { kind: string; orderHash: string; nonce: string; ocoGroup: string; allowedSender: string | null; typedData: { message: Record<string, string> }; jit?: { derivedPoolId: string; predictedCorkSwapToken?: string }; answer: { reach: string; reservationRule: string; requester: string; takingAmount: string; makingAmount: string; tenorSeconds: string; reservedFor: string; expirySeconds: number; expiryRule: string; quoteRef: unknown; pool: { poolId: string; corkSwapToken: string; exists: boolean }; collateralDecimals: number; impliedPremiumWad: string }; execution: { then: string[] } };
 
   it("uncited: pair/notional/requester from the RFQ, the kernel's amounts, reserved for the requester, the re-rest expiry, one bit per RFQ", async () => {
     // 20 days out: inside the registry's 30-day creation bound (the stub RFQ's own window sits years
@@ -71,9 +71,13 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(d.typedData.message.makerAsset!.toLowerCase()).toBe(dp.shares.corkSwapToken.toLowerCase());
     expect(d.jit?.derivedPoolId.toLowerCase()).toBe(dp.pool.poolId.toLowerCase());
     expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("expiry_window"))).toBe(true);
-    // Reach: reserved for the requester (low 80 bits), by default.
+    // Reach: reserved for the RFQ's DECLARED fill_sender (low 80 bits), by default — the stub RFQ
+    // declares one (it happens to be the requester's own address).
     expect(d.answer.reservedFor.toLowerCase()).toBe(RC2_CLONE_OWNER.toLowerCase());
     expect(d.allowedSender).toBe(`0x${RC2_CLONE_OWNER.slice(-20).toLowerCase()}`);
+    expect(d.answer.reach).toBe("reserved");
+    expect(d.answer.reservationRule).toContain("declared fill_sender");
+    expect(env.warnings.some((w) => w.code === "fill_sender_unknown")).toBe(false);
     // Expiry: the RFQ's valid_until (1795000000) is 5e6 s away → the 600 s cap applies.
     expect(d.answer.expirySeconds).toBe(600);
     expect(d.answer.expiryRule).toContain("re-rest rule");
@@ -82,6 +86,37 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(d.answer.quoteRef).toBeNull();
     expect(d.execution.then.some((s) => s.includes("refresh-order"))).toBe(true);
     expect(env.warnings.some((w) => w.code === "oco_group_notice")).toBe(true);
+  });
+
+  it("an RFQ that declares NO fill_sender is answered OPEN with fill_sender_unknown — never reserved for the requester account by guess (the LOP compares allowedSender with its CALLER; an adapter-bound requester would be locked out)", async () => {
+    const expiry = NOW + 20n * 86_400n;
+    const open = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-nosender-0001", action: { type: "answer-rfq", rfqId: RFQ_NOSENDER_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
+    expect(open.state, JSON.stringify(open.warnings)).toBe("ok");
+    const d = open.data as Answered;
+    expect(d.allowedSender).toBeNull();
+    expect(d.answer.reservedFor).toBeNull();
+    expect(d.answer.reach).toBe("open");
+    expect(d.answer.reservationRule).toContain("pass fillSender");
+    expect(decodeMakerTraits(BigInt(d.typedData.message.makerTraits!)).allowedSender).toBeNull();
+    const w = open.warnings.find((x) => x.code === "fill_sender_unknown");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("PrivateOrder");
+    expect(w!.message).toContain("fillSender");
+    // The requester is still echoed (identity), it is just not the reach.
+    expect(d.answer.requester.toLowerCase()).toBe(RC2_CLONE_OWNER.toLowerCase());
+    // The caller's fillSender reserves the fill and silences the warning (it knows the caller).
+    const reserved = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-nosender-0002", action: { type: "answer-rfq", rfqId: RFQ_NOSENDER_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), fillSender: RC2_CLONE_OWNER.toLowerCase() as `0x${string}`, jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
+    expect(reserved.state, JSON.stringify(reserved.warnings)).toBe("ok");
+    const r = reserved.data as Answered;
+    expect(r.allowedSender).toBe(`0x${RC2_CLONE_OWNER.slice(-20).toLowerCase()}`);
+    expect(r.answer.reach).toBe("reserved");
+    expect(r.answer.reservationRule).toContain("caller's fillSender");
+    expect(reserved.warnings.some((x) => x.code === "fill_sender_unknown")).toBe(false);
+    // reserve:false is open by CHOICE — no warning about an unknown sender.
+    const chosen = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-nosender-0003", action: { type: "answer-rfq", rfqId: RFQ_NOSENDER_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), reserve: false, jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
+    expect(chosen.state).toBe("ok");
+    expect((chosen.data as Answered).answer.reservationRule).toBe("open: reserve false");
+    expect(chosen.warnings.some((x) => x.code === "fill_sender_unknown")).toBe(false);
   });
 
   it("the derived amounts are the kernel's, digit for digit, and a caller expirySeconds / open reach / notional override are honored", async () => {

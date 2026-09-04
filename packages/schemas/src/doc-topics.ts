@@ -157,7 +157,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "ok",
     contract:
       "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), or a defaulted/ignored input the caller should know about",
-    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified"],
+    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown"],
   },
 ] as const;
 
@@ -464,7 +464,7 @@ knows, the venue does not — the row keeps reading OPEN until a status sync, so
 
 ## The underwriter's moves, as one call each (cork_prepare_orders)
 
-- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; a cited option (\`answerId\` + \`optionId\`, YOUR own answer) or your \`premiumAnnualized\` + \`expiryTimestamp\` supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for the RFQ's fill_sender, else the requester; \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. The tool never chooses a premium.
+- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; a cited option (\`answerId\` + \`optionId\`, YOUR own answer) or your \`premiumAnnualized\` + \`expiryTimestamp\` supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for \`fillSender\` or the RFQ's declared fill_sender; when neither exists the order is OPEN and \`fill_sender_unknown\` says why (the requester account may not be the LOP caller — a reservation is never guessed); \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. The tool never chooses a premium.
 - \`refresh-order\` — re-rest a resting order of yours before it expires: the same terms on the SAME nonce (one bit — the old order and the new one cannot both fill) with a new expiry; refused when the bit is already spent (a refresh of a dead order could never fill — post a maker-order).
 - Lifting the best offer is not a sugar: \`offers\` (or the ranked \`orderbook\`) names the order, and \`taker-fill\` with that \`orderHash\` sets the cap from the signed price (the ceiling for a decaying row) — two calls, no derived cap to trust.
 

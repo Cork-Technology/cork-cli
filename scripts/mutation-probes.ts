@@ -63,6 +63,7 @@ const T = {
   offers: "packages/core/test/offers.test.ts",
   watch: "packages/core/test/orders-watch.test.ts",
   answer: "packages/core/test/answer-rfq.test.ts",
+  rfqsFirm: "packages/core/test/rfqs-firm.test.ts",
   gate: "packages/core/test/jit-bytes-gate.test.ts",
   extraData: "packages/core/test/jit-extra-data-fixture.test.ts",
   decodeTx: "packages/core/test/decode-tx.test.ts",
@@ -514,6 +515,59 @@ const CATALOG: Mutant[] = [
     find: "    ...(allowedSender !== undefined ? { allowedSender } : {}),\n    ...(quoteRef ? { quoteRef } : {}),",
     replace: "    ...(quoteRef ? { quoteRef } : {}),",
     tests: [T.answer],
+  },
+  {
+    // An undeclared fill sender silently reserved for the requester ACCOUNT: the LOP compares
+    // allowedSender with its caller, so an adapter-bound requester is locked out of the only
+    // order meant for it. The rule is open + fill_sender_unknown, never a guess.
+    id: "answer-unknown-sender-reserved-for-requester",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    allowedSender = action.fillSender ?? declared;",
+    replace: "    allowedSender = action.fillSender ?? declared ?? requester;",
+    tests: [T.answer],
+  },
+  {
+    // The open-by-necessity case must SAY so: without the warning an underwriter reads an open
+    // order as a reserved one (the reach it asked for).
+    id: "answer-unknown-sender-warning-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "      warnings.push({\n        code: \"fill_sender_unknown\",",
+    replace: "      void ({\n        code: \"fill_sender_unknown\",",
+    tests: [T.answer],
+  },
+  {
+    // A firm flag that is always true turns every indicative quote into a price nobody can buy.
+    id: "rfqs-firm-always-true",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "        const firm = cited.has(`${String(answer.answer_id)}|${String(option.option_id)}`);",
+    replace: "        const firm = true;",
+    tests: [T.rfqsFirm],
+  },
+  {
+    // A reserved-for-other row is LIVE: it backs the quote it cites (firmness is about the order
+    // existing, not who may lift it). Dropping the excluded pass unbacks those quotes in BOTH views.
+    id: "rfqs-firm-reserved-live-ignored",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "    if ((row as { exclusion?: string }).exclusion !== \"reserved-for-other\") continue;",
+    replace: "    continue;",
+    tests: [T.offers, T.rfqsFirm],
+  },
+  {
+    // The venue-side underwriter filter must reach the venue: an unapplied filter would serve the
+    // whole feed as if it were one underwriter's book.
+    id: "rfqs-underwriter-filter-unapplied",
+    file: "packages/core/src/handlers/query.ts",
+    find: "            ...(filters.underwriter ? { underwriter: filters.underwriter.toLowerCase() } : {}),",
+    replace: "",
+    tests: [T.rfqsFirm],
+  },
+  {
+    // Same gate one layer down: the client must put the parameter on the wire.
+    id: "rfqs-underwriter-param-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "requester: p.requester, underwriter: p.underwriter, with_answers: p.withAnswers,",
+    replace: "requester: p.requester, with_answers: p.withAnswers,",
+    tests: [T.rfqsFirm],
   },
   {
     // Every rung answering one RFQ shares one bit by default (ocoGroup 'rfq:<rfqId>').

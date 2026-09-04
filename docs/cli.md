@@ -23,6 +23,7 @@ ch query orderbook --chain-id <id> --pool-id <0x…>       # resting limit order
 ch query rollover-orders --chain-id <id> --kind orders   # rollover feed (orders | fills | contracts)
 ch query rfqs --chain-id <id>                            # open requests-for-quote
 ch query rfq --chain-id <id> --rfq-id <rfq_…>            # one RFQ with all its answers
+ch query rfqs --chain-id <id> --underwriter <0x…> --with-answers true   # the RFQs you answered (venue-side filter)
 ch query account-state --chain-id <id> --pool-id <0x…> --account <0x…>   # balances + funding allowances
 ch query pool-whitelist --chain-id <id> --pool-id <0x…> --account <0x…>  # is a gated pool open to you
 ch query whitelisted-addresses --chain-id <id> --pool-id <0x…>           # whitelist membership (HyperSync)
