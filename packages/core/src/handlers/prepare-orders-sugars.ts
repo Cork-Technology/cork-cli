@@ -160,25 +160,16 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // lock out the only party the reservation is for (PrivateOrder). Until the venue serves the
   // RFQ's fill_sender, an undeclared sender means an OPEN order, said in a warning — never a
   // guess (the kernel's rule for the same case, 2026-09-04).
-  let allowedSender: `0x${string}` | undefined;
-  let reservationRule: string;
-  if (action.reserve) {
-    const declared = isAddr(rfq.fill_sender) ? rfq.fill_sender : undefined;
-    allowedSender = action.fillSender ?? declared;
-    if (action.fillSender !== undefined) reservationRule = "reserved for the caller's fillSender";
-    else if (declared !== undefined) reservationRule = "reserved for the RFQ's declared fill_sender";
-    else {
-      reservationRule = "open: the RFQ declares no fill_sender, and the requester account may not be the LOP caller — pass fillSender to reserve";
-      warnings.push({
-        code: "fill_sender_unknown",
-        message: `RFQ ${action.rfqId} declares no fill_sender, so this order is OPEN to any taker. The LOP compares allowedSender with the address that CALLS it; the requester${requester ? ` ${requester}` : ""} may fill through an adapter (a ForSelf integrator), and an order reserved for the account would revert PrivateOrder() for the only party it was meant for. To reserve, pass fillSender: the requester's own address when you know it calls the LOP itself, or its adapter address.`,
-      });
-    }
-  } else {
-    reservationRule = "open: reserve false";
-  }
   if (!action.reserve && action.fillSender !== undefined) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "fillSender"], message: "fillSender reserves the fill; it contradicts reserve:false" }]);
+  }
+  const declared = isAddr(rfq.fill_sender) ? rfq.fill_sender : undefined;
+  const allowedSender = action.reserve ? (action.fillSender ?? declared) : undefined;
+  if (action.reserve && allowedSender === undefined) {
+    warnings.push({
+      code: "fill_sender_unknown",
+      message: `RFQ ${action.rfqId} declares no fill_sender, so this order is OPEN to any taker. The LOP compares allowedSender with the address that CALLS it; the requester${requester ? ` ${requester}` : ""} may fill through an adapter (a ForSelf integrator), and an order reserved for the account would revert PrivateOrder() for the only party it was meant for. To reserve, pass fillSender: the requester's own address when you know it calls the LOP itself, or its adapter address.`,
+    });
   }
 
   // ── the pool the cover creates on fill: derive-cork-pool (recipe → constraint → id → cST) ──
@@ -256,7 +247,6 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         formula: "takingAmount = ceil(premium × notional × tenorSeconds / 31536000) in collateral base units (ACT/365, rounded toward the maker — the kernel's premium_amount); makingAmount = notional rescaled to the 18-decimal cST",
         reservedFor: allowedSender ?? null,
         reach: allowedSender !== undefined ? "reserved" : "open",
-        reservationRule,
         expirySeconds,
         expiryRule: action.expirySeconds !== undefined ? "caller" : "venue re-rest rule: max(90 s, min(600 s, remaining RFQ validity / 2))",
         ocoGroup,

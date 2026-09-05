@@ -582,14 +582,14 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // quoteRef) or indicative, from the same ranked-book read `offers` makes — the venue serves
       // no firm label, and a quote nobody can buy must not read like one (owner ruling
       // 2026-09-02). One extra bounded book read, only when answers ride along.
-      let firmness: Record<string, unknown> = {};
+      let firmness: { source: string; orderbookPagination: unknown } | undefined;
       const firmWarnings: Array<{ code: string; message: string }> = [];
       if (input.resource === "rfqs" && (filters.withAnswers === true || filters.rfqId !== undefined)) {
         const book = await handleQuery({ resource: "orderbook", chainId, format: input.format, pageSize: input.pageSize, maxPages: input.maxPages, sort: "best", filters: {}, ...(input.mode ? { mode: input.mode } : {}) }, ctx);
         if (book.state === "ok") {
           const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; pagination?: unknown };
           items = markFirmOptions(items as Array<Record<string, unknown>>, citedOptionKeys(bookData));
-          firmness = { firmness: { source: "orderbook join: an answer option is FIRM when a LIVE resting order cites it (quoteRef) — the venue serves no firm label; `firmQuotes`/`indicativeQuotes` count per RFQ, `firm` rides on each answer and option", orderbookPagination: bookData.pagination ?? null } };
+          firmness = { source: "orderbook join — `firm` on each answer and option: a LIVE resting order cites it (quoteRef); the venue serves no firm label", orderbookPagination: bookData.pagination ?? null };
         } else {
           firmWarnings.push({ code: book.warnings[0]?.code ?? "needs_service", message: `rfqs: the orderbook read that labels firm quotes did not answer (${book.warnings[0]?.message ?? book.state}); answers are served WITHOUT \`firm\` flags — read offers when the book is back` });
         }
@@ -645,7 +645,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           count: verification ? verification.items.length : traversal.items.length,
           items,
           ...ranking,
-          ...firmness,
+          ...(firmness ? { firmness } : {}),
           ...(verification
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),

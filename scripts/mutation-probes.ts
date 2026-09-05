@@ -522,8 +522,8 @@ const CATALOG: Mutant[] = [
     // order meant for it. The rule is open + fill_sender_unknown, never a guess.
     id: "answer-unknown-sender-reserved-for-requester",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "    allowedSender = action.fillSender ?? declared;",
-    replace: "    allowedSender = action.fillSender ?? declared ?? requester;",
+    find: "  const allowedSender = action.reserve ? (action.fillSender ?? declared) : undefined;",
+    replace: "  const allowedSender = action.reserve ? (action.fillSender ?? declared ?? requester) : undefined;",
     tests: [T.answer],
   },
   {
@@ -531,8 +531,8 @@ const CATALOG: Mutant[] = [
     // order as a reserved one (the reach it asked for).
     id: "answer-unknown-sender-warning-dropped",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "      warnings.push({\n        code: \"fill_sender_unknown\",",
-    replace: "      void ({\n        code: \"fill_sender_unknown\",",
+    find: "    warnings.push({\n      code: \"fill_sender_unknown\",",
+    replace: "    void ({\n      code: \"fill_sender_unknown\",",
     tests: [T.answer],
   },
   {
@@ -1695,8 +1695,8 @@ const CATALOG: Mutant[] = [
     // populated — and the discovery task would grade a filter that never ran (green no-op, C13).
     id: "eval-stub-rfq-state-filter-ignored",
     file: "evals/stub.ts",
-    find: 'return r(200, { items: state === "open" ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });',
-    replace: 'return r(200, { items: [withAnswers ? { ...row, answers, answer_count: answers.length } : row], nextCursor: null, hasMore: false });',
+    find: 'const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()));',
+    replace: 'const listed = underwriter === null || answeredBy.has(underwriter.toLowerCase());',
     tests: [T.taskFixtures],
   },
   {
