@@ -5,7 +5,7 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [0.5.1] — unreleased
+## [0.5.1-rc.3] — 2026-09-10
 
 ### Fixed
 
