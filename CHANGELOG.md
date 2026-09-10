@@ -5,6 +5,12 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [0.5.1] — unreleased
+
+### Fixed
+
+- `cork_query orderbook` with `wait`: a non-ok read inside the long-poll (a venue 429, an unreachable venue, a refuted watermark) is returned as-is and ends the poll. The loop read `changes` off the null `data` of a non-ok envelope and threw, so a rate-limited poll surfaced as `internal_error` instead of the venue's own `venue_rate_limited` with its `Retry-After`. Found by the test written for the Cloudflare per-IP limits coming to the hosted endpoints; the loop never re-hits a 429 and makes no further poll after one.
+
 ## [0.5.1-rc.2] — 2026-09-04
 
 ### Added

@@ -517,6 +517,16 @@ const CATALOG: Mutant[] = [
     tests: [T.answer],
   },
   {
+    // A non-ok read inside the long-poll must END the poll and be returned as-is. Without the
+    // guard the loop reads `.changes` off a null `data` and the caller gets internal_error
+    // instead of the venue's own rate-limit answer (found 2026-09-10).
+    id: "watch-nonok-read-dereferenced",
+    file: "packages/core/src/handlers/query-watch.ts",
+    find: "    if (env.state !== \"ok\") return env;\n",
+    replace: "",
+    tests: [T.watch],
+  },
+  {
     // An undeclared fill sender silently reserved for the requester ACCOUNT: the LOP compares
     // allowedSender with its caller, so an adapter-bound requester is locked out of the only
     // order meant for it. The rule is open + fill_sender_unknown, never a guess.

@@ -213,6 +213,35 @@ describe("cork_query orderbook — since / wait", () => {
     expect((env.data as BookData).waited).toMatchObject({ pollsMade: 3, polls: 3, changed: false, endedBy: "timeout" });
   });
 
+  it("a venue 429 inside the long-poll ENDS the loop on that poll (no silent re-hit, no further polls) and surfaces the Retry-After", async () => {
+    // Cloudflare per-IP limits are coming for the hosted endpoints. A rate-limited read must
+    // stop the loop and hand the caller the venue's own retry hint — never keep hammering at the
+    // 2 s cadence. The GET transport's one silent retry is for TRANSPORT failures only; a 429 is
+    // an HTTP answer and is never retried.
+    const old = await row("q-8");
+    let call = 0;
+    const fetch = async (url: string) => {
+      if (!url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      call++;
+      // call 1 = the watermark read; call 2 = the first poll (unchanged); call 3 = rate-limited.
+      if (call <= 2) return new Response(JSON.stringify({ items: [old], hasMore: false }), { status: 200 });
+      return new Response(JSON.stringify({ message: "slow down" }), { status: 429, headers: { "retry-after": "7" } });
+    };
+    const first = await read(fetch);
+    const sleeps: number[] = [];
+    const env = await read(fetch, { since: (first.data as BookData).watermark, wait: 25 }, sleeps);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]!.code).toBe("venue_rate_limited");
+    expect(env.warnings[0]!.message).toMatch(/7 ?s|retry/i);
+    // The non-ok envelope is returned as-is (data null, no `waited`): the loop stopped on the
+    // second poll, the rate-limited one — one sleep before it, none after.
+    expect(env.data).toBeNull();
+    expect(sleeps).toEqual([WATCH_POLL_SECONDS * 1000]);
+    // Exactly one book fetch per read: watermark read, poll 1, poll 2 (429). No silent re-hit
+    // of the 429 and no further poll.
+    expect(call).toBe(3);
+  });
+
   it("refusals: since/wait off the orderbook, under sort venue, wait without since, a foreign token, a watermark for another sender", async () => {
     const v = venueSeq([[await row("q-8")]]);
     const first = await read(v.fetch);

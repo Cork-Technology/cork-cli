@@ -17,11 +17,15 @@ export async function handleQueryWait(input: QueryInput, ctx: HandlerContext, re
   const pause = ctx.sleep ?? defaultSleep;
   for (let poll = 1; ; poll++) {
     const env = await read(single as QueryInput, ctx);
+    // A non-ok read (a venue 429, an unreachable venue, a refuted watermark) ENDS the poll and is
+    // returned as-is: its `data` is null, so it carries no `waited` block — the warning is the
+    // answer (found by the 429 test, 2026-09-10: reading `.changes` off a null data threw).
+    if (env.state !== "ok") return env;
     const data = env.data as Record<string, unknown>;
     const changed = (data.changes as { changed?: boolean } | undefined)?.changed === true;
     const exhausted = poll >= polls;
     const aborted = ctx.signal?.aborted === true;
-    if (env.state !== "ok" || changed || exhausted || aborted) {
+    if (changed || exhausted || aborted) {
       return { ...env, data: { ...data, waited: { requestedSeconds: wait, pollIntervalSeconds: WATCH_POLL_SECONDS, polls, pollsMade: poll, changed, endedBy: changed ? "change" : aborted ? "abort" : exhausted ? "timeout" : "state" } } };
     }
     await pause(WATCH_POLL_SECONDS * 1000, ctx.signal);
