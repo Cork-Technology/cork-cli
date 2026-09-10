@@ -6,7 +6,7 @@ stdio MCP server of one or two checkouts, so schema/description changes can be A
 the surface clients actually see. First used 2026-07-21 to validate the frontier-MCP
 schema pass (result: old 9/10 selection + 9/10 params → new 10/10 + 10/10, zero
 schema-invalid calls in ~40 runs; two TokenAmount teaching fixes fell out of observed
-misses — see `notes/research/mcp-frontier-2026.md`).
+misses, recorded in the private research notes).
 
 ## Requirements
 
