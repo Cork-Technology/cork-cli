@@ -1103,8 +1103,8 @@ const CATALOG: Mutant[] = [
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.
     id: "hybrid-dead-row-drop-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'else if (classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");',
-    replace: 'else if (false) drop("on-chain invalidator says filled-or-cancelled");',
+    find: 'if (word !== undefined && word !== "error" && classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") {',
+    replace: 'if (false) {',
     tests: [T.hybridVerify],
   },
   {
@@ -2744,8 +2744,8 @@ const CATALOG: Mutant[] = [
     // mis-decoding venue relabels reserved orders open (and vice versa) with nothing to catch it.
     id: "book-exclusivity-from-venue-echo",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: "const annotated: Row = { ...row, allowedSender, exclusivity };",
-    replace: "const annotated: Row = { ...row, allowedSender: typeof row.allowedSender === \"string\" ? row.allowedSender : row.allowedSender === null ? null : allowedSender, exclusivity };",
+    find: "const annotated: Row = { ...row, allowedSender, exclusivity, makerSignature };",
+    replace: "const annotated: Row = { ...row, allowedSender: typeof row.allowedSender === \"string\" ? row.allowedSender : row.allowedSender === null ? null : allowedSender, exclusivity, makerSignature };",
     tests: [T.hybridVerify],
   },
   {
@@ -3139,9 +3139,9 @@ const CATALOG: Mutant[] = [
     // The salt↔extension binding gate disappears: bytes build that can only revert
     // InvalidExtension at fill.
     id: "inline-fill-binding-gate-removed",
-    file: "packages/core/src/handlers/prepare-orders.ts",
-    find: 'if (so.extension !== "0x" && !saltExtensionBinding(order.salt, so.extension).bound) {',
-    replace: "if (false) {",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: "  const ext = extensionVerdict(order, a.extension);\n  if (!ext.valid) {",
+    replace: "  const ext = extensionVerdict(order, a.extension);\n  if (false) {",
     tests: [T.inlineFill],
   },
   {
@@ -3156,16 +3156,16 @@ const CATALOG: Mutant[] = [
     // The signature ladder is skipped: fill bytes build for an order whose signature the fill
     // can only revert on — the check that makes inline bytes trustworthy without the venue.
     id: "inline-fill-signature-ladder-skipped",
-    file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "const verdict = await verifyMakerSignatureLadder({ ctx, chainId, maker: order.maker, orderHash: localOrderHash, signature: so.signature });",
-    replace: 'const verdict = { kind: "eoa", recoveredSigner: order.maker, codeUnknown: false } as MakerSignatureVerdict;',
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: "  const verdict = await verifyMakerSignatureLadder({ ctx, chainId, maker: order.maker, orderHash, signature: a.signature });",
+    replace: '  const verdict = { kind: "eoa", recoveredSigner: order.maker, codeProbe: "no-code" } as MakerSignatureVerdict;',
     tests: [T.inlineFill],
   },
   {
     // The ERC-1271 magic-value comparison loosens to "any string answer": a contract maker
     // whose isValidSignature rejects still gets fill bytes.
     id: "ladder-magic-comparison-loosened",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/order-auth.ts",
     find: 'if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {',
     replace: 'if (typeof magic !== "string") {',
     tests: [T.inlineFill],
@@ -3175,7 +3175,7 @@ const CATALOG: Mutant[] = [
     // opaque contract-scheme signature can never verify — valid ERC-1271 orders become
     // unfillable through this tool.
     id: "ladder-code-detection-lost",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/order-auth.ts",
     find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
     replace: 'probe = "no-code";',
     tests: [T.inlineFill],
@@ -3440,7 +3440,7 @@ const CATALOG: Mutant[] = [
     // Treat viem's `undefined` (no code) as a failed read again — every EOA maker would carry
     // the spurious chain_read_failed.
     id: "maker-code-undefined-is-failure",
-    file: "packages/core/src/handlers/prepare-orders.ts",
+    file: "packages/core/src/handlers/order-auth.ts",
     find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
     replace: 'probe = code === undefined ? "read-failed" : code !== "0x" ? "has-code" : "no-code";',
     tests: [T.makerCode],
@@ -3702,8 +3702,8 @@ const CATALOG: Mutant[] = [
     // until it refuses everything.
     id: "admission-slot-leak-on-throw",
     file: "packages/mcp/src/admission.ts",
-    find: "    } finally {\n      permit.release();\n    }",
-    replace: "    } finally {\n      if (false) permit.release();\n    }",
+    find: "    const settled = work.finally(() => permit.release());",
+    replace: "    const settled = work.then(() => permit.release());",
     tests: [T.httpAdmission],
   },
   {
@@ -3711,8 +3711,8 @@ const CATALOG: Mutant[] = [
     // caller that lies about it can send anything.
     id: "admission-actual-body-bound-dropped",
     file: "packages/mcp/src/admission.ts",
-    find: "      if (bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
-    replace: "      if (false && bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
+    find: "    if (bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
+    replace: "    if (false && bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413,",
     tests: [T.httpAdmission],
   },
   {
@@ -3854,7 +3854,7 @@ const CATALOG: Mutant[] = [
     // (or a config typo) builds bytes against contracts the pre-flights never proved.
     id: "creator-binding-comparator-dropped",
     file: "packages/core/src/handlers/prepare-market.ts",
-    find: "if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase())) {",
+    find: "if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase()) || controllerMismatch) {",
     replace: "if (false) {",
     tests: [T.marketCreator],
   },
@@ -3974,7 +3974,7 @@ const CATALOG: Mutant[] = [
     // resolve gate falls through to recipe_refused, and the anchor/deploy misdirection returns.
     id: "oracle-rate-error-dropped",
     file: "packages/core/src/handlers/registry.ts",
-    find: "    return { rate: null, rateError: revertReason(err) };",
+    find: '    return { rate: null, rateError: revertReason(err), rateReadFailure: isTransportFailure(err) ? "transport" : "revert" };',
     replace: "    return { rate: null };",
     tests: [T.oracleDiag],
   },
@@ -3990,8 +3990,8 @@ const CATALOG: Mutant[] = [
     // rateReadable inverted: a reverting oracle reads as readable and a healthy one as broken.
     id: "oracle-rate-readable-flag-inverted",
     file: "packages/core/src/handlers/registry.ts",
-    find: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}) };',
-    replace: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: false } : { rateReadable: true, ...(r.rateError ? { rateError: r.rateError } : {}) };',
+    find: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}), ...(r.rateReadFailure ? { rateReadFailure: r.rateReadFailure } : {}) };',
+    replace: 'return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: false } : { rateReadable: true, ...(r.rateError ? { rateError: r.rateError } : {}), ...(r.rateReadFailure ? { rateReadFailure: r.rateReadFailure } : {}) };',
     tests: [T.oracleDiag],
   },
   {
