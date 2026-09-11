@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ClientRequestId, OCO_GROUP_NONCE_NAMESPACE } from "@cork/schemas";
 import { decodeFunctionData, keccak256, parseAbi, stringToHex, toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ALLOWED_SENDER_MASK, allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildMakerTraits, buildTakerFill, decodeMakerTraits, finalizeMakerOrder, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopOrder, ocoGroupNonce } from "@cork/core";
@@ -268,6 +269,20 @@ describe("ocoGroup — a shared invalidator nonce is one-cancels-the-other", () 
     const grouped = buildMakerOrder({ ...base, clientRequestId: "other-id", ocoGroup: "shared-key" });
     expect(grouped.nonce).not.toBe(alone.nonce);
     expect(ocoGroupNonce("shared-key")).not.toBe(alone.nonce);
+  });
+
+  it("the namespace is DISJOINT by construction: an id inside 'oco-group:' is refused, so no id seed can equal a group seed (audit RC1-NONCE-001)", () => {
+    expect(OCO_GROUP_NONCE_NAMESPACE).toBe("oco-group:");
+    // The seed a group uses IS what an id spelling that prefix would use — which is exactly why
+    // such an id is refused rather than allowed to share the bit silently.
+    expect(ocoGroupNonce("rfq_abc")).toBe((BigInt(keccak256(stringToHex("oco-group:rfq_abc"))) >> 160n) & U40);
+    expect(() => buildMakerOrder({ ...base, clientRequestId: "oco-group:rfq_abc" })).toThrow(/must not start with 'oco-group:'/);
+    expect(() => buildMakerOrder({ ...base, clientRequestId: "oco-group:rfq_abc", ocoGroup: "other" })).toThrow(/oco-group:/);
+    // The schema refuses the same ids on the wire, with the same teaching.
+    expect(ClientRequestId.safeParse("oco-group:rfq_abc").success).toBe(false);
+    expect(ClientRequestId.safeParse("oco-group:rfq_abc").error?.issues[0]?.message).toContain("nonce namespace");
+    expect(ClientRequestId.safeParse("rfq_abc-oco-group:x").success).toBe(true); // only the PREFIX is the namespace
+    expect(ClientRequestId.safeParse("req-oco-golden-0001").success).toBe(true);
   });
 
   it("the group nonce fits the 40-bit trait slot and round-trips through the invalidator plan", () => {

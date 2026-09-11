@@ -6,6 +6,7 @@ import { concatHex, decodeFunctionData, encodeFunctionData, getAddress, hashType
 
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 import { U256_MAX } from "./math/fixed.ts";
+import { OCO_GROUP_NONCE_NAMESPACE } from "@cork/schemas";
 
 /** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin).
  *  Sourced from the bundled cork-defaults.json — no address literals in source. BUNDLED-PINNED
@@ -361,10 +362,13 @@ function nonceFromSeed(seed: string): bigint {
 
 /** The invalidator nonce every order naming `ocoGroup` shares (the group's bit). Exported so an
  *  integrator can predict the bit — and read it with readLopInvalidator — before signing a rung.
- *  Namespaced: a group named "x" and a stand-alone order whose clientRequestId is "x" land on
- *  DIFFERENT bits, so sharing only ever happens on purpose. */
+ *  Namespaced: the seed is `oco-group:<group>`, and no clientRequestId may start with that
+ *  prefix (the schema refuses it; buildMakerOrder refuses it for SDK callers), so a group seed
+ *  and an id seed are never the same string and sharing only ever happens on purpose. What
+ *  remains is the 40-bit truncation any two seeds share, birthday-rare — disclosed on
+ *  buildMakerOrder, never promised away (audit RC1-NONCE-001). */
 export function ocoGroupNonce(ocoGroup: string): bigint {
-  return nonceFromSeed(`oco-group:${ocoGroup}`);
+  return nonceFromSeed(`${OCO_GROUP_NONCE_NAMESPACE}${ocoGroup}`);
 }
 
 /** Longest ladder clientRequestId whose rung ids still fit the 128-char idempotency-key bound. */
@@ -382,6 +386,11 @@ export function ladderRungClientRequestId(ladderId: string, index: number): stri
 
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
+  // The SDK-side twin of the schema's refusal: an id inside the group namespace would seed the
+  // bit of the group it spells, silently making a stand-alone order one-cancels-the-other with it.
+  if (a.clientRequestId.startsWith(OCO_GROUP_NONCE_NAMESPACE)) {
+    throw new Error(`clientRequestId must not start with '${OCO_GROUP_NONCE_NAMESPACE}' — that prefix is the ocoGroup nonce namespace, and an id carrying it would seed the same invalidator bit as the group it names`);
+  }
   const hasExtension = a.extension !== undefined && a.extension !== "0x";
   if (hasExtension) validateExtensionShape(a.extension!);
   // Deterministic salt from the idempotency key. Plain order: low 160 bits of keccak(id).
@@ -405,8 +414,9 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   //
   // Sharing a bit is also a CHOICE: `ocoGroup` seeds the nonce instead, so every order that names
   // the same group is one-cancels-the-other (a ladder; one capacity answering several requests).
-  // The group seed is NAMESPACED so a group key can never collide with a plain order's id-derived
-  // bit by accident.
+  // The group seed is NAMESPACED — its prefix is refused on clientRequestId above — so a group
+  // seed and an id seed are never the same string; the 40-bit truncation is the only way two
+  // seeds can still meet, and that is the disclosed birthday risk, not a namespace failure.
   const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);
   let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,

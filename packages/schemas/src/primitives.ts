@@ -115,10 +115,17 @@ export type DataMode = z.infer<typeof DataMode>;
 
 export const Format = z.enum(["concise", "full"]).default("concise");
 
+/** The seed prefix every `ocoGroup` nonce derives from (`oco-group:<group>`). A clientRequestId
+ *  may NOT start with it: the two seed families are then DISJOINT as strings, so a stand-alone
+ *  order and a group can never share a bit through equal seeds (they can still meet in the
+ *  40-bit truncation, birthday-rare, like any two seeds — disclosed, not promised away). */
+export const OCO_GROUP_NONCE_NAMESPACE = "oco-group:";
+
 export const ClientRequestId = z
   .string()
   .min(8)
   .max(128)
+  .refine((s) => !s.startsWith(OCO_GROUP_NONCE_NAMESPACE), { message: `must not start with '${OCO_GROUP_NONCE_NAMESPACE}' — that prefix is the ocoGroup nonce namespace; an id carrying it would seed the same invalidator bit as the group it names` })
   .describe(
     "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry",
   );
