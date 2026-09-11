@@ -7,7 +7,7 @@ import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
-import { type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
+import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
 
 export class ToolInputError extends Error {
@@ -51,8 +51,10 @@ export interface HandlerContext {
    * Cancellation for this call's outbound work. The HTTP projection sets it from the request's
    * deadline, so a caller who walks away (or exceeds the budget) stops the venue traffic their
    * request started rather than leaving it to finish into a response nobody will read.
-   * Propagated to the VENUE transport, which composes it with its own timeout; RPC and HyperSync
-   * clients keep their own per-call timeouts and are NOT wired to it yet.
+   * Propagated to the VENUE transport (`VenueDeps.signal`), which composes it with its own
+   * per-call timeout, refuses to start a call once aborted, and reports an abort as
+   * `request_aborted` rather than a venue failure; the long-poll sleep resolves early on it.
+   * RPC and HyperSync clients keep their own per-call timeouts and are NOT wired to it.
    */
   signal?: AbortSignal;
   /**
@@ -95,6 +97,12 @@ export function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext)
   }
   if (err instanceof VenueUnreachable) {
     return unavailable(chainId, "venue_unreachable", `${err.message} — check connectivity or CORK_VENUE_URL`, ctx);
+  }
+  if (err instanceof VenueAborted) {
+    // "not started" is definitive (no bytes left this process); "cancelled mid-flight" is not —
+    // a relay may have reached the venue before the abort, and only the venue's own idempotency
+    // (a replay on the same clientRequestId, a 409 on a different payload) can say.
+    return unavailable(chainId, "request_aborted", `${err.message} — the caller's deadline or cancellation ended this request, and no venue failure was recorded (the venue did nothing wrong). ${err.message.includes("not started") ? "Nothing was sent." : "A call cancelled mid-flight MAY have reached the venue."} Retry with the same clientRequestId if the work is still wanted [K2]: a relay the venue already took answers as a replay, never as a second order`, ctx);
   }
   throw err;
 }

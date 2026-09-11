@@ -1037,6 +1037,10 @@
       "kind": "value"
     },
     {
+      "name": "VenueAborted",
+      "kind": "value+type"
+    },
+    {
       "name": "VenueBreakerState",
       "kind": "type"
     },
@@ -4203,6 +4207,10 @@
     {
       "name": "VENUE_BREAKER_POLICY",
       "kind": "value"
+    },
+    {
+      "name": "VenueAborted",
+      "kind": "value+type"
     },
     {
       "name": "VenueBreakerState",

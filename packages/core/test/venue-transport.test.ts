@@ -27,6 +27,7 @@ import {
   venueDiagnostics,
   VenueHttpError,
   VENUE_BREAKER_POLICY,
+  VenueAborted,
   type VenueBreakerState,
   type VenueDeps,
 } from "@cork/core";
@@ -121,6 +122,69 @@ describe("GET retry vs POST no-retry", () => {
       breaker: { byHost: {} },
     };
     await expect(postLopOrder(deps, { any: "payload" })).rejects.toThrow(/unreachable/);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("the caller's signal ends venue work (audit DB-001) — an abort is never a venue fault", () => {
+  it("an already-aborted signal starts NO call: no fetch, no breaker bookkeeping, VenueAborted", async () => {
+    let calls = 0;
+    const breaker: VenueBreakerState = { byHost: {} };
+    const ctl = new AbortController();
+    ctl.abort(new DOMException("MCP request deadline exceeded", "TimeoutError"));
+    const deps: VenueDeps = { fetch: async () => { calls++; return okList(); }, now: () => 0, breaker, signal: ctl.signal };
+    await expect(getPools(deps, 1)).rejects.toBeInstanceOf(VenueAborted);
+    await expect(getPools(deps, 1)).rejects.toThrow(/TimeoutError/);
+    expect(calls).toBe(0);
+    expect(breaker.byHost[HOST]).toBeUndefined();
+  });
+
+  it("the signal reaches the fetch (composed into init.signal); an abort mid-flight is VenueAborted, not retried, and never opens the breaker", async () => {
+    let calls = 0;
+    const breaker: VenueBreakerState = { byHost: {} };
+    const ctl = new AbortController();
+    const deps: VenueDeps = {
+      fetch: async (_url, init) => {
+        calls++;
+        expect(init?.signal).toBeDefined();
+        // The caller walks away while the venue is still thinking: the composed signal fires
+        // and fetch rejects with the abort reason, exactly as the platform fetch does.
+        ctl.abort(new DOMException("MCP request deadline exceeded", "TimeoutError"));
+        throw init!.signal!.reason;
+      },
+      now: () => 0,
+      breaker,
+      signal: ctl.signal,
+    };
+    await expect(getPools(deps, 1)).rejects.toBeInstanceOf(VenueAborted);
+    expect(calls).toBe(1); // the GET retry is for transport blips, not for a cancelled caller
+    expect(breaker.byHost[HOST]).toBeUndefined();
+    // POSTs the same way: a relay cancelled by its caller is not a venue outage.
+    const ctl2 = new AbortController();
+    ctl2.abort();
+    await expect(postLopOrder({ ...deps, signal: ctl2.signal }, { any: "payload" })).rejects.toBeInstanceOf(VenueAborted);
+    expect(breaker.byHost[HOST]).toBeUndefined();
+  });
+
+  it("a bounded traversal stops at the abort: no page fetched past it, and the envelope is request_aborted", async () => {
+    let calls = 0;
+    const ctl = new AbortController();
+    const env = await runTool(
+      "cork_query",
+      { resource: "cork-pools", chainId: 42161, pageSize: 25, format: "concise" },
+      {
+        nowSeconds: 1n,
+        signal: ctl.signal,
+        venueFetch: async () => {
+          calls++;
+          ctl.abort(new DOMException("MCP request deadline exceeded", "TimeoutError")); // elapses while page 1 is served
+          return new Response(JSON.stringify({ items: [{ poolId: `0x${"ab".repeat(32)}` }], hasMore: true, nextCursor: "c2" }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("request_aborted");
+    expect(env.warnings[0]?.message).toContain("no venue failure was recorded");
     expect(calls).toBe(1);
   });
 });

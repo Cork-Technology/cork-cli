@@ -125,34 +125,66 @@ export class AdmissionController {
 
   /**
    * Admit one request: take a slot, enforce the byte/shape bounds, parse ONCE, and hand the
-   * parsed body plus a deadline signal to `dispatch`. The slot is always released.
+   * parsed body plus a deadline signal to `dispatch`.
+   *
+   * The deadline is END-TO-END for the caller: when it elapses, the caller gets a 504 at once,
+   * whether the request is still reading its body or waiting on a slow upstream. The SLOT is
+   * not released at that moment — it is released when the admitted work actually settles,
+   * because the slot accounts for work the server is doing, not for a response the caller is
+   * still waiting on. The signal makes that settlement prompt: the venue transport refuses to
+   * start another call and aborts the one in flight, the long-poll sleep resolves, and the
+   * dispatch unwinds. A body read that cannot be cancelled (a client trickling bytes) ends when
+   * the socket does; until then the slot is honestly occupied. (Audit DB-001, 2026-09-11: the
+   * deadline used to abort a flag nobody downstream consumed, while the response waited for
+   * the whole dispatch.)
    */
   async handle(req: Request, principal: string, dispatch: (parsedBody: unknown, signal: AbortSignal) => Promise<Response>): Promise<Response> {
     const permit = this.tryAcquire(principal);
     if (!permit) return refusal(429, -32000, "server busy: too many requests in flight — retry in a moment", { "retry-after": "1" });
-    try {
-      // A declared length lets us refuse before reading; a lying or absent one is caught after.
-      const declared = req.headers.get("content-length");
-      if (declared !== null && /^\d+$/.test(declared) && Number(declared) > MCP_HTTP_LIMITS.bodyBytes) {
-        return refusal(413, -32000, `request body exceeds ${MCP_HTTP_LIMITS.bodyBytes} bytes`);
-      }
-      const bytes = new Uint8Array(await req.arrayBuffer());
-      if (bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413, -32000, `request body exceeds ${MCP_HTTP_LIMITS.bodyBytes} bytes`);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-      } catch {
-        return refusal(400, -32700, "Parse error: invalid JSON");
-      }
-      if (exceedsDepth(parsed, 0)) return refusal(400, -32600, `request JSON nests deeper than ${MCP_HTTP_LIMITS.jsonDepth}`);
-      if (Array.isArray(parsed) && parsed.length > MCP_HTTP_LIMITS.batchMessages) {
-        return refusal(400, -32600, `request batch exceeds ${MCP_HTTP_LIMITS.batchMessages} messages`);
-      }
-      return await dispatch(parsed, permit.signal);
-    } finally {
-      permit.release();
-    }
+    const work = this.admitted(req, dispatch, permit.signal);
+    // Released when the work settles — however it settles — and an abandoned rejection (the
+    // caller already has its 504) must not surface as an unhandled promise.
+    const settled = work.finally(() => permit.release());
+    settled.catch(() => {});
+    return Promise.race([work, deadlineResponse(permit.signal)]);
   }
+
+  /** The bounded read → parse → dispatch sequence, run under the permit's signal. */
+  private async admitted(req: Request, dispatch: (parsedBody: unknown, signal: AbortSignal) => Promise<Response>, signal: AbortSignal): Promise<Response> {
+    // A declared length lets us refuse before reading; a lying or absent one is caught after.
+    const declared = req.headers.get("content-length");
+    if (declared !== null && /^\d+$/.test(declared) && Number(declared) > MCP_HTTP_LIMITS.bodyBytes) {
+      return refusal(413, -32000, `request body exceeds ${MCP_HTTP_LIMITS.bodyBytes} bytes`);
+    }
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (bytes.byteLength > MCP_HTTP_LIMITS.bodyBytes) return refusal(413, -32000, `request body exceeds ${MCP_HTTP_LIMITS.bodyBytes} bytes`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    } catch {
+      return refusal(400, -32700, "Parse error: invalid JSON");
+    }
+    if (exceedsDepth(parsed, 0)) return refusal(400, -32600, `request JSON nests deeper than ${MCP_HTTP_LIMITS.jsonDepth}`);
+    if (Array.isArray(parsed) && parsed.length > MCP_HTTP_LIMITS.batchMessages) {
+      return refusal(400, -32600, `request batch exceeds ${MCP_HTTP_LIMITS.batchMessages} messages`);
+    }
+    if (signal.aborted) return deadlineRefusal();
+    return dispatch(parsed, signal);
+  }
+}
+
+/** The 504 a caller receives the moment its deadline elapses. */
+function deadlineRefusal(): Response {
+  return refusal(504, -32000, `request deadline exceeded (${MCP_HTTP_LIMITS.deadlineMs} ms budget) — the work it started is being cancelled; retry with the same clientRequestId if still wanted`);
+}
+
+/** Resolves to the 504 when the signal aborts; never resolves otherwise (the race's other arm
+ *  wins and this promise is dropped with its listener). */
+function deadlineResponse(signal: AbortSignal): Promise<Response> {
+  return new Promise((resolve) => {
+    if (signal.aborted) resolve(deadlineRefusal());
+    else signal.addEventListener("abort", () => resolve(deadlineRefusal()), { once: true });
+  });
 }
 
 /**

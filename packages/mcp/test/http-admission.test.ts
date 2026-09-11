@@ -150,20 +150,78 @@ describe("concurrency is accounted per principal", () => {
 });
 
 describe("the deadline cancels the request's own work", () => {
-  it("aborts the signal handed to the dispatch, with a TimeoutError", async () => {
+  it("aborts the signal handed to the dispatch, with a TimeoutError — and the caller's answer is the 504, not the late response", async () => {
     let fired: (() => void) | undefined;
     const controller = new AdmissionController(1_000, (onDeadline) => {
       fired = onDeadline;
       return () => {};
     });
+    let dispatchFinished = false;
     const seen = await controller.handle(post(initialize), "ip:1", async (_body, signal) => {
       expect(signal.aborted).toBe(false);
       fired?.(); // the deadline elapses mid-request
       expect(signal.aborted).toBe(true);
       expect((signal.reason as DOMException).name).toBe("TimeoutError");
+      dispatchFinished = true;
       return new Response("ok");
     });
-    expect(seen.status).toBe(200);
+    expect(seen.status).toBe(504);
+    expect(dispatchFinished).toBe(true); // the work ran to its own end; the caller simply did not wait for it
+  });
+
+  it("ends the CALLER's wait at once (504) while the slot stays held until the admitted work settles (audit DB-001)", async () => {
+    let fired: (() => void) | undefined;
+    const controller = new AdmissionController(1_000, (onDeadline) => {
+      fired = onDeadline;
+      return () => {};
+    });
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => { finish = r; });
+    let sawAbort = false;
+    const pending = controller.handle(post(initialize), "ip:1", async (_body, signal) => {
+      signal.addEventListener("abort", () => { sawAbort = true; }, { once: true });
+      await gate; // a slow upstream that only the signal can hurry
+      return new Response("late");
+    });
+    await new Promise((r) => setTimeout(r, 0)); // the body is parsed and the dispatch is waiting
+    expect(controller.inFlight().global).toBe(1);
+    fired!();
+    const res = await pending; // resolves NOW, not when the dispatch does
+    expect(res.status).toBe(504);
+    expect((await rpcError(res)).error.message).toContain("deadline exceeded");
+    expect(sawAbort).toBe(true);
+    expect(controller.inFlight().global).toBe(1); // the work is still running: the slot is honestly occupied
+    finish();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(controller.inFlight()).toEqual({ global: 0, principals: 0, sharedBucketInUse: false });
+  });
+
+  it("a deadline that elapses while the body is still arriving also answers 504 (the read cannot be cancelled; the slot waits for the socket)", async () => {
+    let fired: (() => void) | undefined;
+    const controller = new AdmissionController(1_000, (onDeadline) => {
+      fired = onDeadline;
+      return () => {};
+    });
+    let close!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(JSON.stringify(initialize).slice(0, 10))); // a trickle, never finished
+        close = () => c.close();
+      },
+    });
+    const req = new Request("http://mcp.test/mcp", { method: "POST", headers: { "content-type": "application/json" }, body, duplex: "half" } as RequestInit);
+    let dispatched = false;
+    const pending = controller.handle(req, "ip:1", async () => { dispatched = true; return new Response("never"); });
+    await new Promise((r) => setTimeout(r, 0));
+    fired!();
+    const res = await pending;
+    expect(res.status).toBe(504);
+    expect(dispatched).toBe(false);
+    expect(controller.inFlight().global).toBe(1);
+    close(); // the socket ends: the truncated body parses as invalid JSON, the work settles, the slot frees
+    await new Promise((r) => setTimeout(r, 0));
+    expect(controller.inFlight().global).toBe(0);
+    expect(dispatched).toBe(false); // an aborted permit never dispatches, even once the body arrives
   });
 
   it("refuses a non-positive deadline at construction rather than never firing", () => {

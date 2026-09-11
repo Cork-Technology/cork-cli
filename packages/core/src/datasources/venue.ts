@@ -71,6 +71,12 @@ export interface VenueDeps {
    *  so stubbed calls (the entire offline test surface) neither consult nor pollute the shared
    *  breaker unless they opt in by injecting a state object. */
   breaker?: VenueBreakerState | null;
+  /** The caller's cancellation (the HTTP ingress deadline, via `HandlerContext.signal`): composed
+   *  with the per-call timeout on every fetch, so a request that outlives its budget stops the
+   *  venue traffic it started — no further page, no relay — instead of finishing into a
+   *  response nobody will read. An abort is the CALLER's decision, never a venue failure: it
+   *  does not feed the breaker and surfaces as VenueAborted, not VenueUnreachable. */
+  signal?: AbortSignal;
 }
 
 // Same shape as the RPC endpoint breaker (3 consecutive transport failures → open 30 s). The
@@ -125,6 +131,17 @@ export class VenueUnreachable extends Error {
   }
 }
 
+/** The caller cancelled (`VenueDeps.signal` aborted) before or during a venue call. Distinct
+ *  from VenueUnreachable on purpose: the venue did nothing wrong, so no breaker failure is
+ *  recorded, no retry is attempted, and the envelope says "your request ended", not "the
+ *  venue is down". */
+export class VenueAborted extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VenueAborted";
+  }
+}
+
 const Row = z.record(z.string(), z.unknown());
 const ListResponse = z
   .object({
@@ -174,6 +191,8 @@ export interface VenuePostResult {
  *  timeout records a failure; ANY HTTP response — even a 5xx — records a success, because the
  *  breaker guards the 10s-timeout class of waste, not server-side errors that answer quickly). */
 async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Promise<Response> {
+  // An already-aborted caller gets no network at all: no attempt, no breaker bookkeeping.
+  if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} not started: the request was cancelled (${abortReasonText(deps.signal)})`);
   const f = deps.fetch ?? fetch;
   const br = breakerStateOf(deps);
   const now = deps.now ?? Date.now;
@@ -188,9 +207,11 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     // points before we ever saw the hop (audit MCP-NET-004). Reads may follow the standard
     // statuses; writes only 307/308, which preserve method and body.
     const method = (init?.method ?? "GET").toUpperCase();
+    // The caller's signal rides in the init: fetchWithTimeout composes it with the per-call
+    // timeout, so whichever fires first ends the fetch.
     const res = await fetchFollowingSameOrigin(
       `${venueBaseUrl(deps.baseUrl)}${path}`,
-      init ?? {},
+      { ...(init ?? {}), ...(deps.signal ? { signal: deps.signal } : {}) },
       deps.timeoutMs ?? 10_000,
       method === "GET" || method === "HEAD" ? "follow-get" : "preserve-write",
       f,
@@ -199,10 +220,20 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     if (br === moduleBreaker) lastOutcome = { ok: true, host, atMs: now() };
     return res;
   } catch (err) {
+    // A fetch that died because the CALLER aborted is not a venue failure: the breaker must
+    // not open on it (three cancelled requests would otherwise fail-fast every caller for 30 s).
+    if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} cancelled mid-flight (${abortReasonText(deps.signal)})`);
     if (br) br.byHost[host] = breakerOnFailure(br.byHost[host], now(), VENUE_BREAKER_POLICY);
     if (br === moduleBreaker) lastOutcome = { ok: false, host, atMs: now() };
     throw new VenueUnreachable(`venue unreachable: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
   }
+}
+
+/** The abort reason as one readable clause (a DOMException's name is the informative part). */
+function abortReasonText(signal: AbortSignal): string {
+  const r = signal.reason as { name?: unknown; message?: unknown } | undefined;
+  if (r && typeof r === "object" && typeof r.name === "string") return typeof r.message === "string" && r.message.length > 0 ? `${r.name}: ${r.message}` : r.name;
+  return "aborted";
 }
 
 /** GET transport with ONE immediate silent retry on a transport-class failure — GETs are
