@@ -10,6 +10,7 @@ import { erc20Abi } from "../chain/abis.ts";
 import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, premiumAmount, premiumFraction, reRestExpirySeconds } from "../orders-answer.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
+import { authenticateSignedOrder } from "./order-auth.ts";
 
 type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-order" }>;
 
@@ -290,13 +291,20 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
   if (old.maker.toLowerCase() !== input.account.toLowerCase()) {
     return unavailable(chainId, "invalid_order_terms", `order ${action.orderHash} was made by ${old.maker}, not by ${input.account} — only the maker can re-rest its order (the new order is signed by account)`, ctx);
   }
+  // The venue row is DISCOVERY, not authority [K3]: before its terms become a NEW signature
+  // request, the extension rule and the maker signature are checked exactly as a fill checks
+  // them — a refresh must never re-sign bytes the venue served with a signature `account`
+  // never made, or an extension the salt never committed to. Chain-free for an EOA maker;
+  // the ERC-1271 staticcall for a contract maker (an RPC read, indeterminate without one).
+  const auth = await authenticateSignedOrder({ ctx, chainId, order: old, orderHash: localHash, signature: parsed.value.signature, extension: parsed.value.extension, consequence: "the order was not refreshed", echo: { requestedOrderHash: action.orderHash, acquisition: "venue" } });
+  if (!auth.ok) return auth.envelope;
   const traits = decodeMakerTraits(old.makerTraits);
   const plan = lopInvalidatorPlan(old.makerTraits);
   if (plan.mode !== "bit") return unavailable(chainId, "invalid_order_terms", "this order uses the remaining-amount invalidator (allowMultipleFills) — a refresh shares a BIT, which only single-fill orders have; post a maker-order instead", ctx);
   // Liveness [K7]: a spent bit means the old order is dead AND a refresh on the same nonce would
   // be dead on arrival — refuse, and say what to do instead.
   const resolved = await getRpc(ctx, chainId);
-  const warnings: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string }> = [...auth.warnings];
   if (resolved) {
     try {
       const status = classifyInvalidatorWord(plan, await readLopInvalidator(resolved.client, plan, lop, old.maker, localHash));

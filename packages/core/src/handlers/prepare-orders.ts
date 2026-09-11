@@ -1,8 +1,8 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { isAddressEqual, recoverAddress } from "viem";
+import { isAddressEqual } from "viem";
 import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, ERC1271_MAGIC, erc1271Abi, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, saltExtensionBinding, type TakerFillResult } from "../orders.ts";
+import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -10,13 +10,14 @@ import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, 
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
-import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-orders-sugars.ts";
+import { authenticateSignedOrder, makerCodeUnknownWarning, verifyMakerSignatureLadder } from "./order-auth.ts";
 
 /** The sugars re-enter this dispatcher and its approval annotator; handed in, never imported back. */
 const SUGAR_DEPS: SugarDeps = { prepare: (input, ctx) => handlePrepareOrders(input, ctx), annotateApprovals: (ctx, chainId, entries) => annotateIfExplicitRpc(ctx, chainId, entries) };
@@ -60,72 +61,6 @@ interface MakerAuctionPlan {
   takerPaysCeiling: string;
   takerPaysNow: string;
   floorTakingAmount: string;
-}
-
-/** Maker-signature verification ladder, shared by finalize-maker-order and taker-fill's inline
- *  signedOrder path. Code detection decides the branch: a CONTRACT maker (a Safe, the Zyfai
- *  shape) cannot be ecrecovered — verification performs the SAME isValidSignature staticcall
- *  the fill performs; an EOA maker verifies offline by ecrecover. Returns a VERDICT, not an
- *  envelope: the call sites refuse with legitimately different consequences ("NOT finalized"
- *  vs "no fill bytes were built"), so message construction stays with each caller. */
-/** How the maker-code probe went. "no-code" is a positive answer (an EOA); only the other two
- *  leave the account type genuinely unknown. viem's getCode returns `undefined` for an
- *  account WITHOUT code, so the read's outcome is tracked separately from its value —
- *  conflating the two reported every EOA maker as "could not be checked" (2026-08-20). */
-type MakerCodeProbe = "has-code" | "no-code" | "no-rpc" | "read-failed";
-
-type MakerSignatureVerdict =
-  | { kind: "eoa"; recoveredSigner: `0x${string}`; codeProbe: Exclude<MakerCodeProbe, "has-code"> }
-  | { kind: "erc1271" }
-  | { kind: "erc1271_transport"; reason: string }
-  | { kind: "erc1271_rejected"; isValidSignatureAnswer: string | null }
-  | { kind: "eoa_mismatch"; recoveredSigner: `0x${string}` }
-  | { kind: "unparseable"; reason: string };
-
-/** The disclosure an EOA verdict carries when the account type could not be established —
- *  one sentence per cause, shared by finalize and the inline taker-fill path. `consequence`
- *  names what the caller did with the order anyway. */
-function makerCodeUnknownWarning(probe: Exclude<MakerCodeProbe, "has-code">, consequence: string): { code: string; message: string } | null {
-  if (probe === "no-code") return null;
-  const cause = probe === "no-rpc" ? "no RPC resolved to check whether the maker has code" : "the maker's code could not be read (the RPC call failed)";
-  return { code: "chain_read_failed", message: `${cause} — the signature ecrecovers to the maker, so ${consequence}; if the maker is actually a contract account, retry with an RPC available` };
-}
-
-async function verifyMakerSignatureLadder(a: { ctx: HandlerContext; chainId: PrepareOrdersInput["chainId"]; maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}` }): Promise<MakerSignatureVerdict> {
-  const resolved = await getRpc(a.ctx, a.chainId);
-  let probe: MakerCodeProbe = "no-rpc";
-  if (resolved) {
-    try {
-      // `undefined` and "0x" both mean "no code" — only a throw means the read failed.
-      const code = await resolved.client.getCode({ address: a.maker });
-      probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";
-    } catch {
-      probe = "read-failed"; // transport failure or a client without getCode — the EOA branch discloses it
-    }
-  }
-  if (probe === "has-code") {
-    let magic: unknown;
-    try {
-      magic = await resolved!.client.readContract({ address: a.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [a.orderHash, a.signature] });
-    } catch (err) {
-      // Attribution: a transport failure is indeterminate (retryable, not a verdict); a
-      // contract-side revert IS the verdict — the fill runs this exact staticcall.
-      if (isTransportFailure(err)) return { kind: "erc1271_transport", reason: revertReason(err) };
-      magic = null;
-    }
-    if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
-      return { kind: "erc1271_rejected", isValidSignatureAnswer: typeof magic === "string" ? magic : null };
-    }
-    return { kind: "erc1271" };
-  }
-  let recoveredSigner: `0x${string}`;
-  try {
-    recoveredSigner = await recoverAddress({ hash: a.orderHash, signature: a.signature });
-  } catch (err) {
-    return { kind: "unparseable", reason: err instanceof Error ? err.message : "the signature could not be parsed" };
-  }
-  if (!isAddressEqual(recoveredSigner, a.maker)) return { kind: "eoa_mismatch", recoveredSigner };
-  return { kind: "eoa", recoveredSigner, codeProbe: probe };
 }
 
 export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: HandlerContext): Promise<Envelope> {
@@ -194,6 +129,11 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // The two refusals below throw into this block's catch, which appends the
       // contract-account hint — the exact pre-refactor behavior (the errors used to
       // originate inside finalizeMakerOrder).
+      if (verdict.kind === "eoa_mismatch" && verdict.codeProbe === "read-failed") {
+        // Indeterminate: the maker's code read failed, so whether an ERC-1271 answer would
+        // validate this signature is unknown — an RPC outage is not a signature verdict.
+        return unavailable(chainId, "chain_read_failed", `the signature recovers to ${verdict.recoveredSigner}, not the order maker ${m.maker}, and the maker's code could not be read (the RPC call failed) — whether the maker is a contract account whose ERC-1271 answer would validate it is unknown; NOT finalized, retry with a working RPC`, ctx);
+      }
       if (verdict.kind === "eoa_mismatch") throw new Error(`signature recovers to ${verdict.recoveredSigner}, not the order maker ${m.maker}`);
       if (verdict.kind === "unparseable") throw new Error(verdict.reason);
       if (verdict.kind === "erc1271") {
@@ -751,50 +691,15 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           ctx,
         });
       }
-      if (so.extension !== "0x" && !saltExtensionBinding(order.salt, so.extension).bound) {
-        return envelope({
-          state: "conflict",
-          data: { orderHash: localOrderHash },
-          chainId,
-          source: "config",
-          warnings: [{ code: "signature_or_reconstruction_mismatch", message: "the salt's low 160 bits are not bound to keccak256(extension) — OrderLib enforces this binding at fill (InvalidExtension), so these bytes can never fill. Pass the order's OWN extension verbatim; no fill bytes were built" }],
-          ctx,
-        });
-      }
       // A zero makingAmount here is a CALLER-supplied order — attribution differs from the
       // venue path, where the same defect is a malformed service row.
       if (order.makingAmount === 0n) {
         return unavailable(chainId, "invalid_order_terms", "the supplied signed order has makingAmount 0 — nothing is fillable", ctx);
       }
-      const verdict = await verifyMakerSignatureLadder({ ctx, chainId, maker: order.maker, orderHash: localOrderHash, signature: so.signature });
-      if (verdict.kind === "erc1271_transport") {
-        return unavailable(chainId, "chain_read_failed", `the maker ${order.maker} is a CONTRACT account but its isValidSignature staticcall failed in transport (${verdict.reason}) — the ERC-1271 signature could not be verified either way; retry with a working RPC (the fill path requires this exact call to answer)`, ctx);
-      }
-      if (verdict.kind === "erc1271_rejected" || verdict.kind === "eoa_mismatch" || verdict.kind === "unparseable") {
-        return envelope({
-          state: "conflict",
-          data: { orderHash: localOrderHash, maker: order.maker, ...(verdict.kind === "erc1271_rejected" ? { makerAccountType: "ERC1271", isValidSignatureAnswer: verdict.isValidSignatureAnswer } : {}), ...(verdict.kind === "eoa_mismatch" ? { recoveredSigner: verdict.recoveredSigner } : {}) },
-          chainId,
-          source: verdict.kind === "erc1271_rejected" ? "chain" : "config",
-          warnings: [{
-            code: "signature_or_reconstruction_mismatch",
-            message:
-              verdict.kind === "erc1271_rejected"
-                ? `the maker ${order.maker} is a CONTRACT account and its isValidSignature(orderHash, signature) did not answer the ERC-1271 magic value — the fill runs this exact staticcall, so these bytes can only revert; no fill bytes were built. (For a Safe, the hash must have been approved/signed per its own ERC-1271 scheme.)`
-                : verdict.kind === "eoa_mismatch"
-                  ? `the signature recovers to ${verdict.recoveredSigner}, not the order maker ${order.maker} — the fill would revert on it, so no fill bytes were built. If the maker is a CONTRACT account (ERC-1271, e.g. a Safe), make sure an RPC resolves (CORK_RPC_URL) so the maker's code can be detected`
-                  : `${verdict.reason} — no fill bytes were built`,
-          }],
-          ctx,
-        });
-      }
-      const acquisitionWarnings: Array<{ code: string; message: string }> = [];
-      if (verdict.kind === "eoa") {
-        const w = makerCodeUnknownWarning(verdict.codeProbe, "it is treated as an EOA order");
-        if (w) acquisitionWarnings.push(w);
-      }
-      const signed: SignedLopOrder = { order, signature: so.signature, extension: so.extension, makerAccountType: verdict.kind === "erc1271" ? "ERC1271" : "EOA" };
-      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed, localOrderHash, acquisitionWarnings, artifactSource: verdict.kind === "erc1271" ? "chain" : "config" });
+      const auth = await authenticateSignedOrder({ ctx, chainId, order, orderHash: localOrderHash, signature: so.signature, extension: so.extension, consequence: "no fill bytes were built", echo: { acquisition: "inline" } });
+      if (!auth.ok) return auth.envelope;
+      const signed: SignedLopOrder = { order, signature: so.signature, extension: so.extension, makerAccountType: auth.makerAccountType };
+      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed, localOrderHash, acquisitionWarnings: auth.warnings, artifactSource: auth.source });
     }
 
     const deps = venueDepsOf(ctx);
@@ -844,9 +749,17 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (signed.order.makingAmount === 0n) {
         return unavailable(chainId, "invalid_service_response", `venue returned a resting order with makingAmount 0 for ${action.orderHash} — a malformed row; no fill bytes were built`, ctx);
       }
+      // The venue's row is DISCOVERY, not authority [K3]: the extension rule and the maker
+      // signature are checked exactly as the inline path checks bytes in hand — a row the venue
+      // serves with a signature its maker never made, or bytes its salt never committed to,
+      // yields no fill (the fill would only revert) and the venue's `makerAccountType` claim is
+      // replaced by the verdict's.
+      const auth = await authenticateSignedOrder({ ctx, chainId, order: signed.order, orderHash: localOrderHash, signature: signed.signature, extension: signed.extension, consequence: "no fill bytes were built", echo: { requestedOrderHash: action.orderHash, acquisition: "venue" } });
+      if (!auth.ok) return auth.envelope;
+      const authenticated: SignedLopOrder = { ...signed, makerAccountType: auth.makerAccountType };
       // The venue's in-band notices ride the book pages this search read (e.g. the premium
       // deprecation) — the fill path is exactly who they are for.
-      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed, localOrderHash, acquisitionWarnings: venueNoticeWarnings(book), artifactSource: "service" });
+      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed: authenticated, localOrderHash, acquisitionWarnings: [...venueNoticeWarnings(book), ...auth.warnings], artifactSource: "service" });
     } catch (err) {
       return venueFailed(chainId, err, ctx);
     }
@@ -1200,6 +1113,9 @@ async function buildTakerFillArtifact(a: {
       makerAsset: signed.order.makerAsset,
       takerAsset: signed.order.takerAsset,
       fillFunction: fill.functionName,
+      // The VERDICT's account type (ecrecover vs the ERC-1271 staticcall), never the venue's
+      // claim — it decides the fill function above.
+      makerAccountType: signed.makerAccountType,
       requiredMakingAmount: fill.requiredMakingAmount,
       requiredTakingAmount: fill.requiredTakingAmount,
       takerTraits: fill.takerTraits,

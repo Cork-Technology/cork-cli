@@ -135,17 +135,38 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     expect((env.data as { calldata?: string }).calldata).toBeUndefined();
   });
 
-  it("refuses an extension the salt does not commit to (InvalidExtension at fill)", async () => {
-    const { order, orderHash, signature } = await signedInline();
+  // OrderLib.isValidExtension, all three reverts: the HAS_EXTENSION flag (makerTraits bit 249)
+  // decides whether bytes are expected; when they are, the salt must commit to them.
+  const HAS_EXTENSION = 1n << 249n;
+
+  it("refuses an extension the salt does not commit to (InvalidExtensionHash at fill)", async () => {
+    const { order, orderHash, signature } = await signedInline({ makerTraits: HAS_EXTENSION });
     const env = await fill(orderHash, { order: wire(order), signature, extension: "0xdeadbeef" });
     expect(env.state).toBe("conflict");
     expect(env.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch" && w.message.includes("keccak256(extension)"))).toBe(true);
+    expect((env.data as { extensionFault: string }).extensionFault).toBe("InvalidExtensionHash");
+  });
+
+  it("refuses bytes beside an order signed WITHOUT the extension flag (UnexpectedOrderExtension), and a flagged order served without bytes (MissingOrderExtension)", async () => {
+    const extension = "0x00000001" as const;
+    const extLow = BigInt(keccak256(extension)) & ((1n << 160n) - 1n);
+    // The salt commits to the bytes, but the signed traits say "no extension": the hash check
+    // alone would pass this — the fill reverts.
+    const unflagged = await signedInline({ salt: extLow });
+    const unexpected = await fill(unflagged.orderHash, { order: wire(unflagged.order), signature: unflagged.signature, extension });
+    expect(unexpected.state).toBe("conflict");
+    expect((unexpected.data as { extensionFault: string }).extensionFault).toBe("UnexpectedOrderExtension");
+    const flagged = await signedInline({ salt: extLow, makerTraits: HAS_EXTENSION });
+    const missing = await fill(flagged.orderHash, { order: wire(flagged.order), signature: flagged.signature, extension: "0x" });
+    expect(missing.state).toBe("conflict");
+    expect((missing.data as { extensionFault: string }).extensionFault).toBe("MissingOrderExtension");
+    expect(missing.warnings[0]!.code).toBe("signature_or_reconstruction_mismatch");
   });
 
   it("accepts an extension the salt DOES commit to", async () => {
     const extension = "0x00000001" as const;
     const extLow = BigInt(keccak256(extension)) & ((1n << 160n) - 1n);
-    const order = baseOrder({ salt: extLow });
+    const order = baseOrder({ salt: extLow, makerTraits: HAS_EXTENSION });
     const orderHash = hashLopOrder(1, LOP, order);
     const signature = await maker.sign({ hash: orderHash });
     const env = await fill(orderHash, { order: wire(order), signature, extension });

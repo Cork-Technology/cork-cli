@@ -2,7 +2,7 @@
 // Covers query routing (markets/orderbook/fills/limit-order-markets/flows), mode gating,
 // submit relays with [K3] recomputation (tampered payloads are NOT relayed), the venue POST
 // outcome map (201/200/400/409/429), and track reconcile via venue lifecycle rows.
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
@@ -1256,14 +1256,21 @@ describe("parseSignedLopOrder (untrusted venue row → validated signed order)",
 
 describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + unsigned fill)", () => {
   const LOP = LOP_ADDRESSES[42161]!;
-  const MAKER = "0x00000000000000000000000000000000000000a1";
+  // A REAL maker key: venue rows are authenticated (maker signature + extension rule) before
+  // any fill bytes are built, so the fixture rows must be signed by their maker.
+  const makerKey = privateKeyToAccount(`0x${"a1".repeat(32)}`);
+  const MAKER = makerKey.address;
+  const signFor = (o: LopOrder) => makerKey.sign({ hash: hashLopOrder(42161, LOP, o) });
   const SUSDE = "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2";
   const VBUSDC = "0x53e82abbb12638f09d9e624578ccb666217a765e";
   const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
   const orderT: LopOrder = { salt: 7n, maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: 100n, takingAmount: 200n, makerTraits: 0n };
   const orderWire = { salt: "7", maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "100", takingAmount: "200", makerTraits: "0" };
   const hash = hashLopOrder(42161, LOP, orderT);
-  const bookRow = { orderHash: hash, order: orderWire, signature: SIG, extension: "0x" };
+  let bookRow: Record<string, unknown>;
+  beforeAll(async () => {
+    bookRow = { orderHash: hash, order: orderWire, signature: await signFor(orderT), extension: "0x" };
+  });
   const fill = (routes: Parameters<typeof ctxWith>[0], orderHash = hash) =>
     runTool("cork_prepare_orders", { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" }, ctxWith(routes));
 
@@ -1316,7 +1323,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const STRANGER = "0x00000000000000000000000000000000000000ee" as const;
     const reservedT: LopOrder = { ...orderT, makerTraits: BigInt(allowedSenderSuffix(STRANGER)) };
     const reservedHash = hashLopOrder(42161, LOP, reservedT);
-    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: SIG, extension: "0x" };
+    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: await signFor(reservedT), extension: "0x" };
     const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [reservedRow], hasMore: false } }], reservedHash);
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("private_order");
@@ -1331,7 +1338,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const TAKER_TWIN = "0xffffffffffffffffffff000000000000000000dd" as const; // same suffix as the fill account
     const reservedT: LopOrder = { ...orderT, makerTraits: BigInt(allowedSenderSuffix(TAKER_TWIN)) };
     const reservedHash = hashLopOrder(42161, LOP, reservedT);
-    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: SIG, extension: "0x" };
+    const reservedRow = { orderHash: reservedHash, order: { ...orderWire, makerTraits: reservedT.makerTraits.toString() }, signature: await signFor(reservedT), extension: "0x" };
     const mine = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [reservedRow], hasMore: false } }], reservedHash);
     expect(mine.state).toBe("ok");
     expect((mine.data as { allowedSender: string | null }).allowedSender).toBe(allowedSenderSuffix(TAKER_TWIN));
@@ -1384,7 +1391,10 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     const buyOrderT: LopOrder = { salt: 7n, maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: CST.toLowerCase() as `0x${string}`, makingAmount: 100n, takingAmount: 200n, makerTraits: 0n };
     const buyOrderWire = { salt: "7", maker: MAKER, receiver: zeroAddress, makerAsset: SUSDE, takerAsset: CST.toLowerCase(), makingAmount: "100", takingAmount: "200", makerTraits: "0" };
     const buyHash = hashLopOrder(42161, LOP, buyOrderT);
-    const buyRow = { orderHash: buyHash, order: buyOrderWire, signature: SIG, extension: "0x" };
+    let buyRow: Record<string, unknown>;
+    beforeAll(async () => {
+      buyRow = { orderHash: buyHash, order: buyOrderWire, signature: await signFor(buyOrderT), extension: "0x" };
+    });
     const jm = { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", expiryTimestamp: "1795000000", recipe: LIQ };
     const rpcStub = (over?: (c: StubCall) => unknown, code?: Record<string, string>) =>
       stubRpc(
@@ -1439,7 +1449,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       const FOREIGN_POOL = `0x${"deadbeef".repeat(8)}`;
       const staleOrderT: LopOrder = { ...buyOrderT, takerAsset: FOREIGN };
       const staleHash = hashLopOrder(42161, LOP, staleOrderT);
-      const staleRow = { orderHash: staleHash, order: { ...buyOrderWire, takerAsset: FOREIGN }, signature: SIG, extension: "0x" };
+      const staleRow = { orderHash: staleHash, order: { ...buyOrderWire, takerAsset: FOREIGN }, signature: await signFor(staleOrderT), extension: "0x" };
       const env = await fillJit({}, (c) => (c.functionName === "poolId" ? FOREIGN_POOL : undefined), staleRow, { [FOREIGN]: "0x6080" });
       expect(env.state).toBe("ok");
       expect(env.warnings.some((w) => w.code === "jit_side_mismatch")).toBe(true);
@@ -1490,7 +1500,12 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     it("a resting order carrying its OWN jit extension pins the market: mismatched taker params → conflict marketid_mismatch", async () => {
       // The maker signed for a DIFFERENT expiry; the taker's params derive a different pool id.
       const makerExt = buildJitExtension(ADAPTER, encodeJitExtraData({ collateralAsset: jm.collateralAsset as `0x${string}`, referenceAsset: jm.referenceAsset as `0x${string}`, expiryTimestamp: 1_796_000_000n, recipe: LIQ, rateOverride: 0n, constraint: { rateMin: 1n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: 3n * WAD }, additionalData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n, enableJitMint: false }));
-      const rowWithExt = { ...buyRow, extension: makerExt };
+      // The resting order must have been SIGNED with that extension (HAS_EXTENSION flag, salt
+      // bound) — an extension merely attached beside an unflagged order is refused at the
+      // authentication gate (UnexpectedOrderExtension), never reaching the market check.
+      const withExt = buildMakerOrder({ chainId: 42161, lop: LOP, maker: MAKER, makerAsset: SUSDE, takerAsset: CST.toLowerCase() as `0x${string}`, makingAmount: 100n, takingAmount: 200n, clientRequestId: "test-fill-jit-ext-01", extension: makerExt });
+      const wo = withExt.order;
+      const rowWithExt = { orderHash: withExt.orderHash, order: { salt: wo.salt.toString(), maker: wo.maker, receiver: wo.receiver, makerAsset: wo.makerAsset, takerAsset: wo.takerAsset, makingAmount: wo.makingAmount.toString(), takingAmount: wo.takingAmount.toString(), makerTraits: wo.makerTraits.toString() }, signature: await makerKey.sign({ hash: withExt.orderHash }), extension: makerExt };
       const env = await fillJit({}, undefined, rowWithExt);
       expect(env.state).toBe("conflict");
       expect(env.warnings[0]?.code).toBe("marketid_mismatch");
@@ -1526,15 +1541,15 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
 // decay window, making the default artifact dead bytes.
 describe("taker-fill of an auction-priced resting order", () => {
   const LOP = LOP_ADDRESSES[42161]!;
-  const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
+  const makerKey2 = privateKeyToAccount(`0x${"a2".repeat(32)}`);
   const NOW2 = 1_790_000_000n;
   const THRESHOLD_MASK = (1n << 185n) - 1n;
   const auction = { gasBumpEstimate: 0n, gasPriceEstimate: 0n, startTime: NOW2 - 600n, duration: 3600n, initialRateBump: 1_000_000n, points: [] as { rateBump: bigint; timeDelta: bigint }[] };
-  const mkRow = (ext: `0x${string}`) => {
-    const built = buildMakerOrder({ chainId: 42161, lop: LOP, maker: "0x00000000000000000000000000000000000000a1", makerAsset: "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2", takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", makingAmount: 10n ** 18n, takingAmount: 1_000_000n, clientRequestId: "auction-row-0001", extension: ext });
+  const mkRow = async (ext: `0x${string}`) => {
+    const built = buildMakerOrder({ chainId: 42161, lop: LOP, maker: makerKey2.address, makerAsset: "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2", takerAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", makingAmount: 10n ** 18n, takingAmount: 1_000_000n, clientRequestId: "auction-row-0001", extension: ext });
     const o = built.order;
     const wire = { salt: o.salt.toString(), maker: o.maker, receiver: o.receiver, makerAsset: o.makerAsset, takerAsset: o.takerAsset, makingAmount: o.makingAmount.toString(), takingAmount: o.takingAmount.toString(), makerTraits: o.makerTraits.toString() };
-    return { built, row: { orderHash: built.orderHash, order: wire, signature: SIG, extension: built.extension } };
+    return { built, row: { orderHash: built.orderHash, order: wire, signature: await makerKey2.sign({ hash: built.orderHash }), extension: built.extension } };
   };
   const fill = (row: Record<string, unknown>, orderHash: string, extra: Record<string, unknown> = {}) =>
     runTool(
@@ -1545,7 +1560,7 @@ describe("taker-fill of an auction-priced resting order", () => {
 
   it("defaults the slippage cap to the curve CEILING (not the floor) and reports current/floor prices", async () => {
     const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
-    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const { built, row } = await mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
     const env = await fill(row, built.orderHash);
     expect(env.state).toBe("ok");
     const d = env.data as { takerTraits: string; auction: Record<string, unknown> };
@@ -1561,7 +1576,7 @@ describe("taker-fill of an auction-priced resting order", () => {
 
   it("forSelf carries the same ceiling cap into the wrapper's pull (an auction fill pulls the ceiling up-front, remainder swept back)", async () => {
     const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
-    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const { built, row } = await mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
     const forSelfAdapter = "0xaaaAAAAAAaAaaaaAAAaaAAAAaAaaaaAaaAaaAA01";
     const chain = stubRpc(
       (c) => {
@@ -1599,7 +1614,7 @@ describe("taker-fill of an auction-priced resting order", () => {
 
   it("an explicit cap BELOW the current decayed price is respected but disclosed as would_revert-for-now", async () => {
     const { makingAmountData, takingAmountData } = buildAuctionAmountData(42161, auction);
-    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
+    const { built, row } = await mkRow(encodeExtensionFields({ makingAmountData, takingAmountData }));
     const env = await fill(row, built.orderHash, { maximumTakingAmount: "1000001" });
     expect(env.state).toBe("ok");
     const d = env.data as { takerTraits: string };
@@ -1614,7 +1629,7 @@ describe("taker-fill of an auction-priced resting order", () => {
     const { makingAmountData } = buildAuctionAmountData(42161, withPoint);
     expect(makingAmountData).toContain("0abcde");
     const patched = makingAmountData.replace("0abcde", "1abcde") as `0x${string}`;
-    const { built, row } = mkRow(encodeExtensionFields({ makingAmountData: patched, takingAmountData: patched }));
+    const { built, row } = await mkRow(encodeExtensionFields({ makingAmountData: patched, takingAmountData: patched }));
     const env = await fill(row, built.orderHash);
     expect(env.state).toBe("ok");
     const d = env.data as { takerTraits: string; auction: Record<string, unknown> };
@@ -1624,7 +1639,7 @@ describe("taker-fill of an auction-priced resting order", () => {
   });
 
   it("a plain (non-auction) resting order gets NO auction block and keeps the signed-ratio cap", async () => {
-    const { built, row } = mkRow("0x");
+    const { built, row } = await mkRow("0x");
     const env = await fill(row, built.orderHash);
     expect(env.state).toBe("ok");
     const d = env.data as { takerTraits: string; auction?: unknown };

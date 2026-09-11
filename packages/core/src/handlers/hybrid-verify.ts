@@ -26,6 +26,7 @@ import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
 import { getRpc, type HandlerContext } from "./shared.ts";
+import { authenticateBookRowSignature, type BookMakerSignature, extensionVerdict, recoverEoaSigner } from "./order-auth.ts";
 import type { ChainId } from "@cork/schemas";
 
 /** Rows fully verified per call; a larger page verifies the newest BUDGET rows and labels the
@@ -98,24 +99,33 @@ interface AnnotatedBook {
   /** The served rows in the venue's order — self-contradicting rows removed, the rest carrying
    *  `allowedSender` + `exclusivity` decoded from their own signed makerTraits. */
   rows: Row[];
-  /** Parse results keyed by SERVED row, so the liveness leg never re-parses. */
-  parsed: Map<Row, { signed: SignedLopOrder; localHash: `0x${string}` }>;
+  /** Parse results keyed by SERVED row, so the liveness leg never re-parses. `makerSignature`
+   *  is what the chain-free half could settle: `eoa-verified` (ecrecover to the maker), or
+   *  `unverified` — the signature did not recover to the maker, so only the maker's own
+   *  ERC-1271 answer (an RPC read, the liveness leg's job) can validate or refute it. */
+  parsed: Map<Row, { signed: SignedLopOrder; localHash: `0x${string}`; makerSignature: BookMakerSignature }>;
   dropped: number;
   warnings: Warning[];
 }
 
 /** The chain-free half of orderbook verification [K3], run on EVERY row whether or not an RPC
- *  resolves: parse the signed order once, re-hash it, and decode what its makerTraits commit
- *  to. A row that does not hash to its own claimed orderHash misrepresents itself and is
- *  dropped without a chain read (its hash is the key every fill/cancel/track would use, so it
- *  is unusable either way). Exclusivity is served from the LOCAL decode — the venue's
- *  `allowedSender` echo is replaced, never read as truth; an echo that contradicted the signed
- *  bytes is counted and disclosed. An unparseable row rides through untouched (the liveness
- *  leg labels it unverified). */
-function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, account: `0x${string}` | undefined): AnnotatedBook {
-  const parsed = new Map<Row, { signed: SignedLopOrder; localHash: `0x${string}` }>();
+ *  resolves: parse the signed order once, re-hash it, check the extension rule OrderLib enforces
+ *  at fill, ecrecover the signature, and decode what its makerTraits commit to. Three
+ *  self-contradictions are settled here without a chain read, and a row showing any of them is
+ *  DROPPED: it does not hash to its own claimed orderHash (unusable under either hash), its
+ *  extension bytes are not the ones its salt commits to (the fill reverts InvalidExtension), or
+ *  its signature does not ecrecover to the maker AND the liveness leg later finds the maker has
+ *  no code (an EOA that never signed it). A signature that ecrecovers to the maker is settled
+ *  positive here (`eoa-verified`); one that does not is handed to the liveness leg for the
+ *  maker's own ERC-1271 answer — the venue's `makerAccountType` claim is never the arbiter.
+ *  Exclusivity is served from the LOCAL decode — the venue's `allowedSender` echo is replaced,
+ *  never read as truth; an echo that contradicted the signed bytes is counted and disclosed.
+ *  An unparseable row rides through untouched (the liveness leg labels it unverified). */
+async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, account: `0x${string}` | undefined): Promise<AnnotatedBook> {
+  const parsed = new Map<Row, { signed: SignedLopOrder; localHash: `0x${string}`; makerSignature: BookMakerSignature }>();
   const served: Row[] = [];
   let hashLies = 0;
+  let extensionLies = 0;
   let echoLies = 0;
   for (const row of rows) {
     const p = parseSignedLopOrder(row);
@@ -128,24 +138,33 @@ function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, acco
       hashLies += 1;
       continue;
     }
+    if (!extensionVerdict(p.value.order, p.value.extension).valid) {
+      extensionLies += 1;
+      continue;
+    }
+    const recovered = await recoverEoaSigner(localHash, p.value.signature);
+    const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";
     const traits = p.value.order.makerTraits;
     const allowedSender = decodeMakerTraits(traits).allowedSender;
     const echo = row.allowedSender;
     if (echo !== undefined && (typeof echo === "string" ? echo.toLowerCase() : null) !== allowedSender) echoLies += 1;
     const exclusivity: BookExclusivity =
       allowedSender === null ? "open" : account === undefined ? "reserved" : isAllowedSender(traits, account) ? "reserved-for-account" : "reserved-for-other";
-    const annotated: Row = { ...row, allowedSender, exclusivity };
-    parsed.set(annotated, { signed: p.value, localHash });
+    const annotated: Row = { ...row, allowedSender, exclusivity, makerSignature };
+    parsed.set(annotated, { signed: p.value, localHash, makerSignature });
     served.push(annotated);
   }
   const warnings: Warning[] = [];
   if (hashLies > 0) {
     warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash [K3]; a row that misrepresents its own order is unusable under either hash` });
   }
+  if (extensionLies > 0) {
+    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies)} venue row(s) DROPPED — the extension bytes served beside the signed order are not the ones its salt/makerTraits commit to (OrderLib.isValidExtension), so no fill of that row can ever succeed [K3]` });
+  }
   if (echoLies > 0) {
     warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word [K3]; the venue's echo was not used` });
   }
-  return { lop, rows: served, parsed, dropped: hashLies, warnings };
+  return { lop, rows: served, parsed, dropped: hashLies + extensionLies, warnings };
 }
 
 /** Verify one page of venue rows against the chain. Returns null for resources with no
@@ -171,7 +190,7 @@ export async function verifyVenueRows(a: {
   if (resource === "orderbook") {
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return allUnverified(a.rows, { code: "no_lop", message: `no known 1inch LOP v4 deployment for chainId ${String(chainId)} — book rows are venue-claimed only` });
-    book = annotateBookRows(a.rows, chainId, lop, a.account);
+    book = await annotateBookRows(a.rows, chainId, lop, a.account);
   }
   const rows = book ? book.rows : a.rows;
   // Re-key the parse results by hash: `kept` rows are relabeled copies, so identity keys would
@@ -211,6 +230,20 @@ export async function verifyVenueRows(a: {
   };
 
   if (book) {
+    // Phase 0 — authenticity for the rows the chain-free half could not settle: a signature
+    // that did not ecrecover to its maker is either a CONTRACT maker's (validated by its own
+    // isValidSignature answer, the read the fill performs) or a forgery. The ladder decides;
+    // a refutation DROPS the row, an unreachable maker leaves it `unverified`. Runs beside the
+    // invalidator reads, in budget, and only for the rows that need it (contract makers are
+    // the exception on a book, so this costs nothing on the common page).
+    const signatureOutcome = new Map<Row, Awaited<ReturnType<typeof authenticateBookRowSignature>>>();
+    await Promise.all(
+      inBudget.map(async (row) => {
+        const parsed = book.parsed.get(row);
+        if (!parsed || parsed.makerSignature !== "unverified") return;
+        signatureOutcome.set(row, await authenticateBookRowSignature({ ctx, chainId, maker: parsed.signed.order.maker, orderHash: parsed.localHash, signature: parsed.signed.signature, client }));
+      }),
+    );
     // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
     // page needs. One bit word covers 256 orders of the same (maker, slot), so rows dedupe
     // onto shared reads. A read is keyed on the WORD it fetches (bit mode: maker + slot index,
@@ -241,15 +274,29 @@ export async function verifyVenueRows(a: {
         }
       }),
     );
-    // Phase 3 — verdicts applied in the venue's own row order.
+    // Phase 3 — verdicts applied in the venue's own row order. `confirmed` means BOTH legs
+    // answered positively: the maker signed it (chain-free or via ERC-1271) AND the bit is
+    // unspent; either leg indeterminate leaves the row `unverified`, either leg refuting DROPS it.
     for (const ref of refs) {
-      if (ref.readKey === undefined) keep(ref.row, "unverified");
-      else {
-        const word = words.get(ref.readKey);
-        if (word === undefined || word === "error") keep(ref.row, "unverified", true);
-        else if (classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") drop("on-chain invalidator says filled-or-cancelled");
-        else keep(ref.row, "confirmed");
+      if (ref.readKey === undefined) {
+        keep(ref.row, "unverified");
+        continue;
       }
+      const sig = signatureOutcome.get(ref.row);
+      if (sig?.outcome === "refuted") {
+        drop(`maker signature refuted: ${sig.why}`);
+        continue;
+      }
+      const word = words.get(ref.readKey);
+      if (word !== undefined && word !== "error" && classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") {
+        drop("on-chain invalidator says filled-or-cancelled");
+        continue;
+      }
+      const makerSignature: BookMakerSignature = sig === undefined ? book.parsed.get(ref.row)!.makerSignature : sig.outcome === "verified" ? "erc1271-verified" : "unverified";
+      const liveness = word === undefined || word === "error" ? "indeterminate" : "live";
+      const row = { ...ref.row, makerSignature };
+      if (liveness === "live" && makerSignature !== "unverified") keep(row, "confirmed");
+      else keep(row, "unverified", liveness === "indeterminate" || sig?.outcome === "indeterminate");
     }
   } else if (resource === "cork-pools" || resource === "trading-pairs") {
     const pms = await configuredPoolManagers(chainId);
