@@ -226,13 +226,13 @@ export async function authenticateSignedOrder(a: {
  *  a forgery nobody could refute yet. A row refuted either way is dropped, never labeled. */
 export type BookMakerSignature = "eoa-verified" | "erc1271-verified" | "unverified";
 
-/** The per-row authenticity leg for a row whose signature PARSED but did NOT ecrecover to its
- *  maker (both settled chain-free by the book's first half; an unparseable signature is
- *  dropped there). Only the chain can finish the question: the maker has no code → an EOA that
- *  never signed it (refuted); the maker has code → its own isValidSignature answer decides
- *  (verified, or refuted); the code read or the staticcall failed in transport → nobody could
- *  ask (indeterminate, the row stays `unverified`). No second ecrecover: its answer is the
- *  premise. */
+/** The per-row authenticity leg for a row whose signature did NOT ecrecover to its maker —
+ *  another signer, or bytes ecrecover cannot read (a Safe7579's `validator ++ sig`); the book's
+ *  first half settles only the POSITIVE ecrecover. Only the chain can finish the question: the
+ *  maker has no code → an EOA that never signed it (refuted); the maker has code → its own
+ *  isValidSignature answer decides (verified, or refuted); the code read or the staticcall
+ *  failed in transport → nobody could ask (indeterminate, the row stays `unverified`). No second
+ *  ecrecover: its answer is the premise. */
 export type BookSignatureOutcome = { outcome: "verified" } | { outcome: "refuted"; why: string } | { outcome: "indeterminate" };
 
 export async function authenticateBookRowSignature(client: MakerCodeClient, a: { maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}` }): Promise<BookSignatureOutcome> {

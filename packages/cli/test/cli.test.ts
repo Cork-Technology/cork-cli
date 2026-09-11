@@ -865,12 +865,64 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
     expect(r.stdout.split("watch tick 2")[1]).toContain("watermark: bw1.");
   });
 
-  it("refuses --watch off the orderbook, alongside --since/--wait, and with a bad interval — exit 2, nothing read", async () => {
+  it("rfqs --watch: re-reads the feed with answers, prints tick 1, stays quiet unchanged, reports a version move plus the accepted counter no live order backs, then backedNow when a citing order rests", async () => {
+    // One RFQ, two answers. ansA's option is cited by a live row from the start (firm); ansB's is
+    // indicative until tick 4. The requester's counter (tick 3) accepts ansB — the 2026-09-10
+    // signature: an accepted quote nobody rested.
+    const rowA = { ...(await bookRow("rw-1", 5n * 10n ** 16n)), quoteRef: { rfq_id: "rfq_w", answer_id: "ansA", option_id: "o1" } };
+    const rowB = { ...(await bookRow("rw-2", 4n * 10n ** 16n)), quoteRef: { rfq_id: "rfq_w", answer_id: "ansB", option_id: "o1" } };
+    const rfqRow = (version: number, counter: boolean) => ({
+      rfq_id: "rfq_w", version, state: "open", answer_count: 2, answers_truncated: false,
+      request: { chain_id: 1, requester: ME },
+      answers: [
+        { answer_id: "ansA", underwriter: maker.address, received_at: 1, answer: { status: "quoted", options: [{ option_id: "o1", premium_annualized: "0.05" }] } },
+        { answer_id: "ansB", underwriter: "0x00000000000000000000000000000000000000b0", received_at: 2, answer: { status: "quoted", options: [{ option_id: "o1", premium_annualized: "0.04" }] } },
+      ],
+      counter: counter ? { counter_id: "ctr_w", received_at: Number(NOW) - 5, counter: { requester: ME, option_ref: { answer_id: "ansB", option_id: "o1" }, premium_annualized: "0.04", fresh_until: Number(NOW) + 600, schema_version: "1" } } : null,
+    });
+    const feeds = [[rfqRow(1, false)], [rfqRow(1, false)], [rfqRow(2, true)], [rfqRow(2, true)]];
+    const books = [[rowA], [rowA], [rowA], [rowA, rowB]];
+    let feedCall = 0, bookCall = 0;
+    const urls: string[] = [];
+    const venueFetch = async (url: string) => {
+      urls.push(url);
+      if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: books[Math.min(bookCall++, books.length - 1)], hasMore: false }), { status: 200 });
+      if (url.includes("/rfqs/v1")) return new Response(JSON.stringify({ items: feeds[Math.min(feedCall++, feeds.length - 1)], next_cursor: null }), { status: 200 });
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    };
+    const sleeps: number[] = [];
+    const r = await runCli(["query", "rfqs", "--chain-id", "1", "--watch", "--interval", "2", "--iterations", "4", "--json"], { nowSeconds: NOW, venueFetch, resolveRpc: live, sleep: async (ms) => { sleeps.push(ms); } });
+    expect(r.code, r.stderr).toBe(EXIT.ok);
+    expect(sleeps).toEqual([2000, 2000, 2000]);
+    // Every feed read embeds answers (the firm join needs them), whatever the caller passed.
+    expect(urls.filter((u) => u.includes("/rfqs/v1")).every((u) => u.includes("with_answers=true"))).toBe(true);
+    const ticks = r.stdout.trim().split(/\n(?=\{)/).map((t) => JSON.parse(t) as { tick: number; state: string; data: { items: Array<{ rfq_id: string; firmQuotes: number }>; changes: { changed: boolean; appeared: string[]; moved: unknown[]; unbacked: Array<{ rfqId: string; counter: { answerId: string; optionId: string }; firmQuotes: number; counterFresh: boolean; reason: string }>; backedNow: string[] } } });
+    expect(ticks.map((t) => t.tick)).toEqual([1, 3, 4]);
+    expect(ticks[0]!.data.changes).toMatchObject({ changed: false, appeared: ["rfq_w"], unbacked: [] });
+    expect(ticks[0]!.data.items[0]!.firmQuotes).toBe(1);
+    expect(ticks[1]!.data.changes.moved).toEqual([{ rfqId: "rfq_w", version: { from: 1, to: 2 } }]);
+    expect(ticks[1]!.data.changes.unbacked).toHaveLength(1);
+    expect(ticks[1]!.data.changes.unbacked[0]).toMatchObject({ rfqId: "rfq_w", counter: { answerId: "ansB", optionId: "o1" }, firmQuotes: 1, counterFresh: true });
+    expect(ticks[1]!.data.changes.unbacked[0]!.reason).toContain("NO live resting order cites that option");
+    expect(ticks[2]!.data.changes).toMatchObject({ moved: [], unbacked: [], backedNow: ["rfq_w"] });
+    expect(ticks[2]!.data.items[0]!.firmQuotes).toBe(2);
+    // Prose output carries the same alert.
+    feedCall = 0; bookCall = 0;
+    const prose = await runCli(["query", "rfqs", "--chain-id", "1", "--watch", "--iterations", "3"], { nowSeconds: NOW, venueFetch, resolveRpc: live, sleep: async () => {} });
+    expect(prose.code).toBe(EXIT.ok);
+    expect(prose.stdout).toContain("watch tick 3");
+    expect(prose.stdout).not.toContain("watch tick 2");
+    expect(prose.stdout).toContain("unbacked");
+    expect(prose.stdout).toContain("ansB");
+  });
+
+  it("refuses --watch off the orderbook and rfqs, alongside --since/--wait, and with a bad interval — exit 2, nothing read", async () => {
     let calls = 0;
     const venueFetch = async () => { calls++; return new Response(JSON.stringify({ items: [] }), { status: 200 }); };
-    const off = await runCli(["query", "rfqs", "--chain-id", "1", "--watch", "--json"], { nowSeconds: NOW, venueFetch });
+    const off = await runCli(["query", "cork-pools", "--chain-id", "1", "--watch", "--json"], { nowSeconds: NOW, venueFetch });
     expect(off.code).toBe(EXIT.invalid);
     expect(JSON.parse(off.stderr).error.issues[0].message).toContain("orderbook");
+    expect(JSON.parse(off.stderr).error.issues[0].message).toContain("rfqs");
     const both = await runCli(["query", "orderbook", "--chain-id", "1", "--watch", "--wait", "5", "--json"], { nowSeconds: NOW, venueFetch });
     expect(both.code).toBe(EXIT.invalid);
     const bad = await runCli(["query", "orderbook", "--chain-id", "1", "--watch", "--interval", "0", "--json"], { nowSeconds: NOW, venueFetch });

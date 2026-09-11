@@ -75,6 +75,7 @@ const T = {
   scanCache: "packages/core/test/scan-cache.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
   cli: "packages/cli/test/cli.test.ts",
+  cliWatchRfqs: "packages/cli/test/watch-rfqs.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
@@ -621,6 +622,51 @@ const CATALOG: Mutant[] = [
     replace: 'if (false) return envelope({ state: "conflict", data: { orderHash: localHash, nonce: traits.nonce.toString(), venueStatus: "resting", chainStatus: status.status }',
     tests: [T.answer],
   },
+  // ── rfqs --watch: the accepted-counter-without-a-firm-order alert (2026-09-11) ──
+  {
+    // A cited option beyond the embed with NOTHING firm on the RFQ is refuted; reading it as
+    // undecidable hides the alert exactly on the truncated-embed RFQs.
+    id: "watch-rfqs-beyond-embed-not-refuted",
+    file: "packages/cli/src/watch-rfqs.ts",
+    find: "backed = firm !== undefined ? firm : firmQuotes === 0 ? false : null;",
+    replace: "backed = firm !== undefined ? firm : null;",
+    tests: [T.cliWatchRfqs],
+  },
+  {
+    // The alert set moving without a version move is a change (the book moved, the RFQ did
+    // not); dropping it silences the tick a citing order dies or rests.
+    id: "watch-rfqs-unbacked-move-not-a-change",
+    file: "packages/cli/src/watch-rfqs.ts",
+    find: "appeared.length > 0 || gone.length > 0 || moved.length > 0 || unbackedMoved || backedNow.length > 0",
+    replace: "appeared.length > 0 || gone.length > 0 || moved.length > 0",
+    tests: [T.cliWatchRfqs],
+  },
+  {
+    // A firm cited option is backed; inverting the label alerts on every lifted quote and never
+    // on the dead one.
+    id: "watch-rfqs-firm-label-inverted",
+    file: "packages/cli/src/watch-rfqs.ts",
+    find: 'if (option && str(option.option_id ?? option.optionId) === counter.optionId) return option.firm === true;',
+    replace: 'if (option && str(option.option_id ?? option.optionId) === counter.optionId) return option.firm !== true;',
+    tests: [T.cliWatchRfqs],
+  },
+  {
+    // The feed read must embed answers — without them no option carries `firm` and every
+    // accepted counter reads as unbacked.
+    id: "cli-watch-rfqs-answers-not-embedded",
+    file: "packages/cli/src/app.ts",
+    find: 'const filters = baseFilters["rfqId"] === undefined ? { ...baseFilters, withAnswers: true } : baseFilters;',
+    replace: 'const filters = baseFilters;',
+    tests: [T.cli],
+  },
+  {
+    // The quiet-tick rule on the rfqs loop: an unchanged tick prints nothing.
+    id: "cli-watch-rfqs-quiet-tick-dropped",
+    file: "packages/cli/src/app.ts",
+    find: "if (tick === 1 || changes?.changed === true || code !== EXIT.ok) {",
+    replace: "if (true) {",
+    tests: [T.cli],
+  },
   {
     // Only the maker refreshes its order (the new order is signed by account).
     id: "refresh-maker-check-dropped",
@@ -635,6 +681,50 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/orders.ts",
     find: "const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
     replace: "const nonce = a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);",
+    tests: [T.answer],
+  },
+  {
+    // The requester's inline anchor must ride as additionalData (the undeployed-oracle case
+    // reads it); dropping the encode leaves the recipe with no anchor on a fresh pair.
+    id: "answer-inline-anchor-not-encoded",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? (inline?.anchorRate !== undefined ? encodeAnchorArgs(inline.anchorRate) : undefined);",
+    replace: "const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData;",
+    tests: [T.answer],
+  },
+  {
+    // The drift notice fires when the LIVE rate differs from the carried anchor; inverting the
+    // comparator warns on agreement and stays silent on drift.
+    id: "answer-inline-drift-comparator-inverted",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {",
+    replace: "dd.oracle.deployed && liveRate !== undefined && liveRate === inline.anchorRate) {",
+    tests: [T.answer],
+  },
+  {
+    // The cited option's inline block wins over the RFQ's (the option is what the requester lifts).
+    id: "answer-inline-option-block-ignored",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "if (optionInline) {\n      inline = optionInline;",
+    replace: "if (false) {\n      inline = optionInline;",
+    tests: [T.answer],
+  },
+  {
+    // Only the cork-inline-liquidity/1 schema is read; accepting any schema reads a foreign
+    // block's numbers as ours.
+    id: "answer-inline-schema-gate-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: "if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;",
+    replace: "",
+    tests: [T.answer],
+  },
+  {
+    // The inline fees fill the JIT block; a dropped fee leaves the pool created at 0 % against
+    // the requester's ask.
+    id: "answer-inline-fees-ignored",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: 'swapFeePercentage: inline?.swapFeeWad ?? "0",',
+    replace: 'swapFeePercentage: "0",',
     tests: [T.answer],
   },
   // ── watch: the client-side watermark and verify-before-announce ──
@@ -4032,8 +4122,35 @@ const CATALOG: Mutant[] = [
     // DB-004: ecrecover's answer is ignored — every row reads eoa-verified.
     id: "book-eoa-recover-ignored",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'const makerSignature: BookMakerSignature = recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
+    find: 'const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
     replace: 'const makerSignature: BookMakerSignature = "eoa-verified";',
+    tests: [T.orderAuth],
+  },
+  {
+    // The rc.4 regression, re-introduced: bytes ecrecover cannot read (a Safe7579's
+    // `validator ++ sig`) drop the row chain-free as "unparseable". The Safe7579 test serves
+    // that row `unverified` offline and confirms it online through isValidSignature.
+    id: "book-unreadable-signature-dropped-chainfree",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
+    replace: 'if (recovered.signer === null) { extensionLies += 1; continue; }\n    const makerSignature: BookMakerSignature = recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
+    tests: [T.orderAuth],
+  },
+  {
+    // The rc.4 double count: status_mismatch fires on the TOTAL dropped (chain-free drops
+    // included), claiming a chain refutation for rows the chain never saw.
+    id: "book-chainfree-drop-claimed-by-chain",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "if (chainDropped > 0) {",
+    replace: "if (dropped > 0) {",
+    tests: [T.orderAuth],
+  },
+  {
+    // …and its count twin: the chain's warning states the total, not its own rows.
+    id: "book-chain-drop-count-is-total",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "message: `${String(chainDropped)} venue row(s) DROPPED — the chain definitively refutes them",
+    replace: "message: `${String(dropped)} venue row(s) DROPPED — the chain definitively refutes them",
     tests: [T.orderAuth],
   },
   {

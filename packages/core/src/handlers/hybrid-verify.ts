@@ -110,14 +110,18 @@ interface AnnotatedBook {
 
 /** The chain-free half of orderbook verification [K3], run on EVERY row whether or not an RPC
  *  resolves: parse the signed order once, re-hash it, check the extension rule OrderLib enforces
- *  at fill, ecrecover the signature, and decode what its makerTraits commit to. Three
- *  self-contradictions are settled here without a chain read, and a row showing any of them is
- *  DROPPED: it does not hash to its own claimed orderHash (unusable under either hash), its
- *  extension bytes are not the ones its salt commits to (the fill reverts InvalidExtension), or
- *  its signature does not ecrecover to the maker AND the liveness leg later finds the maker has
- *  no code (an EOA that never signed it). A signature that ecrecovers to the maker is settled
- *  positive here (`eoa-verified`); one that does not is handed to the liveness leg for the
- *  maker's own ERC-1271 answer — the venue's `makerAccountType` claim is never the arbiter.
+ *  at fill, ecrecover the signature, and decode what its makerTraits commit to. Two
+ *  self-contradictions are settled here without a chain read, and a row showing either is
+ *  DROPPED: it does not hash to its own claimed orderHash (unusable under either hash), or its
+ *  extension bytes are not the ones its salt commits to (the fill reverts InvalidExtension).
+ *  The signature is NEVER settled negative here. One that ecrecovers to the maker is settled
+ *  positive (`eoa-verified`); every other one — a different signer, or bytes ecrecover cannot
+ *  read at all (a Safe7579 maker signs `validator ++ sig`, 85 bytes; an ERC-1271 maker may sign
+ *  anything its own validator accepts) — is handed to the liveness leg for the maker's own
+ *  ERC-1271 answer, and dropped only when the chain refutes it (an EOA that never signed it, a
+ *  contract whose isValidSignature rejects). rc.4 dropped the unreadable case chain-free and
+ *  hid every live Safe-maker row on Base (2026-09-11). The venue's `makerAccountType` claim is
+ *  never the arbiter.
  *  Exclusivity is served from the LOCAL decode — the venue's `allowedSender` echo is replaced,
  *  never read as truth; an echo that contradicted the signed bytes is counted and disclosed.
  *  An unparseable row rides through untouched (the liveness leg labels it unverified). */
@@ -126,7 +130,6 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
   const served: Row[] = [];
   let hashLies = 0;
   let extensionLies = 0;
-  let unparseableSignatures = 0;
   let echoLies = 0;
   for (const row of rows) {
     const p = parseSignedLopOrder(row);
@@ -144,12 +147,9 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
       continue;
     }
     const recovered = await recoverEoaSigner(localHash, p.value.signature);
-    if (recovered.signer === null) {
-      // A signature that does not even parse can never fill — settled without a chain read.
-      unparseableSignatures += 1;
-      continue;
-    }
-    const makerSignature: BookMakerSignature = recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";
+    // Only a positive ecrecover is settled here. `signer: null` (bytes ecrecover cannot read) is
+    // the SHAPE of a contract maker's signature, not a refutation — the chain decides.
+    const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";
     const traits = p.value.order.makerTraits;
     const allowedSender = decodeMakerTraits(traits).allowedSender;
     const echo = row.allowedSender;
@@ -164,17 +164,13 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
   if (hashLies > 0) {
     warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash [K3]; a row that misrepresents its own order is unusable under either hash` });
   }
-  if (extensionLies > 0 || unparseableSignatures > 0) {
-    const causes = [
-      ...(extensionLies > 0 ? [`${String(extensionLies)} whose extension bytes are not the ones the salt/makerTraits commit to (OrderLib.isValidExtension)`] : []),
-      ...(unparseableSignatures > 0 ? [`${String(unparseableSignatures)} whose signature does not parse`] : []),
-    ];
-    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies + unparseableSignatures)} venue row(s) DROPPED chain-free — ${causes.join("; ")}: no fill of such a row can ever succeed [K3]` });
+  if (extensionLies > 0) {
+    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies)} venue row(s) DROPPED chain-free — their extension bytes are not the ones the salt/makerTraits commit to (OrderLib.isValidExtension): no fill of such a row can ever succeed [K3]` });
   }
   if (echoLies > 0) {
     warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word [K3]; the venue's echo was not used` });
   }
-  return { lop, rows: served, parsed, dropped: hashLies + extensionLies + unparseableSignatures, warnings };
+  return { lop, rows: served, parsed, dropped: hashLies + extensionLies, warnings };
 }
 
 /** Verify one page of venue rows against the chain. Returns null for resources with no
@@ -227,7 +223,8 @@ export async function verifyVenueRows(a: {
   const kept: Row[] = [];
   let confirmed = 0;
   let transportUnverified = 0;
-  let dropped = book?.dropped ?? 0;
+  let dropped = book?.dropped ?? 0; // the total, chain-free drops included (`verification.dropped`)
+  let chainDropped = 0; // the rows THIS leg refuted — the only ones `status_mismatch` may claim
   const droppedWhy: string[] = [];
   const keep = (row: Row, v: "confirmed" | "unverified", transport = false) => {
     kept.push(label(row, v));
@@ -236,6 +233,7 @@ export async function verifyVenueRows(a: {
   };
   const drop = (why: string) => {
     dropped += 1;
+    chainDropped += 1;
     if (droppedWhy.length < 3 && !droppedWhy.includes(why)) droppedWhy.push(why);
   };
 
@@ -463,8 +461,8 @@ export async function verifyVenueRows(a: {
 
   for (const row of overBudget) keep(row, "unverified");
 
-  if (dropped > 0) {
-    warnings.push({ code: "status_mismatch", message: `${String(dropped)} venue row(s) DROPPED — the chain definitively refutes them (${droppedWhy.join("; ")}); chain outranks the venue [K7]` });
+  if (chainDropped > 0) {
+    warnings.push({ code: "status_mismatch", message: `${String(chainDropped)} venue row(s) DROPPED — the chain definitively refutes them (${droppedWhy.join("; ")}); chain outranks the venue [K7]` });
   }
   if (transportUnverified > 0) {
     warnings.push({ code: "chain_read_failed", message: `${String(transportUnverified)} row(s) could not be verified (transport failure) — kept, labeled verification:'unverified'` });

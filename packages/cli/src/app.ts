@@ -24,6 +24,7 @@ import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
 import { colorEnabled, makeStyle } from "./ansi.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError, renderWatchTick } from "./render.ts";
+import { diffRfqWatch, rfqWatchRows, type RfqWatchRow } from "./watch-rfqs.ts";
 
 /** The CLI's own pause for --watch (the core's default sleep is handler-internal): a timer that resolves early on abort. */
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -507,7 +508,7 @@ export async function runCli(
       // book on an interval, threading each read's watermark into the next as `since`, and print
       // only the ticks that changed. A poll is the same cork_query read a script would make by hand.
       if (tool.name === "cork_query") {
-        c.option("--watch", "orderbook only: keep re-reading the ranked book, threading each read's watermark into the next as `since`; print the first read, then only ticks whose `changes.changed` is true (appeared/gone/better are chain-CONFIRMED rows; `unconfirmed` needs your own check). Ctrl-C to stop")
+        c.option("--watch", "orderbook: keep re-reading the ranked book, threading each read's watermark into the next as `since`; print the first read, then only ticks whose `changes.changed` is true (appeared/gone/better are chain-CONFIRMED rows; `unconfirmed` needs your own check). rfqs: keep re-reading the feed WITH answers (firm labels ride along); print the first read, then only ticks where an RFQ appeared, went, moved `version`, or an accepted counter's backing changed — `changes.unbacked` names every requester counter that accepts a quoted option no live order cites (the underwriter never rested the cover). Ctrl-C to stop")
           .option("--interval <seconds>", "seconds between --watch reads (default 15)")
           .option("--iterations <n>", "stop --watch after this many reads (default: until interrupted) — for scripts and tests");
       }
@@ -790,8 +791,9 @@ export async function runCli(
         };
         try {
           if (opts["watch"]) {
-            if (tool.name !== "cork_query" || input["resource"] !== "orderbook") {
-              fail({ error: { code: "invalid_input", tool: tool.name, issues: [{ path: ["--watch"], message: "--watch applies to `ch query orderbook` only: it threads the ranked book's watermark (`since`) read after read; other resources have no watermark" }] } }, EXIT.invalid);
+            const watchResource = input["resource"];
+            if (tool.name !== "cork_query" || (watchResource !== "orderbook" && watchResource !== "rfqs")) {
+              fail({ error: { code: "invalid_input", tool: tool.name, issues: [{ path: ["--watch"], message: "--watch applies to `ch query orderbook` (threads the ranked book's watermark, `since`, read after read) and `ch query rfqs` (re-reads the feed with answers and reports version moves and unbacked accepted counters); other resources have no change signal" }] } }, EXIT.invalid);
               return;
             }
             if (input["wait"] !== undefined || input["since"] !== undefined) {
@@ -805,6 +807,31 @@ export async function runCli(
               return;
             }
             const pause = ctx.sleep ?? sleepMs;
+            if (watchResource === "rfqs") {
+              // The read must embed answers: the `firm` labels (the ranked-book join) are what
+              // decide whether an accepted counter is backed. A single-record read (rfqId)
+              // embeds them already; the list needs withAnswers.
+              const baseFilters = (input["filters"] as Record<string, unknown> | undefined) ?? {};
+              const filters = baseFilters["rfqId"] === undefined ? { ...baseFilters, withAnswers: true } : baseFilters;
+              const rfqInput = { ...input, filters };
+              let prev: RfqWatchRow[] | undefined;
+              for (let tick = 1; tick <= iterations; tick++) {
+                const envelope = await runTool(tool.name, rfqInput, callCtx);
+                code = stateCode(envelope);
+                const data = (envelope as { data?: Record<string, unknown> | null }).data ?? {};
+                const rows = code === EXIT.ok ? rfqWatchRows(data["items"]) : [];
+                const changes = code === EXIT.ok ? diffRfqWatch(prev, rows, ctx.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000))) : undefined;
+                const shown = changes ? { ...(envelope as Record<string, unknown>), data: { ...data, changes } } : envelope;
+                if (tick === 1 || changes?.changed === true || code !== EXIT.ok) {
+                  out += wantsJson ? `${JSON.stringify({ tick, ...(shown as Record<string, unknown>) }, null, 2)}\n` : renderWatchTick(tick, shown, tool, outStyle);
+                }
+                if (code !== EXIT.ok) break;
+                prev = rows;
+                if (tick < iterations) await pause(interval * 1000, ctx.signal);
+                if (ctx.signal?.aborted) break;
+              }
+              return;
+            }
             let since: string | undefined;
             for (let tick = 1; tick <= iterations; tick++) {
               const envelope = await runTool(tool.name, since === undefined ? input : { ...input, since }, callCtx);

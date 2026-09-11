@@ -4696,7 +4696,7 @@
                       "type": "string"
                     },
                     "additionalProperties": {},
-                    "description": "venue market template: either {market_template_id} or {inline:{oracle_recipe, …}}. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"
+                    "description": "venue market template: either {market_template_id} or {inline:{oracle_recipe, oracle_params}} — oracle_params is REQUIRED on an inline template and must be the cork-inline-liquidity/1 block {schema, anchor_rate, expiry, swap_fee_wad, unwind_swap_fee_wad} (decimal strings; the expiry and fees are part of pool identity; answer-rfq reads it — never send {}). CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"
                   },
                   "notionalAssets": {
                     "description": "requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals",

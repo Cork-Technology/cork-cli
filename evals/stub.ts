@@ -191,6 +191,15 @@ export const RFQ_OPEN_ID = "rfq_open7";
  *  keeps its one row so every count the eval fixtures pin stays put). answer-rfq must build it
  *  OPEN with `fill_sender_unknown`, never reserved for the requester account by guess. */
 export const RFQ_NOSENDER_ID = "rfq_open8nosender";
+/** An open RFQ whose inline template carries the `cork-inline-liquidity/1` oracle_params block
+ *  (the shape the Cork status-page heartbeat RFQs carry): an anchor BELOW the stub oracle's live
+ *  rate (0.7 vs 0.8), the JIT task expiry, a 1% swap fee. Its one answer (by the resting maker)
+ *  cites an option whose own template names the LIVE rate as anchor. Served on the single-record
+ *  read only, like RFQ_NOSENDER_ID. */
+export const RFQ_INLINE_ID = "rfq_open9inline";
+export const RFQ_INLINE_ANCHOR = "700000000000000000";
+export const RFQ_INLINE_OPTION_ANCHOR = "800000000000000000"; // = the stub oracle's rate()
+export const RFQ_INLINE_ANSWER_ID = "ans_inline1";
 /** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
 export const RFQ_ANSWER_ID = "ans_eval1";
 
@@ -407,6 +416,11 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
       if (id === RFQ_NOSENDER_ID) {
         const { fill_sender: _omit, ...noSender } = row;
         return r(200, { ...noSender, rfq_id: RFQ_NOSENDER_ID, answers: [], answer_count: 0 });
+      }
+      if (id === RFQ_INLINE_ID) {
+        const inlineTemplate = (anchor: string) => ({ inline: { oracle_recipe: LIQUIDITY_RECIPE, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: anchor, expiry: String(JIT_TASK_EXPIRY), swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" } } });
+        const inlineAnswers = [{ answer_id: RFQ_INLINE_ANSWER_ID, underwriter: RESTING_MAKER.address, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.05", expiry: Number(JIT_TASK_EXPIRY), market_template: inlineTemplate(RFQ_INLINE_OPTION_ANCHOR) }] } }];
+        return r(200, { ...row, rfq_id: RFQ_INLINE_ID, market_template: inlineTemplate(RFQ_INLINE_ANCHOR), answers: inlineAnswers, answer_count: 1 });
       }
       return r(404, { message: `unknown rfq ${single}` });
     }

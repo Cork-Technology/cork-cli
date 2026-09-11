@@ -5,6 +5,26 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [0.5.1-rc.5] — 2026-09-11
+
+This cut fixes a regression that rc.4 introduced on the ranked orderbook, and it adds the two pieces the first Zyfai fill attempt showed were missing: the answer tool now reads the requester's inline oracle parameters, and the CLI can watch an RFQ for an accepted quote that no live order backs.
+
+### Fixed
+
+- **The ranked orderbook dropped every contract-maker row chain-free (rc.4 regression).** rc.4 settled ecrecover once per row and dropped a signature that ecrecover could not read as "unparseable". A smart-account signature is exactly such bytes: a Safe7579 signature is `validator ++ sig`, 85 bytes, and only the maker's own isValidSignature can judge it. So every row a smart account rested vanished from the book, with no RPC consulted and no warning that named it. The chain-free half now settles ONLY what it can settle: the hash lie (`order_hash_mismatch`) and the extension lie (`signature_or_reconstruction_mismatch`) drop the row; a signature that does not recover to the maker leaves the row `unverified` and hands it to the liveness leg, where the code probe and the ERC-1271 call decide it (no code = refuted, isValidSignature rejects = refuted, transport failure = still `unverified`). The test suite carries a real 85-byte Safe7579-shaped signature for this case.
+- **`status_mismatch` counted the chain-free drops twice.** The read added the chain-free drops to the chain's drops and then reported the sum as rows "the chain definitively refutes". The message now counts the chain's drops alone. `verification.dropped` keeps the total.
+
+### Added
+
+- **answer-rfq reads the requester's inline template.** An RFQ (or the cited option) whose `market_template.inline.oracle_params` carries the `cork-inline-liquidity/1` block now drives the order: `anchor_rate` rides as `additionalData` (abi.encode(anchorRate)), `swap_fee_wad`/`unwind_swap_fee_wad` fill the JIT block, and `expiry` is checked against the answer's (a difference is `invalid_order_terms`, info, because it is a different pool). The constraint the derivation resolved is pinned into the order, so the derivation and the ladder cannot tick apart on a NAV pair. `answer.inline` echoes what was read and whether the anchor was honoured. We verified the recipe live on 2026-09-11: LiquidityRecipe.resolve anchors on the live oracle rate while the oracle is deployed and ignores the carried anchor; it honours the anchor only while the oracle is undeployed. On a deployed oracle whose live rate differs from the anchor the tool says so with `rate_drift_notice` (info), naming both rates and the pool the order will birth. Explicit `jitMarket` fields win over the inline block.
+- **`ch query rfqs --watch`.** The loop re-reads the RFQ feed with answers embedded, and prints a tick when an RFQ appears or goes, its `version` moves, or the alert set moves. `data.changes.unbacked` lists every requester counter that accepts a quoted option which no live resting order cites. That is the signature the first Zyfai fill attempt left behind: the buyer accepted a quote, and the underwriter never rested the cover. `backedNow` names the RFQs a citing order later backed. A cited option beyond the truncated answers embed is refuted only when nothing on the RFQ is firm; otherwise the verdict is `null`. Each tick costs one rfqs read plus its ranked-book join.
+
+### Changed
+
+- The `marketTemplate` description on rfq-open names `oracle_params` as REQUIRED on an inline template and spells out the `cork-inline-liquidity/1` block. Sending `{}` is refused by the venue.
+- The Zyfai quickstart no longer says that a carried anchor pins the pool on every pair. It pins the pool only while the pair's oracle is undeployed; expiry and fees pin their part either way.
+- SDK (`@cork/core`, root and `/orders`): `INLINE_LIQUIDITY_SCHEMA`, `InlineLiquidityParams`, `inlineParamsOfTemplate` and `encodeAnchorArgs` are new.
+
 ## [0.5.1-rc.4] — 2026-09-11
 
 This cut works the external review of rc.3 (Daybreak Blue, 11 findings, none high). We re-verified every finding at the rc.3 source before we accepted it. Two findings wait for an owner ruling and are NOT in this cut: DB-002 (forwarded-identity trust defaults on for a non-loopback bind) and DB-006 (list-only filters are accepted beside an RFQ detail read).

@@ -9,6 +9,7 @@
 //   tenor is pinned at signing (pool expiry − now).
 // Nothing here chooses a premium: the caller's quote is an input.
 
+import { encodeAbiParameters } from "viem";
 import { ceilDiv, normalizeDecimals } from "./math/fixed.ts";
 
 /** ACT/365: the year the venue and the kernel divide by. */
@@ -58,3 +59,39 @@ export function impliedPremiumWad(premiumAmountNative: bigint, notionalAssets: b
   if (notionalAssets <= 0n || tenorSeconds <= 0n) return 0n;
   return (premiumAmountNative * YEAR_SECONDS * 10n ** 18n) / (notionalAssets * tenorSeconds);
 }
+
+/** The inline template's `oracle_params` block under the `cork-inline-liquidity/1` contract —
+ *  the shape the Cork status-page heartbeat RFQs carry: the requester's anchor rate (the rate it
+ *  derived its pool with, ABSOLUTE 1e18 = 1.0), the pool expiry it derived with, and the two
+ *  creation fees, every value a decimal string. The venue requires the field on an inline
+ *  template and nothing about its content, so every value is read defensively: another schema
+ *  name, a missing field, or a non-digit value reads as absent, never as a guess. */
+export const INLINE_LIQUIDITY_SCHEMA = "cork-inline-liquidity/1";
+export interface InlineLiquidityParams {
+  anchorRate?: bigint;
+  expiry?: bigint;
+  swapFeeWad?: string;
+  unwindSwapFeeWad?: string;
+}
+export function inlineParamsOfTemplate(t: unknown): InlineLiquidityParams | undefined {
+  if (!t || typeof t !== "object") return undefined;
+  const inline = (t as { inline?: unknown }).inline;
+  const op = inline && typeof inline === "object" ? (inline as { oracle_params?: unknown }).oracle_params : undefined;
+  if (!op || typeof op !== "object") return undefined;
+  const o = op as Record<string, unknown>;
+  if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;
+  const digits = (v: unknown): string | undefined => {
+    const s = typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
+    return s !== undefined && /^\d+$/.test(s) ? s : undefined;
+  };
+  const anchor = digits(o.anchor_rate), expiry = digits(o.expiry), swapFee = digits(o.swap_fee_wad), unwindFee = digits(o.unwind_swap_fee_wad);
+  return {
+    ...(anchor !== undefined && BigInt(anchor) > 0n ? { anchorRate: BigInt(anchor) } : {}),
+    ...(expiry !== undefined && BigInt(expiry) > 0n ? { expiry: BigInt(expiry) } : {}),
+    ...(swapFee !== undefined ? { swapFeeWad: swapFee } : {}),
+    ...(unwindFee !== undefined ? { unwindSwapFeeWad: unwindFee } : {}),
+  };
+}
+
+/** The liquidity recipes' `additionalData`: `abi.encode(uint256 anchorRate)`. */
+export const encodeAnchorArgs = (anchorRate: bigint): `0x${string}` => encodeAbiParameters([{ type: "uint256" }], [anchorRate]);

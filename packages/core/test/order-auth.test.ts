@@ -141,19 +141,59 @@ describe("the ranked book authenticates every row it serves", () => {
     expect(data(env).verification.dropped).toBe(0);
   });
 
-  it("a signature that does not parse DROPS the row chain-free, RPC or not — it can never fill", async () => {
-    const honest = await rowBy("auth-9", maker);
-    const garbage = { ...(await rowBy("auth-10", maker)), signature: "0xdeadbeef" as const };
-    for (const resolveRpc of [async () => null, chain()]) {
-      const env = await book([honest, garbage], { resolveRpc });
-      expect(env.state).toBe("ok");
-      expect(data(env).count).toBe(1);
-      expect(data(env).verification.dropped).toBe(1);
-      expect(env.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch" && w.message.includes("does not parse"))).toBe(true);
-    }
+  // The rc.4 regression (2026-09-11): the book dropped every row whose signature ecrecover could
+  // not READ as "unparseable — it can never fill". A Safe7579 (ERC-7579) maker signs
+  // `validator(20) ++ sig(65)` — 85 bytes ecrecover cannot parse and isValidSignature accepts
+  // (proven live on Base: a row an integrator's Safe rested was dropped by rc.4 and validated by
+  // its own isValidSignature). Bytes ecrecover cannot read are the SHAPE of a contract maker's
+  // signature, not a refutation; only the chain may refute a signature, and offline the row is
+  // served `unverified`.
+  const VALIDATOR = `0x${"7579".repeat(10)}` as const; // a 20-byte ERC-7579 validator address
+  const safe7579 = (sig: `0x${string}`): `0x${string}` => `${VALIDATOR}${sig.slice(2)}` as `0x${string}`;
+
+  it("a Safe7579-shaped signature (validator ++ sig, 85 bytes ecrecover cannot read) is served `unverified` offline — never dropped chain-free — and online the maker's own isValidSignature decides", async () => {
+    const signed = await rowBy("auth-9", forger, safe);
+    const row = { ...signed, signature: safe7579(signed.signature) };
+    expect((row.signature.length - 2) / 2).toBe(85);
+    const offline = await book([row], { resolveRpc: async () => null });
+    expect(offline.state).toBe("ok");
+    expect(data(offline).count).toBe(1);
+    expect(data(offline).items[0]).toMatchObject({ orderHash: row.orderHash, makerSignature: "unverified", verification: "unverified" });
+    expect(data(offline).verification).toMatchObject({ confirmed: 0, unverified: 1, dropped: 0 });
+    expect(offline.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch")).toBe(false);
+    expect(offline.warnings.some((w) => w.code === "status_mismatch")).toBe(false);
+    // The Safe's isValidSignature answers the magic value: the row is authentic, confirmed.
+    const accepted = await book([row], { resolveRpc: chain({ code: { [safe]: CODE } }) });
+    expect(data(accepted).count).toBe(1);
+    expect(data(accepted).items[0]).toMatchObject({ makerSignature: "erc1271-verified", verification: "confirmed" });
+    expect(data(accepted).verification).toMatchObject({ confirmed: 1, dropped: 0 });
+    // The Safe rejects it: the CHAIN refuted the row — dropped under status_mismatch, and the
+    // chain-free code never claims a signature verdict it could not reach.
+    const rejected = await book([row], { resolveRpc: chain({ code: { [safe]: CODE }, isValidSignature: "0xffffffff" }) });
+    expect(data(rejected).count).toBe(0);
+    expect(data(rejected).verification.dropped).toBe(1);
+    const why = rejected.warnings.find((w) => w.code === "status_mismatch");
+    expect(why?.message).toContain("isValidSignature rejected");
+    expect(why?.message.startsWith("1 venue row(s)")).toBe(true);
+    expect(rejected.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch")).toBe(false);
   });
 
-  it("extension bytes the salt/traits do not commit to DROP the row chain-free (signature_or_reconstruction_mismatch)", async () => {
+  it("bytes ecrecover cannot read on an EOA maker: served `unverified` offline; the chain refutes them (no code, so no ERC-1271 path) and drops them under status_mismatch", async () => {
+    const honest = await rowBy("auth-10", maker);
+    const garbage = { ...(await rowBy("auth-11", maker)), signature: "0xdeadbeef" as const };
+    const offline = await book([honest, garbage], { resolveRpc: async () => null });
+    expect(data(offline).count).toBe(2);
+    expect(data(offline).verification.dropped).toBe(0);
+    expect(data(offline).items.find((r) => r.orderHash === garbage.orderHash)).toMatchObject({ makerSignature: "unverified", verification: "unverified" });
+    expect(offline.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch")).toBe(false);
+    const online = await book([honest, garbage], { resolveRpc: chain() });
+    expect(data(online).count).toBe(1);
+    expect(data(online).items[0]).toMatchObject({ orderHash: honest.orderHash, verification: "confirmed" });
+    expect(data(online).verification.dropped).toBe(1);
+    expect(online.warnings.some((w) => w.code === "status_mismatch" && w.message.includes("maker signature refuted"))).toBe(true);
+  });
+
+  it("extension bytes the salt/traits do not commit to DROP the row chain-free (signature_or_reconstruction_mismatch) — and the chain never claims that drop", async () => {
     const honest = await rowBy("auth-6", maker);
     const unbound = { ...(await rowBy("auth-7", maker)), extension: "0xdeadbeef" as const }; // signed WITHOUT the flag: UnexpectedOrderExtension
     for (const resolveRpc of [async () => null, chain()]) {
@@ -162,7 +202,23 @@ describe("the ranked book authenticates every row it serves", () => {
       expect(data(env).count).toBe(1);
       expect(data(env).verification.dropped).toBe(1);
       expect(env.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch" && w.message.includes("isValidExtension"))).toBe(true);
+      // rc.4 counted the chain-free drops into the chain's own tally: online, this page said
+      // "1 venue row(s) DROPPED — the chain definitively refutes them" about a row the chain
+      // never saw. The chain's warning claims only the rows the chain refuted.
+      expect(env.warnings.some((w) => w.code === "status_mismatch")).toBe(false);
     }
+  });
+
+  it("chain-free drops and the chain's drops are counted once each: verification.dropped is the total, each warning claims only its own rows", async () => {
+    const honest = await rowBy("auth-12", maker);
+    const unbound = { ...(await rowBy("auth-13", maker)), extension: "0xdeadbeef" as const };
+    const forgedEoa = await rowBy("auth-14", forger, maker.address);
+    const env = await book([honest, unbound, forgedEoa], { resolveRpc: chain() });
+    expect(env.state).toBe("ok");
+    expect(data(env).count).toBe(1);
+    expect(data(env).verification).toMatchObject({ confirmed: 1, dropped: 2 });
+    expect(env.warnings.find((w) => w.code === "signature_or_reconstruction_mismatch")?.message.startsWith("1 venue row(s)")).toBe(true);
+    expect(env.warnings.find((w) => w.code === "status_mismatch")?.message.startsWith("1 venue row(s)")).toBe(true);
   });
 });
 

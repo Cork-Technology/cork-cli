@@ -316,12 +316,21 @@ you just made:
 | CA asset (1) | `collateralAsset.exact` — or `one_of: […]` to let underwriters pick from a set |
 | Price-vs-NAV view (1, 4) | implied by the recipe + oracle mode behind `oracle_recipe` |
 | Recipe contract (5) | `marketTemplate.inline.oracle_recipe` — copy the address from `registry-recipes`, never hand-type it |
+| Anchor rate + expiry (6) | `marketTemplate.inline.oracle_params` — the `cork-inline-liquidity/1` block: `derive-cork-pool`'s `oracle.rate` as `anchor_rate`, the expiry you derived with |
 | Term (6) | `expiryWindow` — pin an exact expiry with `notBefore = notAfter − 1` |
 | Cover style | `modes` (`liquidity_only` pairs with the liquidity recipe) + the venue's `packageIds` |
 
-Note what the RFQ does **not** carry: the constraint. The four numbers get resolved and pinned
-when the underwriter *signs the order* (step 2) — your recipe choice determines them, but the anchor is read
-at signing time. That's why deriving, quoting, and signing close together matters (step 1c).
+Note what the RFQ carries and what it does not. It does **not** carry the four constraint numbers
+— those get resolved and pinned when the underwriter *signs the order* (step 2). It **does** carry
+the anchor you derived at (`oracle_params.anchor_rate`), the expiry, and the fees. Read the anchor
+for what the recipe makes of it: the liquidity recipes honour a carried anchor **only while the
+pair's oracle is undeployed**; once the wrapper exists, `resolve` reads the live rate and ignores
+the argument (verified on-chain 2026-09-11, `cork_compute recipe-rate-constraint` with and without
+`args` against the live 42161 wrapper). On a fresh pair, then, every underwriter that carries your
+anchor resolves the same four numbers and names the pool you derived in 1c. On a live NAV pair,
+each underwriter's signing moment yields its own constraint and its own `poolId`, whatever the
+RFQ says — the tool tells the underwriter so (`rate_drift_notice`), and your fill checks decide
+whether that pool is acceptable. The expiry and the fees pin their part of the identity either way.
 
 **Pre-RFQ checklist:**
 1. REF appears in `registry-assets` (and carries the source slot your view needs).
@@ -459,6 +468,13 @@ What to check:
   apart — the re-resolved constraint named a *different* pool, and the tool refused the mismatched
   order with `jit_side_mismatch` naming the fresh cST. Pass `constraint: {…}` from this output
   into `--jit-market` and the identity holds exactly.
+- The same rule applies across the RFQ boundary: **`oracle.rate` is the `anchor_rate` you publish
+  in the RFQ** (step 1d), and `expiry` is this `--expiry`. On a pair whose oracle is not yet
+  deployed, that is how the underwriter — a different process, reading at a different moment —
+  lands on this exact `poolId`. On a pair whose oracle IS deployed (this one), the recipe reads the
+  live rate at the underwriter's signing moment and ignores the carried anchor, so the pool the
+  order births is the underwriter's derivation, not yours — compare its `answer.pool.poolId` with
+  yours before you fill.
 
 The steps below use this market: `poolId` =
 `0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8`, `cST` =
@@ -479,7 +495,7 @@ ch submit rfq-open --chain-id 8453 --client-request-id rfq-0001 --json \
   --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
   --modes '["liquidity_only"]' --package-ids '["balanced-v1"]' \
   --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
-  --market-template '{"inline":{"oracle_recipe":"0xAeD3D0e3C86A994d88741C285657c3e78550f66d"}}' \
+  --market-template "{\"inline\":{\"oracle_recipe\":\"0xAeD3D0e3C86A994d88741C285657c3e78550f66d\",\"oracle_params\":{\"schema\":\"cork-inline-liquidity/1\",\"anchor_rate\":\"872582269293287498\",\"expiry\":\"$EXP\",\"swap_fee_wad\":\"0\",\"unwind_swap_fee_wad\":\"0\"}}}" \
   --notional-assets … --valid-until $VU --signature 0x…
 # alternative — the canonical wire blob behind the positional chainId:
 ch submit 8453 --client-request-id rfq-0001 --json \
@@ -493,6 +509,25 @@ Conventions the live flow uses (all observable in the venue's open RFQs):
   the bridge from quote to order, so both sides must put the address here for the quote to be
   executable. The venue stores it as unchecked free text: a mistyped address still posts and fails
   only at fill time, so copy it from `registry-recipes`, never type it.
+- **`marketTemplate.inline.oracle_params` carries the pool identity** — the `cork-inline-liquidity/1`
+  block (proposed 2026-09-10; `ch prepare answer-rfq` reads it since v0.5.1-rc.5). The venue schema
+  requires the field on every inline template, and requires nothing about its content: `{}` posts
+  fine. Do not send `{}`. Every value is a decimal string:
+  - `schema`: `"cork-inline-liquidity/1"`, exactly.
+  - `anchor_rate`: `oracle.rate` from your `derive-cork-pool` call (1c), ABSOLUTE 1e18 = 1.0 — the
+    rate the four constraint numbers are resolved around while the pair's oracle is undeployed
+    (a deployed oracle's live rate replaces it; see the note under the field table).
+  - `expiry`: the `--expiry` you derived with, unix seconds; by convention the same value as
+    `expiryWindow.notAfter`.
+  - `swap_fee_wad`, `unwind_swap_fee_wad`: the pool's creation fees, `"0"` for the live flow.
+
+  With this block, an underwriter derives the pool you mean from the RFQ alone: the expiry and the
+  fees pin their part of the identity on every pair, and the anchor pins the rest on a pair whose
+  oracle is not yet deployed. Without it (or with `{}`), an underwriter falls back to the window's
+  end and zero fees — a different expiry or fee names a different pool, and the fill then births a
+  pool you did not ask for, or never happens. (The Zyfai RFQs of 2026-09-10 sent `{}`; that is the
+  trap this bullet closes.) On a live NAV pair the anchor cannot pin the constraint — the recipe
+  reads the live rate at signing — so the underwriter's `answer.pool.poolId` is the id to check.
 - You sign the RFQ with your own stack; `ch submit` only relays — it never signs.
 
 Then watch for answers — this is also how you'd browse what others are asking:
@@ -517,7 +552,10 @@ are quoting there):
 { "status": "quoted", "options": [ {
   "option_id": "e7dda7c5-…-liquidity_only-1786021200",
   "mode": "liquidity_only", "package_id": "balanced-v1",
-  "market_template": { "inline": { "oracle_recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d" } },
+  "market_template": { "inline": { "oracle_recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+                                   "oracle_params": { "schema": "cork-inline-liquidity/1", "anchor_rate": "872582269293287498",
+                                                      "expiry": "1786021200", "swap_fee_wad": "0", "unwind_swap_fee_wad": "0" } } },
+                                       // the option echoes your template — check the anchor and expiry match what you sent
   "reference_asset": "0xc1256ae5…a2ca", "collateral_asset": "0x211cc4dd…5fe5d2",
   "premium_annualized": "0.032",       // fraction: 0.032 = 3.2% — the book listing now shares this convention (its percent `premium` is removed 2026-08-17)
   "fresh_until": 1786014948

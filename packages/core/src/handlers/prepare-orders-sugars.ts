@@ -7,7 +7,7 @@ import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrd
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
-import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, premiumAmount, premiumFraction, reRestExpirySeconds } from "../orders-answer.ts";
+import { answerOcoGroup, coverMakingAmount, encodeAnchorArgs, impliedPremiumWad, INLINE_LIQUIDITY_SCHEMA, inlineParamsOfTemplate, premiumAmount, premiumFraction, reRestExpirySeconds, type InlineLiquidityParams } from "../orders-answer.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
@@ -36,6 +36,7 @@ const recipeOfTemplate = (t: unknown): `0x${string}` | undefined => {
   const r = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;
   return isAddr(r) ? r : undefined;
 };
+
 
 /** The venue's answers embed: `answers[]` rows, each `{ answer_id, underwriter, answer: { status, options[] } }` (or flat). */
 function findRfqOption(rfq: Record<string, unknown>, answerId: string, optionId: string): { answer: Record<string, unknown>; option: Record<string, unknown> } | "no-answer" | "no-option" {
@@ -113,6 +114,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   let expiryTimestamp: bigint;
   let quoteRef: { rfqId: string; answerId: string; optionId: string } | undefined;
   let templateRecipe: `0x${string}` | undefined = recipeOfTemplate(rfq.market_template);
+  // The requester's inline block (anchor, expiry, fees) — the cited option's when it carries one.
+  let inline: InlineLiquidityParams | undefined = inlineParamsOfTemplate(rfq.market_template);
+  let inlineSource: "rfq" | "cited option" = "rfq";
   let optionEcho: Record<string, unknown> | null = null;
   if (cited) {
     const found = findRfqOption(rfq, action.answerId!, action.optionId!);
@@ -129,6 +133,11 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     expiryTimestamp = BigInt(e);
     quoteRef = { rfqId: action.rfqId, answerId: action.answerId!, optionId: action.optionId! };
     templateRecipe = recipeOfTemplate(found.option.market_template) ?? templateRecipe;
+    const optionInline = inlineParamsOfTemplate(found.option.market_template);
+    if (optionInline) {
+      inline = optionInline;
+      inlineSource = "cited option";
+    }
     optionEcho = { answerId: action.answerId, optionId: action.optionId, premiumAnnualized: p, expiry: e, ...(str(found.option.notional_max_assets) !== undefined ? { notionalMaxAssets: str(found.option.notional_max_assets) } : {}) };
     const maxNotional = str(found.option.notional_max_assets);
     const wanted = action.notionalAssets ?? str(rfq.notional_assets);
@@ -154,6 +163,18 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
       warnings.push({ code: "invalid_order_terms", message: `pool expiry ${expiryTimestamp} is outside the RFQ's expiry_window [${nb ?? "?"}, ${na ?? "?"}] — a visible counter-proposal the requester may ignore; the order still builds` });
     }
   }
+  if (inline?.expiry !== undefined && inline.expiry !== expiryTimestamp) {
+    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template (oracle_params.expiry) names pool expiry ${inline.expiry}, but this answer builds at ${expiryTimestamp} — the requester derived its pool at ${inline.expiry}; the expiry is part of pool identity, so a different value is a different pool. The order still builds` });
+  }
+
+  // ── the requester's anchor: carried as the liquidity recipes' additionalData ──
+  // The anchor decides the constraint ONLY while the pair's oracle is undeployed (the recipe's
+  // resolve reads it in place of the missing oracle). Against a DEPLOYED oracle the recipe
+  // anchors on the live rate and ignores the payload — verified live 2026-09-11 on Arbitrum: the
+  // same call with and without an anchor answered the live NAV, and two calls seconds apart
+  // answered two different rates. So the anchor is carried (the undeployed case is exactly when
+  // it matters), and a deployed oracle's rate is compared with it below and disclosed.
+  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? (inline?.anchorRate !== undefined ? encodeAnchorArgs(inline.anchorRate) : undefined);
 
   // ── reach: the declared FILL SENDER, or open when nobody declared one ──
   // The LOP compares allowedSender with the address that CALLS it. A requester that fills
@@ -175,14 +196,25 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
 
   // ── the pool the cover creates on fill: derive-cork-pool (recipe → constraint → id → cST) ──
   const derive = await handleQuery(
-    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, ...(action.jitMarket?.additionalData !== undefined ? { args: action.jitMarket.additionalData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
+    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, ...(additionalData !== undefined ? { args: additionalData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
   );
   if (derive.state !== "ok") return { ...derive, warnings: [{ code: derive.warnings[0]?.code ?? "invalid_state", message: `answer-rfq could not derive the pool the cover creates: ${derive.warnings[0]?.message ?? derive.state}` }, ...derive.warnings.slice(1)] };
-  const dd = derive.data as { pool: { poolId: `0x${string}`; exists: boolean } | null; shares: { corkSwapToken: `0x${string}` | null } | null; recipe: `0x${string}`; oracle: { address: `0x${string}` | null; deployed: boolean } };
+  type DerivedConstraint = { rateMin: bigint | string; rateMax: bigint | string; rateChangePerDayMax: bigint | string; rateChangeCapacityMax: bigint | string };
+  const dd = derive.data as { pool: { poolId: `0x${string}`; exists: boolean; constraint?: DerivedConstraint } | null; shares: { corkSwapToken: `0x${string}` | null } | null; recipe: `0x${string}`; oracle: { address: `0x${string}` | null; deployed: boolean; rate?: bigint | string } };
   if (!dd.pool) return unavailable(chainId, "oracle_not_deployable", "the pair cannot get an oracle as registered — no pool id, no cST, no order", ctx);
   const cst = dd.shares?.corkSwapToken ?? null;
   if (!cst) return unavailable(chainId, "share_prediction_unavailable", "the pool's cST could not be read or predicted — the order's maker side cannot be set", ctx);
+  // The anchor against a DEPLOYED oracle: the recipe ignores it, so the requester's expectation
+  // and this pool agree only when the live rate equals the anchor at signing.
+  const liveRate = typeof dd.oracle.rate === "bigint" ? dd.oracle.rate : typeof dd.oracle.rate === "string" && /^\d+$/.test(dd.oracle.rate) ? BigInt(dd.oracle.rate) : undefined;
+  if (inline?.anchorRate !== undefined && dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {
+    warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the liquidity recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in additionalData for the undeployed-oracle case` });
+  }
+  // The derived constraint is PINNED into the order explicitly: the maker path then verifies
+  // the carried numbers (recipe.verify) instead of resolving a second time — one derivation,
+  // the one `answer.pool` reports.
+  const pinnedConstraint = action.jitMarket?.constraint ?? (dd.pool.constraint ? { rateMin: String(dd.pool.constraint.rateMin), rateMax: String(dd.pool.constraint.rateMax), rateChangePerDayMax: String(dd.pool.constraint.rateChangePerDayMax), rateChangeCapacityMax: String(dd.pool.constraint.rateChangeCapacityMax) } : undefined);
 
   // ── amounts, the kernel's way ──
   const resolved = await getRpc(ctx, chainId);
@@ -205,7 +237,17 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const expirySeconds = action.expirySeconds ?? reRestExpirySeconds(remaining);
   const ocoGroup = action.ocoGroup ?? answerOcoGroup(action.rfqId);
 
+  // The caller's explicit jitMarket fields win; absent ones come from the requester's inline
+  // block (fees, anchor), else the defaults. `undefined` values are dropped so a spread never
+  // erases an inline value.
   const { recipe: _r, ...jitRest } = action.jitMarket ?? {};
+  const jitExplicit = Object.fromEntries(Object.entries(jitRest).filter(([, v]) => v !== undefined));
+  const jitFromInline = {
+    ...(additionalData !== undefined ? { additionalData } : {}),
+    ...(pinnedConstraint !== undefined ? { constraint: pinnedConstraint } : {}),
+    swapFeePercentage: inline?.swapFeeWad ?? "0",
+    unwindSwapFeePercentage: inline?.unwindSwapFeeWad ?? "0",
+  };
   const makerAction: MakerOrderAction = {
     type: "maker-order",
     poolId: dd.pool.poolId,
@@ -220,7 +262,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     ocoGroup,
     ...(allowedSender !== undefined ? { allowedSender } : {}),
     ...(quoteRef ? { quoteRef } : {}),
-    jitMarket: { collateralAsset, referenceAsset, expiryTimestamp: expiryTimestamp.toString(), recipe, rateOverride: "0", swapFeePercentage: "0", unwindSwapFeePercentage: "0", enableJitMint: false, ...jitRest } as NonNullable<MakerOrderAction["jitMarket"]>,
+    jitMarket: { collateralAsset, referenceAsset, expiryTimestamp: expiryTimestamp.toString(), recipe, rateOverride: "0", enableJitMint: false, ...jitFromInline, ...jitExplicit } as NonNullable<MakerOrderAction["jitMarket"]>,
   };
   const env = await sugar.prepare({ ...input, action: makerAction }, ctx);
   if (env.state !== "ok") return { ...env, warnings: [...warnings, ...env.warnings] };
@@ -251,7 +293,10 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         expirySeconds,
         expiryRule: action.expirySeconds !== undefined ? "caller" : "venue re-rest rule: max(90 s, min(600 s, remaining RFQ validity / 2))",
         ocoGroup,
-        pool: { poolId: dd.pool.poolId, exists: dd.pool.exists, corkSwapToken: cst, recipe: dd.recipe, oracleDeployed: dd.oracle.deployed },
+        pool: { poolId: dd.pool.poolId, exists: dd.pool.exists, corkSwapToken: cst, recipe: dd.recipe, oracleDeployed: dd.oracle.deployed, ...(liveRate !== undefined ? { oracleRate: liveRate.toString() } : {}) },
+        inline: inline
+          ? { schema: INLINE_LIQUIDITY_SCHEMA, source: inlineSource, anchorRate: inline.anchorRate?.toString() ?? null, expiry: inline.expiry?.toString() ?? null, swapFeeWad: inline.swapFeeWad ?? null, unwindSwapFeeWad: inline.unwindSwapFeeWad ?? null, additionalData: additionalData ?? null, anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed, note: "the liquidity recipe reads the anchor (additionalData) only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ" }
+          : null,
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
       },
       execution: executionAnswerRfq(),

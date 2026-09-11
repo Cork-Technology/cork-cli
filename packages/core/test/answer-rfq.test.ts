@@ -5,10 +5,11 @@
 // the production path, not a mock of it.
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, impliedPremiumWad, LOP_ADDRESSES, premiumAmount, premiumFraction, RE_REST_MAX_SECONDS, RE_REST_MIN_SECONDS, reRestExpirySeconds, runTool, ToolInputError, YEAR_SECONDS } from "@cork/core";
+import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, impliedPremiumWad, LOP_ADDRESSES, premiumAmount, premiumFraction, RE_REST_MAX_SECONDS, RE_REST_MIN_SECONDS, reRestExpirySeconds, runTool, ToolInputError, YEAR_SECONDS, type HandlerContext, type ResolvedRpc } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext } from "../../../evals/stub.ts";
+import { encodeAnchorArgs, inlineParamsOfTemplate, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
+import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext } from "../../../evals/stub.ts";
 
 describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
   it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
@@ -162,6 +163,157 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     const past = await runTool("cork_prepare_orders", { ...base, action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: (NOW - 1n).toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
     expect(past.state).toBe("unavailable");
     expect(past.warnings[0]!.code).toBe("invalid_order_terms");
+  });
+});
+
+describe("answer-rfq reads the requester's inline template (cork-inline-liquidity/1): anchor, expiry, fees", () => {
+  const NOW = 1_790_000_000n;
+  const ctx = stubContext();
+  const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-inline-0001" };
+  type Inline = { schema: string; source: string; anchorRate: string | null; expiry: string | null; swapFeeWad: string | null; unwindSwapFeeWad: string | null; additionalData: string | null; anchorHonored: boolean | null; note: string };
+  type AnsweredInline = { jit?: { constraint?: Record<string, string>; derivedPoolId: string }; answer: { pool: { poolId: string; oracleDeployed: boolean; oracleRate?: string }; inline: Inline | null } };
+  const expiry = JIT_TASK_EXPIRY.toString();
+
+  it("inlineParamsOfTemplate: only the cork-inline-liquidity/1 schema is read; `{}`, a foreign schema, and non-digit values yield nothing", () => {
+    expect(inlineParamsOfTemplate(undefined)).toBeUndefined();
+    expect(inlineParamsOfTemplate({ market_template_id: "tpl" })).toBeUndefined();
+    expect(inlineParamsOfTemplate({ inline: { oracle_recipe: LIQUIDITY_RECIPE } })).toBeUndefined();
+    expect(inlineParamsOfTemplate({ inline: { oracle_recipe: LIQUIDITY_RECIPE, oracle_params: {} } })).toBeUndefined();
+    expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: "someone-else/1", anchor_rate: "1" } } })).toBeUndefined();
+    const full = inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, expiry, swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" } } });
+    expect(full).toEqual({ anchorRate: 7n * 10n ** 17n, expiry: JIT_TASK_EXPIRY, swapFeeWad: "1000000000000000000", unwindSwapFeeWad: "0" });
+    // Non-digit or zero anchor/expiry are absent, not zero; fee strings are passed through as digits only.
+    expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: "0.7", expiry: "0", swap_fee_wad: "1e18" } } })).toEqual({});
+    expect(encodeAnchorArgs(7n * 10n ** 17n)).toBe(`0x${(7n * 10n ** 17n).toString(16).padStart(64, "0")}`);
+  });
+
+  it("uncited: the RFQ's anchor rides as additionalData, its fees fill the JIT block, and against a DEPLOYED oracle the drift notice says the anchor is not honored", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as AnsweredInline;
+    expect(d.answer.inline).not.toBeNull();
+    const inline = d.answer.inline!;
+    expect(inline.source).toBe("rfq");
+    expect(inline.schema).toBe(INLINE_LIQUIDITY_SCHEMA);
+    expect(inline.anchorRate).toBe(RFQ_INLINE_ANCHOR);
+    expect(inline.expiry).toBe(expiry);
+    expect(inline.swapFeeWad).toBe("1000000000000000000");
+    expect(inline.unwindSwapFeeWad).toBe("0");
+    expect(inline.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
+    // The stub's oracle is deployed at 0.8e18: the recipe anchors on THAT, so the carried 0.7e18 is not honored.
+    expect(d.answer.pool.oracleDeployed).toBe(true);
+    expect(d.answer.pool.oracleRate).toBe(RFQ_INLINE_OPTION_ANCHOR);
+    expect(inline.anchorHonored).toBe(false);
+    const drift = env.warnings.find((w) => w.code === "rate_drift_notice");
+    expect(drift).toBeDefined();
+    expect(drift!.message).toContain(RFQ_INLINE_ANCHOR);
+    expect(drift!.message).toContain(RFQ_INLINE_OPTION_ANCHOR);
+    expect(drift!.message).toContain("ignores the carried anchor");
+    // The pinned constraint is the derivation's own (the stub resolves the 0.8e18 shape), and the
+    // pool is the one derive-cork-pool answers for the same legs + args.
+    expect(d.jit?.constraint).toEqual(JIT_TASK_CONSTRAINT);
+    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: LIQUIDITY_RECIPE, args: inline.additionalData } }, ctx);
+    expect(d.answer.pool.poolId.toLowerCase()).toBe((derived.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
+    // The RFQ's expiry and this answer's agree: no inline-expiry warning.
+    expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("oracle_params.expiry"))).toBe(false);
+    // The recipe came from the RFQ's inline template (no jitMarket passed at all).
+    expect(d.jit?.derivedPoolId.toLowerCase()).toBe(d.answer.pool.poolId.toLowerCase());
+    // The signed extension carries the requester's fees and anchor: decode the built order and
+    // read them back from the bytes, not from the echo.
+    const built = env.data as { typedData: { message: Record<string, string> }; extension: string };
+    const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: built.extension } }, ctx);
+    expect(decoded.state, JSON.stringify(decoded.warnings)).toBe("ok");
+    const jit = (decoded.data as { jit: { swapFeePercentage: string; unwindSwapFeePercentage: string; additionalData: string; constraint: Record<string, string> } }).jit;
+    expect(jit.swapFeePercentage).toBe("1000000000000000000");
+    expect(jit.unwindSwapFeePercentage).toBe("0");
+    expect(jit.additionalData).toBe(inline.additionalData);
+    expect(jit.constraint).toMatchObject(JIT_TASK_CONSTRAINT);
+  });
+
+  it("an answer at a different pool expiry than the RFQ's inline template is warned as a different pool — and still builds", async () => {
+    const other = (NOW + 20n * 86_400n).toString();
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-inline-0002", action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: other } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "invalid_order_terms" && x.message.includes("oracle_params.expiry"));
+    expect(w).toBeDefined();
+    expect(w!.message).toContain(expiry);
+    expect(w!.message).toContain(other);
+    expect((env.data as AnsweredInline).answer.inline!.expiry).toBe(expiry);
+  });
+
+  it("the caller's explicit jitMarket fields win over the inline block (fees, additionalData); an explicit anchor that matches the live rate raises no drift notice", async () => {
+    const args = encodeAnchorArgs(BigInt(RFQ_INLINE_OPTION_ANCHOR));
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-inline-0003", action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry, jitMarket: { recipe: LIQUIDITY_RECIPE, additionalData: args, swapFeePercentage: "0" } } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as AnsweredInline;
+    expect(d.answer.inline!.additionalData).toBe(args);
+    expect(d.answer.inline!.anchorRate).toBe(RFQ_INLINE_ANCHOR); // the RFQ's block is still echoed
+    // The drift notice compares the RFQ's anchor with the live rate, and they differ here too.
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(true);
+  });
+
+  it("cited: the option's inline block wins over the RFQ's; its anchor equals the live rate, so no drift notice", async () => {
+    const underwriter = SIGNED_LOP_PAYLOAD.order.maker as `0x${string}`;
+    const env = await runTool("cork_prepare_orders", { ...base, account: underwriter, clientRequestId: "answer-inline-0004", action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, answerId: RFQ_INLINE_ANSWER_ID, optionId: "opt1" } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as AnsweredInline;
+    expect(d.answer.inline!.source).toBe("cited option");
+    expect(d.answer.inline!.anchorRate).toBe(RFQ_INLINE_OPTION_ANCHOR);
+    expect(d.answer.inline!.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_OPTION_ANCHOR)));
+    expect(d.answer.inline!.anchorHonored).toBe(false); // deployed oracle: the live rate rules, whatever the anchor says
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
+    expect(d.answer.pool.poolId.toLowerCase()).toBe(DERIVED_JIT_POOL.toLowerCase());
+  });
+
+  it("a pair whose oracle is NOT deployed: the anchor reaches recipe.resolve as additionalData, is honoured, and no drift notice fires (the fresh-pair path the RFQ contract was written for)", async () => {
+    // Compose over the eval stub: the wrapper lookup answers zero, its rate cannot be read, and
+    // the registry's deploy simulation predicts the wrapper address — the shape a registered
+    // pair has before anyone calls deploy. Every resolve call's args are captured.
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    const PREDICTED = "0x14115b5fdab3afcd72cf03785041c720100edb0e";
+    const resolveArgs: unknown[][] = [];
+    const stub = stubContext();
+    const fresh: HandlerContext = {
+      ...stub,
+      resolveRpc: async (chainId, url) => {
+        const r = (await stub.resolveRpc!(chainId, url)) as ResolvedRpc;
+        const client = r.client as unknown as { readContract: (a: { functionName: string; args?: unknown[] }) => Promise<unknown> };
+        const wrapped = {
+          ...(r.client as unknown as Record<string, unknown>),
+          readContract: async (a: { functionName: string; args?: unknown[] }) => {
+            if (a.functionName === "lookupWrapper") return ZERO;
+            if (a.functionName === "rate") throw Object.assign(new Error("execution reverted"), { shortMessage: 'The contract function "rate" reverted.' });
+            if (a.functionName === "resolve") resolveArgs.push(a.args ?? []);
+            return client.readContract(a);
+          },
+          simulateContract: async () => ({ result: PREDICTED }),
+        };
+        return { ...r, client: wrapped as unknown as ResolvedRpc["client"] };
+      },
+    };
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-inline-0006", action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry } }, fresh);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as AnsweredInline;
+    expect(d.answer.pool.oracleDeployed).toBe(false);
+    expect(d.answer.pool.oracleRate).toBeUndefined();
+    expect(d.answer.inline!.anchorHonored).toBe(true);
+    expect(d.answer.inline!.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
+    expect(env.warnings.some((w) => w.code === "oracle_not_deployed")).toBe(true);
+    // The anchor reached the recipe: every resolve staticcall carried abi.encode(anchorRate) as
+    // its args leg and the ZERO oracle (the recipe's undeployed branch reads the anchor there).
+    expect(resolveArgs.length).toBeGreaterThan(0);
+    for (const args of resolveArgs) {
+      expect(String(args[2]).toLowerCase()).toBe(ZERO);
+      expect(args[3]).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
+    }
+  });
+
+  it("an RFQ without an inline block answers with inline: null and no additionalData of its own", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-inline-0005", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry, jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect((env.data as AnsweredInline).answer.inline).toBeNull();
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
   });
 });
 
