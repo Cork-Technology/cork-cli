@@ -126,6 +126,7 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
   const served: Row[] = [];
   let hashLies = 0;
   let extensionLies = 0;
+  let unparseableSignatures = 0;
   let echoLies = 0;
   for (const row of rows) {
     const p = parseSignedLopOrder(row);
@@ -143,7 +144,12 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
       continue;
     }
     const recovered = await recoverEoaSigner(localHash, p.value.signature);
-    const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";
+    if (recovered.signer === null) {
+      // A signature that does not even parse can never fill — settled without a chain read.
+      unparseableSignatures += 1;
+      continue;
+    }
+    const makerSignature: BookMakerSignature = recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";
     const traits = p.value.order.makerTraits;
     const allowedSender = decodeMakerTraits(traits).allowedSender;
     const echo = row.allowedSender;
@@ -158,13 +164,17 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
   if (hashLies > 0) {
     warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash [K3]; a row that misrepresents its own order is unusable under either hash` });
   }
-  if (extensionLies > 0) {
-    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies)} venue row(s) DROPPED — the extension bytes served beside the signed order are not the ones its salt/makerTraits commit to (OrderLib.isValidExtension), so no fill of that row can ever succeed [K3]` });
+  if (extensionLies > 0 || unparseableSignatures > 0) {
+    const causes = [
+      ...(extensionLies > 0 ? [`${String(extensionLies)} whose extension bytes are not the ones the salt/makerTraits commit to (OrderLib.isValidExtension)`] : []),
+      ...(unparseableSignatures > 0 ? [`${String(unparseableSignatures)} whose signature does not parse`] : []),
+    ];
+    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies + unparseableSignatures)} venue row(s) DROPPED chain-free — ${causes.join("; ")}: no fill of such a row can ever succeed [K3]` });
   }
   if (echoLies > 0) {
     warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word [K3]; the venue's echo was not used` });
   }
-  return { lop, rows: served, parsed, dropped: hashLies + extensionLies, warnings };
+  return { lop, rows: served, parsed, dropped: hashLies + extensionLies + unparseableSignatures, warnings };
 }
 
 /** Verify one page of venue rows against the chain. Returns null for resources with no
@@ -241,7 +251,7 @@ export async function verifyVenueRows(a: {
       inBudget.map(async (row) => {
         const parsed = book.parsed.get(row);
         if (!parsed || parsed.makerSignature !== "unverified") return;
-        signatureOutcome.set(row, await authenticateBookRowSignature({ ctx, chainId, maker: parsed.signed.order.maker, orderHash: parsed.localHash, signature: parsed.signed.signature, client }));
+        signatureOutcome.set(row, await authenticateBookRowSignature(client, { maker: parsed.signed.order.maker, orderHash: parsed.localHash, signature: parsed.signed.signature }));
       }),
     );
     // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
@@ -251,7 +261,7 @@ export async function verifyVenueRows(a: {
     // representative (plan, maker, hash) to perform it with — readLopInvalidator owns the
     // view's arguments.
     type InvalidatorRead = { plan: LopInvalidatorPlan; maker: `0x${string}`; orderHash: `0x${string}` };
-    type BookRef = { row: Row; readKey?: string; plan?: LopInvalidatorPlan };
+    type BookRef = { row: Row; parsed?: { makerSignature: BookMakerSignature }; readKey?: string; plan?: LopInvalidatorPlan };
     const reads = new Map<string, InvalidatorRead>();
     const refs: BookRef[] = inBudget.map((row) => {
       const parsed = book.parsed.get(row);
@@ -261,7 +271,7 @@ export async function verifyVenueRows(a: {
       const maker = order.maker.toLowerCase() as `0x${string}`;
       const readKey = plan.mode === "bit" ? `bit:${maker}:${plan.slot.toString()}` : `raw:${maker}:${parsed.localHash.toLowerCase()}`;
       if (!reads.has(readKey)) reads.set(readKey, { plan, maker: order.maker, orderHash: parsed.localHash });
-      return { row, readKey, plan };
+      return { row, parsed, readKey, plan };
     });
     // Phase 2 — the deduped reads run CONCURRENTLY (the default mode's latency is this leg).
     const words = new Map<string, bigint | "error">();
@@ -292,7 +302,7 @@ export async function verifyVenueRows(a: {
         drop("on-chain invalidator says filled-or-cancelled");
         continue;
       }
-      const makerSignature: BookMakerSignature = sig === undefined ? book.parsed.get(ref.row)!.makerSignature : sig.outcome === "verified" ? "erc1271-verified" : "unverified";
+      const makerSignature: BookMakerSignature = sig === undefined ? ref.parsed!.makerSignature : sig.outcome === "verified" ? "erc1271-verified" : "unverified";
       const liveness = word === undefined || word === "error" ? "indeterminate" : "live";
       const row = { ...ref.row, makerSignature };
       if (liveness === "live" && makerSignature !== "unverified") keep(row, "confirmed");

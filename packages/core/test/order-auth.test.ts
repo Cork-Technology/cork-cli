@@ -141,6 +141,18 @@ describe("the ranked book authenticates every row it serves", () => {
     expect(data(env).verification.dropped).toBe(0);
   });
 
+  it("a signature that does not parse DROPS the row chain-free, RPC or not — it can never fill", async () => {
+    const honest = await rowBy("auth-9", maker);
+    const garbage = { ...(await rowBy("auth-10", maker)), signature: "0xdeadbeef" as const };
+    for (const resolveRpc of [async () => null, chain()]) {
+      const env = await book([honest, garbage], { resolveRpc });
+      expect(env.state).toBe("ok");
+      expect(data(env).count).toBe(1);
+      expect(data(env).verification.dropped).toBe(1);
+      expect(env.warnings.some((w) => w.code === "signature_or_reconstruction_mismatch" && w.message.includes("does not parse"))).toBe(true);
+    }
+  });
+
   it("extension bytes the salt/traits do not commit to DROP the row chain-free (signature_or_reconstruction_mismatch)", async () => {
     const honest = await rowBy("auth-6", maker);
     const unbound = { ...(await rowBy("auth-7", maker)), extension: "0xdeadbeef" as const }; // signed WITHOUT the flag: UnexpectedOrderExtension

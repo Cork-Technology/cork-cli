@@ -456,6 +456,9 @@ export interface SignedLopOrder {
   order: LopOrder;
   signature: `0x${string}`;
   extension: `0x${string}`;
+  /** The account type the row CLAIMS (or, on a build path, the verdict's). A venue row's claim
+   *  is validated as vocabulary and then consulted by nothing: the signature ladder decides
+   *  the type from the maker's code and replaces this field before any bytes are built. */
   makerAccountType: "EOA" | "ERC1271";
   /** The venue's own claimed order hash, when present (cross-checked against the local re-hash). */
   venueOrderHash?: `0x${string}`;

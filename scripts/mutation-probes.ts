@@ -3176,8 +3176,8 @@ const CATALOG: Mutant[] = [
     // unfillable through this tool.
     id: "ladder-code-detection-lost",
     file: "packages/core/src/handlers/order-auth.ts",
-    find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
-    replace: 'probe = "no-code";',
+    find: 'return code !== undefined && code !== "0x" ? "has-code" : "no-code";',
+    replace: 'return "no-code";',
     tests: [T.inlineFill],
   },
   {
@@ -3441,8 +3441,8 @@ const CATALOG: Mutant[] = [
     // the spurious chain_read_failed.
     id: "maker-code-undefined-is-failure",
     file: "packages/core/src/handlers/order-auth.ts",
-    find: 'probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";',
-    replace: 'probe = code === undefined ? "read-failed" : code !== "0x" ? "has-code" : "no-code";',
+    find: 'return code !== undefined && code !== "0x" ? "has-code" : "no-code";',
+    replace: 'return code === undefined ? "read-failed" : code !== "0x" ? "has-code" : "no-code";',
     tests: [T.makerCode],
   },
   // ── TakerTraitsLib._AMOUNT_MASK is 184 bits, not 185 ────────────────────────────────────
@@ -4032,7 +4032,7 @@ const CATALOG: Mutant[] = [
     // DB-004: ecrecover's answer is ignored — every row reads eoa-verified.
     id: "book-eoa-recover-ignored",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
+    find: 'const makerSignature: BookMakerSignature = recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
     replace: 'const makerSignature: BookMakerSignature = "eoa-verified";',
     tests: [T.orderAuth],
   },
@@ -4072,16 +4072,16 @@ const CATALOG: Mutant[] = [
     // DB-004: an ERC-1271 transport failure refutes the row instead of leaving it unverified.
     id: "book-1271-transport-refutes",
     file: "packages/core/src/handlers/order-auth.ts",
-    find: '    case "erc1271_transport": return { outcome: "indeterminate" };',
-    replace: '    case "erc1271_transport": return { outcome: "refuted", why: "transport" };',
+    find: '  if (verdict.kind === "erc1271_rejected") return { outcome: "refuted", why: "the contract maker\'s isValidSignature rejected the signature" };\n  return { outcome: "indeterminate" };',
+    replace: '  return { outcome: "refuted", why: verdict.kind };',
     tests: [T.orderAuth],
   },
   {
     // DB-004: a non-recovering signature refutes the row even when the code probe failed.
     id: "book-eoa-mismatch-probe-ignored",
     file: "packages/core/src/handlers/order-auth.ts",
-    find: '    case "eoa_mismatch": return verdict.codeProbe === "no-code" ? { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" } : { outcome: "indeterminate" };',
-    replace: '    case "eoa_mismatch": return { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" };',
+    find: '  if (probe !== "has-code") return { outcome: "indeterminate" }; // read-failed (no-rpc cannot occur: the client is in hand)',
+    replace: '  if (probe !== "has-code") return { outcome: "refuted", why: "probe" };',
     tests: [T.orderAuth],
   },
   {

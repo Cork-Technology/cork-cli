@@ -37,7 +37,7 @@ export type ExtensionVerdict =
   | { valid: false; reason: "MissingOrderExtension" | "UnexpectedOrderExtension" | "InvalidExtensionHash"; message: string };
 
 export function extensionVerdict(order: LopOrder, extension: `0x${string}`): ExtensionVerdict {
-  const hasBytes = extension !== "0x" && extension.length > 2;
+  const hasBytes = extension.length > 2; // "0x" is the empty extension
   if (decodeMakerTraits(order.makerTraits).hasExtension) {
     if (!hasBytes) {
       return { valid: false, reason: "MissingOrderExtension", message: "the signed makerTraits set HAS_EXTENSION, but no extension bytes came with the order — OrderLib reverts MissingOrderExtension at fill, so these bytes can never fill. Pass the order's OWN extension verbatim" };
@@ -74,47 +74,54 @@ export type MakerSignatureVerdict =
   | { kind: "eoa_mismatch"; recoveredSigner: `0x${string}`; codeProbe: Exclude<MakerCodeProbe, "has-code"> }
   | { kind: "unparseable"; reason: string };
 
+/** eth_getCode on the maker, classified. `undefined` and "0x" both mean "no code" (an EOA) —
+ *  only a throw means the read failed, and a missing client means nobody could ask. */
+export async function probeMakerCode(client: MakerCodeClient | null, maker: `0x${string}`): Promise<MakerCodeProbe> {
+  if (!client) return "no-rpc";
+  try {
+    const code = await client.getCode({ address: maker });
+    return code !== undefined && code !== "0x" ? "has-code" : "no-code";
+  } catch {
+    return "read-failed"; // transport failure or a client without getCode
+  }
+}
+
+/** The ERC-1271 isValidSignature staticcall — the exact read the fill performs for a contract
+ *  maker — classified. Attribution: a transport failure is indeterminate (retryable, not a
+ *  verdict); a contract-side revert or a non-magic answer IS the verdict. */
+export async function checkContractMakerSignature(client: MakerCodeClient, a: { maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}` }): Promise<Extract<MakerSignatureVerdict, { kind: "erc1271" | "erc1271_transport" | "erc1271_rejected" }>> {
+  let magic: unknown;
+  try {
+    magic = await client.readContract({ address: a.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [a.orderHash, a.signature] });
+  } catch (err) {
+    if (isTransportFailure(err)) return { kind: "erc1271_transport", reason: revertReason(err) };
+    magic = null;
+  }
+  if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
+    return { kind: "erc1271_rejected", isValidSignatureAnswer: typeof magic === "string" ? magic : null };
+  }
+  return { kind: "erc1271" };
+}
+
 /** Maker-signature verification ladder, shared by finalize-maker-order, both taker-fill
- *  acquisition paths, refresh-order, and the ranked book's per-row leg. Code detection decides
- *  the branch: a CONTRACT maker (a Safe, the Zyfai shape) cannot be ecrecovered — verification
- *  performs the SAME isValidSignature staticcall the fill performs; an EOA maker verifies
- *  offline by ecrecover. */
+ *  acquisition paths and refresh-order. Code detection decides the branch: a CONTRACT maker
+ *  (a Safe, the Zyfai shape) cannot be ecrecovered — verification performs the SAME
+ *  isValidSignature staticcall the fill performs; an EOA maker verifies offline by ecrecover.
+ *  Composes the two primitives above; the ranked book composes them differently (it settles
+ *  ecrecover chain-free for every row first, then asks only about the rows that did not
+ *  recover — see authenticateBookRowSignature). */
 export async function verifyMakerSignatureLadder(a: {
   ctx: HandlerContext;
   chainId: ChainId;
   maker: `0x${string}`;
   orderHash: `0x${string}`;
   signature: `0x${string}`;
-  /** A client the caller already resolved (the book's liveness leg holds one per page); omitted
-   *  = resolve through the context, the build paths' shape. */
+  /** A client the caller already resolved; omitted = resolve through the context. */
   client?: MakerCodeClient | undefined;
 }): Promise<MakerSignatureVerdict> {
   const client: MakerCodeClient | null = a.client ?? (await getRpc(a.ctx, a.chainId))?.client ?? null;
-  let probe: MakerCodeProbe = "no-rpc";
-  if (client) {
-    try {
-      // `undefined` and "0x" both mean "no code" — only a throw means the read failed.
-      const code = await client.getCode({ address: a.maker });
-      probe = code !== undefined && code !== "0x" ? "has-code" : "no-code";
-    } catch {
-      probe = "read-failed"; // transport failure or a client without getCode — the EOA branch discloses it
-    }
-  }
-  if (probe === "has-code") {
-    let magic: unknown;
-    try {
-      magic = await client!.readContract({ address: a.maker, abi: erc1271Abi, functionName: "isValidSignature", args: [a.orderHash, a.signature] });
-    } catch (err) {
-      // Attribution: a transport failure is indeterminate (retryable, not a verdict); a
-      // contract-side revert IS the verdict — the fill runs this exact staticcall.
-      if (isTransportFailure(err)) return { kind: "erc1271_transport", reason: revertReason(err) };
-      magic = null;
-    }
-    if (typeof magic !== "string" || magic.slice(0, 10).toLowerCase() !== ERC1271_MAGIC) {
-      return { kind: "erc1271_rejected", isValidSignatureAnswer: typeof magic === "string" ? magic : null };
-    }
-    return { kind: "erc1271" };
-  }
+  const probe = await probeMakerCode(client, a.maker);
+  if (probe === "has-code") return checkContractMakerSignature(client!, a);
   const recovered = await recoverEoaSigner(a.orderHash, a.signature);
   if (recovered.signer === null) return { kind: "unparseable", reason: recovered.reason };
   if (!isAddressEqual(recovered.signer, a.maker)) return { kind: "eoa_mismatch", recoveredSigner: recovered.signer, codeProbe: probe };
@@ -219,20 +226,21 @@ export async function authenticateSignedOrder(a: {
  *  a forgery nobody could refute yet. A row refuted either way is dropped, never labeled. */
 export type BookMakerSignature = "eoa-verified" | "erc1271-verified" | "unverified";
 
-/** The per-row authenticity leg for a row whose signature did NOT ecrecover to its maker: the
- *  ladder decides whether the maker is a contract that validates it (kept, verified), an EOA or
- *  a rejecting contract (a refutation — dropped), or unreachable (kept, unverified). Rows that
- *  ecrecovered to their maker never reach here. */
+/** The per-row authenticity leg for a row whose signature PARSED but did NOT ecrecover to its
+ *  maker (both settled chain-free by the book's first half; an unparseable signature is
+ *  dropped there). Only the chain can finish the question: the maker has no code → an EOA that
+ *  never signed it (refuted); the maker has code → its own isValidSignature answer decides
+ *  (verified, or refuted); the code read or the staticcall failed in transport → nobody could
+ *  ask (indeterminate, the row stays `unverified`). No second ecrecover: its answer is the
+ *  premise. */
 export type BookSignatureOutcome = { outcome: "verified" } | { outcome: "refuted"; why: string } | { outcome: "indeterminate" };
 
-export async function authenticateBookRowSignature(a: { ctx: HandlerContext; chainId: ChainId; maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}`; client: MakerCodeClient }): Promise<BookSignatureOutcome> {
-  const verdict = await verifyMakerSignatureLadder(a);
-  switch (verdict.kind) {
-    case "erc1271": return { outcome: "verified" };
-    case "erc1271_rejected": return { outcome: "refuted", why: "the contract maker's isValidSignature rejected the signature" };
-    case "eoa_mismatch": return verdict.codeProbe === "no-code" ? { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" } : { outcome: "indeterminate" };
-    case "unparseable": return { outcome: "refuted", why: "the signature is unparseable" };
-    case "erc1271_transport": return { outcome: "indeterminate" };
-    case "eoa": return { outcome: "verified" }; // unreachable for a non-recovering row; harmless if reached
-  }
+export async function authenticateBookRowSignature(client: MakerCodeClient, a: { maker: `0x${string}`; orderHash: `0x${string}`; signature: `0x${string}` }): Promise<BookSignatureOutcome> {
+  const probe = await probeMakerCode(client, a.maker);
+  if (probe === "no-code") return { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" };
+  if (probe !== "has-code") return { outcome: "indeterminate" }; // read-failed (no-rpc cannot occur: the client is in hand)
+  const verdict = await checkContractMakerSignature(client, a);
+  if (verdict.kind === "erc1271") return { outcome: "verified" };
+  if (verdict.kind === "erc1271_rejected") return { outcome: "refuted", why: "the contract maker's isValidSignature rejected the signature" };
+  return { outcome: "indeterminate" };
 }
