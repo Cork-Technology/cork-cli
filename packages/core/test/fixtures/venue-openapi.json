@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.4.1"
+  "version": "0.4.2"
  },
  "openapi": "3.0.3",
  "paths": {
