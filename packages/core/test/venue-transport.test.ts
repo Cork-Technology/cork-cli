@@ -141,22 +141,26 @@ describe("the caller's signal ends venue work (audit DB-001) — an abort is nev
 
   it("the signal reaches the fetch (composed into init.signal); an abort mid-flight is VenueAborted, not retried, and never opens the breaker", async () => {
     let calls = 0;
+    let composedAborted: boolean | undefined;
     const breaker: VenueBreakerState = { byHost: {} };
     const ctl = new AbortController();
     const deps: VenueDeps = {
       fetch: async (_url, init) => {
         calls++;
-        expect(init?.signal).toBeDefined();
-        // The caller walks away while the venue is still thinking: the composed signal fires
-        // and fetch rejects with the abort reason, exactly as the platform fetch does.
+        // The caller walks away while the venue is still thinking: the signal the fetch was
+        // given must be COMPOSED with the caller's (the transport always adds its own timeout
+        // signal, so "a signal is present" proves nothing — its abort state after the caller's
+        // abort does). fetch then rejects with the abort reason, as the platform fetch does.
         ctl.abort(new DOMException("MCP request deadline exceeded", "TimeoutError"));
-        throw init!.signal!.reason;
+        composedAborted = init?.signal?.aborted;
+        throw init?.signal?.reason ?? new Error("no signal reached the fetch");
       },
       now: () => 0,
       breaker,
       signal: ctl.signal,
     };
     await expect(getPools(deps, 1)).rejects.toBeInstanceOf(VenueAborted);
+    expect(composedAborted).toBe(true);
     expect(calls).toBe(1); // the GET retry is for transport blips, not for a cancelled caller
     expect(breaker.byHost[HOST]).toBeUndefined();
     // POSTs the same way: a relay cancelled by its caller is not a venue outage.

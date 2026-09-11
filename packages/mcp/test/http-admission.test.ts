@@ -205,7 +205,10 @@ describe("the deadline cancels the request's own work", () => {
     let close!: () => void;
     const body = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(new TextEncoder().encode(JSON.stringify(initialize).slice(0, 10))); // a trickle, never finished
+        // The whole VALID body is enqueued, but the stream stays open past the deadline — a
+        // client that finishes late. Once it closes, the body parses fine; the only thing that
+        // keeps it from being dispatched is the aborted permit.
+        c.enqueue(new TextEncoder().encode(JSON.stringify(initialize)));
         close = () => c.close();
       },
     });
@@ -218,10 +221,10 @@ describe("the deadline cancels the request's own work", () => {
     expect(res.status).toBe(504);
     expect(dispatched).toBe(false);
     expect(controller.inFlight().global).toBe(1);
-    close(); // the socket ends: the truncated body parses as invalid JSON, the work settles, the slot frees
+    close(); // the socket ends: the body parses, the aborted permit refuses to dispatch it, the work settles, the slot frees
     await new Promise((r) => setTimeout(r, 0));
     expect(controller.inFlight().global).toBe(0);
-    expect(dispatched).toBe(false); // an aborted permit never dispatches, even once the body arrives
+    expect(dispatched).toBe(false); // an aborted permit never dispatches, even once a valid body arrives
   });
 
   it("refuses a non-positive deadline at construction rather than never firing", () => {
