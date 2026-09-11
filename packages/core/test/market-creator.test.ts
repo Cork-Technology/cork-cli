@@ -258,6 +258,25 @@ describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewP
     expect((env.data as { calldata?: string }).calldata).toBeUndefined();
   });
 
+  it("the creator's bound CONTROLLER contradicting config → conflict too (audit DB-005): roles and share prediction must run on ONE graph", async () => {
+    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, constraint: CONSTRAINT_WIRE } }, ctx(creatorStub({ CONTROLLER: PM })));
+    expect(env.state).toBe("conflict");
+    expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");
+    expect(env.warnings[0]?.message).toContain("controller");
+    expect(env.data).toMatchObject({ expected: { controller: CONTROLLER }, onChain: { controller: PM } });
+    expect((env.data as { calldata?: string }).calldata).toBeUndefined();
+  });
+
+  it("share prediction follows the creator's BOUND controller (its CORK_POOL_MANAGER view is read on that address)", async () => {
+    const seen: string[] = [];
+    const env = await runTool("cork_prepare_market", { ...base, action: ACTION }, ctx((c) => {
+      if (c.functionName === "CORK_POOL_MANAGER") seen.push(String((c as { address?: string }).address).toLowerCase());
+      return creatorStub()(c);
+    }));
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(seen).toContain(CONTROLLER.toLowerCase());
+  });
+
   it("missing controller roles → roles_not_granted naming the per-role truth", async () => {
     const env = await runTool("cork_prepare_market", { ...base, action: ACTION }, ctx(creatorStub({ hasRole: false })));
     expect(env.state).toBe("ok");

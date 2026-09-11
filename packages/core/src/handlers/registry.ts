@@ -7,7 +7,7 @@ import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeplo
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
-import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
+import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
 
 
@@ -346,7 +346,8 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       // A deployed oracle whose rate() reverts is the cheapest catch of the whole read path —
       // said explicitly (rateReadable:false + the revert, plus an info warning), never by
       // dropping the field.
-      if (read.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(probe.address, read.rateError, "Every recipe resolve/verify against this pair, every JIT fill, and CorkMarketCreator.createNewPool would revert the same way.") });
+      if (read.rateError && read.rateReadFailure === "transport") warnings.push({ code: "chain_read_failed", message: oracleRateTransportMessage(probe.address, read.rateError, "Whether the pair's recipes resolve/verify right now is unknown.") });
+      else if (read.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(probe.address, read.rateError, "Every recipe resolve/verify against this pair, every JIT fill, and CorkMarketCreator.createNewPool would revert the same way.") });
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, ...pairEcho, oracle: { address: probe.address, deployed: true, deployable: true, ...oracleRateEcho(read) } }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (probe.address !== null) {
@@ -500,7 +501,7 @@ interface RecipeResolution {
   gate?: Envelope;
   recipe: `0x${string}`;
   source: RecipeSourceName;
-  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; rateError?: string; reason?: string };
+  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; rateError?: string; rateReadFailure?: OracleRateReadFailure; reason?: string };
   constraint?: ResolvedConstraint;
   warnings: Array<{ code: string; message: string }>;
 }
@@ -510,19 +511,31 @@ interface RecipeResolution {
  *  toward anchor/deploy advice when the real fault was the oracle's source contract (
  *  a NAV oracle over an ERC-4626 vault reverting on totalAssets() — on a fork, a block clock
  *  behind the synced state underflows Morpho's accrual, Panic 0x11). */
-async function readOracleRate(client: RegistryClient, oracle: `0x${string}`): Promise<{ rate: bigint | null; rateError?: string }> {
+/** WHY a deployed oracle's rate() read produced no rate: the contract REVERTED (a fact about
+ *  the oracle/source — the oracle_rate_unreadable diagnosis), or the read never reached a
+ *  verdict (a transport failure — indeterminate, the RPC's fault, retryable). Conflating the
+ *  two sent operators repairing inputs and oracles during RPC outages (audit DB-007). */
+export type OracleRateReadFailure = "revert" | "transport";
+
+async function readOracleRate(client: RegistryClient, oracle: `0x${string}`): Promise<{ rate: bigint | null; rateError?: string; rateReadFailure?: OracleRateReadFailure }> {
   try {
     return { rate: (await client.readContract({ address: oracle, abi: rateOracleAbi, functionName: "rate" })) as bigint };
   } catch (err) {
-    return { rate: null, rateError: revertReason(err) };
+    return { rate: null, rateError: revertReason(err), rateReadFailure: isTransportFailure(err) ? "transport" : "revert" };
   }
 }
 
 /** The shared oracle-rate echo for a DEPLOYED oracle: the live rate with its scale, or an
- *  explicit `rateReadable: false` + the revert — a deployed-but-reverting oracle must never
- *  read as healthy by omission (the registry-oracle surface used to drop the field silently). */
-export function oracleRateEcho(r: { rate: bigint | null; rateError?: string }): Record<string, unknown> {
-  return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}) };
+ *  explicit `rateReadable: false` + the failure and its KIND — a deployed-but-reverting oracle
+ *  must never read as healthy by omission (the registry-oracle surface used to drop the field
+ *  silently), and a transport failure must never read as a reverting oracle. */
+export function oracleRateEcho(r: { rate: bigint | null; rateError?: string; rateReadFailure?: OracleRateReadFailure }): Record<string, unknown> {
+  return r.rate !== null ? { rate: r.rate, rateScale: "ABSOLUTE, 1e18 = 1.0", rateReadable: true } : { rateReadable: false, ...(r.rateError ? { rateError: r.rateError } : {}), ...(r.rateReadFailure ? { rateReadFailure: r.rateReadFailure } : {}) };
+}
+
+/** The chain_read_failed message for a rate() read that failed in TRANSPORT — indeterminate. */
+export function oracleRateTransportMessage(oracle: `0x${string}` | null, rateError: string, tail: string): string {
+  return `the pair's oracle ${oracle} is DEPLOYED but its rate() read failed in transport: ${rateError}. ${tail} This says nothing about the oracle — the RPC did not answer; retry (or set CORK_RPC_URL to a working endpoint)`;
 }
 
 /** The oracle_rate_unreadable message, shared by the resolve gate and the verify pre-flights. */
@@ -618,6 +631,12 @@ export async function staticResolveConstraint(
     return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
   } catch (err) {
     const o = args.oracle;
+    // A read that never reached the recipe is no verdict on the recipe: the RPC failed, the
+    // constraint is unknown, and the only correct advice is "retry" — not "fix additionalData"
+    // and not "the oracle reverts" (audit DB-007).
+    if (isTransportFailure(err) || (o.deployed && o.rateReadFailure === "transport")) {
+      return { gate: unavailable(chainId, "chain_read_failed", `the recipe.resolve staticcall could not be completed: ${revertReason(err)}${o.deployed && o.rateReadFailure === "transport" ? ` (the oracle ${o.address}'s rate() read had already failed in transport: ${o.rateError})` : ""} — a transport failure, indeterminate; the constraint was NOT resolved. Retry, or set CORK_RPC_URL to a working endpoint`, ctx) };
+    }
     // A deployed oracle whose rate() already reverted is the cause, not the caller's input —
     // the recipe read the same oracle and fell over the same way. Distinct code, so
     // callers branch on the oracle/environment instead of re-shaping additionalData.

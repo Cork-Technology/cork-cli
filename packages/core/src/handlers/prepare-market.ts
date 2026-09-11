@@ -218,13 +218,20 @@ async function handleCreatePool(
       client.readContract({ address: creator, abi: marketCreatorAbi, functionName: "MARKET_REGISTRY" }),
     ]);
     const { dep } = await getDep(ctx, chainId);
-    if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase())) {
+    // All THREE bindings the creator's graph hangs on: registry (the recipe/oracle authority),
+    // pool manager (where the pool lands), and CONTROLLER (whose roles gate creation and whose
+    // own pool-manager binding the share prediction follows). A controller that differs from
+    // the configured one would put the roles check on one graph and the cST/cPT prediction on
+    // another (audit DB-005, 2026-09-11) — so it is a conflict like the other two, and the
+    // prediction below runs against the BOUND controller, never the config's.
+    const controllerMismatch = mr.controller !== undefined && boundController.toLowerCase() !== mr.controller.toLowerCase();
+    if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase()) || controllerMismatch) {
       return envelope({
         state: "conflict",
-        data: { marketCreator: creator, expected: { registry: mr.registry, ...(dep?.poolManager ? { poolManager: dep.poolManager } : {}) }, onChain: { registry: boundRegistry, poolManager: boundPm } },
+        data: { marketCreator: creator, expected: { registry: mr.registry, ...(dep?.poolManager ? { poolManager: dep.poolManager } : {}), ...(mr.controller ? { controller: mr.controller } : {}) }, onChain: { registry: boundRegistry, poolManager: boundPm, controller: boundController } },
         chainId,
         source: "chain",
-        warnings: [{ code: "adapter_binding_mismatch", message: "the configured CorkMarketCreator's on-chain bindings do not match this tool's registry/pool-manager config — a stale or cross-generation address; refresh cork-defaults.json before signing anything" }],
+        warnings: [{ code: "adapter_binding_mismatch", message: `the configured CorkMarketCreator's on-chain bindings do not match this tool's ${controllerMismatch ? "controller" : "registry/pool-manager"} config — a stale or cross-generation address; refresh cork-defaults.json before signing anything` }],
         ctx,
       });
     }
@@ -264,7 +271,7 @@ async function handleCreatePool(
       if (ok === false) {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — sending this tx would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
       } else if (ok === null) {
-        if (oracle.rateError) warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and createNewPool will too.") });
+        if (oracle.rateError && oracle.rateReadFailure !== "transport") warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and createNewPool will too.") });
         else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the creator's constraint check could not be previewed" });
       }
     } else {
@@ -280,7 +287,7 @@ async function handleCreatePool(
       if (!oracle.deployed) {
         preCalls.push({ to: mr.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(a.collateralAsset, a.referenceAsset, oracle.mode ?? "price") });
       }
-      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls, chainId });
+      shares = await predictShares(client, { adapter: mr.adapter, controller: boundController, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls, chainId });
     }
     if (shares.status === "unavailable") {
       warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the calldata and pool id above are still exact; the tx itself returns (poolId, cst, cpt)" });

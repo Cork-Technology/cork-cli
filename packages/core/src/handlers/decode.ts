@@ -274,7 +274,7 @@ const describeTarget = (leg: DecodedLeg): string => {
 /** The verification verdicts of a decoded tree (JIT hook targets included), as warnings: one
  *  `target_mismatch` per contradiction (the handler returns `conflict`), and ONE informational
  *  `target_unverified` naming every labeled leg nobody could vouch for. */
-function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: string } = {}): { mismatch: boolean; warnings: Array<{ code: string; message: string }> } {
+function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: string; outerUnverified?: string } = {}): { mismatch: boolean; warnings: Array<{ code: string; message: string }> } {
   const { mismatches, unverified } = collectVerification(legs);
   const warnings: Array<{ code: string; message: string }> = [];
   for (const leg of mismatches) {
@@ -293,9 +293,13 @@ function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: strin
   };
   walkJit(legs);
   for (const m of jitMismatch) warnings.push({ code: "target_mismatch", message: `${m} — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not sign` });
-  const names = [...unverified.map((l) => `${describeTarget(l)} at ${l.to}`), ...jitUnverified];
+  // The outer multicall target is not a leg: raw Bundler3.multicall bytes name no contract of
+  // their own, so when the caller claimed none, the address these bytes will be SENT to is
+  // unverified even if every inner leg checked out — said in the same warning, first, so a
+  // warning-free result can never mean "the executor is verified" (audit DB-003, 2026-09-11).
+  const names = [...(opts.outerUnverified ? [opts.outerUnverified] : []), ...unverified.map((l) => `${describeTarget(l)} at ${l.to}`), ...jitUnverified];
   if (names.length) {
-    warnings.push({ code: "target_unverified", message: `${names.length} labeled leg(s) could not be checked against a configured contract: ${names.join("; ")}. ${opts.unverifiedHint ?? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"}` });
+    warnings.push({ code: "target_unverified", message: `${names.length} labeled leg(s)/target(s) could not be checked against a configured contract: ${names.join("; ")}. ${opts.unverifiedHint ?? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"}` });
   }
   return { mismatch: mismatches.length > 0 || jitMismatch.length > 0, warnings };
 }
@@ -640,6 +644,7 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
     warnings.push({ code: "target_mismatch", message: `these bytes are Bundler3.multicall calldata, but the claimed target ${claimedTo} is not the configured Bundler3 (${targets.bundler3}) — the bytes claim Cork semantics at a contract that is not Cork's. Do not sign` });
   }
   const v = verificationWarnings(legs, {
+    ...(claimedTo === undefined && isBundlerMulticall(data) ? { outerUnverified: `the OUTER Bundler3.multicall target (these bytes will be sent to an address they do not name — pass \`to\`, or decode the signed tx, to verify it is the configured Bundler3${targets.bundler3 ? ` ${targets.bundler3}` : ""})` } : {}),
     unverifiedHint:
       claimedTo !== undefined
         ? "The target here is the CALLER'S claim, verified against the configured contracts where a role exists; roles this decode has no authority for (a token, an integrator-deployed adapter) stay unverified. The claim also only helps if you actually send the tx to that address — the signed-tx decode (kind \"tx\") is still the last word"

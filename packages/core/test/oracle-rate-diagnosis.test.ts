@@ -50,6 +50,45 @@ const revertingOracleStub = (over: Partial<Record<string, () => unknown>> = {}) 
 };
 const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_789_900_000n, resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" } }) });
 
+const TRANSPORT = () => {
+  throw Object.assign(new Error("HTTP request failed. URL: https://rpc.example/ Request body: {...}"), { name: "HttpRequestError" });
+};
+
+describe("a rate() read that fails in TRANSPORT is never attributed to the oracle or the recipe (audit DB-007)", () => {
+  it("registry-oracle: rateReadable:false with rateReadFailure:'transport' and a chain_read_failed info — not oracle_rate_unreadable", async () => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx(revertingOracleStub({ rate: TRANSPORT })));
+    expect(env.state).toBe("ok");
+    const o = (env.data as { oracle: { rateReadable?: boolean; rateReadFailure?: string; rateError?: string } }).oracle;
+    expect(o).toMatchObject({ rateReadable: false, rateReadFailure: "transport" });
+    expect(env.warnings.map((w) => w.code)).toContain("chain_read_failed");
+    expect(env.warnings.map((w) => w.code)).not.toContain("oracle_rate_unreadable");
+    expect(env.warnings.find((w) => w.code === "chain_read_failed")!.message).toContain("says nothing about the oracle");
+    // The revert case keeps its kind too.
+    const reverted = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx(revertingOracleStub()));
+    expect((reverted.data as { oracle: { rateReadFailure?: string } }).oracle.rateReadFailure).toBe("revert");
+  });
+
+  it("derive-cork-pool and recipe-rate-constraint: a resolve that fails in transport gates as chain_read_failed — not recipe_refused (fix additionalData) and not oracle_rate_unreadable", async () => {
+    for (const stub of [revertingOracleStub({ rate: TRANSPORT, resolve: TRANSPORT }), revertingOracleStub({ rate: () => WAD, resolve: TRANSPORT })]) {
+      const derive = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: "1790000000", recipe: NAV } }, ctx(stub));
+      expect(derive.state).toBe("unavailable");
+      expect(derive.warnings[0]?.code).toBe("chain_read_failed");
+      expect(derive.warnings[0]?.message).toContain("NOT resolved");
+      expect(derive.warnings[0]?.message).not.toContain("additionalData");
+      const compute = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: NAV, collateralAsset: CA, referenceAsset: REF } }, ctx(stub));
+      expect(compute.state).toBe("unavailable");
+      expect(compute.warnings[0]?.code).toBe("chain_read_failed");
+    }
+  });
+
+  it("create-pool with an EXPLICIT constraint: a transport failure on rate() + verify is chain_read_failed, not the oracle-fault diagnosis", async () => {
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "db007-create-01", action: { type: "create-pool", collateralAsset: CA, referenceAsset: REF, expiryTimestamp: "1790000000", recipe: NAV, constraint: CONSTRAINT } }, ctx(revertingOracleStub({ rate: TRANSPORT, verify: TRANSPORT })));
+    expect(env.state).toBe("ok");
+    expect(env.warnings.some((w) => w.code === "chain_read_failed")).toBe(true);
+    expect(env.warnings.some((w) => w.code === "oracle_rate_unreadable")).toBe(false);
+  });
+});
+
 describe("a deployed oracle whose rate() reverts is named as the cause", () => {
   it("registry-oracle: rateReadable:false + the revert, plus an oracle_rate_unreadable info — never a silently healthy oracle", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx(revertingOracleStub()));

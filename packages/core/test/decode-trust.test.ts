@@ -102,13 +102,23 @@ describe("kind:calldata — raw bytes with no target of their own", () => {
     expect(env.warnings[0]!.message).toContain('kind "tx"');
   });
 
-  it("a multicall's INNER legs do name their targets, so they verify like a signed tx's", async () => {
+  it("a multicall's INNER legs do name their targets, so they verify like a signed tx's — but the OUTER target stays unverified until `to` is claimed (audit DB-003)", async () => {
     const good = await runTool("cork_decode", { kind: "calldata", chainId: 1, data: encodeMulticall([pullLeg(ADAPTER_1), depositLeg(ADAPTER_1)]) }, ctx);
     expect(good.state).toBe("ok");
-    expect(codes(good)).toEqual([]);
+    // Every inner leg is trusted, yet a warning-free result would claim more than these bytes can
+    // prove: nothing in a raw multicall says which address it will be SENT to.
+    expect(codes(good)).toEqual(["target_unverified"]);
+    expect(good.warnings[0]!.message).toContain("OUTER Bundler3.multicall target");
+    expect(good.warnings[0]!.message).toContain(BUNDLER3_1);
+    const legs = (good.data as { legs: Array<{ verification: string }> }).legs;
+    expect(legs.every((l) => l.verification === "trusted")).toBe(true);
+    // Claiming the configured Bundler3 as `to` verifies the outer target: the warning is gone.
+    const claimed = await runTool("cork_decode", { kind: "calldata", chainId: 1, data: encodeMulticall([pullLeg(ADAPTER_1), depositLeg(ADAPTER_1)]), to: BUNDLER3_1 }, ctx);
+    expect(claimed.state).toBe("ok");
+    expect(codes(claimed)).toEqual([]);
     const bad = await runTool("cork_decode", { kind: "calldata", chainId: 1, data: encodeMulticall([depositLeg(FAKE)]) }, ctx);
     expect(bad.state).toBe("conflict");
-    expect(codes(bad)).toEqual(["target_mismatch"]);
+    expect(codes(bad)).toEqual(["target_mismatch", "target_unverified"]); // the leg contradiction, plus the outer target nobody claimed
   });
 });
 

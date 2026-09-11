@@ -241,8 +241,13 @@ describe("cork_decode kind:calldata / kind:tx — 1inch legs label, with the sam
     const env = await decode({ kind: "calldata", chainId: 8453, data: outer });
     expect(env.state).toBe("ok");
     // Inner targets are verifiable (a multicall's legs name their contracts): the reenter
-    // bundle targets the chain's Bundler3 and the fills its LOP, so every leg is trusted.
-    expect(env.warnings.filter((w) => w.code === "target_unverified" || w.code === "target_mismatch")).toEqual([]);
+    // bundle targets the chain's Bundler3 and the fills its LOP, so every leg is trusted. The
+    // OUTER target of raw bytes is the one thing nobody can verify without `to` (DB-003).
+    expect(env.warnings.filter((w) => w.code === "target_mismatch")).toEqual([]);
+    const unverified = env.warnings.filter((w) => w.code === "target_unverified");
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.message).toContain("OUTER Bundler3.multicall target");
+    expect(unverified[0]!.message).not.toMatch(/ at 0x/); // no LEG is unverified — only the outer target
     type Leg = { kind: string; legs?: Leg[]; label?: { orderHash: string | null; jit?: { adapter: string } } };
     const d = env.data as { summary: string[]; legs: Leg[] };
     const inner = d.legs[0]!.legs!;
