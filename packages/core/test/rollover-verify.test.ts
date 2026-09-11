@@ -103,15 +103,19 @@ describe("settler provenance gate [STATE-003]: only a configured generation may 
     expect(env.warnings.filter((x) => x.code === "venue_reported")).toHaveLength(0);
   });
 
-  it.each([["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"], ["retired", EXACT]])(
-    "a configured %s settler IS read, and its generation rides on the verification",
-    async (generation, settler) => {
+  it.each([
+    ["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", "v0.1.0-rc.2"],
+    ["active", "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", "0.4-rc.1-candidate"], // the second active generation
+    ["retired", EXACT, "july-2026"],
+  ])(
+    "a configured %s settler (%s) IS read, and its generation + label ride on the verification",
+    async (generation, settler, label) => {
       const asked: string[] = [];
       const env = await track(stubCtx({ venueStatus: "OPENED", chainStatus: 1, settler, onOrderStatus: (a) => asked.push(a) }));
       expect(asked).toEqual([settler.toLowerCase()]);
       expect(env.state).toBe("ok");
       expect(env.provenance.source).toBe("chain");
-      expect(env.data).toMatchObject({ chainVerification: { settler, settlerGeneration: generation, chainStatus: "Opened", consistent: true } });
+      expect(env.data).toMatchObject({ chainVerification: { settler, settlerGeneration: generation, settlerGenerationLabel: label, chainStatus: "Opened", consistent: true } });
     },
   );
 
@@ -413,6 +417,14 @@ describe("reconcile event-history leg — a digest binds to ONE settler, and the
     expect(requested[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0xf4ffd4b3faedb784b04d1883119840515f224c2f"]);
     expect(BigInt(requested[0]!.fromBlock!)).toBe(494104750n); // rc.2 seed, not 484973917
   });
+
+  it("a second ACTIVE generation's settler scopes to ITS OWN seed — ~9.8M blocks after rc.2, never the primary's", async () => {
+    const requested: Array<{ address?: string[]; fromBlock?: string }> = [];
+    await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, withRow("0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", requested));
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.address!.map((a) => a.toLowerCase())).toEqual(["0x0f2ce7a5b817865ebff50c58439b9a27e38f452e"]);
+    expect(BigInt(requested[0]!.fromBlock!)).toBe(503918966n);
+  });
 });
 
 describe("reconcile venue-miss sweep [K7] — venue absence must not silence the chain", () => {
@@ -448,7 +460,21 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     const v = (env.data as { chainVerification: { settler: string; chainStatus: string } }).chainVerification;
     expect(v.settler.toLowerCase()).toBe(EXACT.toLowerCase());
     expect(v.chainStatus).toBe("Settled");
+    expect(v).toMatchObject({ settlerGeneration: "retired", settlerGenerationLabel: "july-2026" });
     expect(env.warnings.some((w) => w.code === "order_not_found" && w.message.includes("outranks"))).toBe(true);
+  });
+
+  it("the sweep reaches the second ACTIVE generation's settlers — a digest only the candidate PartialSettler holds reconstructs", async () => {
+    const candidatePartial = "0x5E19Be0743fE521d8BF85b5A558356675499bE9e";
+    const env = await runTool(
+      "cork_track",
+      { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" },
+      missCtx({ [candidatePartial.toLowerCase()]: 1 }), // Opened on the candidate partial only
+    );
+    expect(env.state).toBe("ok");
+    const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
+    expect(String(v.settler).toLowerCase()).toBe(candidatePartial.toLowerCase());
+    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: "active", settlerGenerationLabel: "0.4-rc.1-candidate" });
   });
 
   it("all settlers answering None (and the venue empty) is an honest order_not_found", async () => {

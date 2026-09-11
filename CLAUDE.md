@@ -230,7 +230,7 @@ Warning codes:
 | `rfq_not_found` | rfqId unknown to the venue — normal. |
 | `asset_not_found` | registry-assets `filters.address`: not registry-approved on that chain. |
 | `settler_mode_mismatch` | rollover-intent: the settler's mode gate makes the order unfillable (ExactSettler rejects partial fills; PartialSettler requires them); message names the right one. |
-| `settler_retired` | rollover prepare/submit: the settler belongs to a RETIRED generation (config `legacyGenerations`; the rc.2 wire break retired the July 2026 set) — venue-inadmissible AND wire-incompatible with current-generation digests; message names the active replacement. Nothing built/relayed. |
+| `settler_retired` | rollover prepare/submit: the settler belongs to a RETIRED generation (config `legacyGenerations`; the rc.2 wire break retired the July 2026 set) — venue-inadmissible AND wire-incompatible with current-generation digests; message names every ACTIVE replacement of the same kind (primary + `activeGenerations`), the primary marked. Nothing built/relayed. |
 | `settler_not_recognized` / `invalid_order_terms` | Info: settler not a configured Cork settler. On dutch-auction-price and taker-fill it is a REFUSAL (unavailable) since 2026-08-26: an amount getter that is not the release-pinned current Fusion deployment cannot be priced here — the bytes after the address are caller-controlled data, not proof of what the contract charges — so no curve and no DERIVED cap. `data.classification` says which kind (`unknown`, or `legacy` under `phase_gated`). A taker-fill with an EXPLICIT `maximumTakingAmount` still builds and warns: the LOP enforces that cap on-chain, so an unknown getter can only make the fill revert, never overcharge. Also `invalid_order_terms` for incoherent order terms; covers a JIT fee over the 5% cap. | Also on hybrid `rollover-orders` and track reconcile: a settler a venue row NAMES that is not a configured active/retired generation receives NO orderStatus read and NO log scan, and its row stays venue-provenance (`verification:"unverified"`, `settlerGeneration:"unknown"`) — reading an unrecognized contract would let it author the chain truth we then report (audit STATE-003).
 | `invalid_pair` | unavailable (derive-cork-pool): collateralAsset == referenceAsset (domain-rule envelope, exit 3). |
 | `status_mismatch` | conflict: venue lifecycle disagrees with the chain — chain outranks indexer [K7]. Track reconcile (settler `orderStatus()`) and taker-fill's liveness pre-flight (a row the LOP invalidator says is dead yields NO fill bytes). Best-effort without an RPC. Also INFO on an ok orderbook read counting the rows the chain REFUTED and dropped — a spent bit, or (2026-09-11) a maker signature the chain refuted: an EOA maker that did not sign, or a contract maker whose isValidSignature rejected. |
@@ -446,8 +446,19 @@ gained a trailing `bytes32 jitMarketHash` (zero = no JIT market; commit a negoti
 `JITMarketParams` instruction via `hashJitMarketParams` — the BaseFiller mirror), changing both
 typehashes and the OrderData static ABI length (832 → 864). The July 2026 generation is RETIRED
 (venue-archived; kept as `rollover.42161.legacyGenerations[0]` for event-history scans and the
-`settler_retired` teaching): rc.2-typed digests do not verify on it, and the venue admits only
-rc.2 settlers. rc.2: factory `0x697A…5F82`, exact `0xF4ff…4C2f`, partial `0xC0fb…6B4e`, seeded
+`settler_retired` teaching): rc.2-typed digests do not verify on it. A rollover deployment is a
+SET of generations (`rolloverGenerations` in rollover.ts, the ONE flattening every consumer
+reads: the primary record, then `activeGenerations`, then `legacyGenerations`; each entry
+labeled — config `label`, else `contractsVersion`, else positional — with a `status` and ONE
+`primary` flag). Since 2026-09-11 the venue (cork-indexing-api 0.4.2) admits EVERY non-archived
+factory, and the Distribution 0.4-rc.1 candidate set (factory `0x99A5…3F65`, exact
+`0x0F2C…452E`, partial `0x5E19…bE9e`, identical on both chains, seeded 503918966 (42161) /
+51153216 (8453)) is live beside rc.2 as `activeGenerations[0]`, label `0.4-rc.1-candidate`;
+wire-identical to rc.2 (CorkSettler/1.0.0), but each factory approves only ITS OWN settlers, so
+the mode-mismatch teaching names the same generation's partner. Older binaries `.strip()`
+`activeGenerations` and treat those settlers as unknown (warn-and-relay, never a refusal). rc.2
+(primary, label `v0.1.0-rc.2` from its contractsVersion): factory `0x697A…5F82`, exact
+`0xF4ff…4C2f`, partial `0xC0fb…6B4e`, seeded
 494104750 (42161) / 49917191 (8453) — ERC-5267 domains + DOMAIN_SEPARATOR golden vectors + a
 live `resolveFor` encoding probe in test/rollover.test.ts + test/rollover-live.test.ts; digest
 golden vectors were generated from the release's own Solidity libraries via forge (2026-08-19).

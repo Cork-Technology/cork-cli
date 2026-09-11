@@ -5,6 +5,22 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+The rollover config can now name more than one ACTIVE generation. On 2026-09-11 the venue (cork-indexing-api 0.4.2) started to admit every non-archived rollover factory, and the Distribution 0.4-rc.1 candidate set (factory `0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65`, ExactSettler `0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E`, PartialSettler `0x5E19Be0743fE521d8BF85b5A558356675499bE9e`, the same addresses on Arbitrum and Base) went live beside rc.2. The old model knew one active set and a list of retired sets, so it called the new settlers unknown: prepares built with a warning, the book left their rows unverified, decode labeled a tx to them `unknown_target`, and no scan read their history. Each factory approves only its own settlers, so the old mode-mismatch teaching also named the wrong partner for a settler outside the primary set.
+
+### Added
+
+- **`activeGenerations` in the rollover config.** The primary record is one generation. `activeGenerations` lists the other live generations, `legacyGenerations` the retired ones. Each entry carries its own `seededAtBlock` and an optional `label` and `contractsVersion`. The bundled config carries the candidate set on both chains (seeds 503918966 on Arbitrum, 51153216 on Base, from the first OwnershipTransferred logs).
+- **One flattening for every consumer.** `rolloverGenerations` turns a record into an ordered list (primary, other active, retired), each with a `label`, a `status` and a `primary` flag. The label is the config label, else `contractsVersion`, else a positional name. Classification, the event-history scan targets, the emitter table, the decode target labels and the settler teachings all read that list. Nothing consults the primary fields on their own any more.
+- **Output rows name the generation.** Hybrid `rollover-orders` rows, track's `chainVerification` (status leg, logs leg and the venue-miss sweep) and the rollover-intent result carry `settlerGenerationLabel` (respectively `settlerGeneration`) beside the active/retired flag. Decode names a settler outside the primary set with its standing and label, for example `exactSettler (active 0.4-rc.1-candidate generation)`.
+
+### Changed
+
+- **The teachings list every active generation.** `settler_not_recognized` and `settler_retired` name every active ExactSettler or PartialSettler with its label, the primary one marked. `settler_mode_mismatch` names the SAME generation's partner, never the primary's.
+- **Older binaries keep working.** They validate the remote config with `.strip()`, so `activeGenerations` is dropped and the candidate settlers stay unknown there. That is a warning path, not a refusal.
+- SDK (`@cork/core`, root and `/orders`): `RolloverGenerationAddresses` is removed. `RolloverGenerationRecord`, `RolloverDeploymentRecord`, `RolloverGeneration`, `rolloverGenerations`, `activeRolloverGenerations`, `settlerOfKind` and `activeSettlersTeaching` are new. The active variant of `classifyRolloverSettler` carries the matched `generation`, and `retiredSettlerTeaching` takes the deployment record.
+
 ## [0.5.1] — 2026-09-22
 
 Supersedes 0.5.1-rc.1 through 0.5.1-rc.7. This is the last release for the current generation of on-chain contracts (market-registry 0.3.3, phoenix v1.3.0-rc.1, rollover v0.1.0-rc.2 on Arbitrum One and Base). The Distribution 0.4 contract set is not in this release. Orders that name its rollover settlers read `settler_not_recognized`.

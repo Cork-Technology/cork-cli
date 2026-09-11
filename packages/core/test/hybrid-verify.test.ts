@@ -265,8 +265,35 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     expect(d.count).toBe(2);
     expect(d.items[0]!.verification).toBe("confirmed");
     expect(d.items[0]!.settlerGeneration).toBe("retired");
+    expect(d.items[0]!.settlerGenerationLabel).toBe("july-2026");
     expect(d.items[1]!.verification).toBe("unverified"); // unknown vocabulary kept, labeled
     expect(d.verification.dropped).toBe(1);
+  });
+
+  it("rollover kind=orders: a second ACTIVE generation's settler IS read and its row carries that generation's label", async () => {
+    // The Distribution 0.4-rc.1 candidate set is venue-admissible beside rc.2 (2026-09-11): a
+    // model with one active generation would leave these rows unverified + unrecognized.
+    const candidate = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E";
+    const rc2 = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f";
+    const rows = [
+      { orderDigest: `0x${"51".repeat(32)}`, settler: candidate, status: "OPENED" },
+      { orderDigest: `0x${"52".repeat(32)}`, settler: rc2, status: "OPENED" },
+    ];
+    const asked: string[] = [];
+    const chain = stubRpc((c) => {
+      if (c.functionName === "orderStatus") {
+        asked.push(c.address.toLowerCase());
+        return 1n;
+      }
+      throw new Error(`no stub for ${c.functionName}`);
+    });
+    const env = await query("rollover-orders", { venueFetch: venueWith("rollover", rows), resolveRpc: chain }, { chainId: 8453 });
+    const d = env.data as VerifiedData;
+    expect(asked.sort()).toEqual([candidate.toLowerCase(), rc2.toLowerCase()].sort());
+    const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "0.4-rc.1-candidate" });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "v0.1.0-rc.2" });
+    expect(env.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
   });
 
   it("rollover kind=orders: a settler this build does not recognize gets ZERO reads and cannot gain chain provenance", async () => {

@@ -1547,12 +1547,52 @@ const CATALOG: Mutant[] = [
     tests: [T.rollover],
   },
   {
-    // Retired-settler classification must consult the LEGACY generations — skipping them
-    // degrades the precise settler_retired refusal into relay-with-warning.
+    // Settler classification must walk EVERY generation (primary, other active, retired) —
+    // walking only the active set degrades the precise settler_retired refusal into
+    // relay-with-warning for the July set.
     id: "rollover-settler-legacy-skipped",
     file: "packages/core/src/rollover.ts",
-    find: "for (const g of dep.legacyGenerations ?? []) {",
-    replace: "for (const g of [] as RolloverGenerationAddresses[]) {",
+    find: "  for (const generation of rolloverGenerations(dep)) {\n    if (lc === generation.exactSettler.toLowerCase()) return { status: generation.status, kind: \"EXACT\", generation };",
+    replace: "  for (const generation of activeRolloverGenerations(dep)) {\n    if (lc === generation.exactSettler.toLowerCase()) return { status: generation.status, kind: \"EXACT\", generation };",
+    tests: [T.rollover],
+  },
+  {
+    // The flattening must carry the config's `activeGenerations` — dropping them makes a
+    // second live generation (the 0.4-rc.1 candidate set, venue-admissible beside rc.2)
+    // invisible to every consumer at once: classification, scans, emitters, decode labels.
+    id: "rollover-generations-active-list-dropped",
+    file: "packages/core/src/rollover.ts",
+    find: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
+    replace: "    ...([] as RolloverGenerationRecord[]).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
+    tests: [T.rollover, T.hypersync, T.eventAttribution, T.decodeTx],
+  },
+  {
+    // Exactly ONE generation is primary — the flag drives decode's plain labels and the
+    // "(…, primary)" teaching marker; a regression that marks every active set primary
+    // strips the label from the candidate set's decode name.
+    id: "rollover-generations-primary-flag-everywhere",
+    file: "packages/core/src/rollover.ts",
+    find: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
+    replace: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", true, `active-${i + 1}`)),",
+    tests: [T.decodeTx, T.rollover],
+  },
+  {
+    // The label ladder is config label → contractsVersion → positional fallback; skipping
+    // contractsVersion renames the primary rc.2 set to "primary" on every output row.
+    id: "rollover-generations-label-ladder-skips-version",
+    file: "packages/core/src/rollover.ts",
+    find: "    label: g.label ?? g.contractsVersion ?? fallbackLabel,",
+    replace: "    label: g.label ?? fallbackLabel,",
+    tests: [T.eventAttribution, T.hybridVerify, T.rolloverVerify],
+  },
+  {
+    // The mode-mismatch teaching names the SAME generation's partner: each factory approves
+    // only its own settlers, so pointing the candidate ExactSettler's user at the PRIMARY
+    // PartialSettler sends them to an unfillable pairing.
+    id: "rollover-mismatch-partner-from-primary",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "use that generation's PartialSettler ${cls.generation.partialSettler}",
+    replace: "use that generation's PartialSettler ${rollover.partialSettler}",
     tests: [T.rollover],
   },
   {
@@ -1561,8 +1601,8 @@ const CATALOG: Mutant[] = [
     // full-decentralized query AND track reconcile.
     id: "rollover-scan-targets-active-only",
     file: "packages/core/src/config-remote.ts",
-    find: "const generations = [dep, ...(dep.legacyGenerations ?? [])];",
-    replace: "const generations = [dep];",
+    find: "const generations = rolloverGenerations(dep);",
+    replace: "const generations = rolloverGenerations(dep).filter((g) => g.primary);",
     tests: [T.hypersync, T.rolloverVerify],
   },
   {
@@ -1607,8 +1647,8 @@ const CATALOG: Mutant[] = [
     // genuine Cork cancel/settle traffic into an unknown_target distrust warning.
     id: "decode-legacy-generation-naming-dropped",
     file: "packages/core/src/handlers/decode.ts",
-    find: "      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [",
-    replace: "      ...(undefined ?? []).flatMap((g): Array<[string, string | undefined]> => [",
+    find: "      ...(rollover ? rolloverGenerations(rollover) : []).flatMap((g): Array<[string, string | undefined]> => {",
+    replace: "      ...(rollover ? rolloverGenerations(rollover).filter((g) => g.primary) : []).flatMap((g): Array<[string, string | undefined]> => {",
     tests: [T.decodeTx],
   },
   // ── warning-code registry: membership is enforced by test, so membership must be mutable-

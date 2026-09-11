@@ -6,7 +6,7 @@ import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill,
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
-import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
+import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
@@ -491,6 +491,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "rollover-intent") {
     const { rollover, warning: rolloverWarn } = await resolveRollover(chainId);
     if (!rollover) {
+    // The partner named is the SAME generation's other settler: each factory approves only its
+    // own settlers, so the primary's partner would be unfillable from another active generation.
       return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One and Base — 42161, 8453)`, ctx);
     }
     const warnings: Array<{ code: string; message: string }> = rolloverWarn ? [rolloverWarn] : [];
@@ -502,15 +504,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     if (cls.status === "retired") {
       return unavailable(chainId, "settler_retired", retiredSettlerTeaching(action.settler, cls, rollover), ctx);
     }
-    const kind = cls.status === "active" ? cls.kind : undefined;
-    if (kind === "EXACT" && action.allowPartialFills) {
-      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — use the PartialSettler ${rollover.partialSettler} or set allowPartialFills:false`, ctx);
+    if (cls.status === "active" && cls.kind === "EXACT" && action.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the ExactSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:true on-chain — use that generation's PartialSettler ${cls.generation.partialSettler} or set allowPartialFills:false`, ctx);
     }
-    if (kind === "PARTIAL" && !action.allowPartialFills) {
-      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — use the ExactSettler ${rollover.exactSettler} or set allowPartialFills:true`, ctx);
+    if (cls.status === "active" && cls.kind === "PARTIAL" && !action.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the PartialSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:false on-chain — use that generation's ExactSettler ${cls.generation.exactSettler} or set allowPartialFills:true`, ctx);
     }
-    if (kind === undefined) {
-      warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (exact: ${rollover.exactSettler}, partial: ${rollover.partialSettler}) — the venue only admits factory-approved settlers` });
+    if (cls.status === "unknown") {
+      warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — the venue only admits factory-approved settlers` });
     }
 
     // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
@@ -643,7 +644,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       data: {
         kind: "rollover-intent",
         settler: action.settler,
-        ...(kind ? { settlerKind: kind } : {}),
+        ...(cls.status === "active" ? { settlerKind: cls.kind, settlerGeneration: cls.generation.label } : {}),
         typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
         orderDigest: built.orderDigest,
         rolloverIntentHash: built.rolloverIntentHash,

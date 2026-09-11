@@ -11,6 +11,7 @@ import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTar
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "../config-remote.ts";
+import { rolloverGenerations } from "../rollover.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
 // ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
@@ -518,17 +519,19 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ["marketRegistry", mr?.registry],
       ["corkMarketCreator", mr?.marketCreator],
       ["corkLimitOrderAdapter (JIT)", mr?.adapter],
-      ["exactSettler", rollover?.exactSettler],
-      ["partialSettler", rollover?.partialSettler],
-      ["rolloverFactory", rollover?.factory],
-      // Retired generations stay NAMED: their contracts still hold live orders (cancel/settle
-      // txs are genuine Cork traffic), and unknown_target exists to catch address substitution,
-      // not to teach signers to distrust a real Cork settler.
-      ...(rollover?.legacyGenerations ?? []).flatMap((g): Array<[string, string | undefined]> => [
-        [`exactSettler (retired ${g.label ?? "legacy"} generation)`, g.exactSettler],
-        [`partialSettler (retired ${g.label ?? "legacy"} generation)`, g.partialSettler],
-        [`rolloverFactory (retired ${g.label ?? "legacy"} generation)`, g.factory],
-      ]),
+      // Every rollover generation stays NAMED — the primary set plainly, every other set with
+      // its standing and label: other active sets are genuine Cork traffic the venue admits,
+      // and retired contracts still hold live orders (cancel/settle txs are genuine Cork
+      // traffic). unknown_target exists to catch address substitution, not to teach signers to
+      // distrust a real Cork settler.
+      ...(rollover ? rolloverGenerations(rollover) : []).flatMap((g): Array<[string, string | undefined]> => {
+        const suffix = g.primary ? "" : ` (${g.status} ${g.label} generation)`;
+        return [
+          [`exactSettler${suffix}`, g.exactSettler],
+          [`partialSettler${suffix}`, g.partialSettler],
+          [`rolloverFactory${suffix}`, g.factory],
+        ];
+      }),
     ];
     toLabel = to === null ? null : (candidates.find(([, addr]) => addr !== undefined && addr.toLowerCase() === to.toLowerCase())?.[0] ?? null);
     if (to !== null && toLabel === null) {

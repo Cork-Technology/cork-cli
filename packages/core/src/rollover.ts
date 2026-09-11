@@ -427,48 +427,119 @@ const U64 = (1n << 64n) - 1n;
 // exactly where the venue's 400 would. Chain-dependent admission (hook-target getCode, the
 // settler resolveFor preflight) deliberately stays venue-side — this module is pure.
 
-/** One settler generation's addresses (structural subset of the config's rollover record). */
-export interface RolloverGenerationAddresses {
+// ── Rollover generations ───────────────────────────────────────────────────────────────────────
+// A rollover DEPLOYMENT is a set of generations, each one factory + ExactSettler + PartialSettler
+// seeded at one block. The config record keeps three vocabularies for them: the top-level fields
+// are the PRIMARY generation (the one this distribution pins and the one every teaching names as
+// the replacement), `activeGenerations` are the OTHER venue-admissible sets (wire-compatible with
+// the primary — observed 2026-09-11: the venue kept rollover v0.1.0-rc.2 AND the Distribution
+// 0.4-rc.1 set live side by side on 42161 + 8453, and each factory admits only its own settlers),
+// and `legacyGenerations` are RETIRED sets (a wire-format release retires a whole generation:
+// rc.2's jitMarketHash typehash change, 2026-08-13). Every consumer — classification, scan
+// scoping, emitter attribution, decode labels — reads the ONE flattened list below, never the
+// three fields, so a fourth vocabulary cannot be half-adopted.
+
+/** The structural shape of one generation as the config records it. */
+export interface RolloverGenerationRecord {
+  factory: string;
   exactSettler: string;
   partialSettler: string;
+  seededAtBlock: number;
   retired?: string | undefined;
   label?: string | undefined;
+  contractsVersion?: string | undefined;
+}
+
+/** The structural shape of the config's rollover record every generation-aware read accepts. */
+export interface RolloverDeploymentRecord extends RolloverGenerationRecord {
+  activeGenerations?: RolloverGenerationRecord[] | undefined;
+  legacyGenerations?: RolloverGenerationRecord[] | undefined;
+}
+
+/** One normalized generation: the record plus its standing and a label that always exists. */
+export interface RolloverGeneration extends RolloverGenerationRecord {
+  /** Always present: the config label, else its contractsVersion, else "primary" for the top-level set. */
+  label: string;
+  status: "active" | "retired";
+  /** The distribution-pinned set — the replacement every teaching names. Exactly one per deployment. */
+  primary: boolean;
+}
+
+/** The ONE flattening of a rollover record: primary first, then the other active generations in
+ *  config order, then the retired ones in config order. Pure; every generation-aware consumer
+ *  derives from this list. */
+export function rolloverGenerations(dep: RolloverDeploymentRecord): RolloverGeneration[] {
+  // The record's fields are copied by name: the primary generation IS the deployment record,
+  // which also carries deployment-only fields (settlerDomain, the generation lists, remote-config
+  // extras) that must not leak into a generation entry — entries ride verbatim into results.
+  const normalize = (g: RolloverGenerationRecord, status: "active" | "retired", isPrimary: boolean, fallbackLabel: string): RolloverGeneration => ({
+    factory: g.factory,
+    exactSettler: g.exactSettler,
+    partialSettler: g.partialSettler,
+    seededAtBlock: g.seededAtBlock,
+    ...(g.retired !== undefined ? { retired: g.retired } : {}),
+    ...(g.contractsVersion !== undefined ? { contractsVersion: g.contractsVersion } : {}),
+    label: g.label ?? g.contractsVersion ?? fallbackLabel,
+    status,
+    primary: isPrimary,
+  });
+  const { activeGenerations, legacyGenerations } = dep;
+  return [
+    normalize(dep, "active", true, "primary"),
+    ...(activeGenerations ?? []).map((g, i) => normalize(g, "active", false, `active-${i + 1}`)),
+    ...(legacyGenerations ?? []).map((g, i) => normalize(g, "retired", false, `retired-${i + 1}`)),
+  ];
+}
+
+/** The generations the venue admits and the wire this tool speaks (primary first). */
+export function activeRolloverGenerations(dep: RolloverDeploymentRecord): RolloverGeneration[] {
+  return rolloverGenerations(dep).filter((g) => g.status === "active");
 }
 
 export type RolloverSettlerClassification =
-  | { status: "active"; kind: "EXACT" | "PARTIAL" }
-  | { status: "retired"; kind: "EXACT" | "PARTIAL"; generation: RolloverGenerationAddresses }
+  | { status: "active"; kind: "EXACT" | "PARTIAL"; generation: RolloverGeneration }
+  | { status: "retired"; kind: "EXACT" | "PARTIAL"; generation: RolloverGeneration }
   | { status: "unknown" };
 
-/** Classify a settler address against the configured deployment: the active generation's
- *  Exact/Partial settler, a RETIRED generation's (venue-inadmissible: the venue archives old
- *  generations, and a wire-format release means its digests no longer verify there), or unknown. */
-export function classifyRolloverSettler(
-  dep: { exactSettler: string; partialSettler: string; legacyGenerations?: RolloverGenerationAddresses[] | undefined },
-  settler: string,
-): RolloverSettlerClassification {
+/** Classify a settler address against the configured deployment: an ACTIVE generation's
+ *  Exact/Partial settler (the primary set or any other venue-admissible set), a RETIRED
+ *  generation's (venue-inadmissible: the venue archives old generations, and a wire-format
+ *  release means its digests no longer verify there), or unknown. The classified generation
+ *  rides along so a caller can name THAT generation's partner settler, not the primary's. */
+export function classifyRolloverSettler(dep: RolloverDeploymentRecord, settler: string): RolloverSettlerClassification {
   const lc = settler.toLowerCase();
-  if (lc === dep.exactSettler.toLowerCase()) return { status: "active", kind: "EXACT" };
-  if (lc === dep.partialSettler.toLowerCase()) return { status: "active", kind: "PARTIAL" };
-  for (const g of dep.legacyGenerations ?? []) {
-    if (lc === g.exactSettler.toLowerCase()) return { status: "retired", kind: "EXACT", generation: g };
-    if (lc === g.partialSettler.toLowerCase()) return { status: "retired", kind: "PARTIAL", generation: g };
+  for (const generation of rolloverGenerations(dep)) {
+    if (lc === generation.exactSettler.toLowerCase()) return { status: generation.status, kind: "EXACT", generation };
+    if (lc === generation.partialSettler.toLowerCase()) return { status: generation.status, kind: "PARTIAL", generation };
   }
   return { status: "unknown" };
+}
+
+/** The settler of `kind` in one generation. */
+export function settlerOfKind(generation: { exactSettler: string; partialSettler: string }, kind: "EXACT" | "PARTIAL"): string {
+  return kind === "EXACT" ? generation.exactSettler : generation.partialSettler;
+}
+
+/** "ExactSettler 0x… (rc.2), ExactSettler 0x… (0.4-rc.1-candidate)" — every active generation's
+ *  settler of `kind`, the teaching list prepare/submit name when a settler is unknown or retired. */
+export function activeSettlersTeaching(dep: RolloverDeploymentRecord, kind: "EXACT" | "PARTIAL"): string {
+  const role = kind === "EXACT" ? "ExactSettler" : "PartialSettler";
+  return activeRolloverGenerations(dep)
+    .map((g) => `${role} ${settlerOfKind(g, kind)} (${g.label}${g.primary ? ", primary" : ""})`)
+    .join(", ");
 }
 
 /** The retired-generation refusal, ONE string for prepare AND submit (the two sites had
  *  already drifted apart by the first review pass — the resolveListingPremium lesson applies:
  *  one function, no drift). Names the retired generation, why nothing useful can be built
- *  (venue-inadmissible AND wire-incompatible), and the active replacement. */
+ *  (venue-inadmissible AND wire-incompatible), and every active replacement (primary first). */
 export function retiredSettlerTeaching(
   settler: string,
   cls: Extract<RolloverSettlerClassification, { status: "retired" }>,
-  active: { exactSettler: string; partialSettler: string },
+  dep: RolloverDeploymentRecord,
 ): string {
   const role = cls.kind === "EXACT" ? "ExactSettler" : "PartialSettler";
-  const replacement = cls.kind === "EXACT" ? active.exactSettler : active.partialSettler;
-  return `settler ${settler} is the ${role} of the RETIRED ${cls.generation.label ?? "previous"} rollover generation (retired ${cls.generation.retired ?? "at the last wire change"}) — nothing useful can be built or relayed against it: the venue archives retired generations and admits only the active set, and the current-generation digest this tool computes would not verify on that contract; use the active ${role} ${replacement}`;
+  return `settler ${settler} is the ${role} of the RETIRED ${cls.generation.label} rollover generation (retired ${cls.generation.retired ?? "at the last wire change"}) — nothing useful can be built or relayed against it: the venue archives retired generations and admits only the active generations, and the current-generation digest this tool computes would not verify on that contract; use an active ${role}: ${activeSettlersTeaching(dep, cls.kind)}`;
 }
 
 /** Order-term fields the deterministic admission battery reads. `intentDeadline`/`hooks` are

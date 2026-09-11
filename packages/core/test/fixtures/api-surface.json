@@ -825,11 +825,19 @@
       "kind": "type"
     },
     {
+      "name": "RolloverDeploymentRecord",
+      "kind": "type"
+    },
+    {
       "name": "RolloverFillRow",
       "kind": "type"
     },
     {
-      "name": "RolloverGenerationAddresses",
+      "name": "RolloverGeneration",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverGenerationRecord",
       "kind": "type"
     },
     {
@@ -1154,6 +1162,14 @@
     },
     {
       "name": "accessControlAbi",
+      "kind": "value"
+    },
+    {
+      "name": "activeRolloverGenerations",
+      "kind": "value"
+    },
+    {
+      "name": "activeSettlersTeaching",
       "kind": "value"
     },
     {
@@ -2133,6 +2149,10 @@
       "kind": "value"
     },
     {
+      "name": "rolloverGenerations",
+      "kind": "value"
+    },
+    {
       "name": "rolloverScanTargets",
       "kind": "value"
     },
@@ -2146,6 +2166,10 @@
     },
     {
       "name": "saltExtensionBinding",
+      "kind": "value"
+    },
+    {
+      "name": "settlerOfKind",
       "kind": "value"
     },
     {
@@ -3593,7 +3617,15 @@
       "kind": "type"
     },
     {
-      "name": "RolloverGenerationAddresses",
+      "name": "RolloverDeploymentRecord",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverGeneration",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverGenerationRecord",
       "kind": "type"
     },
     {
@@ -3682,6 +3714,14 @@
     },
     {
       "name": "ZERO_JIT_MARKET_HASH",
+      "kind": "value"
+    },
+    {
+      "name": "activeRolloverGenerations",
+      "kind": "value"
+    },
+    {
+      "name": "activeSettlersTeaching",
       "kind": "value"
     },
     {
@@ -4025,7 +4065,15 @@
       "kind": "value"
     },
     {
+      "name": "rolloverGenerations",
+      "kind": "value"
+    },
+    {
       "name": "saltExtensionBinding",
+      "kind": "value"
+    },
+    {
+      "name": "settlerOfKind",
       "kind": "value"
     },
     {

@@ -453,18 +453,19 @@ export async function verifyVenueRows(a: {
     // never queried — a read against it is an attacker-chosen contract answering a question we
     // would then treat as chain truth — and its row stays venue-provenance, labeled.
     const { rollover } = await resolveRollover(chainId);
-    const generationOf = (row: Row): "active" | "retired" | "unknown" | undefined => {
+    /** The row's settler standing: which generation (active | retired, with its label) or unknown. */
+    const generationOf = (row: Row): { status: "active" | "retired"; label: string } | { status: "unknown" } | undefined => {
       const settler = str(row.settler);
       if (settler === undefined) return undefined;
-      if (!rollover) return "unknown";
+      if (!rollover) return { status: "unknown" };
       const c = classifyRolloverSettler(rollover, settler);
-      return c.status === "active" || c.status === "retired" ? c.status : "unknown";
+      return c.status === "unknown" ? c : { status: c.status, label: c.generation.label };
     };
     const readKeyOf = (row: Row): { key: string; settler: `0x${string}`; digest: `0x${string}` } | undefined => {
       const digest = str(row.orderDigest) ?? str((row as { order_digest?: unknown }).order_digest);
       const settler = str(row.settler);
       const generation = generationOf(row);
-      if (digest === undefined || settler === undefined || generation === undefined || generation === "unknown") return undefined;
+      if (digest === undefined || settler === undefined || generation === undefined || generation.status === "unknown") return undefined;
       return { key: `${settler.toLowerCase()}:${digest.toLowerCase()}`, settler: settler as `0x${string}`, digest: digest as `0x${string}` };
     };
     const statuses = new Map<string, string | "error">();
@@ -481,9 +482,13 @@ export async function verifyVenueRows(a: {
     const unknownSettlers = new Set<string>();
     for (const row of inBudget) {
       const generation = generationOf(row);
-      // The generation rides on the row: a reader can see WHY a row is unverified.
-      const labeled = generation === undefined ? row : { ...row, settlerGeneration: generation };
-      if (generation === "unknown") unknownSettlers.add(str(row.settler)!.toLowerCase());
+      // The generation rides on the row: a reader can see WHY a row is unverified, and WHICH
+      // configured generation (its label) vouched for a verified one.
+      const labeled =
+        generation === undefined ? row
+        : generation.status === "unknown" ? { ...row, settlerGeneration: "unknown" }
+        : { ...row, settlerGeneration: generation.status, settlerGenerationLabel: generation.label };
+      if (generation?.status === "unknown") unknownSettlers.add(str(row.settler)!.toLowerCase());
       const k = readKeyOf(row);
       const venueStatus = str(row.status);
       if (k === undefined || venueStatus === undefined) {

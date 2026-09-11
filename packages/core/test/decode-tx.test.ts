@@ -232,4 +232,21 @@ describe("target naming spans rollover settler generations", () => {
     const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
     expect((env.data as { toLabel: string | null }).toLabel).toBe("exactSettler");
   });
+
+  it("a tx to the second ACTIVE generation's settler is NAMED with its standing and label, never unknown_target", async () => {
+    const signed = await SIGNER.signTransaction({
+      type: "eip1559",
+      chainId: 8453,
+      nonce: 14,
+      to: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", // 0.4-rc.1-candidate PartialSettler (activeGenerations[0])
+      value: 0n,
+      gas: 100_000n,
+      maxFeePerGas: 10n ** 9n,
+      maxPriorityFeePerGas: 10n ** 8n,
+    });
+    const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 8453 }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    expect((env.data as { toLabel: string | null }).toLabel).toBe("partialSettler (active 0.4-rc.1-candidate generation)");
+    expect(env.warnings.map((w) => w.code)).not.toContain("unknown_target");
+  });
 });

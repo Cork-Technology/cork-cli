@@ -9,7 +9,13 @@ import {
   resolveConfig,
   resolveDeployment,
   resolveRollover,
+  activeRolloverGenerations,
+  rolloverDigestScanTargets,
+  rolloverFactoryScanTargets,
+  rolloverGenerations,
+  rolloverScanTargets,
   type ConfigDeps,
+  type CorkRolloverDeployment,
   type StoredCache,
 } from "@cork/core";
 
@@ -177,8 +183,21 @@ describe("resolveRollover", () => {
       factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
       seededAtBlock: 49917191,
     });
-    // Base has never had another generation — no legacy entries there.
+    // Base has never had a RETIRED generation — no legacy entries there.
     expect(base.rollover?.legacyGenerations).toBeUndefined();
+  });
+  it("carries the Distribution 0.4-rc.1 candidate set as a second ACTIVE generation on BOTH chains (venue-admissible beside rc.2 since 2026-09-11)", async () => {
+    // Identical CREATE2 addresses on both chains; per-chain seed = the generation's earliest
+    // deployment (42161: first OwnershipTransferred logs; 8453: eth_getCode bisect + first logs).
+    const candidate = {
+      factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+      exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+      partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+      label: "0.4-rc.1-candidate",
+      contractsVersion: "0.4-rc.1-candidate",
+    };
+    expect((await resolveRollover(42161)).rollover?.activeGenerations).toEqual([{ ...candidate, seededAtBlock: 503918966 }]);
+    expect((await resolveRollover(8453)).rollover?.activeGenerations).toEqual([{ ...candidate, seededAtBlock: 51153216 }]);
   });
   it("carries the RETIRED July generation on Arbitrum (event-history scans + retired-settler teaching)", async () => {
     const r = await resolveRollover(42161);
@@ -196,6 +215,83 @@ describe("resolveRollover", () => {
   it("is undefined for chains without a rollover deployment", async () => {
     const r = await resolveRollover(1);
     expect(r.rollover).toBeUndefined();
+  });
+});
+
+describe("rolloverGenerations — the ONE flattening every generation-aware consumer reads", () => {
+  const dep = (over: Partial<CorkRolloverDeployment> = {}): CorkRolloverDeployment => ({
+    factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+    exactSettler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+    partialSettler: "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
+    settlerDomain: { name: "CorkSettler", version: "1.0.0" },
+    seededAtBlock: 494104750,
+    contractsVersion: "v0.1.0-rc.2",
+    activeGenerations: [
+      { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", seededAtBlock: 503918966, label: "0.4-rc.1-candidate" },
+    ],
+    legacyGenerations: [
+      { factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", seededAtBlock: 484973917, retired: "2026-08-13", label: "july-2026" },
+    ],
+    ...over,
+  });
+
+  it("orders primary → other active → retired, with status and the primary flag on exactly one entry", () => {
+    const gens = rolloverGenerations(dep());
+    expect(gens.map((g) => [g.label, g.status, g.primary])).toEqual([
+      ["v0.1.0-rc.2", "active", true],
+      ["0.4-rc.1-candidate", "active", false],
+      ["july-2026", "retired", false],
+    ]);
+    expect(gens[0]).toMatchObject({ factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", seededAtBlock: 494104750, contractsVersion: "v0.1.0-rc.2" });
+    // The deployment-only fields never leak into a generation entry.
+    expect(gens[0]).not.toHaveProperty("settlerDomain");
+    expect(gens[0]).not.toHaveProperty("activeGenerations");
+    expect(gens[0]).not.toHaveProperty("legacyGenerations");
+  });
+
+  it("labels: config label wins over contractsVersion, and a set with neither gets a positional fallback", () => {
+    const gens = rolloverGenerations(
+      dep({
+        contractsVersion: undefined,
+        activeGenerations: [
+          { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", seededAtBlock: 1, label: "named", contractsVersion: "ignored-when-labeled" },
+          { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", seededAtBlock: 2, contractsVersion: "by-version" },
+          { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", seededAtBlock: 3 },
+        ],
+        legacyGenerations: [{ factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", seededAtBlock: 4 }],
+      }),
+    );
+    expect(gens.map((g) => g.label)).toEqual(["primary", "named", "by-version", "active-3", "retired-1"]);
+  });
+
+  it("a record with neither list is exactly one active primary generation (the pre-2026-09-11 config shape still loads)", () => {
+    const gens = rolloverGenerations(dep({ activeGenerations: undefined, legacyGenerations: undefined }));
+    expect(gens).toHaveLength(1);
+    expect(gens[0]).toMatchObject({ status: "active", primary: true, label: "v0.1.0-rc.2" });
+    expect(activeRolloverGenerations(dep())).toHaveLength(2);
+    expect(activeRolloverGenerations(dep()).map((g) => g.primary)).toEqual([true, false]);
+  });
+
+  it("scan targets span every generation from the earliest seed; scoping follows the OWNING generation's seed", async () => {
+    const full = rolloverScanTargets(dep());
+    expect(full.settlers.map((a) => a.toLowerCase())).toEqual([
+      "0xf4ffd4b3faedb784b04d1883119840515f224c2f",
+      "0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e",
+      "0x0f2ce7a5b817865ebff50c58439b9a27e38f452e",
+      "0x5e19be0743fe521d8bf85b5a558356675499be9e",
+      "0x983270ae48545665cee4d7ef61c65ff3fdc8222d",
+      "0x8e9ca640338d3bdbfe3781d7178ca73af66f366a",
+    ]);
+    expect(full.factories).toHaveLength(3);
+    expect(full.fromBlock).toBe(484973917); // the retired July seed is still the floor
+    // The candidate set is seeded ~9M blocks after rc.2: scoping to it must NOT fall back to
+    // the rc.2 or July floor (an "active means primary" regression would).
+    expect(rolloverDigestScanTargets(dep(), "0x5E19Be0743fE521d8BF85b5A558356675499bE9e")).toEqual({ addresses: ["0x5E19Be0743fE521d8BF85b5A558356675499bE9e"], fromBlock: 503918966 });
+    expect(rolloverFactoryScanTargets(dep(), "0x99a5c47cbf062d4e6665afaf32ae6496f9f93f65")).toEqual({ addresses: ["0x99a5c47cbf062d4e6665afaf32ae6496f9f93f65"], fromBlock: 503918966 });
+    // Base: the same candidate set seeds at 51153216 and rc.2 at 49917191 — the bundled config.
+    const base = (await resolveRollover(8453)).rollover!;
+    expect(rolloverScanTargets(base).fromBlock).toBe(49917191);
+    expect(rolloverDigestScanTargets(base, "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E").fromBlock).toBe(51153216);
   });
 });
 

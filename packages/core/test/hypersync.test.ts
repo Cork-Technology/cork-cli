@@ -37,6 +37,7 @@ const STAGING_PM = "0x4d0ab6735def9fbaddbf0f2ffb92353afae623d2";
 // discover them (rc.2 retired the generation at the venue, not on-chain).
 const FACTORY = "0xbbcc54c637c26b484a8c57b5695c04e09dace13a";
 const RC2_FACTORY = "0x697a6a2d5e09dc1cabd0aa46678e053567275f82";
+const CANDIDATE_FACTORY = "0x99a5c47cbf062d4e6665afaf32ae6496f9f93f65"; // the 0.4-rc.1 candidate set, active beside rc.2
 const OWNER = "0xc0ffee0000000000000000000000000000000001";
 const CLONE = "0xc10e000000000000000000000000000000000001";
 
@@ -116,9 +117,10 @@ describe("full-decentralized cork_query over an injected HyperSync source", () =
     expect(d.count).toBe(1);
     expect(d.items[0]).toMatchObject({ owner: expect.stringMatching(/^0x/) as unknown, rolloverContract: expect.stringMatching(/^0x/) as unknown });
     // scan starts at the EARLIEST generation's seeding block, scoped to every factory
-    // generation (active rc.2 + retired July) — retired clones stay discoverable.
+    // generation (active rc.2 + active 0.4-rc.1 candidate + retired July) — retired clones
+    // stay discoverable, and the second active generation's clones are not silently absent.
     expect(seen[0]!.fromBlock).toBe(484973917);
-    expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([RC2_FACTORY, FACTORY].sort());
+    expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([RC2_FACTORY, CANDIDATE_FACTORY, FACTORY].sort());
   });
 
   it("flows kind=fills: filters.settler scopes the scan to that settler and ITS generation's seed", async () => {
@@ -271,9 +273,12 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
     expect(d.items.map((i) => i.leg).sort()).toEqual(["PREMIUM", "RECLAIM", "ROLLOVER"]);
     const roll = d.items.find((i) => i.leg === "ROLLOVER")!;
     expect(roll).toMatchObject({ srcCstProvided: "100", dstCstProduced: "95" });
-    // all four settlers (rc.2 + retired July generation) scanned from the earliest seed block
+    // all six settlers (rc.2 + the active 0.4-rc.1 candidate set + the retired July
+    // generation) scanned from the earliest seed block
     expect(seen[0]!.fromBlock).toBe(484973917);
     expect(seen[0]!.address!.map((a) => a.toLowerCase()).sort()).toEqual([
+      "0x0f2ce7a5b817865ebff50c58439b9a27e38f452e",
+      "0x5e19be0743fe521d8bf85b5a558356675499be9e",
       "0x8e9ca640338d3bdbfe3781d7178ca73af66f366a",
       "0x983270ae48545665cee4d7ef61c65ff3fdc8222d",
       "0xc0fba28687d16e9a94527f7864c7c8d41f1e6b4e",

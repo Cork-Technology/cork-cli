@@ -26,6 +26,10 @@ import {
   type HandlerContext,
   computeMarketId,
   type OrderDataStruct,
+  activeSettlersTeaching,
+  classifyRolloverSettler,
+  resolveRollover,
+  retiredSettlerTeaching,
 } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
 
@@ -37,6 +41,11 @@ const PARTIAL = "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e" as const;
 // deployed and answering, but venue-archived and wire-incompatible with rc.2 digests.
 const RETIRED_EXACT = "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D" as const;
 const RETIRED_PARTIAL = "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a" as const;
+// The Distribution 0.4-rc.1 candidate set (cork-defaults `rollover.*.activeGenerations[0]`): a
+// SECOND ACTIVE generation the venue admits beside rc.2 since 2026-09-11 — wire-identical to
+// rc.2 (same CorkSettler/1.0.0 domain), approved only by ITS OWN factory.
+const CANDIDATE_EXACT = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E" as const;
+const CANDIDATE_PARTIAL = "0x5E19Be0743fE521d8BF85b5A558356675499bE9e" as const;
 // Rollover premium must ride a THIRD asset (venue admission: premiumToken differs from both cSTs).
 const PREMIUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
 const CLONE = "0xc0ffee0000000000000000000000000000000001" as const;
@@ -193,6 +202,32 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     expect(env.warnings[0]?.message).toContain(PARTIAL);
   });
 
+  it("the mode-mismatch teaching names the SAME generation's partner — never the primary's (each factory approves only its own settlers)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_EXACT, allowPartialFills: true } }, ctx);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("settler_mode_mismatch");
+    expect(env.warnings[0]?.message).toContain(CANDIDATE_PARTIAL);
+    expect(env.warnings[0]?.message).toContain("0.4-rc.1-candidate");
+    expect(env.warnings[0]?.message).not.toContain(PARTIAL);
+    const back = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_PARTIAL, allowPartialFills: false } }, ctx);
+    expect(back.warnings[0]?.code).toBe("settler_mode_mismatch");
+    expect(back.warnings[0]?.message).toContain(CANDIDATE_EXACT);
+    expect(back.warnings[0]?.message).not.toContain(EXACT);
+  });
+
+  it("builds against the second ACTIVE generation's settlers and names the generation on the result", async () => {
+    const exact = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_EXACT } }, ctx);
+    expect(exact.state).toBe("ok");
+    expect(exact.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
+    expect(exact.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "0.4-rc.1-candidate" });
+    const partial = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_PARTIAL, allowPartialFills: true } }, ctx);
+    expect(partial.state).toBe("ok");
+    expect(partial.data).toMatchObject({ settlerKind: "PARTIAL", settlerGeneration: "0.4-rc.1-candidate" });
+    // The primary generation's label is its contractsVersion (the config names no label there).
+    const primary = await runTool("cork_prepare_orders", base, ctx);
+    expect(primary.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "v0.1.0-rc.2" });
+  });
+
   it("rejects the PartialSettler without allowPartialFills", async () => {
     const env = await runTool(
       "cork_prepare_orders",
@@ -222,6 +257,11 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
     expect((env.data as Record<string, unknown>).settlerKind).toBeUndefined();
+    // The teaching lists EVERY active generation's settlers, primary marked, retired ones absent.
+    const w = env.warnings.find((x) => x.code === "settler_not_recognized")!;
+    for (const a of [EXACT, PARTIAL, CANDIDATE_EXACT, CANDIDATE_PARTIAL]) expect(w.message).toContain(a);
+    expect(w.message).toContain("primary");
+    expect(w.message).not.toContain(RETIRED_EXACT);
   });
 
   it("gates chains without a rollover deployment (mainnet)", async () => {
@@ -517,7 +557,40 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
       expect(env.warnings[0]?.code).toBe("settler_retired");
       expect(env.warnings[0]?.message).toContain(active);
       expect(env.warnings[0]?.message).toContain("july-2026");
+      // Every ACTIVE generation's replacement of the same kind is named, the primary marked.
+      expect(env.warnings[0]?.message).toContain(retired === RETIRED_EXACT ? CANDIDATE_EXACT : CANDIDATE_PARTIAL);
+      expect(env.warnings[0]?.message).toContain("primary");
     }
+  });
+
+  describe("classifyRolloverSettler over the bundled 42161 record — the pure classification every handler shares", () => {
+    const record = async () => (await resolveRollover(42161)).rollover!;
+    it("classifies every configured settler with its kind AND its generation, case-insensitively", async () => {
+      const dep = await record();
+      expect(classifyRolloverSettler(dep, EXACT.toLowerCase())).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "v0.1.0-rc.2", primary: true } });
+      expect(classifyRolloverSettler(dep, PARTIAL)).toMatchObject({ status: "active", kind: "PARTIAL", generation: { primary: true } });
+      expect(classifyRolloverSettler(dep, CANDIDATE_EXACT)).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "0.4-rc.1-candidate", primary: false, partialSettler: CANDIDATE_PARTIAL } });
+      expect(classifyRolloverSettler(dep, CANDIDATE_PARTIAL.toUpperCase().replace("0X", "0x"))).toMatchObject({ status: "active", kind: "PARTIAL", generation: { label: "0.4-rc.1-candidate" } });
+      expect(classifyRolloverSettler(dep, RETIRED_EXACT)).toMatchObject({ status: "retired", kind: "EXACT", generation: { label: "july-2026", retired: "2026-08-13", primary: false } });
+      expect(classifyRolloverSettler(dep, RETIRED_PARTIAL)).toMatchObject({ status: "retired", kind: "PARTIAL" });
+      expect(classifyRolloverSettler(dep, "0x00000000000000000000000000000000DeaDBeef")).toEqual({ status: "unknown" });
+      // A factory is not a settler.
+      expect(classifyRolloverSettler(dep, dep.factory)).toEqual({ status: "unknown" });
+    });
+    it("activeSettlersTeaching lists the active generations of ONE kind, primary first and marked", async () => {
+      const dep = await record();
+      expect(activeSettlersTeaching(dep, "EXACT")).toBe(`ExactSettler ${EXACT} (v0.1.0-rc.2, primary), ExactSettler ${CANDIDATE_EXACT} (0.4-rc.1-candidate)`);
+      expect(activeSettlersTeaching(dep, "PARTIAL")).toBe(`PartialSettler ${PARTIAL} (v0.1.0-rc.2, primary), PartialSettler ${CANDIDATE_PARTIAL} (0.4-rc.1-candidate)`);
+    });
+    it("retiredSettlerTeaching is ONE string for prepare and submit and carries every active replacement", async () => {
+      const dep = await record();
+      const cls = classifyRolloverSettler(dep, RETIRED_PARTIAL);
+      if (cls.status !== "retired") throw new Error("fixture: expected retired");
+      const text = retiredSettlerTeaching(RETIRED_PARTIAL, cls, dep);
+      expect(text).toContain("PartialSettler of the RETIRED july-2026 rollover generation (retired 2026-08-13)");
+      expect(text).toContain(activeSettlersTeaching(dep, "PARTIAL"));
+      expect(text).not.toContain(EXACT); // the other KIND is never offered as a replacement
+    });
   });
 
   it("premiumToken equal to either cST is refused (venue admission parity)", async () => {

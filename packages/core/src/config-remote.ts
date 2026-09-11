@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
 import type { CorkDeployment } from "./config.ts";
+import { rolloverGenerations } from "./rollover.ts";
 
 /** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. */
 export const CORK_DEFAULTS_URL =
@@ -38,14 +39,23 @@ const DeploymentSchema = z
 
 // Rollover venue contracts (rollover): the factory that self-deploys per-user clones and
 // the two ERC-7683 settlers. `settlerDomain` is the EIP-712 domain OrderData is signed under
-// (verifyingContract = the settler). `seededAtBlock` = the factory seeding block — the backfill
-// start for event reconstruction (settlers deploy + approve within a few blocks of it).
+// (verifyingContract = the settler). `seededAtBlock` = the generation's seeding block (its
+// earliest deployment) — the backfill start for event reconstruction.
 //
-// A wire-format release retires a whole generation at once (observed: rc.2's jitMarketHash
-// typehash change, 2026-08-13): the venue archives the old factory/settlers and admits only the
-// active set, and digests typed for one generation do not verify on the other. Retired sets move
-// to `legacyGenerations` — kept ONLY so event-history scans still see their fills/clones and so
+// A deployment is a SET of generations (see `rolloverGenerations` in rollover.ts — the one
+// flattening every consumer reads). The top-level fields are the PRIMARY generation, the set
+// this distribution pins. `activeGenerations` are the OTHER sets the venue admits — wire-
+// compatible with the primary: the venue keeps every non-archived factory live and admits a
+// settler through the factory that approves it (cork-api 0.4.2, `resolveLiveFactories`), and
+// since 2026-09-11 rollover v0.1.0-rc.2 and the Distribution 0.4-rc.1 set run side by side on
+// 42161 + 8453. A wire-format release retires a whole generation at once (observed: rc.2's
+// jitMarketHash typehash change, 2026-08-13): the venue archives that factory/settlers and
+// digests typed for one wire do not verify on the other. Retired sets move to
+// `legacyGenerations` — kept so event-history scans still see their fills/clones and so
 // prepare/submit can name a retired settler precisely instead of calling it unknown.
+//
+// Older binaries validate this record with `.strip()`, so a remote config that carries
+// `activeGenerations` still loads there — they only keep treating those settlers as unknown.
 const RolloverGenerationSchema = z
   .object({
     factory: Address,
@@ -55,24 +65,20 @@ const RolloverGenerationSchema = z
     /** ISO date the generation stopped being venue-admissible. */
     retired: z.string().optional(),
     label: z.string().optional(),
+    contractsVersion: z.string().optional(),
   })
   .strip();
 export type CorkRolloverGeneration = z.infer<typeof RolloverGenerationSchema>;
-const RolloverDeploymentSchema = z
-  .object({
-    factory: Address,
-    exactSettler: Address,
-    partialSettler: Address,
-    settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
-    seededAtBlock: z.number().int().nonnegative(),
-    contractsVersion: z.string().optional(),
-    legacyGenerations: z.array(RolloverGenerationSchema).optional(),
-  })
-  .strip();
+const RolloverDeploymentSchema = RolloverGenerationSchema.extend({
+  settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
+  /** Other venue-admissible, wire-compatible generations beside the primary one. */
+  activeGenerations: z.array(RolloverGenerationSchema).optional(),
+  legacyGenerations: z.array(RolloverGenerationSchema).optional(),
+}).strip();
 export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
 
 /** Event-scan targets across EVERY generation of a rollover deployment: retired settlers'
- *  fills and retired factories' clones stay on-chain, so history reads span active + legacy
+ *  fills and retired factories' clones stay on-chain, so history reads span every generation's
  *  addresses from the earliest seed block. One derivation for every scan site (query's
  *  full-decentralized feeds, track's digest event-history leg). */
 /** ONE generation-scoping mechanism for every rollover event scan (the digest and factory
@@ -85,13 +91,13 @@ export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
 function generationScanTargets(
   dep: CorkRolloverDeployment,
   address: string | undefined,
-  addressesOf: (g: CorkRolloverDeployment | CorkRolloverGeneration) => string[],
+  addressesOf: (g: { factory: string; exactSettler: string; partialSettler: string }) => string[],
   fullAddresses: `0x${string}`[],
 ): { addresses: `0x${string}`[]; fromBlock: number } {
   const full = rolloverScanTargets(dep);
   if (!address) return { addresses: fullAddresses, fromBlock: full.fromBlock };
   const lc = address.toLowerCase();
-  for (const g of [dep, ...(dep.legacyGenerations ?? [])]) {
+  for (const g of rolloverGenerations(dep)) {
     if (addressesOf(g).some((a) => a.toLowerCase() === lc)) {
       return { addresses: [address as `0x${string}`], fromBlock: g.seededAtBlock };
     }
@@ -122,10 +128,10 @@ export function rolloverScanTargets(dep: CorkRolloverDeployment): {
   factories: `0x${string}`[];
   fromBlock: number;
 } {
-  const generations = [dep, ...(dep.legacyGenerations ?? [])];
+  const generations = rolloverGenerations(dep);
   return {
-    settlers: generations.flatMap((g) => [g.exactSettler, g.partialSettler]),
-    factories: generations.map((g) => g.factory),
+    settlers: generations.flatMap((g) => [g.exactSettler as `0x${string}`, g.partialSettler as `0x${string}`]),
+    factories: generations.map((g) => g.factory as `0x${string}`),
     fromBlock: Math.min(...generations.map((g) => g.seededAtBlock)),
   };
 }

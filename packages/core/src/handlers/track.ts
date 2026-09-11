@@ -23,6 +23,8 @@ type RolloverChainVerification = {
   /** Which configured generation the settler belongs to — chain provenance is only ever
    *  attached to a settler this build recognizes. */
   settlerGeneration?: "active" | "retired";
+  /** That generation's config label ("primary" for the pinned set when the config names none). */
+  settlerGenerationLabel?: string;
   chainStatus?: ReturnType<typeof chainStatusName>;
   venueStatus?: string;
   consistent?: boolean;
@@ -243,6 +245,13 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // active or retired generation is called.
           const classification = settlerAddr && rollover ? classifyRolloverSettler(rollover, settlerAddr) : undefined;
           const configuredSettler = classification?.status === "active" || classification?.status === "retired" ? classification.status : undefined;
+          const settlerGenerationLabel = classification?.status === "active" || classification?.status === "retired" ? classification.generation.label : undefined;
+          /** The provenance fields every chain leg attaches: the settler and the generation that vouches for it. */
+          const settlerProvenance: Pick<RolloverChainVerification, "settler" | "settlerGeneration" | "settlerGenerationLabel"> = {
+            ...(settlerAddr !== undefined ? { settler: settlerAddr } : {}),
+            ...(configuredSettler !== undefined ? { settlerGeneration: configuredSettler } : {}),
+            ...(settlerGenerationLabel !== undefined ? { settlerGenerationLabel } : {}),
+          };
           // The one predicate every chain leg below consults; the mutation probe targets it.
           const settlerReadable = settlerAddr !== undefined && configuredSettler !== undefined;
           if (settlerAddr !== undefined && !settlerReadable) {
@@ -262,7 +271,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               })) as number;
               const chainStatus = chainStatusName(statusNum);
               const consistent = venueChainConsistent(venueStatus, chainStatus);
-              chainVerification = { leg: "orderStatus (settler view, live RPC)", settler: settlerAddr, settlerGeneration: configuredSettler, chainStatus, venueStatus, consistent };
+              chainVerification = { leg: "orderStatus (settler view, live RPC)", ...settlerProvenance, chainStatus, venueStatus, consistent };
               if (!consistent) {
                 // Chain outranks the venue: disagreement is an explicit conflict, with the
                 // indexer's finality lag (~75 s on Arbitrum) noted for freshly-updated rows.
@@ -303,7 +312,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               // Scoped to the ONE settler this digest binds to — the logs endpoint is an external
               // party; it must not be able to substitute another emitter into this history.
               const emitters = (await protocolEmittersFor(chainId)).filter((e) => e.address.toLowerCase() === settlerAddr.toLowerCase());
-              chainVerification = { ...(chainVerification ?? { settler: settlerAddr, settlerGeneration: configuredSettler }), ...attributionFields(attributeLogs(logs, emitters)) };
+              chainVerification = { ...(chainVerification ?? settlerProvenance), ...attributionFields(attributeLogs(logs, emitters)) };
             } catch (err) {
               warnings.push(
                 err instanceof LogsRangeLimited
@@ -442,6 +451,11 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           if (rollover && resolved) {
             const digest = ref.toLowerCase() as `0x${string}`;
             const sweep = rolloverDigestScanTargets(rollover); // full generation span
+            // Every swept address is a configured settler by construction; name its generation.
+            const sweepProvenance = (settler: string): Pick<RolloverChainVerification, "settlerGeneration" | "settlerGenerationLabel"> => {
+              const c = classifyRolloverSettler(rollover, settler);
+              return c.status === "unknown" ? {} : { settlerGeneration: c.status, settlerGenerationLabel: c.generation.label };
+            };
             for (const settler of sweep.addresses) {
               let statusNum: number;
               try {
@@ -484,7 +498,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   orderDigest: digest,
                   lifecycle: null,
                   order: null,
-                  chainVerification: { leg: "orderStatus (settler view, live RPC; venue-miss sweep)", settler, chainStatus, ...(attribution ? attributionFields(attribution) : {}) },
+                  chainVerification: { leg: "orderStatus (settler view, live RPC; venue-miss sweep)", settler, ...sweepProvenance(settler), chainStatus, ...(attribution ? attributionFields(attribution) : {}) },
                 },
                 chainId,
                 source: "chain",

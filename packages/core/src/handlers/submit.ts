@@ -4,7 +4,7 @@ import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveRollover } from "../config-remote.ts";
-import { checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
+import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
@@ -175,14 +175,16 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           if (cls.status === "retired") {
             return unavailable(chainId, "settler_retired", retiredSettlerTeaching(o.settler, cls, rollover), ctx);
           }
+          // The partner named is the SAME generation's other settler (each factory approves
+          // only its own settlers), never the primary generation's by default.
           if (cls.status === "active" && cls.kind === "EXACT" && o.allowPartialFills) {
-            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the ExactSettler, which rejects allowPartialFills:true on-chain — this signed order is unfillable; re-sign against the PartialSettler ${rollover.partialSettler} or with allowPartialFills:false`, ctx);
+            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the ExactSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:true on-chain — this signed order is unfillable; re-sign against that generation's PartialSettler ${cls.generation.partialSettler} or with allowPartialFills:false`, ctx);
           }
           if (cls.status === "active" && cls.kind === "PARTIAL" && !o.allowPartialFills) {
-            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the PartialSettler, which rejects allowPartialFills:false on-chain — this signed order is unfillable; re-sign against the ExactSettler ${rollover.exactSettler} or with allowPartialFills:true`, ctx);
+            return unavailable(chainId, "settler_mode_mismatch", `settler ${o.settler} is the PartialSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:false on-chain — this signed order is unfillable; re-sign against that generation's ExactSettler ${cls.generation.exactSettler} or with allowPartialFills:true`, ctx);
           }
           if (cls.status === "unknown") {
-            settlerWarnings.push({ code: "settler_not_recognized", message: `settler ${o.settler} is not a configured Cork settler for chainId ${chainId} (exact ${rollover.exactSettler}, partial ${rollover.partialSettler}) — relayed, but verify the address before counting on settlement` });
+            settlerWarnings.push({ code: "settler_not_recognized", message: `settler ${o.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — relayed, but verify the address before counting on settlement` });
           }
         } else {
           settlerWarnings.push({ code: "settler_not_recognized", message: `no rollover deployment configured for chainId ${chainId} — the settler/mode coherence checks could not run; relayed unverified` });

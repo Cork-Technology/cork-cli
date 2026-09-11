@@ -11,6 +11,7 @@
 import { resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "./config-remote.ts";
 import { JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC } from "./market-registry.ts";
 import { SETTLER_EVENTS } from "./rollover-verify.ts";
+import { rolloverGenerations } from "./rollover.ts";
 
 /** Who is allowed to emit a given protocol event. */
 export type EmitterRole = "exactSettler" | "partialSettler" | "jitAdapter" | "legacyJitAdapter";
@@ -20,7 +21,9 @@ export interface ProtocolEmitter {
   address: `0x${string}`;
   role: EmitterRole;
   generation: "active" | "retired";
-  /** The retired generation's config label (e.g. "july-2026"), when it has one. */
+  /** The rollover generation's label (every settler emitter carries one: "primary" for the
+   *  pinned set when the config names none, "july-2026" for the retired set, …). JIT adapters
+   *  have no generation label. */
   label?: string;
 }
 
@@ -35,8 +38,8 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
 };
 
 /** Every contract this build recognizes as a protocol emitter on `chainId`, from the same
- *  config every other trust decision reads: the active rollover settlers, each retired
- *  generation's settlers, and the JIT adapters of both registry generations. */
+ *  config every other trust decision reads: every rollover generation's settlers (active and
+ *  retired, primary first), and the JIT adapters of both registry generations. */
 export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmitter[]> {
   const [{ rollover }, { marketRegistry }, { marketRegistry: legacy }] = await Promise.all([
     resolveRollover(chainId),
@@ -45,11 +48,9 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
   ]);
   const out: ProtocolEmitter[] = [];
   if (rollover) {
-    out.push({ address: rollover.exactSettler as `0x${string}`, role: "exactSettler", generation: "active" });
-    out.push({ address: rollover.partialSettler as `0x${string}`, role: "partialSettler", generation: "active" });
-    for (const g of rollover.legacyGenerations ?? []) {
-      out.push({ address: g.exactSettler as `0x${string}`, role: "exactSettler", generation: "retired", ...(g.label ? { label: g.label } : {}) });
-      out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: "retired", ...(g.label ? { label: g.label } : {}) });
+    for (const g of rolloverGenerations(rollover)) {
+      out.push({ address: g.exactSettler as `0x${string}`, role: "exactSettler", generation: g.status, label: g.label });
+      out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: g.status, label: g.label });
     }
   }
   if (marketRegistry?.adapter) out.push({ address: marketRegistry.adapter as `0x${string}`, role: "jitAdapter", generation: "active" });
