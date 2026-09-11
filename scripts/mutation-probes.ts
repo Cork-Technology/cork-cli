@@ -70,6 +70,7 @@ const T = {
   forself: "packages/core/test/forself.test.ts",
   inlineFill: "packages/core/test/taker-fill-inline.test.ts",
   hybridVerify: "packages/core/test/hybrid-verify.test.ts",
+  orderAuth: "packages/core/test/order-auth.test.ts",
   filterScope: "packages/core/test/query-filter-scope.test.ts",
   scanCache: "packages/core/test/scan-cache.test.ts",
   phala: "packages/core/test/phala-attest.test.ts",
@@ -165,7 +166,7 @@ const CATALOG: Mutant[] = [
     // with clientRequestId "x" uses — sharing is a choice, never an accident.
     id: "orders-oco-namespace-dropped",
     file: "packages/core/src/orders.ts",
-    find: "return nonceFromSeed(`oco-group:${ocoGroup}`);",
+    find: "return nonceFromSeed(`${OCO_GROUP_NONCE_NAMESPACE}${ocoGroup}`);",
     replace: "return nonceFromSeed(ocoGroup);",
     tests: [T.orders],
   },
@@ -4001,6 +4002,191 @@ const CATALOG: Mutant[] = [
     find: "if (claimedTo !== undefined && isBundlerMulticall(data) && targets.bundler3 !== undefined && claimedTo.toLowerCase() !== targets.bundler3.toLowerCase()) {",
     replace: "if (false) {",
     tests: [T.decodeTrust],
+  },
+  // ── rc.4: the Daybreak Blue review (2026-09-11) ──────────────────────────────────────────
+  {
+    // DB-004: a refuted maker signature no longer drops the book row — a forgery serves confirmed.
+    id: "book-signature-refutation-kept",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'if (sig?.outcome === "refuted") {\n        drop(`maker signature refuted: ${sig.why}`);\n        continue;\n      }',
+    replace: 'if (false) {\n        drop("");\n        continue;\n      }',
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: a live bit alone confirms — an unverified signature reads as confirmed.
+    id: "book-unverified-signature-confirmed",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'if (liveness === "live" && makerSignature !== "unverified") keep(row, "confirmed");',
+    replace: 'if (liveness === "live") keep(row, "confirmed");',
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: the extension rule is skipped on the book — unbound bytes serve.
+    id: "book-extension-verdict-dropped",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "    if (!extensionVerdict(p.value.order, p.value.extension).valid) {\n      extensionLies += 1;\n      continue;\n    }\n",
+    replace: "",
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: ecrecover's answer is ignored — every row reads eoa-verified.
+    id: "book-eoa-recover-ignored",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: 'const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
+    replace: 'const makerSignature: BookMakerSignature = "eoa-verified";',
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: the venue taker-fill branch builds on a row it never authenticated.
+    id: "venue-fill-auth-skipped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      if (!auth.ok) return auth.envelope;\n      const authenticated: SignedLopOrder",
+    replace: "      const authenticated: SignedLopOrder",
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: refresh re-signs terms nobody authenticated.
+    id: "refresh-auth-skipped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (!auth.ok) return auth.envelope;\n  const traits = decodeMakerTraits(old.makerTraits);",
+    replace: "  const traits = decodeMakerTraits(old.makerTraits);",
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: the extension rule regresses to the pre-rc.4 hash-only check (flag ignored).
+    id: "extension-verdict-flag-ignored",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: "  if (decodeMakerTraits(order.makerTraits).hasExtension) {",
+    replace: "  if (hasBytes) {",
+    tests: [T.orderAuth, T.inlineFill],
+  },
+  {
+    // DB-004/DB-007: a code read failing in transport becomes a signature VERDICT (conflict).
+    id: "auth-read-failed-treated-as-verdict",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: '  if (verdict.kind === "eoa_mismatch" && verdict.codeProbe === "read-failed") {',
+    replace: "  if (false) {",
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: an ERC-1271 transport failure refutes the row instead of leaving it unverified.
+    id: "book-1271-transport-refutes",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: '    case "erc1271_transport": return { outcome: "indeterminate" };',
+    replace: '    case "erc1271_transport": return { outcome: "refuted", why: "transport" };',
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-004: a non-recovering signature refutes the row even when the code probe failed.
+    id: "book-eoa-mismatch-probe-ignored",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: '    case "eoa_mismatch": return verdict.codeProbe === "no-code" ? { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" } : { outcome: "indeterminate" };',
+    replace: '    case "eoa_mismatch": return { outcome: "refuted", why: "the signature does not recover to the maker, an EOA" };',
+    tests: [T.orderAuth],
+  },
+  {
+    // DB-001: the caller's signal is set on deps but never reaches the fetch (the rc.3 state).
+    id: "venue-signal-not-passed",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "      { ...(init ?? {}), ...(deps.signal ? { signal: deps.signal } : {}) },",
+    replace: "      init ?? {},",
+    tests: [T.venueTransport],
+  },
+  {
+    // DB-001: a caller-cancelled fetch feeds the breaker and retries like a venue outage.
+    id: "venue-abort-feeds-breaker",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "    if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} cancelled mid-flight (${abortReasonText(deps.signal)})`);\n",
+    replace: "",
+    tests: [T.venueTransport],
+  },
+  {
+    // DB-001: an already-aborted caller still gets a network call.
+    id: "venue-preaborted-still-fetches",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "  if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} not started: the request was cancelled (${abortReasonText(deps.signal)})`);\n",
+    replace: "",
+    tests: [T.venueTransport],
+  },
+  {
+    // DB-001: an abort is mapped like any other throw (internal_error) instead of request_aborted.
+    id: "venue-aborted-unmapped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  if (err instanceof VenueAborted) {",
+    replace: "  if (false) {",
+    tests: [T.venueTransport],
+  },
+  {
+    // DB-001: the caller waits for the whole dispatch again — the deadline ends nothing.
+    id: "admission-deadline-race-dropped",
+    file: "packages/mcp/src/admission.ts",
+    find: "    return Promise.race([work, deadlineResponse(permit.signal)]);",
+    replace: "    return work;",
+    tests: [T.httpAdmission],
+  },
+  {
+    // DB-001: the slot is released at the deadline while the work still runs — the count lies.
+    id: "admission-release-at-deadline",
+    file: "packages/mcp/src/admission.ts",
+    find: "    const settled = work.finally(() => permit.release());\n    settled.catch(() => {});",
+    replace: '    permit.signal.addEventListener("abort", () => permit.release(), { once: true });\n    const settled = work.finally(() => permit.release());\n    settled.catch(() => {});',
+    tests: [T.httpAdmission],
+  },
+  {
+    // DB-001: a body that arrives after the deadline is still dispatched.
+    id: "admission-aborted-still-dispatches",
+    file: "packages/mcp/src/admission.ts",
+    find: "    if (signal.aborted) return deadlineRefusal();\n",
+    replace: "",
+    tests: [T.httpAdmission],
+  },
+  {
+    // DB-003: the outer multicall target is silently trusted again.
+    id: "decode-outer-unverified-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "...(claimedTo === undefined && isBundlerMulticall(data) ? { outerUnverified: ",
+    replace: "...(false ? { outerUnverified: ",
+    tests: [T.decodeTrust],
+  },
+  {
+    // DB-005: the creator's bound controller is not compared with config.
+    id: "creator-controller-binding-unchecked",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "const controllerMismatch = mr.controller !== undefined && boundController.toLowerCase() !== mr.controller.toLowerCase();",
+    replace: "const controllerMismatch = false;",
+    tests: [T.marketCreator],
+  },
+  {
+    // DB-007: a transport failure on rate() reads as a revert (the oracle-fault diagnosis).
+    id: "oracle-rate-transport-as-revert",
+    file: "packages/core/src/handlers/registry.ts",
+    find: 'rateReadFailure: isTransportFailure(err) ? "transport" : "revert"',
+    replace: 'rateReadFailure: "revert"',
+    tests: [T.oracleDiag],
+  },
+  {
+    // DB-007: a resolve that failed in transport is attributed to the recipe/oracle again.
+    id: "resolve-transport-as-refusal",
+    file: "packages/core/src/handlers/registry.ts",
+    find: '    if (isTransportFailure(err) || (o.deployed && o.rateReadFailure === "transport")) {',
+    replace: "    if (false) {",
+    tests: [T.oracleDiag],
+  },
+  {
+    // RC1-NONCE-001: the schema stops refusing ids inside the group namespace.
+    id: "nonce-namespace-schema-refine-dropped",
+    file: "packages/schemas/src/primitives.ts",
+    find: "  .refine((s) => !s.startsWith(OCO_GROUP_NONCE_NAMESPACE), {",
+    replace: "  .refine(() => true, {",
+    tests: [T.orders],
+  },
+  {
+    // RC1-NONCE-001: the SDK-side guard is gone — an id can seed a group's bit.
+    id: "nonce-namespace-build-guard-dropped",
+    file: "packages/core/src/orders.ts",
+    find: "  if (a.clientRequestId.startsWith(OCO_GROUP_NONCE_NAMESPACE)) {",
+    replace: "  if (false) {",
+    tests: [T.orders],
   },
 ];
 

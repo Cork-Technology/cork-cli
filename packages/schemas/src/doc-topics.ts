@@ -84,8 +84,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "availability",
     envelope: "mixed",
     contract:
-      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
-    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "no_lop"],
+      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
+    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "no_lop", "request_aborted"],
   },
   {
     family: "gates",
@@ -274,9 +274,15 @@ implementation, two consumers. The split rule: a row the chain DEFINITIVELY refu
 (transport failure, page beyond the verification budget, unparseable row, vocabulary neither
 side knows) is KEPT, labeled verification:'unverified'.
 
-- orderbook — each row's order is re-hashed locally [K3] and its 1inch invalidator read: a
-  filled-or-cancelled order is dropped (the venue has listed dead rows before — observed live
-  2026-08-06); a row that does not hash to its own claimed orderHash is dropped.
+- orderbook — each row's order is re-hashed locally [K3], its extension checked against the
+  salt/makerTraits the way OrderLib.isValidExtension does at fill, its signature ecrecovered
+  (a contract maker's is put to its own isValidSignature staticcall), and its 1inch invalidator
+  read: a filled-or-cancelled order is dropped (the venue has listed dead rows before — observed
+  live 2026-08-06), a row whose maker never signed it is dropped, a row whose extension bytes
+  are not the ones it committed to is dropped chain-free, and a row that does not hash to its
+  own claimed orderHash is dropped. \`confirmed\` = the maker signed it AND its bit is unspent;
+  \`makerSignature\` says which check settled the signature (eoa-verified | erc1271-verified |
+  unverified — nobody could ask a non-recovering maker).
 - cork-pools — market(poolId) across EVERY configured pool-manager generation: a pool no PM
   knows is dropped.
 - trading-pairs — NEVER dropped: the venue is the authority on what is LISTED, and a JIT order
@@ -475,7 +481,7 @@ The venue has no push and no \`updated_after\`, so monitoring is client-side pol
 - "Better" is a lower unit price on a SELL row (higher on a BUY row, where the maker pays), or the same price reserved for this fill sender instead of open — an order nobody can race.
 - \`wait\` long-polls: re-read the book every 2 s until \`changes.changed\` or the seconds run out (max 25, under the HTTP ingress deadline); \`waited\` says how it ended. The CLI's \`ch query orderbook --watch [--interval s] [--iterations n]\` loops this, printing the first read and then only the ticks that changed.
 - A watermark is per fill sender: reach and exclusion differ per sender, so a token taken for another account is refused.
-Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key, namespaced so a group can never collide with a stand-alone order by accident); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
+Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key under the \`oco-group:\` namespace, a prefix no clientRequestId may carry — so a group seed and an id seed are never the same string; what remains is the 40-bit truncation any two seeds share, birthday-rare, disclosed on every maker-order); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
 Because the rungs share one bit, cancelling ANY rung (\`cancel\`) retires the whole group; \`bitsInvalidateForOrder(makerTraits, mask)\` additionally spends other bits of the same 256-bit slot word in one transaction — a sweep across orders whose nonces share a slot, not built here.
 
 ## Series and epoch: mass cancel
