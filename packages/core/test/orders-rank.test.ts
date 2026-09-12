@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder, ocoGroupNonce, parseSignedLopOrder, rankBookRows, runTool, ToolInputError } from "@cork/core";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -197,7 +197,7 @@ describe("cork_query orderbook — the ranked view is the default; sort:'venue' 
   const liveChain = stubRpc((c) => {
     if (c.functionName === "bitInvalidatorForOrder") return 0n;
     throw new Error(`no stub for ${c.functionName}`);
-  });
+  }, { code: { [CST.toLowerCase()]: TOKEN_CODE } }); // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
 
   it("default: fillable rows ranked for filters.account, the rest under `excluded`, count = every served row", async () => {
     const dear = await row("q-1", { taking: 6n * 10n ** 16n });
@@ -252,6 +252,46 @@ describe("cork_query orderbook — the ranked view is the default; sort:'venue' 
     expect(data.items.map((x) => x.orderHash)).toEqual([good.orderHash]);
     expect(data.verification.dropped).toBe(1);
     expect(data.count).toBe(1);
+  });
+});
+
+describe("rankBookRows — the maker-not-ready exclusion (chain-proven, verdict-gated)", () => {
+  const preOf = async (rows: Array<Awaited<ReturnType<typeof row>>>, statusOf: (h: string) => "ready" | "not-ready" | "unknown" | undefined) => {
+    const map = new Map<string, { signed: ReturnType<typeof parseSignedLopOrder> extends { ok: true; value: infer V } ? V : never; localHash: `0x${string}`; makerReadiness?: { status: "ready" | "not-ready" | "unknown"; reasons: Array<{ code: string; structural: boolean; message: string }> } }>();
+    for (const r of rows) {
+      const parsed = parseSignedLopOrder(r);
+      if (!parsed.ok) throw new Error(parsed.error);
+      const status = statusOf(r.orderHash);
+      map.set(r.orderHash.toLowerCase(), {
+        signed: parsed.value as never,
+        localHash: r.orderHash as `0x${string}`,
+        ...(status !== undefined ? { makerReadiness: { status, reasons: status === "not-ready" ? [{ code: "silent-noop", structural: true, message: "the makerAsset has no code" }] : [] } } : {}),
+      });
+    }
+    return map;
+  };
+
+  it("only the PROVEN 'not-ready' verdict excludes; 'unknown', 'ready', and an absent verdict all keep the row", async () => {
+    const dead = await row("mr-1");
+    const unknown = await row("mr-2", { taking: 6n * 10n ** 16n });
+    const ready = await row("mr-3", { taking: 7n * 10n ** 16n });
+    const unjudged = await row("mr-4", { taking: 8n * 10n ** 16n });
+    const parsed = await preOf([dead, unknown, ready, unjudged], (h) => (h === dead.orderHash ? "not-ready" : h === unknown.orderHash ? "unknown" : h === ready.orderHash ? "ready" : undefined));
+    const r = rankBookRows([dead, unknown, ready, unjudged], { chainId: 1, lop: LOP, account: ME, nowSeconds: NOW, parsed });
+    expect(hashes(r)).toEqual([unknown.orderHash, ready.orderHash, unjudged.orderHash]);
+    const ex = r.excluded.find((x) => (x as { orderHash?: string }).orderHash === dead.orderHash) as { exclusion: string; whyNotFillable: string };
+    expect(ex.exclusion).toBe("maker-not-ready");
+    expect(ex.whyNotFillable).toContain("the makerAsset has no code");
+    expect(ex.whyNotFillable).toContain("without re-signing");
+  });
+
+  it("a not-ready row that would otherwise be BEST does not shadow the next row's rank 1", async () => {
+    const best = await row("mr-5", { taking: 4n * 10n ** 16n });
+    const second = await row("mr-6", { taking: 5n * 10n ** 16n });
+    const parsed = await preOf([best, second], (h) => (h === best.orderHash ? "not-ready" : "ready"));
+    const r = rankBookRows([best, second], { chainId: 1, lop: LOP, account: ME, nowSeconds: NOW, parsed });
+    expect(hashes(r)).toEqual([second.orderHash]);
+    expect(r.items[0]!.rank).toBe(1);
   });
 });
 

@@ -22,6 +22,13 @@ const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
 /** A readContract/simulateContract call as the handlers issue it (address + functionName + args). */
 export type StubCall = { functionName: string; args?: readonly unknown[]; address: string };
 
+/** Plausible runtime bytecode for a fixture TOKEN. Any non-"0x" answer reads as has-code to the
+ *  maker-readiness probe — and fixture tokens must HAVE code: a code-less makerAsset is the
+ *  silent-noop class (the LOP's transfer helper counts a call to a code-less address as SUCCESS)
+ *  and the ranked book rightly excludes it, which is exactly what healthy fixture rows must not
+ *  be. Pass `{ [token.toLowerCase()]: TOKEN_CODE }` through stubRpc's `code` opt. */
+export const TOKEN_CODE = "0x6080604052";
+
 /** Wrap a (partial) viem client into the ResolvedRpc envelope a resolver returns. `client` is a
  *  bag of just the methods the code under test calls (readContract, call, simulateCalls, …). */
 export function stubResolved(
@@ -43,6 +50,10 @@ export function stubRpc(
     /** eth_getCode answers, keyed by lowercased address; absent addresses answer "0x" (no code) —
      *  except the implementation-role addresses, which throw (unreadable) unless a fixture is given. */
     code?: Record<string, string> | undefined;
+    /** eth_call answers (the fill-simulation probe). Default: reject as a TRANSPORT failure, so
+     *  a probe against a stub with no call model reports verdict "unknown" — honest, never a
+     *  fabricated fillable/would-revert. */
+    call?: ((a: { to: string; data: string; account?: string }) => unknown) | undefined;
   } = {},
 ): NonNullable<HandlerContext["resolveRpc"]> {
   return async () =>
@@ -51,6 +62,10 @@ export function stubRpc(
         readContract: async (c: StubCall) => handler(c),
         simulateContract: async (c: StubCall) => ({ result: handler({ ...c, functionName: `simulate:${c.functionName}` }) }),
         simulateCalls: async (a: { account: string; calls: { to: string; data: string }[]; stateOverrides?: unknown }) => (opts.simulateCalls ? opts.simulateCalls(a) : { results: [] }),
+        call: async (a: { to: string; data: string; account?: string }) => {
+          if (opts.call) return opts.call(a);
+          throw Object.assign(new Error("stub: no eth_call model"), { name: "HttpRequestError" });
+        },
         getCode: async ({ address }: { address: string }) => {
           const fixture = opts.code?.[address.toLowerCase()];
           if (fixture !== undefined) return fixture;

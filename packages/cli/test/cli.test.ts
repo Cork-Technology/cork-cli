@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
-import { poolTokensRpc, stubRpc } from "../../core/test/helpers.ts";
+import { poolTokensRpc, stubRpc, TOKEN_CODE } from "../../core/test/helpers.ts";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, resolveMarketRegistry, unapprovedCodeAllowed } from "@cork/core";
 import { DEMO_ACCOUNT } from "@cork/schemas";
@@ -838,7 +838,8 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
       return new Response(JSON.stringify({ items: books[Math.min(call++, books.length - 1)], hasMore: false }), { status: 200 });
     };
   };
-  const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); });
+  // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
+  const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { "0x16aa2ebe1e2d6c856c634dafc256257d2fec0c69": TOKEN_CODE } });
 
   it("prints the first read, stays quiet on an unchanged tick, prints the tick a better order appears, and threads the watermark", async () => {
     const old = await bookRow("cw-1", 5n * 10n ** 16n);

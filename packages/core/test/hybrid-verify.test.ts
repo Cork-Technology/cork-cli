@@ -8,13 +8,19 @@ import { privateKeyToAccount } from "viem/accounts";
 import { allowedSenderSuffix, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { HYBRID_VERIFY_BUDGET } from "../src/handlers/hybrid-verify.ts";
 import { runTool } from "../src/handlers.ts";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const NOW = 1_790_000_000n;
 const LOP = LOP_ADDRESSES[1]!;
 const maker = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 const POOL = `0x${"cc".repeat(32)}` as const;
+// The fixture makerAsset HAS code: a code-less makerAsset is the silent-noop class the ranked
+// view excludes, which these healthy rows must not be. Threaded into the stubs whose test
+// expects rows to RANK (chain-free reads never invent a readiness verdict, so RPC-less tests
+// need nothing).
+const MAKER_ASSET = "0x00000000000000000000000000000000000000c5" as const;
+const TOKEN_FIXTURE = { code: { [MAKER_ASSET]: TOKEN_CODE } };
 
 const venueWith = (path: string, items: unknown[]) => async (url: string) =>
   url.includes(path) ? new Response(JSON.stringify({ items, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 });
@@ -66,7 +72,7 @@ describe("hybrid verification — orderbook liveness", () => {
         return makerArg === maker.address.toLowerCase() ? 0n : ~0n & ((1n << 256n) - 1n); // live vs fully spent
       }
       throw new Error(`no stub for ${c.functionName}`);
-    });
+    }, TOKEN_FIXTURE);
     const env = await query("orderbook", { venueFetch: venueWith("orderbook", [live, deadRow]), resolveRpc: chain });
     expect(env.state).toBe("ok");
     const d = env.data as VerifiedData;
@@ -86,6 +92,7 @@ describe("hybrid verification — orderbook liveness", () => {
     const live = await bookRow(11n, { makerTraits: traitsOf(liveNonce) });
     const dead = await bookRow(12n, { makerTraits: traitsOf(deadNonce) });
     const chain = new FakeLopInvalidators();
+    chain.setCode(MAKER_ASSET, TOKEN_CODE);
     chain.spendNonce(maker.address, deadNonce);
     const env = await query("orderbook", { venueFetch: venueWith("orderbook", [live, dead]), resolveRpc: chain.resolveRpc() });
     const d = env.data as VerifiedData;
@@ -99,7 +106,7 @@ describe("hybrid verification — orderbook liveness", () => {
     const row = await bookRow(1n);
     const chain = stubRpc(() => {
       throw new Error("transport");
-    });
+    }, TOKEN_FIXTURE);
     const env = await query("orderbook", { venueFetch: venueWith("orderbook", [row]), resolveRpc: chain });
     const d = env.data as VerifiedData;
     expect(d.count).toBe(1);
@@ -344,7 +351,7 @@ describe("hybrid verification — orderbook exclusivity and self-consistency (ch
     const chain = stubRpc((c) => {
       if (c.functionName === "bitInvalidatorForOrder") return 0n;
       throw new Error(`no stub for ${c.functionName}`);
-    });
+    }, TOKEN_FIXTURE);
     const env = await query("orderbook", { venueFetch: venueWith("orderbook", [reserved]), resolveRpc: chain }, { filters: { account: TAKER } });
     expect(rowsOf(env).items[0]).toMatchObject({ verification: "confirmed", allowedSender: allowedSenderSuffix(TAKER), exclusivity: "reserved-for-account" });
     expect(rowsOf(env).verification.confirmed).toBe(1);
@@ -374,5 +381,80 @@ describe("hybrid verification — orderbook exclusivity and self-consistency (ch
       expect(rowsOf(env).verification.dropped).toBe(1);
       expect(env.warnings.some((w) => w.code === "order_hash_mismatch" && w.message.includes("DROPPED"))).toBe(true);
     }
+  });
+});
+
+describe("hybrid verification — maker readiness in the one batch", () => {
+  const TAKER = "0x00000000000000000000000000000000000000dd" as const;
+  const readinessChain = (opts: { code?: Record<string, string>; onAllowance?: () => bigint } = {}) => {
+    const counts = { allowance: 0, balanceOf: 0 };
+    const resolveRpc = stubRpc((c) => {
+      switch (c.functionName) {
+        case "bitInvalidatorForOrder":
+          return 0n;
+        case "allowance":
+          counts.allowance += 1;
+          return opts.onAllowance ? opts.onAllowance() : 10n ** 24n;
+        case "balanceOf":
+          counts.balanceOf += 1;
+          return 10n ** 24n;
+        default:
+          throw new Error(`no stub for ${c.functionName}`);
+      }
+    }, { code: opts.code });
+    return { resolveRpc, counts };
+  };
+
+  it("a code-less makerAsset rides the venue-sort row as makerReadiness 'not-ready' + one page warning; the ranked read EXCLUDES it with the evidence", async () => {
+    const row = await bookRow(31n);
+    // No code fixture: the makerAsset reads no-code — the silent-noop class.
+    const venue = venueWith("orderbook", [row]);
+    const verbatim = await query("orderbook", { venueFetch: venue, resolveRpc: readinessChain().resolveRpc }, { sort: "venue" });
+    expect(verbatim.state).toBe("ok");
+    const vd = verbatim.data as VerifiedData;
+    expect(vd.items[0]!.verification).toBe("confirmed"); // liveness holds — readiness is a different fact
+    expect((vd.items[0]!.makerReadiness as { status: string; reasons: Array<{ code: string }> }).status).toBe("not-ready");
+    expect((vd.items[0]!.makerReadiness as { reasons: Array<{ code: string }> }).reasons.map((r) => r.code)).toEqual(["silent-noop"]);
+    expect(verbatim.warnings.filter((w) => w.code === "maker_not_ready")).toHaveLength(1);
+
+    const ranked = await query("orderbook", { venueFetch: venue, resolveRpc: readinessChain().resolveRpc }, { filters: { account: TAKER } });
+    const rd = ranked.data as VerifiedData & { excluded: Array<{ orderHash: string; exclusion: string; whyNotFillable: string }> };
+    expect(rd.items).toHaveLength(0);
+    expect(rd.count).toBe(1); // kept by verification; excluded only from the ranking
+    const ex = rd.excluded.find((x) => x.orderHash === row.orderHash)!;
+    expect(ex.exclusion).toBe("maker-not-ready");
+    expect(ex.whyNotFillable).toContain("silently");
+  });
+
+  it("readiness reads are DEDUPED per (maker, makerAsset, sourcing, jit): two rows, one gather; two makers, two", async () => {
+    const a = await bookRow(32n);
+    const b = await bookRow(33n, { takingAmount: 6n * 10n ** 16n });
+    const same = readinessChain({ code: { [MAKER_ASSET]: TOKEN_CODE } });
+    await query("orderbook", { venueFetch: venueWith("orderbook", [a, b]), resolveRpc: same.resolveRpc }, { sort: "venue" });
+    expect(same.counts).toEqual({ allowance: 1, balanceOf: 1 });
+
+    const stranger = privateKeyToAccount(`0x${"06".repeat(32)}`);
+    const strangerOrder: LopOrder = { salt: 34n, maker: stranger.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: MAKER_ASSET, takerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", makingAmount: 10n ** 18n, takingAmount: 5n * 10n ** 16n, makerTraits: 0n };
+    const strangerHash = hashLopOrder(1, LOP, strangerOrder);
+    const c = { orderHash: strangerHash, order: { ...a.order, maker: stranger.address, salt: "34" }, signature: await stranger.sign({ hash: strangerHash }), extension: "0x", makerAccountType: "EOA" };
+    const two = readinessChain({ code: { [MAKER_ASSET]: TOKEN_CODE } });
+    await query("orderbook", { venueFetch: venueWith("orderbook", [a, c]), resolveRpc: two.resolveRpc }, { sort: "venue" });
+    expect(two.counts).toEqual({ allowance: 2, balanceOf: 2 });
+  });
+
+  it("a failed readiness read is 'unknown' — the row still ranks; verification is untouched", async () => {
+    const row = await bookRow(35n);
+    const { resolveRpc } = readinessChain({
+      code: { [MAKER_ASSET]: TOKEN_CODE },
+      onAllowance: () => {
+        throw new Error("transport");
+      },
+    });
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [row]), resolveRpc }, { filters: { account: TAKER } });
+    const d = env.data as VerifiedData;
+    expect(d.items).toHaveLength(1);
+    expect(d.items[0]!.verification).toBe("confirmed");
+    expect((d.items[0]!.makerReadiness as { status: string } | undefined)?.status).toBe("unknown");
+    expect(env.warnings.some((w) => w.code === "maker_not_ready")).toBe(false);
   });
 });

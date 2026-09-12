@@ -11,7 +11,7 @@ import { keccak256, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
@@ -27,7 +27,9 @@ const venueMustNotBeCalled = async (): Promise<Response> => {
   throw new Error("the venue was contacted — the signedOrder path must be venue-free");
 };
 
-/** Chain stub: order live in the bit invalidator; every address without an entry in `code`
+/** Chain stub: order live in the bit invalidator, the fixture cST HAS code and the maker's side
+ *  reads funded/allowed (a code-less makerAsset is the silent-noop class the readiness pre-flight
+ *  flags — maker-readiness.test.ts owns those cases); every address without an entry in `code`
  *  answers eth_getCode "0x" (an EOA). */
 const liveChain = (opts: { code?: Record<string, string>; isValidSignature?: string | Error } = {}) =>
   stubRpc(
@@ -38,11 +40,14 @@ const liveChain = (opts: { code?: Record<string, string>; isValidSignature?: str
         case "isValidSignature":
           if (opts.isValidSignature instanceof Error) throw opts.isValidSignature;
           return opts.isValidSignature ?? "0x1626ba7e";
+        case "allowance":
+        case "balanceOf":
+          return 10n ** 24n; // the maker's side is healthy
         default:
           throw new Error(`no stub for ${c.functionName}`);
       }
     },
-    { code: opts.code },
+    { code: { [CST.toLowerCase()]: TOKEN_CODE, ...opts.code } },
   );
 
 function baseOrder(over: Partial<LopOrder> = {}): LopOrder {

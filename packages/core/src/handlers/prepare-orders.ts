@@ -4,7 +4,7 @@ import { isAddressEqual } from "viem";
 import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, decodeJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
 import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
 import { buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
@@ -16,6 +16,7 @@ import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
+import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
 import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-orders-sugars.ts";
 import { authenticateSignedOrder, makerCodeUnknownWarning, verifyMakerSignatureLadder } from "./order-auth.ts";
 
@@ -173,15 +174,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // from the decoded extension and the predicted cST from its embedded permit. Advisory
       // only — deliberately OUTSIDE `artifact`, so the digest pins signed content alone.
       const finalizeTraits = decodeMakerTraits(finalized.order.makerTraits);
-      let finalizeJit: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` } | undefined;
-      if (finalized.extension !== "0x") {
-        try {
-          const dec = decodeJitExtension(finalized.extension);
-          finalizeJit = { adapter: dec.adapter, collateralAsset: dec.params.collateralAsset, enableJitMint: Boolean(dec.params.enableJitMint), ...(dec.permits[0] ? { predictedCorkSwapToken: dec.permits[0].token } : {}) };
-        } catch {
-          /* not a JIT extension (e.g. auction-only) — the plain requirements apply */
-        }
-      }
+      const finalizeJit = decodeMakerExtensionContext(finalized.extension).jit;
       const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
         maker: finalized.order.maker,
         makerAsset: finalized.order.makerAsset,
@@ -1047,6 +1040,60 @@ async function buildTakerFillArtifact(a: {
       }
     }
   }
+  // ── Maker-readiness pre-flight (the 2026-09-11 incident class): a signed, live, authentic
+  // resting order can still be UN-FILLABLE because the LOP cannot pull the maker asset — a
+  // contract maker on an unborn JIT cST (every fill reverts), or a code-less makerAsset with
+  // no creating hook (the fill silently moves nothing while the taker pays — simulation shows
+  // that class GREEN, which is why this decode-based check exists beside simulation). Decoded
+  // from the SIGNED bytes [K3]; chain facts read in ONE concurrent batch with the maker-side
+  // approval annotation against the client the liveness pre-flight already resolved (the
+  // batching client coalesces the overlapping legs — no extra chain-contact policy).
+  // Build-and-warn, never refuse: every reason is the MAKER's to fix, without re-signing.
+  const makerCtx = makerReadinessTargetOf({ order: signed.order, extension: signed.extension, lop, makerSignedEcdsa: signed.makerAccountType === "EOA" });
+  let makerEntries = makerApprovalRequirements({
+    maker: signed.order.maker,
+    makerAsset: signed.order.makerAsset,
+    makingAmount: signed.order.makingAmount,
+    lop,
+    usePermit2: makerCtx.target.usePermit2,
+    orderExpiry: makerCtx.orderExpiry,
+    ...(makerCtx.target.jit ? { jit: makerCtx.target.jit } : {}),
+  });
+  let makerReadiness: MakerReadiness = { status: "unknown", reasons: [] };
+  if (resolved) {
+    const [makerFacts, annotatedMakerEntries] = await Promise.all([
+      gatherMakerReadinessFacts(resolved.client, makerCtx.target, ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}),
+      annotateApprovalStatus(resolved.client, { entries: makerEntries, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
+    ]);
+    makerEntries = annotatedMakerEntries;
+    makerReadiness = assessMakerReadiness({
+      makerAsset: signed.order.makerAsset,
+      makingAmount: action.fillMakingAmount !== undefined ? BigInt(action.fillMakingAmount) : signed.order.makingAmount,
+      allowPartialFills: makerCtx.allowPartialFills,
+      usePermit2: makerCtx.target.usePermit2,
+      jit: makerCtx.target.jit,
+      extensionPermitToken: makerCtx.extensionPermitToken,
+      nowSeconds: nowSecondsOf(ctx),
+      facts: makerFacts,
+    });
+  }
+  // Warning mapping: STRUCTURAL reasons (no pending grant fixes them as-is) → maker_not_ready;
+  // fund-shaped reasons → would_revert; grant-shaped reasons ride the approval_missing
+  // machinery from the annotated maker entries. The approval warning is gated on the verdict
+  // so an escape hatch (an in-fill permit standing in for the zero allowance the annotation
+  // sees) never produces contradictory messages — the entries still carry the raw reads.
+  const makerStructural = makerReadiness.reasons.filter((r) => r.structural);
+  if (makerStructural.length > 0) {
+    jitWarnings.push({ code: "maker_not_ready", message: `the resting order's MAKER side cannot deliver as signed: ${makerStructural.map((r) => r.message).join(" ALSO: ")}. The fix is the maker's — re-read the book after the maker has acted (full verdict in data.makerReadiness)` });
+  }
+  const makerFundGaps = makerReadiness.reasons.filter((r) => !r.structural && (r.code === "balance-empty" || r.code === "balance-insufficient" || r.code === "mint-funding-missing"));
+  if (makerFundGaps.length > 0) {
+    jitWarnings.push({ code: "would_revert", message: `the resting order's MAKER side is not funded: ${makerFundGaps.map((r) => r.message).join(" ALSO: ")}. The maker can fix this without re-signing — these bytes stay valid, but simulate before broadcasting` });
+  }
+  if (makerReadiness.status !== "ready") {
+    const makerApprovalWarn = approvalMissingWarning(makerEntries, "— these are the MAKER's grants (holder = the maker, not you; only the maker's account can execute them) — before any fill of this order can succeed");
+    if (makerApprovalWarn) jitWarnings.push(makerApprovalWarn);
+  }
   // ForSelf mode: the same fill, emitted as a call to the integrator-deployed wrapper.
   if (action.forSelf) {
     return await prepareForSelfTakerFill({
@@ -1122,7 +1169,13 @@ async function buildTakerFillArtifact(a: {
       // The order's exclusivity as signed (null = open); a non-null value here is the suffix
       // this fill's sender was just checked against.
       allowedSender,
-      approvals,
+      // Taker grants first, then the MAKER's (role/holder distinguish them): the maker entries
+      // ride so a taker who reads a maker_not_ready/approval_missing warning can hand the
+      // maker the exact missing grant.
+      approvals: [...approvals, ...makerEntries],
+      // The maker-side verdict behind the warnings above; "unknown" = no client resolved or a
+      // needed read failed (indeterminate is never a verdict).
+      makerReadiness,
       // A caller-assembled interaction is opaque bytes: whatever tokens the interaction
       // contract itself pulls mid-fill are invisible here — say so instead of implying the
       // report is complete (jitMarket-built interactions ARE characterized, in `jit`).

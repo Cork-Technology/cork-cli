@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, runTool, ToolInputError } from "@cork/core";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -43,7 +43,8 @@ const venueWith = (book: unknown[], rfqs: unknown[], seen: string[] = []) => asy
   if (url.includes("/rfqs/v1")) return new Response(JSON.stringify({ items: rfqs, next_cursor: null }), { status: 200 });
   return new Response(JSON.stringify({ items: [] }), { status: 200 });
 };
-const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); });
+// the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
+const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE } });
 const offers = (venue: (u: string) => Promise<Response>, filters: Record<string, unknown> = { account: ME }) => runTool("cork_query", { resource: "offers", chainId: 1, filters, format: "concise" }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: live });
 
 type OffersData = { resource: string; rankedFor: string | null; count: number; items: Array<{ orderHash: string; rank: number; provenance: string; quote: null | { rfqId: string; answerId: string; optionId: string; underwriter?: string; requester?: string; premiumAnnualized?: string; resolved?: boolean } }>; excluded?: Array<{ orderHash: string }>; indicative: { count: number; options: Array<{ rfqId: string; answerId: string; optionId: string; underwriter: string | null; reason: string }> }; pagination: { orderbook: unknown; rfqs: unknown }; scales: Record<string, string>; note: string };
@@ -129,5 +130,47 @@ describe("cork_query offers — live orders joined with the quotes they cite; th
     expect(mode.warnings[0]!.code).toBe("mode_unavailable");
     await expect(runTool("cork_query", { resource: "offers", chainId: 1, filters: { status: "OPEN" } }, { nowSeconds: NOW, venueFetch: venue })).rejects.toBeInstanceOf(ToolInputError);
     await expect(runTool("cork_query", { resource: "offers", chainId: 1, sort: "best" }, { nowSeconds: NOW, venueFetch: venue })).rejects.toBeInstanceOf(ToolInputError);
+  });
+});
+
+describe("cork_query offers — the top-of-book probe fill", () => {
+  const liveWithCall = (call: (a: { to: string; data: string }) => unknown) =>
+    stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE }, call });
+  const offersOn = (venue: (u: string) => Promise<Response>, resolveRpc: unknown, filters: Record<string, unknown> = { account: ME }) =>
+    runTool("cork_query", { resource: "offers", chainId: 1, filters, format: "concise" }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: resolveRpc as never });
+  type Probed = { items: Array<{ orderHash: string; fillSimulation?: { verdict: string } }> };
+  const revertWith = (data: string) => { throw Object.assign(new Error("execution reverted"), { cause: { data } }); };
+
+  it("only the TOP offer per side is probed; a green eth_call is verdict 'fillable' on the row", async () => {
+    const best = await row("p-1", { taking: 4n * 10n ** 16n });
+    const second = await row("p-2", { taking: 6n * 10n ** 16n });
+    const env = await offersOn(venueWith([second, best], []), liveWithCall(() => ({ data: "0x" })));
+    const d = env.data as Probed;
+    expect(d.items[0]!.fillSimulation?.verdict).toBe("fillable");
+    expect(d.items[1]!.fillSimulation).toBeUndefined();
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+  });
+
+  it("a reverting probe rides the row AND one would_revert warning naming the top offer", async () => {
+    const only = await row("p-3");
+    // InvalidatedOrder() selector: keccak("InvalidatedOrder()")[0:4]
+    const env = await offersOn(venueWith([only], []), liveWithCall(() => revertWith("0xf71fbda200")));
+    const d = env.data as Probed;
+    expect(d.items[0]!.fillSimulation?.verdict).toBe("would-revert");
+    const warn = env.warnings.find((w) => w.code === "would_revert");
+    expect(warn?.message).toContain(only.orderHash);
+    expect(warn?.message).toContain("top-ranked SELL offer");
+    expect(warn?.message.toLowerCase()).toContain(ME); // the fill sender, checksum-cased in the text
+  });
+
+  it("no fill sender, no probe: without filters.account the rows carry no fillSimulation", async () => {
+    const env = await offersOn(venueWith([await row("p-4")], []), liveWithCall(() => ({ data: "0x" })), {});
+    expect((env.data as Probed).items[0]!.fillSimulation).toBeUndefined();
+  });
+
+  it("a chain with no call model attaches the honest 'unknown' — the probe ran and could not judge", async () => {
+    const env = await offersOn(venueWith([await row("p-5")], []), live);
+    expect((env.data as Probed).items[0]!.fillSimulation?.verdict).toBe("unknown");
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
   });
 });

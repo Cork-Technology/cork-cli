@@ -2,8 +2,11 @@
 // it composes (orderbook sort:best, rfqs with answers) are re-entered through the injected `read`
 // (= handleQuery), so this module has no import cycle with the dispatcher.
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { envelope, type HandlerContext, unavailable } from "./shared.ts";
+import { envelope, getRpc, type HandlerContext, unavailable } from "./shared.ts";
 import type { QueryFilters } from "./filters.ts";
+import { LOP_ADDRESSES } from "../orders.ts";
+import { parseSignedLopOrder } from "../datasources/venue.ts";
+import { type FillSimulation, probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
 
 // ── offers: the unified discovery view (owner ruling 2026-09-02) ─────────────────────────────
 // An OFFER is a price somebody can actually buy: a live, signed resting order. A quote (an RFQ
@@ -140,7 +143,50 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
     if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push({ ...q, reason: "no live resting order cites this option — a price nobody can buy yet" });
   }
 
-  const warnings = [...book.warnings.map((w) => ({ ...w, message: `orderbook: ${w.message}` })), ...rfqs.warnings.map((w) => ({ ...w, message: `rfqs: ${w.message}` }))];
+  // Probe-fill the TOP offer per side with the REAL fill calldata (threshold 0) from the fill
+  // sender: the row the ranking recommends is the one a wrong verdict costs the most on
+  // (2026-09-11: a structurally un-fillable order ranked #1). Best-effort — needs the fill
+  // sender (filters.account) and a resolved RPC, and probes only rows whose maker signature
+  // the verifier SETTLED; a maker-not-ready row never reaches here (the ranker excluded it),
+  // which is what makes a green probe trustworthy (the silent-noop class simulates green).
+  const simWarnings: Array<{ code: string; message: string }> = [];
+  const probeAccount = filters.account;
+  if (probeAccount !== undefined) {
+    const resolvedSim = await getRpc(ctx, chainId).catch(() => null);
+    const lop = LOP_ADDRESSES[chainId];
+    if (resolvedSim && lop) {
+      const tops = (["SELL", "BUY"] as const).flatMap((side) => {
+        const top = scoped.find((r) => {
+          const s = (r as Record<string, unknown>).side;
+          return typeof s === "string" && s.toUpperCase() === side;
+        });
+        return top ? [top] : [];
+      });
+      await Promise.all(
+        tops.map(async (row) => {
+          const accountType = probeAccountTypeOf((row as Record<string, unknown>).makerSignature);
+          if (accountType === null) return; // unsettled signature — a probe would misreport a forgery's BadSignature
+          const parsed = parseSignedLopOrder(row);
+          if (!parsed.ok) return;
+          const sim = await simulateTopFill(resolvedSim.client, {
+            signed: { ...parsed.value, makerAccountType: accountType },
+            lop,
+            account: probeAccount,
+            ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}),
+          });
+          if (sim) (row as Record<string, unknown>).fillSimulation = sim;
+        }),
+      );
+      for (const row of tops) {
+        const sim = (row as Record<string, unknown>).fillSimulation as FillSimulation | undefined;
+        if (sim?.verdict === "would-revert") {
+          simWarnings.push({ code: "would_revert", message: `the top-ranked ${String((row as Record<string, unknown>).side ?? "?")} offer ${String((row as Record<string, unknown>).orderHash ?? "")} fails its probe fill from ${probeAccount}: ${sim.note} (fillSimulation on the row)` });
+        }
+      }
+    }
+  }
+
+  const warnings = [...book.warnings.map((w) => ({ ...w, message: `orderbook: ${w.message}` })), ...rfqs.warnings.map((w) => ({ ...w, message: `rfqs: ${w.message}` })), ...simWarnings];
   if (rfqs.state !== "ok") warnings.push({ code: "needs_service", message: `the RFQ leg did not answer (${rfqs.warnings[0]?.code ?? rfqs.state}); offers are served from the book alone, so every order reads uncited and no indicative tally exists` });
   return envelope({
     state: "ok",

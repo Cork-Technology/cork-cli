@@ -19,6 +19,7 @@ import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
 import { handleQueryWait } from "./query-watch.ts";
+import { probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
@@ -616,6 +617,38 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             } catch (e) {
               if (!(e instanceof WatermarkError)) throw e;
               throw new ToolInputError("cork_query", [{ path: ["since"], message: e.message }]);
+            }
+          }
+          // The watch's probe leg: the tick that announces a NEW best on a side also says
+          // whether the caller could take it — the changed best is probe-filled with the REAL
+          // fill calldata (threshold 0, fill-simulate.ts) from the fill sender. Best-effort:
+          // needs filters.account and a resolved RPC, and probes only a row whose maker
+          // signature the verifier SETTLED (an unverified one would misreport a forgery's
+          // BadSignature). A ranked row already passed the maker-readiness gate, which is what
+          // makes a green probe trustworthy (the silent-noop class simulates green). The diff
+          // itself never blocks on the RPC.
+          if (changes !== undefined && filters.account !== undefined) {
+            const probeAccount = filters.account;
+            const best = changes.best as Record<"SELL" | "BUY", { current: { orderHash: string } | null; changed: boolean } | null>;
+            const probes = (["SELL", "BUY"] as const).flatMap((side) => {
+              const b = best[side];
+              if (!b || !b.changed || b.current === null) return [];
+              const hash = b.current.orderHash.toLowerCase();
+              const row = (items as Array<Record<string, unknown>>).find((r) => typeof r.orderHash === "string" && r.orderHash.toLowerCase() === hash);
+              const pre = verification?.parsed?.get(hash);
+              if (!row || !pre) return [];
+              const accountType = probeAccountTypeOf(row.makerSignature);
+              if (accountType === null) return [];
+              return [{ target: b as unknown as Record<string, unknown>, signed: { ...pre.signed, makerAccountType: accountType } }];
+            });
+            if (probes.length > 0) {
+              const resolvedSim = await getRpc(ctx, chainId).catch(() => null);
+              if (resolvedSim) {
+                await Promise.all(probes.map(async (p) => {
+                  const sim = await simulateTopFill(resolvedSim.client, { signed: p.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+                  if (sim) p.target.fillSimulation = sim;
+                }));
+              }
             }
           }
           ranking = {

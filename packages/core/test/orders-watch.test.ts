@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { bookWatermarkOf, buildMakerOrder, decodeBookWatermark, diffBook, encodeBookWatermark, isBetterOffer, LOP_ADDRESSES, rankBookRows, runTool, ToolInputError, WATCH_POLL_SECONDS, WatermarkError } from "@cork/core";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -157,7 +157,7 @@ describe("cork_query orderbook — since / wait", () => {
   const chain = stubRpc((c) => {
     if (c.functionName === "bitInvalidatorForOrder") return String((c.args as unknown[])[0]).toLowerCase() === deadMaker.address.toLowerCase() ? (1n << 256n) - 1n : 0n;
     throw new Error(`no stub for ${c.functionName}`);
-  });
+  }, { code: { [CST.toLowerCase()]: TOKEN_CODE } }); // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
   type BookData = { watermark: string; changes?: { changed: boolean; appeared: string[]; gone: string[]; unconfirmed: string[]; better: Array<{ orderHash: string }> }; waited?: { pollsMade: number; polls: number; changed: boolean; endedBy: string }; items: Array<{ orderHash: string }>; verification: { dropped: number } };
   const read = (venue: (u: string) => Promise<Response>, extra: Record<string, unknown> = {}, sleeps?: number[]) =>
     runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: chain, sleep: async (ms) => { sleeps?.push(ms); } });
@@ -251,5 +251,56 @@ describe("cork_query orderbook — since / wait", () => {
     await expect(read(v.fetch, { wait: 4 })).rejects.toBeInstanceOf(ToolInputError);
     await expect(read(v.fetch, { since: "not-a-watermark" })).rejects.toBeInstanceOf(ToolInputError);
     await expect(read(v.fetch, { since: wm, filters: { account: STRANGER } })).rejects.toBeInstanceOf(ToolInputError);
+  });
+});
+
+describe("cork_query orderbook — the watch tick's probe fill", () => {
+  const venueSeq = (books: unknown[][]) => {
+    let call = 0;
+    return async (url: string) => {
+      if (!url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      const items = books[Math.min(call, books.length - 1)]!;
+      call++;
+      return new Response(JSON.stringify({ items, hasMore: false }), { status: 200 });
+    };
+  };
+  const chainWith = (call?: (a: { to: string; data: string }) => unknown) =>
+    stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE }, ...(call ? { call } : {}) });
+  type ProbedBook = { watermark: string; changes?: { best: Record<string, { changed: boolean; fillSimulation?: { verdict: string } } | null> } };
+  const read = (venue: (u: string) => Promise<Response>, resolveRpc: unknown, extra: Record<string, unknown> = {}) =>
+    runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: resolveRpc as never });
+
+  it("a tick whose best CHANGED probes it with the real fill calldata: green eth_call rides as verdict 'fillable' on the best entry", async () => {
+    const old = await row("pf-1", { taking: 5n * 10n ** 16n });
+    const cheaper = await row("pf-2", { taking: 4n * 10n ** 16n });
+    const venue = venueSeq([[old], [old, cheaper]]);
+    const rpc = chainWith(() => ({ data: "0x" }));
+    const first = await read(venue, rpc);
+    const second = await read(venue, rpc, { since: (first.data as ProbedBook).watermark });
+    const best = (second.data as ProbedBook).changes!.best.SELL!;
+    expect(best.changed).toBe(true);
+    expect(best.fillSimulation?.verdict).toBe("fillable");
+  });
+
+  it("a chain that cannot answer eth_call attaches the honest 'unknown' — the probe never invents a verdict", async () => {
+    const old = await row("pf-3", { taking: 5n * 10n ** 16n });
+    const cheaper = await row("pf-4", { taking: 4n * 10n ** 16n });
+    const venue = venueSeq([[old], [old, cheaper]]);
+    const rpc = chainWith(); // default call rejects as a transport failure
+    const first = await read(venue, rpc);
+    const second = await read(venue, rpc, { since: (first.data as ProbedBook).watermark });
+    expect((second.data as ProbedBook).changes!.best.SELL!.fillSimulation?.verdict).toBe("unknown");
+  });
+
+  it("an unchanged best is never probed: a dearer appearance ticks without a fillSimulation", async () => {
+    const old = await row("pf-5", { taking: 5n * 10n ** 16n });
+    const dearer = await row("pf-6", { taking: 6n * 10n ** 16n });
+    const venue = venueSeq([[old], [old, dearer]]);
+    const rpc = chainWith(() => ({ data: "0x" }));
+    const first = await read(venue, rpc);
+    const second = await read(venue, rpc, { since: (first.data as ProbedBook).watermark });
+    const best = (second.data as ProbedBook).changes!.best.SELL!;
+    expect(best.changed).toBe(false);
+    expect(best.fillSimulation).toBeUndefined();
   });
 });

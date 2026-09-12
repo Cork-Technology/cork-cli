@@ -90,7 +90,11 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     case "balanceOf":
       return 42_000_000_000_000_000_000n;
     case "allowance":
-      return 0n;
+      // The RESTING maker's cST→LOP grant is LIVE: the ranked book's maker-readiness leg reads
+      // it, and the fixture row must rank (a maker with no grant in place is rightly excluded
+      // as not-ready). Every other (owner, spender) answers 0 — the confirmed-missing fixture
+      // the approval_missing tasks grade.
+      return String(args.args?.[0]).toLowerCase() === RESTING_MAKER.address.toLowerCase() ? 10n ** 24n : 0n;
     case "bitInvalidatorForOrder":
       return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight [K7]
     case "orderStatus":
@@ -462,6 +466,10 @@ export function stubContext(): HandlerContext {
         getCode: async (a: { address?: string } | undefined) => {
           const address = String(a?.address ?? "").toLowerCase();
           if (address === FORSELF_ADAPTER.toLowerCase()) return FORSELF_ADAPTER_CODE;
+          // The fixture TOKENS are deployed contracts in this world: the maker-readiness probe
+          // reads eth_getCode on the makerAsset, and a code-less token is the silent-noop class
+          // the ranked book excludes — healthy fixture rows must not be that.
+          if (address === CST.toLowerCase() || address === SUSDE.toLowerCase() || address === VBUSDC.toLowerCase()) return "0x6080604052";
           // The implementation guard hashes the code behind each trusted role. This stub holds
           // no real bytecode, so "0x" here would be a FALSE statement ("the adapter is an empty
           // account") that warns implementation_not_approved on every prepare and skews

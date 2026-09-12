@@ -107,6 +107,8 @@ const T = {
   http: "packages/mcp/test/http.test.ts",
   httpAdmission: "packages/mcp/test/http-admission.test.ts",
   surfaceTier: "packages/mcp/test/surface-tier.test.ts",
+  makerReadiness: "packages/core/test/maker-readiness.test.ts",
+  fillSim: "packages/core/test/fill-simulate.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -4304,6 +4306,96 @@ const CATALOG: Mutant[] = [
     find: "  if (a.clientRequestId.startsWith(OCO_GROUP_NONCE_NAMESPACE)) {",
     replace: "  if (false) {",
     tests: [T.orders],
+  },
+  {
+    // A failed code read becomes a "no-code" verdict — a transport blip would then paint every
+    // healthy row as the silent-noop class.
+    id: "readiness-read-failed-as-no-code",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: '.catch(() => ({ probe: "read-failed" as MakerCodeProbe })),',
+    replace: '.catch(() => ({ probe: "no-code" as MakerCodeProbe })),',
+    tests: [T.makerReadiness],
+  },
+  {
+    // The transport rule narrowed: "read-failed" falls into the has-code path and an unreadable
+    // token reads READY off its (ample) other legs — indeterminate must never be a verdict.
+    id: "readiness-transport-branch-narrowed",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: 'if (f.makerAssetCode === "no-rpc" || f.makerAssetCode === "read-failed") {',
+    replace: 'if (f.makerAssetCode === "no-rpc") {',
+    tests: [T.makerReadiness],
+  },
+  {
+    // The silent-noop class demoted to a fund gap: the taker-fill surface would file the
+    // incident class under would_revert instead of maker_not_ready.
+    id: "readiness-silent-noop-not-structural",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: 'code: "silent-noop", structural: true,',
+    replace: 'code: "silent-noop", structural: false,',
+    tests: [T.makerReadiness],
+  },
+  {
+    // The permit escape hatch stops consulting the signer: a CONTRACT maker's embedded permit
+    // counts (ERC-2612 is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
+    id: "readiness-hatch-ignores-signer",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: "      const hatch = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa !== false;",
+    replace: "      const hatch = extensionHatch || permitsCoverMakerAsset;",
+    tests: [T.makerReadiness],
+  },
+  {
+    // Allowance boundary drifts to <=: an allowance of exactly makingAmount — enough for the
+    // all-or-nothing fill — reads insufficient.
+    id: "readiness-allowance-boundary",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: "    } else if (f.allowanceToLop < a.makingAmount && !partial) {",
+    replace: "    } else if (f.allowanceToLop <= a.makingAmount && !partial) {",
+    tests: [T.makerReadiness],
+  },
+  {
+    // The probe loses its threshold-0 cap: an auction row mid-decay would revert
+    // TakingAmountTooHigh against the signed floor and read would-revert while fillable.
+    id: "simulate-threshold-cap-dropped",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: "      maximumTakingAmount: 0n,\n",
+    replace: "",
+    tests: [T.fillSim],
+  },
+  {
+    // The maker-side transfer failure classified as maker-ready: the one revert pair whose
+    // divergence carries the whole meaning of the probe.
+    id: "simulate-maker-side-revert-as-ready",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: '    if (name === "TransferFromTakerToMakerFailed") {',
+    replace: '    if (name === "TransferFromTakerToMakerFailed" || name === "TransferFromMakerToTakerFailed") {',
+    tests: [T.fillSim],
+  },
+  {
+    // The exclusion widens past the proven verdict: "unknown" and unjudged rows — most of every
+    // offline book — vanish from the ranked view.
+    id: "rank-not-ready-exclusion-widened",
+    file: "packages/core/src/orders-rank.ts",
+    find: '    if (pre?.makerReadiness?.status === "not-ready") {',
+    replace: '    if (pre !== undefined && pre.makerReadiness?.status !== "ready") {',
+    tests: [T.rank],
+  },
+  {
+    // The verdict is computed but never attached to the parsed entry the ranker reads — the
+    // ranked view keeps serving the not-ready row as best.
+    id: "hybrid-readiness-verdict-not-attached",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "        ref.parsed.makerReadiness = makerReadiness;\n",
+    replace: "",
+    tests: [T.hybridVerify],
+  },
+  {
+    // An unsettled signature probed as an EOA: a forged row's BadSignature would be reported as
+    // the maker's problem.
+    id: "probe-unverified-as-eoa",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: '  if (makerSignature === "eoa-verified") return "EOA";',
+    replace: '  if (makerSignature === "eoa-verified" || makerSignature === "unverified") return "EOA";',
+    tests: [T.fillSim],
   },
 ];
 

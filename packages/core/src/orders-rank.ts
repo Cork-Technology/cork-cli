@@ -46,8 +46,11 @@ export interface RankedGroup {
 export type RankedRow = BookRow & { rank: number; fillable: true; price: RankedPrice; group?: RankedGroup };
 /** Why a row is not fillable, as a branchable code beside the prose. `reserved-for-other` is the
  *  one LIVE exclusion: the order exists and backs whatever quote it cites — only this sender may
- *  not lift it. The others describe an order that is dead or unreadable. */
-export type BookExclusion = "reserved-for-other" | "expired" | "venue-status" | "unparseable" | "zero-amount";
+ *  not lift it. `maker-not-ready` is evidence-backed but recoverable: the chain proves every fill
+ *  currently reverts or silently moves nothing (the maker's side cannot deliver), yet the maker
+ *  can fix it without re-signing — so the row is excluded with the evidence, never dropped.
+ *  The others describe an order that is dead or unreadable. */
+export type BookExclusion = "reserved-for-other" | "expired" | "venue-status" | "unparseable" | "zero-amount" | "maker-not-ready";
 export type ExcludedRow = BookRow & { fillable: false; exclusion: BookExclusion; whyNotFillable: string };
 
 export interface RankOptions {
@@ -59,9 +62,11 @@ export interface RankOptions {
   account?: `0x${string}` | undefined;
   nowSeconds: bigint;
   /** Parse results the hybrid verifier already produced, keyed by lowercase order hash: a row
-   *  found here is not parsed or hashed again (same bytes, same verdict). Rows absent from the
-   *  map — or any row when the map is omitted — take the parse path. */
-  parsed?: ReadonlyMap<string, { signed: SignedLopOrder; localHash: `0x${string}` }> | undefined;
+   *  found here is not parsed or hashed again (same bytes, same verdict), and its maker-side
+   *  readiness verdict (when the verifier's chain leg produced one) drives the maker-not-ready
+   *  exclusion. Rows absent from the map — or any row when the map is omitted — take the parse
+   *  path, with no readiness verdict (chain-free ranking never invents one). */
+  parsed?: ReadonlyMap<string, { signed: SignedLopOrder; localHash: `0x${string}`; makerReadiness?: { status: "ready" | "not-ready" | "unknown"; reasons: Array<{ code: string; structural: boolean; message: string }> } }> | undefined;
 }
 
 export interface RankResult {
@@ -152,6 +157,13 @@ export function rankBookRows(rows: readonly BookRow[], opts: RankOptions): RankR
     }
     if (order.makingAmount === 0n) {
       exclude(row, "zero-amount", "makingAmount is zero — no price");
+      continue;
+    }
+    // The verifier's maker-side verdict (evidence-backed, recoverable): a not-ready row would
+    // rank on a price nobody can realize — the 2026-09-11 incident ranked one #1. Only the
+    // verifier's own verdict excludes; "unknown" and chain-free ranking keep the row.
+    if (pre?.makerReadiness?.status === "not-ready") {
+      exclude(row, "maker-not-ready", `chain reads prove every fill of this row currently reverts or silently moves nothing — the maker's side cannot deliver as signed: ${pre.makerReadiness.reasons.map((r) => r.message).join("; ")}. The maker can fix this without re-signing; re-read the book after the maker acts`);
       continue;
     }
 

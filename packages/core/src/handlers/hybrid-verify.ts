@@ -25,8 +25,9 @@ import { parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.t
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
-import { getRpc, type HandlerContext } from "./shared.ts";
+import { getRpc, type HandlerContext, nowSecondsOf } from "./shared.ts";
 import { authenticateBookRowSignature, type BookMakerSignature, extensionVerdict, recoverEoaSigner } from "./order-auth.ts";
+import { assessMakerReadiness, gatherMakerReadinessFacts, type MakerReadiness, type MakerReadinessFacts, type MakerReadinessInput, type MakerReadinessTarget, makerReadinessTargetOf } from "./maker-readiness.ts";
 import type { ChainId } from "@cork/schemas";
 
 /** Rows fully verified per call; a larger page verifies the newest BUDGET rows and labels the
@@ -40,6 +41,10 @@ type Warning = { code: string; message: string };
 export interface ParsedBookRow {
   signed: SignedLopOrder;
   localHash: `0x${string}`;
+  /** The maker-side readiness verdict (maker-readiness.ts), when the RPC leg could gather the
+   *  facts — the ranker excludes "not-ready" rows with evidence, never drops them (the maker
+   *  can fix every reason without re-signing, so the row may come back to life). */
+  makerReadiness?: MakerReadiness;
 }
 
 export interface HybridVerification {
@@ -94,6 +99,10 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v.leng
 export const BOOK_EXCLUSIVITY = ["open", "reserved", "reserved-for-account", "reserved-for-other"] as const;
 export type BookExclusivity = (typeof BOOK_EXCLUSIVITY)[number];
 
+/** The per-row parse record annotateBookRows builds; the RPC leg later MUTATES `makerReadiness`
+ *  onto it in place — parsedByHash holds the same object, so the ranker sees the verdict. */
+type ParsedBookEntry = { signed: SignedLopOrder; localHash: `0x${string}`; makerSignature: BookMakerSignature; makerReadiness?: MakerReadiness };
+
 interface AnnotatedBook {
   lop: `0x${string}`;
   /** The served rows in the venue's order — self-contradicting rows removed, the rest carrying
@@ -103,7 +112,7 @@ interface AnnotatedBook {
    *  is what the chain-free half could settle: `eoa-verified` (ecrecover to the maker), or
    *  `unverified` — the signature did not recover to the maker, so only the maker's own
    *  ERC-1271 answer (an RPC read, the liveness leg's job) can validate or refute it. */
-  parsed: Map<Row, { signed: SignedLopOrder; localHash: `0x${string}`; makerSignature: BookMakerSignature }>;
+  parsed: Map<Row, ParsedBookEntry>;
   dropped: number;
   warnings: Warning[];
 }
@@ -126,7 +135,7 @@ interface AnnotatedBook {
  *  never read as truth; an echo that contradicted the signed bytes is counted and disclosed.
  *  An unparseable row rides through untouched (the liveness leg labels it unverified). */
 async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`, account: `0x${string}` | undefined): Promise<AnnotatedBook> {
-  const parsed = new Map<Row, { signed: SignedLopOrder; localHash: `0x${string}`; makerSignature: BookMakerSignature }>();
+  const parsed = new Map<Row, ParsedBookEntry>();
   const served: Row[] = [];
   let hashLies = 0;
   let extensionLies = 0;
@@ -238,20 +247,8 @@ export async function verifyVenueRows(a: {
   };
 
   if (book) {
-    // Phase 0 — authenticity for the rows the chain-free half could not settle: a signature
-    // that did not ecrecover to its maker is either a CONTRACT maker's (validated by its own
-    // isValidSignature answer, the read the fill performs) or a forgery. The ladder decides;
-    // a refutation DROPS the row, an unreachable maker leaves it `unverified`. Runs beside the
-    // invalidator reads, in budget, and only for the rows that need it (contract makers are
-    // the exception on a book, so this costs nothing on the common page).
-    const signatureOutcome = new Map<Row, Awaited<ReturnType<typeof authenticateBookRowSignature>>>();
-    await Promise.all(
-      inBudget.map(async (row) => {
-        const parsed = book.parsed.get(row);
-        if (!parsed || parsed.makerSignature !== "unverified") return;
-        signatureOutcome.set(row, await authenticateBookRowSignature(client, { maker: parsed.signed.order.maker, orderHash: parsed.localHash, signature: parsed.signed.signature }));
-      }),
-    );
+    const bookLop = book.lop;
+    const nowSeconds = nowSecondsOf(ctx);
     // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
     // page needs. One bit word covers 256 orders of the same (maker, slot), so rows dedupe
     // onto shared reads. A read is keyed on the WORD it fetches (bit mode: maker + slot index,
@@ -259,7 +256,7 @@ export async function verifyVenueRows(a: {
     // representative (plan, maker, hash) to perform it with — readLopInvalidator owns the
     // view's arguments.
     type InvalidatorRead = { plan: LopInvalidatorPlan; maker: `0x${string}`; orderHash: `0x${string}` };
-    type BookRef = { row: Row; parsed?: { makerSignature: BookMakerSignature }; readKey?: string; plan?: LopInvalidatorPlan };
+    type BookRef = { row: Row; parsed?: ParsedBookEntry; readKey?: string; plan?: LopInvalidatorPlan };
     const reads = new Map<string, InvalidatorRead>();
     const refs: BookRef[] = inBudget.map((row) => {
       const parsed = book.parsed.get(row);
@@ -271,20 +268,55 @@ export async function verifyVenueRows(a: {
       if (!reads.has(readKey)) reads.set(readKey, { plan, maker: order.maker, orderHash: parsed.localHash });
       return { row, parsed, readKey, plan };
     });
-    // Phase 2 — the deduped reads run CONCURRENTLY (the default mode's latency is this leg).
+    // Readiness plan, still chain-free: one fact gather per distinct maker-side CONTEXT (maker,
+    // makerAsset, sourcing, JIT hook) — a maker with several rungs on one pair dedupes onto one
+    // gather. When any row of a context proved ECDSA capability chain-free (eoa-verified), that
+    // target wins the slot so the maker's own getCode is skipped for the whole context.
+    const readinessTargets = new Map<string, MakerReadinessTarget>();
+    const readinessInputByRow = new Map<Row, { key: string; input: Omit<MakerReadinessInput, "facts"> }>();
+    for (const ref of refs) {
+      if (!ref.parsed) continue;
+      const rCtx = makerReadinessTargetOf({ order: ref.parsed.signed.order, extension: ref.parsed.signed.extension, lop: bookLop, makerSignedEcdsa: ref.parsed.makerSignature === "eoa-verified" });
+      const t = rCtx.target;
+      const jit = t.jit;
+      const key = [t.maker, t.makerAsset, t.usePermit2 ? "p2" : "erc20", jit ? [jit.adapter, jit.collateralAsset, String(jit.enableJitMint), jit.predictedCorkSwapToken ?? "?"].join(",") : "-"].join(":").toLowerCase();
+      const existing = readinessTargets.get(key);
+      if (existing === undefined || (!existing.makerSignedEcdsa && t.makerSignedEcdsa)) readinessTargets.set(key, t);
+      readinessInputByRow.set(ref.row, {
+        key,
+        input: { makerAsset: t.makerAsset, makingAmount: ref.parsed.signed.order.makingAmount, allowPartialFills: rCtx.allowPartialFills, usePermit2: t.usePermit2, jit, extensionPermitToken: rCtx.extensionPermitToken, nowSeconds },
+      });
+    }
+    // Phase 2 — ONE Promise.all for every chain leg the page needs: the signature ladders for
+    // rows the chain-free half could not settle (a refutation DROPS the row, an unreachable
+    // maker leaves it `unverified`; contract makers are the exception on a book, so the common
+    // page pays nothing), the deduped invalidator reads, and the readiness gathers. Issued in
+    // the SAME tick deliberately: a batching client coalesces every readContract leg into one
+    // aggregate3 per page (sequential Promise.alls would tick apart into separate multicalls).
+    const signatureOutcome = new Map<Row, Awaited<ReturnType<typeof authenticateBookRowSignature>>>();
     const words = new Map<string, bigint | "error">();
-    await Promise.all(
-      [...reads].map(async ([key, r]) => {
+    const factsByKey = new Map<string, MakerReadinessFacts>();
+    await Promise.all([
+      ...inBudget.map(async (row) => {
+        const parsed = book.parsed.get(row);
+        if (!parsed || parsed.makerSignature !== "unverified") return;
+        signatureOutcome.set(row, await authenticateBookRowSignature(client, { maker: parsed.signed.order.maker, orderHash: parsed.localHash, signature: parsed.signed.signature }));
+      }),
+      ...[...reads].map(async ([key, r]) => {
         try {
-          words.set(key, await readLopInvalidator(client, r.plan, book.lop, r.maker, r.orderHash));
+          words.set(key, await readLopInvalidator(client, r.plan, bookLop, r.maker, r.orderHash));
         } catch {
           words.set(key, "error");
         }
       }),
-    );
+      ...[...readinessTargets].map(async ([key, t]) => {
+        factsByKey.set(key, await gatherMakerReadinessFacts(client, t));
+      }),
+    ]);
     // Phase 3 — verdicts applied in the venue's own row order. `confirmed` means BOTH legs
     // answered positively: the maker signed it (chain-free or via ERC-1271) AND the bit is
     // unspent; either leg indeterminate leaves the row `unverified`, either leg refuting DROPS it.
+    let notReady = 0;
     for (const ref of refs) {
       if (ref.readKey === undefined) {
         keep(ref.row, "unverified");
@@ -302,9 +334,26 @@ export async function verifyVenueRows(a: {
       }
       const makerSignature: BookMakerSignature = sig === undefined ? ref.parsed!.makerSignature : sig.outcome === "verified" ? "erc1271-verified" : "unverified";
       const liveness = word === undefined || word === "error" ? "indeterminate" : "live";
-      const row = { ...ref.row, makerSignature };
+      // Maker-side readiness (an annotation, never a liveness verdict): classified from the
+      // facts the one-batch fetched, mutated onto the parse record so the ranker (which holds
+      // the same object via parsedByHash) can exclude with evidence.
+      const rIn = readinessInputByRow.get(ref.row);
+      const facts = rIn ? factsByKey.get(rIn.key) : undefined;
+      let makerReadiness: MakerReadiness | undefined;
+      if (rIn && facts && ref.parsed) {
+        makerReadiness = assessMakerReadiness({ ...rIn.input, facts });
+        ref.parsed.makerReadiness = makerReadiness;
+        if (makerReadiness.status === "not-ready") notReady += 1;
+      }
+      const row = { ...ref.row, makerSignature, ...(makerReadiness ? { makerReadiness } : {}) };
       if (liveness === "live" && makerSignature !== "unverified") keep(row, "confirmed");
       else keep(row, "unverified", liveness === "indeterminate" || sig?.outcome === "indeterminate");
+    }
+    if (notReady > 0) {
+      warnings.push({
+        code: "maker_not_ready",
+        message: `${String(notReady)} book row(s) are maker-side NOT READY: chain reads prove every fill of them currently reverts or silently moves nothing (each row's makerReadiness.reasons say why — the 2026-09-11 class was a contract maker on a not-yet-created cST). A ranked read excludes them with the evidence under whyNotFillable; the maker can fix every reason without re-signing, so re-read after the maker acts`,
+      });
     }
   } else if (resource === "cork-pools" || resource === "trading-pairs") {
     const pms = await configuredPoolManagers(chainId);

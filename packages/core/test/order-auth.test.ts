@@ -59,7 +59,9 @@ const chain = (o: { code?: Record<string, string>; isValidSignature?: string | E
       }
       throw new Error(`no stub for ${c.functionName}`);
     },
-    { code: o.code },
+    // The fixture makerAsset always HAS code — a code-less makerAsset is the silent-noop class
+    // the ranked view excludes, and these tests grade signature verdicts, not readiness.
+    { code: { [CST.toLowerCase()]: CODE, ...o.code } },
   );
 const transport = () => Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
 

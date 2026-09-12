@@ -237,11 +237,15 @@ describe("handler wiring: data.approvals across the order lifecycle", () => {
     );
     expect(env.state).toBe("ok");
     const approvals = (env.data as { approvals: ApprovalRequirement[] }).approvals;
-    expect(approvals).toHaveLength(1);
+    // Taker grants first, then the MAKER's (the maker-readiness surface, 2026-09-11): a fill of
+    // this order also needs the maker's cST→LOP allowance, and the taker deserves to see it.
+    expect(approvals).toHaveLength(2);
     expect(approvals[0]).toMatchObject({ role: "taker", token: COLLATERAL, spender: LOP, kind: "cap", satisfied: false });
     expect(approvals[0]!.holder.toLowerCase()).toBe(TAKER.toLowerCase());
     // The cap must come from the fill's TAKING amount, never the making amount.
     expect(approvals[0]!.amount).toBe((5n * 10n ** 16n).toString());
+    expect(approvals[1]).toMatchObject({ role: "maker", token: CST, spender: LOP });
+    expect(approvals[1]!.holder.toLowerCase()).toBe(makerAccount.address.toLowerCase());
     expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(true);
     // No custom interaction on this fill — the completeness caveat must NOT ride.
     expect((env.data as { approvalsNote?: string }).approvalsNote).toBeUndefined();
@@ -265,7 +269,8 @@ describe("handler wiring: data.approvals across the order lifecycle", () => {
     );
     expect(env.state).toBe("ok");
     const d = env.data as { approvals: ApprovalRequirement[]; approvalsNote?: string };
-    expect(d.approvals).toHaveLength(1); // the LOP-level grant is still stated…
+    expect(d.approvals).toHaveLength(2); // the LOP-level grant is still stated (taker + the maker's)…
+    expect(d.approvals[0]).toMatchObject({ role: "taker" });
     expect(d.approvalsNote).toContain("OUTSIDE this approvals report"); // …and the limit is, too
   });
 

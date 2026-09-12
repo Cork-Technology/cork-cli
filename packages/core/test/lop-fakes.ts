@@ -16,6 +16,14 @@ export class FakeLopInvalidators {
   private readonly remaining = new Map<string, Map<string, bigint>>();
   /** Every readContract call, for assertions on WHAT was asked. */
   readonly calls: Array<{ functionName: string; args: readonly unknown[] }> = [];
+  /** eth_getCode answers, keyed by lowercased address; everything else answers undefined (no
+   *  code). Fixture TOKENS should be given code — a code-less makerAsset is the silent-noop
+   *  class the ranked book excludes, which healthy fixture rows must not be. */
+  private readonly code = new Map<string, `0x${string}`>();
+
+  setCode(address: `0x${string}`, bytecode: `0x${string}`): void {
+    this.code.set(lc(address), bytecode);
+  }
 
   /** OrderMixin.cancelOrder / _bitInvalidator.checkAndInvalidate for a bit-invalidator order:
    *  set bit (nonce & 0xff) of word (nonce >> 8). */
@@ -55,7 +63,7 @@ export class FakeLopInvalidators {
       stubResolved(
         {
           readContract: this.readContract,
-          getCode: async () => undefined, // viem: an account without code answers undefined
+          getCode: async ({ address }: { address: string }) => this.code.get(lc(address)), // viem: an account without code answers undefined
         } as Record<string, (...args: never[]) => unknown>,
         source,
       );
