@@ -5,9 +5,9 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [Unreleased]
+## [0.5.1-rc.6] — 2026-09-13
 
-This entry closes the loop the 2026-09-11 incident opened: a contract-maker JIT order on a not-yet-created cST ranked #1 on the Base book, chain-confirmed, and was structurally un-fillable (ERC-2612 permits are ECDSA-only, and an allowance cannot exist on a code-less token). Worse, its failure class simulates GREEN: the LOP's transfer helper counts a call to a code-less address with empty returndata as success, so a fill "succeeds" while delivering nothing. The book now decodes the maker's side, excludes what chain reads PROVE cannot deliver, and probe-fills the top of the book with the real calldata.
+This cut closes the loop the 2026-09-11 incident opened: a contract-maker JIT order on a not-yet-created cST ranked #1 on the Base book, chain-confirmed, and was structurally un-fillable (ERC-2612 permits are ECDSA-only, and an allowance cannot exist on a code-less token). Worse, its failure class simulates GREEN: the LOP's transfer helper counts a call to a code-less address with empty returndata as success, so a fill "succeeds" while delivering nothing. The book now decodes the maker's side, excludes what chain reads PROVE cannot deliver, and probe-fills the top of the book with the real calldata.
 
 ### Added
 
