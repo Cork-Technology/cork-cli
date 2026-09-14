@@ -153,3 +153,59 @@ export function probeAccountTypeOf(makerSignature: unknown): "EOA" | "ERC1271" |
   if (makerSignature === "erc1271-verified") return "ERC1271";
   return null;
 }
+
+/** How many maker-side-PROVEN rows a probe walk looks for before it stops. */
+export const PROBE_SUCCESS_TARGET = 2;
+/** Hard cap on eth_calls one walk may spend hunting for them — a book whose every row fails
+ *  must not turn a read into an unbounded chain scan. */
+export const PROBE_BUDGET = 6;
+
+export interface ProbeWalk<T> {
+  /** Every candidate an eth_call actually judged, in walk order, with its verdict. */
+  probed: Array<{ candidate: T; sim: FillSimulation }>;
+  /** How many of them are maker-side PROVEN (see probeUntilProven on why both verdicts count). */
+  proven: number;
+  stoppedBy: "target" | "budget" | "transport" | "exhausted";
+}
+
+/** Walk `candidates` from the top, probing until `successTarget` of them are maker-side PROVEN
+ *  or the walk runs out of budget, candidates, or transport.
+ *
+ *  "Proven" is BOTH green verdicts — "fillable" AND "maker-ready". A fill sender who has not
+ *  granted the taker-asset allowance yet (the normal state of an account still *choosing* an
+ *  offer) reverts TransferFromTakerToMakerFailed on every healthy row, so counting only
+ *  "fillable" would walk the whole book for most callers and prove nothing more than the first
+ *  probe did. "would-revert" keeps walking; the first "unknown" stops the walk — a transport
+ *  that cannot judge one row cannot judge the next, and each further attempt costs a timeout.
+ *
+ *  Batching: each round probes only the remaining deficit (first round = the full target), so
+ *  the common case — the top rows are healthy — costs ONE parallel round trip, and a failing
+ *  top adds rounds instead of widening them. A `null` probe (terms the fill builder cannot
+ *  encode — no eth_call happened) consumes a candidate but never budget. */
+export async function probeUntilProven<T>(
+  candidates: readonly T[],
+  probe: (c: T) => Promise<FillSimulation | null>,
+  opts: { successTarget?: number; probeBudget?: number } = {},
+): Promise<ProbeWalk<T>> {
+  const target = opts.successTarget ?? PROBE_SUCCESS_TARGET;
+  const budget = opts.probeBudget ?? PROBE_BUDGET;
+  const probed: Array<{ candidate: T; sim: FillSimulation }> = [];
+  let proven = 0;
+  let spent = 0;
+  let transport = false;
+  let i = 0;
+  while (i < candidates.length && proven < target && spent < budget && !transport) {
+    const batch = candidates.slice(i, i + Math.max(1, Math.min(target - proven, budget - spent)));
+    i += batch.length;
+    const sims = await Promise.all(batch.map(probe));
+    for (let k = 0; k < batch.length; k += 1) {
+      const sim = sims[k];
+      if (sim === null || sim === undefined) continue; // unbuildable — nothing was asked of the chain
+      spent += 1;
+      probed.push({ candidate: batch[k]!, sim });
+      if (sim.verdict === "fillable" || sim.verdict === "maker-ready") proven += 1;
+      else if (sim.verdict === "unknown") transport = true;
+    }
+  }
+  return { probed, proven, stoppedBy: proven >= target ? "target" : transport ? "transport" : spent >= budget ? "budget" : "exhausted" };
+}

@@ -6,7 +6,7 @@ import { envelope, getRpc, type HandlerContext, unavailable } from "./shared.ts"
 import type { QueryFilters } from "./filters.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
-import { type FillSimulation, probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
+import { PROBE_BUDGET, PROBE_SUCCESS_TARGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "./fill-simulate.ts";
 
 // ── offers: the unified discovery view (owner ruling 2026-09-02) ─────────────────────────────
 // An OFFER is a price somebody can actually buy: a live, signed resting order. A quote (an RFQ
@@ -143,44 +143,46 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
     if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push({ ...q, reason: "no live resting order cites this option — a price nobody can buy yet" });
   }
 
-  // Probe-fill the TOP offer per side with the REAL fill calldata (threshold 0) from the fill
-  // sender: the row the ranking recommends is the one a wrong verdict costs the most on
-  // (2026-09-11: a structurally un-fillable order ranked #1). Best-effort — needs the fill
-  // sender (filters.account) and a resolved RPC, and probes only rows whose maker signature
-  // the verifier SETTLED; a maker-not-ready row never reaches here (the ranker excluded it),
-  // which is what makes a green probe trustworthy (the silent-noop class simulates green).
+  // Probe-fill each side FROM THE TOP with the REAL fill calldata (threshold 0) from the fill
+  // sender, walking down the ranking until PROBE_SUCCESS_TARGET rows are maker-side PROVEN
+  // (probeUntilProven: "fillable" or "maker-ready" — a sender without the taker allowance yet
+  // reads maker-ready on every healthy row) or the walk's budget runs out. The row the ranking
+  // recommends is the one a wrong verdict costs the most on (2026-09-11: a structurally
+  // un-fillable order ranked #1), and a failing top now costs the caller nothing extra: the
+  // walk keeps going until it can NAME proven alternatives. Best-effort — needs the fill sender
+  // (filters.account) and a resolved RPC, and probes only rows whose maker signature the
+  // verifier SETTLED (an unsettled row is walked past without spending budget); a
+  // maker-not-ready row never reaches here (the ranker excluded it), which is what makes a
+  // green probe trustworthy (the silent-noop class simulates green).
   const simWarnings: Array<{ code: string; message: string }> = [];
+  let probing: Record<string, unknown> | undefined;
   const probeAccount = filters.account;
   if (probeAccount !== undefined) {
     const resolvedSim = await getRpc(ctx, chainId).catch(() => null);
     const lop = LOP_ADDRESSES[chainId];
     if (resolvedSim && lop) {
-      const tops = (["SELL", "BUY"] as const).flatMap((side) => {
-        const top = scoped.find((r) => {
-          const s = (r as Record<string, unknown>).side;
-          return typeof s === "string" && s.toUpperCase() === side;
-        });
-        return top ? [top] : [];
-      });
-      await Promise.all(
-        tops.map(async (row) => {
+      probing = { target: PROBE_SUCCESS_TARGET, budget: PROBE_BUDGET, note: "each side walked from the top until `target` rows PROVE maker-side deliverable (fillSimulation `fillable` or `maker-ready`) or `budget` eth_calls are spent; rows without a fillSimulation were not reached" };
+      for (const side of ["SELL", "BUY"] as const) {
+        const candidates = scoped.flatMap((row) => {
+          const s = (row as Record<string, unknown>).side;
+          if (typeof s !== "string" || s.toUpperCase() !== side) return [];
           const accountType = probeAccountTypeOf((row as Record<string, unknown>).makerSignature);
-          if (accountType === null) return; // unsettled signature — a probe would misreport a forgery's BadSignature
+          if (accountType === null) return []; // unsettled signature — a probe would misreport a forgery's BadSignature
           const parsed = parseSignedLopOrder(row);
-          if (!parsed.ok) return;
-          const sim = await simulateTopFill(resolvedSim.client, {
-            signed: { ...parsed.value, makerAccountType: accountType },
-            lop,
-            account: probeAccount,
-            ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}),
-          });
-          if (sim) (row as Record<string, unknown>).fillSimulation = sim;
-        }),
-      );
-      for (const row of tops) {
-        const sim = (row as Record<string, unknown>).fillSimulation as FillSimulation | undefined;
-        if (sim?.verdict === "would-revert") {
-          simWarnings.push({ code: "would_revert", message: `the top-ranked ${String((row as Record<string, unknown>).side ?? "?")} offer ${String((row as Record<string, unknown>).orderHash ?? "")} fails its probe fill from ${probeAccount}: ${sim.note} (fillSimulation on the row)` });
+          if (!parsed.ok) return [];
+          return [{ row, signed: { ...parsed.value, makerAccountType: accountType } }];
+        });
+        if (candidates.length === 0) continue;
+        const walk = await probeUntilProven(candidates, (c) =>
+          simulateTopFill(resolvedSim.client, { signed: c.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
+        );
+        for (const { candidate, sim } of walk.probed) (candidate.row as Record<string, unknown>).fillSimulation = sim;
+        probing[side] = { probed: walk.probed.length, proven: walk.proven, stoppedBy: walk.stoppedBy };
+        const failing = walk.probed.filter((p) => p.sim.verdict === "would-revert");
+        if (failing.length > 0) {
+          const topFails = failing[0]!.candidate.row === candidates[0]!.row;
+          const named = failing.map((p) => `${String((p.candidate.row as Record<string, unknown>).orderHash ?? "")} reverts ${p.sim.revert?.name ?? p.sim.revert?.selector ?? "(no revert data)"}`).join("; ");
+          simWarnings.push({ code: "would_revert", message: `${String(failing.length)} probed ${side} offer(s)${topFails ? " — the top-ranked one included —" : ""} fail their probe fill from ${probeAccount}: ${named}. The walk ${walk.stoppedBy === "target" ? `still proved ${String(walk.proven)} deliverable row(s) below them` : `stopped by ${walk.stoppedBy} with ${String(walk.proven)} proven`} (fillSimulation on each probed row)` });
         }
       }
     }
@@ -197,6 +199,7 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
       items: scoped.map((it, i) => ({ ...it, rank: i + 1 })),
       ...(bookData.excluded ? { excluded: bookData.excluded } : {}),
       indicative: { count: indicative.length, options: indicative },
+      ...(probing ? { probing } : {}),
       ...(bookData.fillableCount !== undefined ? { fillableCount: bookData.fillableCount } : {}),
       ...(bookData.verification ? { verification: bookData.verification } : {}),
       pagination: { orderbook: bookData.pagination, rfqs: rfqs.state === "ok" ? (rfqs.data as { pagination?: unknown }).pagination ?? null : null },

@@ -4397,6 +4397,69 @@ const CATALOG: Mutant[] = [
     replace: '  if (makerSignature === "eoa-verified" || makerSignature === "unverified") return "EOA";',
     tests: [T.fillSim],
   },
+  {
+    // The walk's success set narrowed to "fillable" only: a fresh fill sender (no taker
+    // allowance yet) reads maker-ready on every healthy row, so the walk would chase the whole
+    // budget for the normal caller and prove nothing more.
+    id: "walk-maker-ready-not-proven",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: '      if (sim.verdict === "fillable" || sim.verdict === "maker-ready") proven += 1;',
+    replace: '      if (sim.verdict === "fillable") proven += 1;',
+    tests: [T.fillSim, T.offers],
+  },
+  {
+    // The success set widened to everything but transport: a failing book "succeeds" after two
+    // reverts and the walk stops before proving anything.
+    id: "walk-would-revert-as-proven",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: '      if (sim.verdict === "fillable" || sim.verdict === "maker-ready") proven += 1;',
+    replace: '      if (sim.verdict !== "unknown") proven += 1;',
+    tests: [T.fillSim, T.offers],
+  },
+  {
+    // The budget guard dropped: an all-failing book turns one read into a full-book chain scan.
+    id: "walk-budget-dropped",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: "  while (i < candidates.length && proven < target && spent < budget && !transport) {",
+    replace: "  while (i < candidates.length && proven < target && !transport) {",
+    tests: [T.fillSim, T.offers],
+  },
+  {
+    // Transport no longer stops the walk: every further probe costs a timeout and answers
+    // nothing.
+    id: "walk-transport-keeps-walking",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: '      else if (sim.verdict === "unknown") transport = true;\n',
+    replace: "",
+    tests: [T.fillSim, T.offers],
+  },
+  {
+    // A null probe (no eth_call happened) starts consuming budget: unbuildable rows would eat
+    // the walk's allowance without asking the chain anything.
+    id: "walk-null-consumes-budget",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: "      if (sim === null || sim === undefined) continue; // unbuildable — nothing was asked of the chain",
+    replace: "      if (sim === null || sim === undefined) { spent += 1; continue; }",
+    tests: [T.fillSim],
+  },
+  {
+    // Batching degenerates to one probe per round: the transport batch shape and the parallel
+    // first round both break.
+    id: "walk-batch-degenerate",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: "    const batch = candidates.slice(i, i + Math.max(1, Math.min(target - proven, budget - spent)));",
+    replace: "    const batch = candidates.slice(i, i + 1);",
+    tests: [T.fillSim],
+  },
+  {
+    // The walk runs but its verdicts never land on the rows: the view would claim a probe that
+    // nobody can read.
+    id: "offers-walk-verdicts-not-attached",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "        for (const { candidate, sim } of walk.probed) (candidate.row as Record<string, unknown>).fillSimulation = sim;\n",
+    replace: "",
+    tests: [T.offers],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

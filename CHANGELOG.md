@@ -5,6 +5,12 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+### Changed
+
+- **The offers probe walks the book instead of stopping at the top.** Each side is now probed FROM THE TOP of the ranking until at least 2 rows PROVE maker-side deliverable — `fillSimulation` `fillable` or `maker-ready` — or a hard budget of 6 eth_calls is spent (`probeUntilProven` in the internal fill-simulate module). Both green verdicts count as proven because a fill sender who has not granted the taker-asset allowance yet (the normal state while choosing an offer) reads `maker-ready` on every healthy row; counting only `fillable` would walk the whole book for most callers. Rounds are batched to the remaining deficit, so a healthy book still costs one parallel round trip; the first transport `unknown` stops the walk. Every probed row carries its `fillSimulation`, `data.probing` reports per side what was probed, proved, and why the walk stopped, and the `would_revert` warning now names every failing probed row — including whether the top-ranked one is among them and how many proven rows sit below it. The watch tick's probe is unchanged: it annotates the one announced best, not a list.
+
 ## [0.5.1-rc.6] — 2026-09-13
 
 This cut closes the loop the 2026-09-11 incident opened: a contract-maker JIT order on a not-yet-created cST ranked #1 on the Base book, chain-confirmed, and was structurally un-fillable (ERC-2612 permits are ECDSA-only, and an allowance cannot exist on a code-less token). Worse, its failure class simulates GREEN: the LOP's transfer helper counts a call to a code-less address with empty returndata as success, so a fill "succeeds" while delivering nothing. The book now decodes the maker's side, excludes what chain reads PROVE cannot deliver, and probe-fills the top of the book with the real calldata.

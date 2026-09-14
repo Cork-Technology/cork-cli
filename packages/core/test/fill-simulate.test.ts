@@ -9,7 +9,7 @@ import { encodeErrorResult, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildTakerFill, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import type { SignedLopOrder } from "../src/datasources/venue.ts";
-import { probeAccountTypeOf, simulateTopFill } from "../src/handlers/fill-simulate.ts";
+import { type FillSimulation, PROBE_BUDGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "../src/handlers/fill-simulate.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const ACCOUNT = "0x00000000000000000000000000000000000000aa" as const;
@@ -190,5 +190,93 @@ describe("probeAccountTypeOf — only a SETTLED signature may be probed", () => 
     expect(probeAccountTypeOf("unverified")).toBeNull();
     expect(probeAccountTypeOf(undefined)).toBeNull();
     expect(probeAccountTypeOf(42)).toBeNull();
+  });
+});
+
+describe("probeUntilProven — the walk policy, graded rule by rule", () => {
+  const sim = (verdict: FillSimulation["verdict"]): FillSimulation => ({ verdict, note: verdict });
+  const seq = (verdicts: Array<FillSimulation["verdict"] | null>) => {
+    const order: number[] = [];
+    let n = 0;
+    const probe = async (c: number) => {
+      order.push(c);
+      const v = verdicts[Math.min(n, verdicts.length - 1)]!;
+      n += 1;
+      return v === null ? null : sim(v);
+    };
+    return { probe, order };
+  };
+  const nums = (k: number) => Array.from({ length: k }, (_, i) => i);
+
+  it("all healthy: exactly the target probed, in ONE batch issued in parallel, stoppedBy target", async () => {
+    // Deferred resolvers: assert the batch is fully in flight before anything resolves — a
+    // sequential (batch-of-1) walk would deadlock here and time the test out.
+    const pending: Array<() => void> = [];
+    const probe = (c: number) =>
+      new Promise<FillSimulation>((res) => {
+        pending.push(() => res(sim(c === 99 ? "would-revert" : "fillable")));
+        if (pending.length === 2) for (const r of pending.splice(0)) r();
+      });
+    const walk = await probeUntilProven(nums(5), probe);
+    expect(walk.probed).toHaveLength(2);
+    expect(walk.proven).toBe(2);
+    expect(walk.stoppedBy).toBe("target");
+  });
+
+  it("a failing top adds a DEFICIT-sized round, not a wider one: [fail, ok, ok] probes rows 0-2 and stops", async () => {
+    const { probe, order } = seq(["would-revert", "fillable", "fillable"]);
+    const walk = await probeUntilProven(nums(6), probe);
+    expect(order).toEqual([0, 1, 2]); // batch [0,1] then the deficit batch [2]
+    expect(walk.proven).toBe(2);
+    expect(walk.stoppedBy).toBe("target");
+    expect(walk.probed.map((x) => x.sim.verdict)).toEqual(["would-revert", "fillable", "fillable"]);
+  });
+
+  it("'maker-ready' IS proven — the fresh-sender case must stop at the target, not chase the book", async () => {
+    const { probe, order } = seq(["maker-ready"]);
+    const walk = await probeUntilProven(nums(10), probe);
+    expect(order).toEqual([0, 1]);
+    expect(walk.proven).toBe(2);
+    expect(walk.stoppedBy).toBe("target");
+  });
+
+  it("'would-revert' is NOT proven: an all-failing book walks to the BUDGET and stops there", async () => {
+    const { probe, order } = seq(["would-revert"]);
+    const walk = await probeUntilProven(nums(20), probe);
+    expect(order).toHaveLength(PROBE_BUDGET);
+    expect(walk.proven).toBe(0);
+    expect(walk.stoppedBy).toBe("budget");
+  });
+
+  it("the first 'unknown' stops the walk after its own batch — transport is never walked through", async () => {
+    const { probe, order } = seq(["unknown"]);
+    const walk = await probeUntilProven(nums(10), probe);
+    expect(order).toEqual([0, 1]); // the first batch was already issued together
+    expect(walk.stoppedBy).toBe("transport");
+    expect(walk.probed.map((x) => x.sim.verdict)).toEqual(["unknown", "unknown"]);
+  });
+
+  it("a null probe (unbuildable terms — no eth_call happened) consumes a candidate but NEVER budget", async () => {
+    const { probe } = seq([null, null, null, "fillable", "fillable"]);
+    const walk = await probeUntilProven(nums(5), probe, { probeBudget: 2 });
+    // Three nulls cost nothing: the two real probes fit a budget of 2 and reach the target.
+    expect(walk.probed.map((x) => x.sim.verdict)).toEqual(["fillable", "fillable"]);
+    expect(walk).toMatchObject({ proven: 2, stoppedBy: "target" });
+  });
+
+  it("fewer candidates than the target: every one probed, stoppedBy exhausted; an empty book probes nothing", async () => {
+    const { probe } = seq(["fillable"]);
+    const one = await probeUntilProven(nums(1), probe);
+    expect(one).toMatchObject({ proven: 1, stoppedBy: "exhausted" });
+    const none = await probeUntilProven([], probe);
+    expect(none).toMatchObject({ proven: 0, stoppedBy: "exhausted" });
+    expect(none.probed).toEqual([]);
+  });
+
+  it("the target and budget are parameters: target 1 stops on the first success", async () => {
+    const { probe, order } = seq(["fillable"]);
+    const walk = await probeUntilProven(nums(5), probe, { successTarget: 1 });
+    expect(order).toEqual([0]);
+    expect(walk).toMatchObject({ proven: 1, stoppedBy: "target" });
   });
 });

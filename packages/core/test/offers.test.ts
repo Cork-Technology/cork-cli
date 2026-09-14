@@ -3,6 +3,7 @@
 // order. Real signed rows built by buildMakerOrder; the venue is a stub of the two routes the
 // view composes (orderbook + rfqs), the chain a stub answering "live".
 import { describe, expect, it } from "vitest";
+import { encodeErrorResult, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, runTool, ToolInputError } from "@cork/core";
 import { stubRpc, TOKEN_CODE } from "./helpers.ts";
@@ -133,44 +134,99 @@ describe("cork_query offers — live orders joined with the quotes they cite; th
   });
 });
 
-describe("cork_query offers — the top-of-book probe fill", () => {
+describe("cork_query offers — the probe walk from the top", () => {
   const liveWithCall = (call: (a: { to: string; data: string }) => unknown) =>
     stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE }, call });
   const offersOn = (venue: (u: string) => Promise<Response>, resolveRpc: unknown, filters: Record<string, unknown> = { account: ME }) =>
     runTool("cork_query", { resource: "offers", chainId: 1, filters, format: "concise" }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: resolveRpc as never });
-  type Probed = { items: Array<{ orderHash: string; fillSimulation?: { verdict: string } }> };
-  const revertWith = (data: string) => { throw Object.assign(new Error("execution reverted"), { cause: { data } }); };
+  type Probed = { items: Array<{ orderHash: string; fillSimulation?: { verdict: string } }>; probing?: { target: number; budget: number; SELL?: { probed: number; proven: number; stoppedBy: string } } };
+  const revertData = (data: string) => Object.assign(new Error("execution reverted"), { cause: { data } });
+  // Verdict per probe, in walk order: the fill calldata is issued candidate-by-candidate, so a
+  // counter maps call N to ranked row N.
+  const seqCall = (verdicts: Array<"ok" | "invalidated" | "taker-pull" | "transport">) => {
+    let n = 0;
+    const calls = () => n;
+    const call = () => {
+      const v = verdicts[Math.min(n, verdicts.length - 1)]!;
+      n += 1;
+      if (v === "ok") return { data: "0x" };
+      if (v === "invalidated") throw revertData(encodeErrorResult({ abi: parseAbi(["error InvalidatedOrder()"]), errorName: "InvalidatedOrder" }));
+      if (v === "taker-pull") throw revertData(encodeErrorResult({ abi: parseAbi(["error TransferFromTakerToMakerFailed()"]), errorName: "TransferFromTakerToMakerFailed" }));
+      throw Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
+    };
+    return { call, calls };
+  };
+  const rows3 = async () => [await row("p-1", { taking: 4n * 10n ** 16n }), await row("p-2", { taking: 5n * 10n ** 16n }), await row("p-3", { taking: 6n * 10n ** 16n })];
 
-  it("only the TOP offer per side is probed; a green eth_call is verdict 'fillable' on the row", async () => {
-    const best = await row("p-1", { taking: 4n * 10n ** 16n });
-    const second = await row("p-2", { taking: 6n * 10n ** 16n });
-    const env = await offersOn(venueWith([second, best], []), liveWithCall(() => ({ data: "0x" })));
+  it("a healthy book stops at the target: exactly the top 2 probed 'fillable', the third untouched, no warning", async () => {
+    const [a, b, c] = await rows3();
+    const seq = seqCall(["ok"]);
+    const env = await offersOn(venueWith([c!, a!, b!], []), liveWithCall(seq.call));
     const d = env.data as Probed;
-    expect(d.items[0]!.fillSimulation?.verdict).toBe("fillable");
-    expect(d.items[1]!.fillSimulation).toBeUndefined();
+    expect(d.items.map((i) => i.fillSimulation?.verdict)).toEqual(["fillable", "fillable", undefined]);
+    expect(seq.calls()).toBe(2);
+    expect(d.probing?.SELL).toEqual({ probed: 2, proven: 2, stoppedBy: "target" });
     expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
   });
 
-  it("a reverting probe rides the row AND one would_revert warning naming the top offer", async () => {
-    const only = await row("p-3");
-    // InvalidatedOrder() selector: keccak("InvalidatedOrder()")[0:4]
-    const env = await offersOn(venueWith([only], []), liveWithCall(() => revertWith("0xf71fbda200")));
+  it("a failing TOP keeps the walk going until 2 rows PROVE deliverable below it, and the warning says both things", async () => {
+    const [a, b, c] = await rows3();
+    const seq = seqCall(["invalidated", "ok", "ok"]);
+    const env = await offersOn(venueWith([a!, b!, c!], []), liveWithCall(seq.call));
     const d = env.data as Probed;
-    expect(d.items[0]!.fillSimulation?.verdict).toBe("would-revert");
+    expect(d.items.map((i) => i.fillSimulation?.verdict)).toEqual(["would-revert", "fillable", "fillable"]);
+    expect(d.probing?.SELL).toEqual({ probed: 3, proven: 2, stoppedBy: "target" });
     const warn = env.warnings.find((w) => w.code === "would_revert");
-    expect(warn?.message).toContain(only.orderHash);
-    expect(warn?.message).toContain("top-ranked SELL offer");
+    expect(warn?.message).toContain(a!.orderHash);
+    expect(warn?.message).toContain("the top-ranked one included");
+    expect(warn?.message).toContain("InvalidatedOrder");
+    expect(warn?.message).toContain("still proved 2 deliverable");
     expect(warn?.message.toLowerCase()).toContain(ME); // the fill sender, checksum-cased in the text
   });
 
-  it("no fill sender, no probe: without filters.account the rows carry no fillSimulation", async () => {
+  it("'maker-ready' (revert only at the taker pull) counts as PROVEN — a fresh sender never sees 'fillable', and the walk must not chase the whole book for them", async () => {
+    const [a, b, c] = await rows3();
+    const seq = seqCall(["taker-pull"]);
+    const env = await offersOn(venueWith([a!, b!, c!], []), liveWithCall(seq.call));
+    const d = env.data as Probed;
+    expect(d.items.map((i) => i.fillSimulation?.verdict)).toEqual(["maker-ready", "maker-ready", undefined]);
+    expect(d.probing?.SELL).toMatchObject({ proven: 2, stoppedBy: "target" });
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+  });
+
+  it("a book whose every row fails stops at the BUDGET, never an unbounded scan; the warning names every failing probed row", async () => {
+    const rows = await Promise.all(Array.from({ length: 9 }, (_, i) => row(`pb-${String(i)}`, { taking: BigInt(i + 4) * 10n ** 16n })));
+    const seq = seqCall(["invalidated"]);
+    const env = await offersOn(venueWith(rows, []), liveWithCall(seq.call));
+    const d = env.data as Probed;
+    expect(seq.calls()).toBe(6); // PROBE_BUDGET
+    expect(d.probing?.SELL).toEqual({ probed: 6, proven: 0, stoppedBy: "budget" });
+    const warn = env.warnings.find((w) => w.code === "would_revert");
+    expect(warn?.message).toContain("6 probed SELL offer(s)");
+    expect(warn?.message).toContain("stopped by budget with 0 proven");
+  });
+
+  it("the first transport 'unknown' STOPS the walk — a transport that cannot judge one row cannot judge the next", async () => {
+    const [a, b, c] = await rows3();
+    const seq = seqCall(["transport"]);
+    const env = await offersOn(venueWith([a!, b!, c!], []), liveWithCall(seq.call));
+    const d = env.data as Probed;
+    expect(seq.calls()).toBe(2); // the first batch only — issued together, then the stop
+    expect(d.items.map((i) => i.fillSimulation?.verdict)).toEqual(["unknown", "unknown", undefined]);
+    expect(d.probing?.SELL).toEqual({ probed: 2, proven: 0, stoppedBy: "transport" });
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+  });
+
+  it("no fill sender, no probe: without filters.account the rows carry no fillSimulation and no probing block rides", async () => {
     const env = await offersOn(venueWith([await row("p-4")], []), liveWithCall(() => ({ data: "0x" })), {});
     expect((env.data as Probed).items[0]!.fillSimulation).toBeUndefined();
+    expect((env.data as Probed).probing).toBeUndefined();
   });
 
   it("a chain with no call model attaches the honest 'unknown' — the probe ran and could not judge", async () => {
     const env = await offersOn(venueWith([await row("p-5")], []), live);
     expect((env.data as Probed).items[0]!.fillSimulation?.verdict).toBe("unknown");
+    expect((env.data as Probed).probing?.SELL?.stoppedBy).toBe("transport");
     expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
   });
 });
