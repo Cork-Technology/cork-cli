@@ -4460,6 +4460,33 @@ const CATALOG: Mutant[] = [
     replace: "",
     tests: [T.offers],
   },
+  {
+    // The caller's probeBudget is ignored and the default always used: the input becomes a
+    // silently-unapplied parameter (C13).
+    id: "walk-caller-budget-ignored",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "      const probeBudget = input.probeBudget ?? defaultProbeBudget();",
+    replace: "      const probeBudget = defaultProbeBudget();",
+    tests: [T.offers],
+  },
+  {
+    // The env default loses its upper bound: an operator typo (or a copied ms value) turns every
+    // offers read into a chain scan.
+    id: "walk-env-default-unbounded",
+    file: "packages/core/src/handlers/fill-simulate.ts",
+    find: "  return Number.isInteger(n) && n >= 1 && n <= PROBE_BUDGET_MAX ? n : PROBE_BUDGET;",
+    replace: "  return Number.isInteger(n) && n >= 1 ? n : PROBE_BUDGET;",
+    tests: [T.fillSim, T.offers],
+  },
+  {
+    // The offers-only gate dropped: probeBudget on another resource would be accepted and
+    // silently unapplied — the green no-op this repo refuses everywhere else.
+    id: "query-probe-budget-refusal-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: '  if (input.probeBudget !== undefined && input.resource !== "offers") {',
+    replace: '  if (false) {',
+    tests: [T.offers],
+  },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────────────────────

@@ -4,12 +4,12 @@
 // the pair that proves the maker's whole side, vs the maker-side failure it must never be
 // confused with), transport failure as "unknown" (never a verdict), and the bounded cause-chain
 // walk for viem's variably-nested revert data.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { encodeErrorResult, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildTakerFill, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import type { SignedLopOrder } from "../src/datasources/venue.ts";
-import { type FillSimulation, PROBE_BUDGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "../src/handlers/fill-simulate.ts";
+import { defaultProbeBudget, type FillSimulation, PROBE_BUDGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "../src/handlers/fill-simulate.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const ACCOUNT = "0x00000000000000000000000000000000000000aa" as const;
@@ -278,5 +278,37 @@ describe("probeUntilProven — the walk policy, graded rule by rule", () => {
     const walk = await probeUntilProven(nums(5), probe, { successTarget: 1 });
     expect(order).toEqual([0]);
     expect(walk).toMatchObject({ proven: 1, stoppedBy: "target" });
+  });
+});
+
+describe("defaultProbeBudget — the operator's default, range-gated", () => {
+  const KEY = "CORK_PROBE_BUDGET";
+  const prior = process.env[KEY];
+  afterEach(() => {
+    if (prior === undefined) delete process.env[KEY];
+    else process.env[KEY] = prior;
+  });
+
+  it("unset or empty: the compiled default", () => {
+    delete process.env[KEY];
+    expect(defaultProbeBudget()).toBe(PROBE_BUDGET);
+    process.env[KEY] = "";
+    expect(defaultProbeBudget()).toBe(PROBE_BUDGET);
+  });
+
+  it("an integer in 1..25 moves the default; the bounds are inclusive", () => {
+    process.env[KEY] = "2";
+    expect(defaultProbeBudget()).toBe(2);
+    process.env[KEY] = "1";
+    expect(defaultProbeBudget()).toBe(1);
+    process.env[KEY] = "25";
+    expect(defaultProbeBudget()).toBe(25);
+  });
+
+  it("out-of-range or non-integer values are IGNORED, never clamped or honored: the 1..25 range is the contract", () => {
+    for (const bad of ["0", "26", "100", "-3", "2.5", "abc", "6six"]) {
+      process.env[KEY] = bad;
+      expect(defaultProbeBudget()).toBe(PROBE_BUDGET);
+    }
   });
 });

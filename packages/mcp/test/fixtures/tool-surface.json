@@ -78,6 +78,12 @@
             "maximum": 25,
             "description": "orderbook only, with `since`: long-poll — re-read the book every 2 s until `changes.changed` or this many seconds pass (max 25, under the HTTP ingress deadline), then return; `waited` reports polls and whether anything changed. The CLI's `--watch` loops this"
           },
+          "probeBudget": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "description": "offers only: hard cap on the eth_calls one probe walk may spend PER SIDE hunting for its 2 maker-side-PROVEN rows (default 6; the CORK_PROBE_BUDGET environment variable moves the default when set to an integer in the same 1..25 range). The cap keeps a book resting many failing orders from turning one read into a chain scan — `data.probing` says when a walk stopped on it"
+          },
           "cursor": {
             "type": "string",
             "description": "opaque cursor from a prior page's pagination.nextCursor, to resume a venue traversal"

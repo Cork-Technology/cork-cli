@@ -29,6 +29,7 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_query :: pageSize": "bounded page knob (1..200)",
   "cork_query :: maxPages": "bounded page knob (1..50)",
   "cork_query :: wait": "bounded long-poll seconds (1..25, under the HTTP ingress deadline)",
+  "cork_query :: probeBudget": "bounded probe-walk knob (1..25 eth_calls per side; offers only)",
   "cork_prepare_orders :: action<oneOf2>.maxPages": "bounded page knob (1..50)",
   // RELATIVE durations, bounded in schema — never absolute moments.
   "cork_compute :: params<oneOf4>.horizonSeconds": "relative duration (impairment horizon)",

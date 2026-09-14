@@ -157,8 +157,21 @@ export function probeAccountTypeOf(makerSignature: unknown): "EOA" | "ERC1271" |
 /** How many maker-side-PROVEN rows a probe walk looks for before it stops. */
 export const PROBE_SUCCESS_TARGET = 2;
 /** Hard cap on eth_calls one walk may spend hunting for them — a book whose every row fails
- *  must not turn a read into an unbounded chain scan. */
+ *  must not turn a read into an unbounded chain scan. The DEFAULT; a caller raises or lowers it
+ *  per read (`probeBudget`, schema-bounded 1..25), an operator moves the default with
+ *  CORK_PROBE_BUDGET (same 1..25 range — anything else is ignored, the range is the contract). */
 export const PROBE_BUDGET = 6;
+export const PROBE_BUDGET_MAX = 25;
+
+/** The walk budget when the caller names none: CORK_PROBE_BUDGET when it holds an integer in
+ *  1..PROBE_BUDGET_MAX, else PROBE_BUDGET. Read per call so one long-lived server honours an
+ *  operator's change without a restart. */
+export function defaultProbeBudget(): number {
+  const raw = process.env["CORK_PROBE_BUDGET"];
+  if (raw === undefined || raw === "") return PROBE_BUDGET;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= PROBE_BUDGET_MAX ? n : PROBE_BUDGET;
+}
 
 export interface ProbeWalk<T> {
   /** Every candidate an eth_call actually judged, in walk order, with its verdict. */

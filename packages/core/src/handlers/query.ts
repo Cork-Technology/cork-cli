@@ -482,6 +482,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.sort !== undefined && input.resource !== "orderbook") {
     throw new ToolInputError("cork_query", [{ path: ["sort"], message: `sort applies to resource 'orderbook' only (it ranks resting orders best-first for filters.account); '${input.resource}' has no ranking — omit sort` }]);
   }
+  if (input.probeBudget !== undefined && input.resource !== "offers") {
+    throw new ToolInputError("cork_query", [{ path: ["probeBudget"], message: `probeBudget applies to resource 'offers' only (it bounds the probe walk's eth_calls per side); '${input.resource}' runs no probe walk — omit probeBudget` }]);
+  }
   // `since`/`wait` are the ranked orderbook's watch switches: a watermark over the RANKED view
   // (venue order carries no price and no reach, so there is nothing to compare), and a long-poll
   // that only makes sense against a watermark.

@@ -2,7 +2,7 @@
 // answer options they cite, and an indicative tally for the options nobody has backed with an
 // order. Real signed rows built by buildMakerOrder; the venue is a stub of the two routes the
 // view composes (orderbook + rfqs), the chain a stub answering "live".
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { encodeErrorResult, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, runTool, ToolInputError } from "@cork/core";
@@ -228,5 +228,71 @@ describe("cork_query offers — the probe walk from the top", () => {
     expect((env.data as Probed).items[0]!.fillSimulation?.verdict).toBe("unknown");
     expect((env.data as Probed).probing?.SELL?.stoppedBy).toBe("transport");
     expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+  });
+});
+
+describe("cork_query offers — probeBudget: caller-tunable, env-defaulted, offers-only", () => {
+  const KEY = "CORK_PROBE_BUDGET";
+  const prior = process.env[KEY];
+  afterEach(() => {
+    if (prior === undefined) delete process.env[KEY];
+    else process.env[KEY] = prior;
+  });
+  const liveWithCall = (call: (a: { to: string; data: string }) => unknown) =>
+    stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE }, call });
+  const failingCall = () => {
+    let n = 0;
+    return { calls: () => n, call: () => { n += 1; throw Object.assign(new Error("execution reverted"), { cause: { data: encodeErrorResult({ abi: parseAbi(["error InvalidatedOrder()"]), errorName: "InvalidatedOrder" }) } }); } };
+  };
+  const manyRows = () => Promise.all(Array.from({ length: 9 }, (_, i) => row(`bb-${String(i)}`, { taking: BigInt(i + 4) * 10n ** 16n })));
+  type Probed = { probing?: { budget: number; SELL?: { probed: number; proven: number; stoppedBy: string } } };
+  const read = (input: Record<string, unknown>, resolveRpc: unknown) =>
+    runTool("cork_query", { resource: "offers", chainId: 1, filters: { account: ME }, format: "concise", ...input }, { nowSeconds: NOW, venueFetch: venueWith(inputRows, []), resolveRpc: resolveRpc as never });
+  let inputRows: unknown[] = [];
+
+  it("the caller's probeBudget bounds the walk and is echoed in data.probing", async () => {
+    inputRows = await manyRows();
+    const seq = failingCall();
+    const env = await read({ probeBudget: 3 }, liveWithCall(seq.call));
+    expect(seq.calls()).toBe(3);
+    expect((env.data as Probed).probing).toMatchObject({ budget: 3, SELL: { probed: 3, proven: 0, stoppedBy: "budget" } });
+  });
+
+  it("CORK_PROBE_BUDGET moves the DEFAULT; an explicit probeBudget still wins over it", async () => {
+    inputRows = await manyRows();
+    process.env[KEY] = "2";
+    const seq = failingCall();
+    const env = await read({}, liveWithCall(seq.call));
+    expect(seq.calls()).toBe(2);
+    expect((env.data as Probed).probing).toMatchObject({ budget: 2, SELL: { stoppedBy: "budget" } });
+    const seq2 = failingCall();
+    const env2 = await read({ probeBudget: 4 }, liveWithCall(seq2.call));
+    expect(seq2.calls()).toBe(4);
+    expect((env2.data as Probed).probing).toMatchObject({ budget: 4 });
+  });
+
+  it("an out-of-range CORK_PROBE_BUDGET is ignored: the compiled default of 6 holds", async () => {
+    inputRows = await manyRows();
+    process.env[KEY] = "100";
+    const seq = failingCall();
+    const env = await read({}, liveWithCall(seq.call));
+    expect(seq.calls()).toBe(6);
+    expect((env.data as Probed).probing).toMatchObject({ budget: 6 });
+  });
+
+  it("probeBudget is offers-only (refused elsewhere — it would be silently unapplied) and schema-bounded 1..25", async () => {
+    inputRows = [];
+    const venue = venueWith([], []);
+    const on = (extra: Record<string, unknown>) => runTool("cork_query", { chainId: 1, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: live });
+    await expect(on({ resource: "orderbook", probeBudget: 3 })).rejects.toBeInstanceOf(ToolInputError);
+    await expect(on({ resource: "rfqs", probeBudget: 3 })).rejects.toBeInstanceOf(ToolInputError);
+    await expect(on({ resource: "offers", probeBudget: 0 })).rejects.toBeInstanceOf(ToolInputError);
+    await expect(on({ resource: "offers", probeBudget: 26 })).rejects.toBeInstanceOf(ToolInputError);
+    // The bound values themselves are legal, and the re-entered book/rfqs legs must not choke
+    // on the stripped field.
+    const ok = await on({ resource: "offers", probeBudget: 1, filters: { account: ME } });
+    expect(ok.state).toBe("ok");
+    const ok25 = await on({ resource: "offers", probeBudget: 25, filters: { account: ME } });
+    expect(ok25.state).toBe("ok");
   });
 });

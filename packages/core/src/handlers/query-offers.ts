@@ -6,7 +6,7 @@ import { envelope, getRpc, type HandlerContext, unavailable } from "./shared.ts"
 import type { QueryFilters } from "./filters.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
-import { PROBE_BUDGET, PROBE_SUCCESS_TARGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "./fill-simulate.ts";
+import { defaultProbeBudget, PROBE_SUCCESS_TARGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "./fill-simulate.ts";
 
 // ── offers: the unified discovery view (owner ruling 2026-09-02) ─────────────────────────────
 // An OFFER is a price somebody can actually buy: a live, signed resting order. A quote (an RFQ
@@ -111,11 +111,11 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
   // Leg 1: the ranked book for this fill sender. Leg 2: the RFQ feed with the current answers.
   // Both are the SAME reads a caller could make by hand; composing them here is what makes the
   // join, the tally, and the ranking one coherent answer.
-  const book = await read({ ...input, resource: "orderbook", sort: "best", filters: { ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.account ? { account: filters.account } : {}) } }, ctx);
+  const book = await read({ ...input, probeBudget: undefined, resource: "orderbook", sort: "best", filters: { ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.account ? { account: filters.account } : {}) } }, ctx);
   if (book.state !== "ok") return book;
   const rfqs = filters.rfqId
-    ? await read({ ...input, resource: "rfqs", filters: { rfqId: filters.rfqId, view: "current" } }, ctx)
-    : await read({ ...input, resource: "rfqs", filters: { withAnswers: true, view: "current" } }, ctx);
+    ? await read({ ...input, probeBudget: undefined, resource: "rfqs", filters: { rfqId: filters.rfqId, view: "current" } }, ctx)
+    : await read({ ...input, probeBudget: undefined, resource: "rfqs", filters: { withAnswers: true, view: "current" } }, ctx);
   const rfqRows: Array<Record<string, unknown>> = rfqs.state === "ok" ? ((rfqs.data as { items?: Array<Record<string, unknown>> }).items ?? []) : [];
 
   // The citation index: (answer_id, option_id) → the quote it names.
@@ -161,7 +161,8 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
     const resolvedSim = await getRpc(ctx, chainId).catch(() => null);
     const lop = LOP_ADDRESSES[chainId];
     if (resolvedSim && lop) {
-      probing = { target: PROBE_SUCCESS_TARGET, budget: PROBE_BUDGET, note: "each side walked from the top until `target` rows PROVE maker-side deliverable (fillSimulation `fillable` or `maker-ready`) or `budget` eth_calls are spent; rows without a fillSimulation were not reached" };
+      const probeBudget = input.probeBudget ?? defaultProbeBudget();
+      probing = { target: PROBE_SUCCESS_TARGET, budget: probeBudget, note: "each side walked from the top until `target` rows PROVE maker-side deliverable (fillSimulation `fillable` or `maker-ready`) or `budget` eth_calls are spent; rows without a fillSimulation were not reached" };
       for (const side of ["SELL", "BUY"] as const) {
         const candidates = scoped.flatMap((row) => {
           const s = (row as Record<string, unknown>).side;
@@ -173,8 +174,10 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
           return [{ row, signed: { ...parsed.value, makerAccountType: accountType } }];
         });
         if (candidates.length === 0) continue;
-        const walk = await probeUntilProven(candidates, (c) =>
-          simulateTopFill(resolvedSim.client, { signed: c.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
+        const walk = await probeUntilProven(
+          candidates,
+          (c) => simulateTopFill(resolvedSim.client, { signed: c.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
+          { probeBudget },
         );
         for (const { candidate, sim } of walk.probed) (candidate.row as Record<string, unknown>).fillSimulation = sim;
         probing[side] = { probed: walk.probed.length, proven: walk.proven, stoppedBy: walk.stoppedBy };
