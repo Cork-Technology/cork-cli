@@ -266,6 +266,7 @@ are always client-side (see `cork_capabilities topic:"signing"`).
 | `CORK_RPC_URL` | Explicit RPC endpoint override for chain reads (else built-in defaults + chainlist fallback). |
 | `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target (Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl — those builds say so); `ch version` shows which binding a binary carries. |
 | `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech). |
+| `CORK_PROBE_BUDGET` | Default eth_call budget of the offers probe walk, per side (integer 1..25; default 6; a per-call `probeBudget` input wins). Values outside the range are ignored. |
 | `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs (see "Address config" in CLAUDE.md). |
 
 `GET /docs/signing` serves the sign-and-broadcast guide as markdown — the same constant that

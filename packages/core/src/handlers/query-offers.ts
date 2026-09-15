@@ -185,7 +185,7 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
         if (failing.length > 0) {
           const topFails = failing[0]!.candidate.row === candidates[0]!.row;
           const named = failing.map((p) => `${String((p.candidate.row as Record<string, unknown>).orderHash ?? "")} reverts ${p.sim.revert?.name ?? p.sim.revert?.selector ?? "(no revert data)"}`).join("; ");
-          simWarnings.push({ code: "would_revert", message: `${String(failing.length)} probed ${side} offer(s)${topFails ? " — the top-ranked one included —" : ""} fail their probe fill from ${probeAccount}: ${named}. The walk ${walk.stoppedBy === "target" ? `still proved ${String(walk.proven)} deliverable row(s) below them` : `stopped by ${walk.stoppedBy} with ${String(walk.proven)} proven`} (fillSimulation on each probed row)` });
+          simWarnings.push({ code: "would_revert", message: `${String(failing.length)} probed ${side} offer(s)${topFails ? " — the top-ranked one included —" : ""} fail their probe fill from ${probeAccount}: ${named}. The walk ${walk.stoppedBy === "target" ? `still proved ${String(walk.proven)} deliverable row(s) on this side` : `stopped by ${walk.stoppedBy} with ${String(walk.proven)} proven`} (fillSimulation on each probed row)` });
         }
       }
     }
