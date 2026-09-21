@@ -422,21 +422,39 @@ export interface RfqListParams extends PageParams {
  * underwriter + the current counter). Rows carry `version`, the venue's monotonic change
  * counter — poll the list, re-read only what moved.
  */
+/** The venue serves an RFQ as an ENVELOPE — row-level facts (`rfq_id`, `state`, `version`,
+ *  `received_at`, `answers`, `counter`, …) beside `request`, the requester's POSTed body stored
+ *  VERBATIM (`requester`, `reference_asset`, `collateral_asset`, `notional_assets`,
+ *  `expiry_window`, `market_template`, `fill_sender`, `chain_id`, …). cork-api's
+ *  get-rfqs.schema.ts has shaped it so from the first release; this tool's fixtures served the
+ *  body FLAT until the 2026-09-21 staging rehearsal found answer-rfq refusing every real RFQ
+ *  ("carries no reference_asset address"). One flatten at the boundary, so every consumer reads
+ *  one shape: the body's fields are lifted beside the row's, and a row-level key WINS a
+ *  collision (the venue's `state`/`version` over anything a requester might have posted under
+ *  the same name). `request` stays in place for anyone who wants the verbatim body. A row
+ *  without `request` (a flat fixture, an older venue) passes through unchanged. */
+export function normalizeRfqRow(row: Record<string, unknown>): Record<string, unknown> {
+  const req = row.request;
+  if (!req || typeof req !== "object" || Array.isArray(req)) return row;
+  return { ...(req as Record<string, unknown>), ...row };
+}
+
 export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueList> {
-  return asList(
+  const list = asList(
     await getJson(
       deps,
       `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, underwriter: p.underwriter, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );
+  return { ...list, items: list.items.map(normalizeRfqRow) };
 }
 
 /** GET /rfqs/v1/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
 export async function getRfq(deps: VenueDeps, rfqId: string, view?: "full" | "current"): Promise<Record<string, unknown> | null> {
   try {
     const raw = await getJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}${qs({ view })}`);
-    return Row.parse(raw.body);
+    return normalizeRfqRow(Row.parse(raw.body));
   } catch (err) {
     if (err instanceof VenueHttpError && err.status === 404) return null;
     throw err;

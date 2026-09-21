@@ -452,7 +452,12 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     // honestly empty feed, never an unfiltered one.
     const underwriter = new URL(url).searchParams.get("underwriter");
     const answeredBy = new Set([RESTING_MAKER.address.toLowerCase(), SOFT_UNDERWRITER.toLowerCase()]);
-    const row = { rfq_id: RFQ_OPEN_ID, state: "open", chain_id: 42161, requester: RC2_CLONE_OWNER, fill_sender: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, version: 3 };
+    // The venue's REAL envelope shape (cork-api get-rfqs.schema.ts, verified against staging
+    // 2026-09-21): row-level facts beside `request`, the requester's body stored verbatim. A
+    // flat row here hid a boundary defect for three rc cuts — never flatten a fixture the venue
+    // does not flatten.
+    const request = { chain_id: 42161, requester: RC2_CLONE_OWNER, fill_sender: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, schema_version: "1", signature: "" };
+    const row = { rfq_id: RFQ_OPEN_ID, state: "open", received_at: 1789000000, version: 3, request };
     // GET /rfqs/v1/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
     // then reads back as rfq_not_found, and an agent that verifies before it submits is told
     // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
@@ -468,19 +473,19 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
       const id = decodeURIComponent(single);
       if (id === RFQ_OPEN_ID) return r(200, { ...row, answers, answer_count: answers.length });
       if (id === RFQ_NOSENDER_ID) {
-        const { fill_sender: _omit, ...noSender } = row;
-        return r(200, { ...noSender, rfq_id: RFQ_NOSENDER_ID, answers: [], answer_count: 0 });
+        const { fill_sender: _omit, ...noSender } = request;
+        return r(200, { ...row, request: noSender, rfq_id: RFQ_NOSENDER_ID, answers: [], answer_count: 0 });
       }
       if (id === RFQ_INLINE_ID) {
         const inlineTemplate = (anchor: string) => ({ inline: { oracle_recipe: LIQUIDITY_RECIPE, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: anchor, expiry: String(JIT_TASK_EXPIRY), swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" } } });
         const inlineAnswers = [{ answer_id: RFQ_INLINE_ANSWER_ID, underwriter: RESTING_MAKER.address, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.05", expiry: Number(JIT_TASK_EXPIRY), market_template: inlineTemplate(RFQ_INLINE_OPTION_ANCHOR) }] } }];
-        return r(200, { ...row, rfq_id: RFQ_INLINE_ID, market_template: inlineTemplate(RFQ_INLINE_ANCHOR), answers: inlineAnswers, answer_count: 1 });
+        return r(200, { ...row, rfq_id: RFQ_INLINE_ID, request: { ...request, market_template: inlineTemplate(RFQ_INLINE_ANCHOR) }, answers: inlineAnswers, answer_count: 1 });
       }
       if (id === RFQ_IMPAIRMENT_ID || id === RFQ_IMPAIRMENT_PARTIAL_ID) {
         const params: Record<string, string> = { schema: "cork-inline-impairment/1", anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, expiry: RFQ_IMPAIRMENT_EXPIRY, swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" };
         if (id === RFQ_IMPAIRMENT_ID) params.apy_spread_percentage = RFQ_IMPAIRMENT_SPREAD;
         const window = { not_before: Number(RFQ_IMPAIRMENT_EXPIRY) - 86_400, not_after: Number(RFQ_IMPAIRMENT_EXPIRY) + 86_400 };
-        return r(200, { ...row, rfq_id: id, modes: ["liquidity_impairment"], expiry_window: window, market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } }, answers: [], answer_count: 0 });
+        return r(200, { ...row, rfq_id: id, request: { ...request, modes: ["liquidity_impairment"], expiry_window: window, market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } } }, answers: [], answer_count: 0 });
       }
       return r(404, { message: `unknown rfq ${single}` });
     }

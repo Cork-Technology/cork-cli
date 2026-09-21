@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
+import { normalizeRfqRow } from "../src/datasources/venue.ts";
 import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { ORDERS_TOPIC_REFERENCE, TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
@@ -1815,5 +1816,36 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     await expect(
       runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { view: "frontier" }, pageSize: 25, format: "concise" }, ctxWith([])),
     ).rejects.toBeInstanceOf(ToolInputError);
+  });
+});
+
+describe("normalizeRfqRow — the venue's RFQ envelope is flattened ONCE at the boundary", () => {
+  // The venue stores the requester's POSTed body verbatim under `request` (cork-api
+  // get-rfqs.schema.ts) beside the row-level facts. A flat fixture hid this for three rc cuts;
+  // the 2026-09-21 staging rehearsal found answer-rfq refusing every real RFQ.
+  const row = {
+    rfq_id: "rfq_x", state: "open", version: 4, received_at: 1_790_000_000, answers: [], answer_count: 0,
+    request: { chain_id: 8453, requester: "0x254cC9692102bd73779d7e218DCe9cfe66a1EFA7", reference_asset: "0x9c6864105AEC23388C89600046213a44C384c831", collateral_asset: { exact: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }, notional_assets: "1000000000", state: "posted-by-requester", market_template: { inline: { oracle_recipe: "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA", oracle_params: { schema: "cork-inline-impairment/1" } } } },
+  };
+
+  it("lifts every body field beside the row's; a row-level key WINS a collision; `request` stays for the verbatim body", () => {
+    const n = normalizeRfqRow(row);
+    expect(n.reference_asset).toBe(row.request.reference_asset);
+    expect(n.requester).toBe(row.request.requester);
+    expect(n.collateral_asset).toEqual(row.request.collateral_asset);
+    expect(n.market_template).toEqual(row.request.market_template);
+    expect(n.chain_id).toBe(8453);
+    expect(n.state).toBe("open"); // the venue's lifecycle, not the body's same-named field
+    expect(n.version).toBe(4);
+    expect(n.request).toEqual(row.request);
+  });
+
+  it("a row without `request` (a flat fixture, an older venue) passes through untouched; a non-object `request` is left alone", () => {
+    const flat = { rfq_id: "rfq_y", reference_asset: "0x9c6864105AEC23388C89600046213a44C384c831" };
+    expect(normalizeRfqRow(flat)).toBe(flat);
+    const weird = { rfq_id: "rfq_z", request: "not-an-object" };
+    expect(normalizeRfqRow(weird)).toBe(weird);
+    const arr = { rfq_id: "rfq_w", request: [1, 2] };
+    expect(normalizeRfqRow(arr)).toBe(arr);
   });
 });

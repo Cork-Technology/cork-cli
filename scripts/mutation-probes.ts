@@ -4605,6 +4605,26 @@ const CATALOG: Mutant[] = [
     tests: [T.answer],
   },
   {
+    // The boundary flatten is dropped: every consumer reads the FLAT shape the venue never
+    // serves — answer-rfq refuses every real RFQ ("carries no reference_asset address"), the
+    // exact defect the 2026-09-21 staging rehearsal found. The eval stub serves the REAL nested
+    // envelope, so this dies in the answer suite, not only in the unit test.
+    id: "venue-rfq-envelope-not-flattened",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "  return { ...(req as Record<string, unknown>), ...row };",
+    replace: "  return row;",
+    tests: [T.venue, T.answer],
+  },
+  {
+    // Collision precedence inverted: the requester's posted body overrides the venue's own
+    // row-level facts (a body that says state:"open" would mask an expired RFQ).
+    id: "venue-rfq-envelope-body-wins",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "  return { ...(req as Record<string, unknown>), ...row };",
+    replace: "  return { ...row, ...(req as Record<string, unknown>) };",
+    tests: [T.venue],
+  },
+  {
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
     // recipe: the mode sugar silently diverges across chains.
     id: "impairment-hint-dropped-one-chain",
