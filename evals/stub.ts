@@ -42,6 +42,7 @@ export const RC2_FACTORY = ROLLOVER_42161.factory;
 export const RETIRED_EXACT_SETTLER = ROLLOVER_42161.legacyGenerations![0]!.exactSettler;
 const REGISTRY_210 = MR_42161.registry;
 export const LIQUIDITY_RECIPE = MR_42161.recipes.liquidity!;
+export const IMPAIRMENT_RECIPE = MR_42161.recipes.impairment!;
 export const FIXED_RECIPE = MR_42161.recipes.fixed!;
 const WAD = 10n ** 18n;
 
@@ -124,14 +125,22 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 2_592_000n; // 30 days — the live registry's value at last read
     case "isRecipe": {
       const a = String(args.args?.[0] ?? "").toLowerCase();
-      return a === LIQUIDITY_RECIPE.toLowerCase() || a === FIXED_RECIPE.toLowerCase();
+      return a === LIQUIDITY_RECIPE.toLowerCase() || a === FIXED_RECIPE.toLowerCase() || a === IMPAIRMENT_RECIPE.toLowerCase();
     }
     case "getRecipes":
-      return [[LIQUIDITY_RECIPE, FIXED_RECIPE], 2n];
+      return [[LIQUIDITY_RECIPE, FIXED_RECIPE, IMPAIRMENT_RECIPE], 3n];
     case "source":
-      return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? 2 : 1; // RecipeSource: PRICE=1, FIXED=2
+      // RecipeSource: NAV=0, PRICE=1, FIXED=2 (the deliberately inverted upstream ordering).
+      return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? 2 : args.address.toLowerCase() === IMPAIRMENT_RECIPE.toLowerCase() ? 0 : 1;
     case "description":
+      if (args.address.toLowerCase() === IMPAIRMENT_RECIPE.toLowerCase()) {
+        return "Impairment: the rate window is the anchor plus or minus apySpreadPercentage * durationSeconds / 365 days of it. additionalData is abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), 96 bytes; apySpreadPercentage is on the percentage scale (1e18 = 1%).";
+      }
       return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? "Fixed rate: a window of WINDOW_WIDTH around the fixed oracle rate." : "Liquidity: the widest rate window CorkPoolManager will accept.";
+    case "SECONDS_PER_YEAR":
+      return 31_536_000n;
+    case "CAPACITY_DAYS":
+      return 7n;
     case "REGISTRY":
       return REGISTRY_210;
     case "RATE_MIN":
@@ -171,9 +180,37 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return "0xF10000000000000000000000000000000000000d"; // CREATE2-predicted, not yet deployed (getCode answers "0x")
     case "lookupWrapper":
       return ORACLE; // pair oracle deployed; its rate() is served above
-    case "resolve":
+    case "resolve": {
+      // The impairment recipe COMPUTES here — the real band math over the args the caller
+      // actually encoded, so an eval agent's mis-encoded additionalData produces wrong numbers
+      // instead of a green canned answer (realistic, never a rubber stamp). The oracle is
+      // deployed in this world (lookupWrapper above), so like the deployed recipe the carried
+      // anchor is IGNORED and the stub oracle's rate (0.8e18) anchors the window.
+      if (args.address.toLowerCase() === IMPAIRMENT_RECIPE.toLowerCase()) {
+        const data = String(args.args?.[3] ?? "0x");
+        if ((data.length - 2) / 2 !== 96) throw new Error(`execution reverted: MalformedAdditionalData(${String((data.length - 2) / 2)})`);
+        const word = (i: number) => BigInt(`0x${data.slice(2 + i * 64, 2 + (i + 1) * 64)}`);
+        const [carried, durationSeconds, spread] = [word(0), word(1), word(2)];
+        const oracleArg = String(args.args?.[2] ?? "").toLowerCase();
+        const anchor = oracleArg === "0x0000000000000000000000000000000000000000" ? carried : 800_000_000_000_000_000n;
+        const D = 100n * WAD;
+        const YEAR = 31_536_000n;
+        if (anchor === 0n) throw new Error("execution reverted: ZeroAnchorRate()");
+        if (durationSeconds === 0n) throw new Error("execution reverted: ZeroDuration()");
+        if (durationSeconds > 2_592_000n) throw new Error(`execution reverted: DurationTooLong(${durationSeconds.toString()}, 2592000)`);
+        const band = (spread * durationSeconds) / YEAR;
+        if (band >= D) throw new Error(`execution reverted: BandTooWide(${band.toString()})`);
+        const perDayPct = (spread * 86_400n) / YEAR;
+        return {
+          rateMin: (anchor * (D - band) + D - 1n) / D,
+          rateMax: (anchor * (D + band)) / D,
+          rateChangePerDayMax: (anchor * perDayPct) / D,
+          rateChangeCapacityMax: (anchor * 7n * perDayPct) / D,
+        };
+      }
       // The liquidity shape at rate 0.8e18: floor 1 wei, ceiling 2×rate, per-day rate, capacity 3×rate.
       return { rateMin: 1n, rateMax: 1_600_000_000_000_000_000n, rateChangePerDayMax: 800_000_000_000_000_000n, rateChangeCapacityMax: 2_400_000_000_000_000_000n };
+    }
     case "verify":
       return true;
     case "symbol":

@@ -4493,8 +4493,8 @@ const CATALOG: Mutant[] = [
     // 30-day duration read as a 2.6-billion-percent spread — bytes the recipe happily decodes.
     id: "impairment-encoder-word-order",
     file: "packages/core/src/market-registry.ts",
-    find: "    [a.anchorRate, a.durationSeconds, a.apySpreadPercentage],",
-    replace: "    [a.anchorRate, a.apySpreadPercentage, a.durationSeconds],",
+    find: "  return encodeUintWords([a.anchorRate, a.durationSeconds, a.apySpreadPercentage]);",
+    replace: "  return encodeUintWords([a.anchorRate, a.apySpreadPercentage, a.durationSeconds]);",
     tests: [T.impairment],
   },
   {
@@ -4521,6 +4521,23 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/registry.ts",
     find: "; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it)",
     replace: "",
+    tests: [T.impairment],
+  },
+  {
+    // argsUints silently ignored: the structured words never reach resolve and the raw-hex
+    // fallback (absent) rides instead — the parameter-ignored green no-op.
+    id: "compute-args-uints-ignored",
+    file: "packages/core/src/handlers/compute.ts",
+    find: "        additionalData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,",
+    replace: "        additionalData: p.args,",
+    tests: [T.impairment],
+  },
+  {
+    // The both-given refusal dropped: args and argsUints race for the same additionalData.
+    id: "compute-args-uints-exclusivity-dropped",
+    file: "packages/core/src/handlers/compute.ts",
+    find: "    if (p.args !== undefined && p.argsUints !== undefined) {",
+    replace: "    if (false) {",
     tests: [T.impairment],
   },
   {

@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
+import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -276,6 +276,15 @@ export const TASKS: EvalTask[] = [
     id: "resolve-constraint",
     prompt: `Resolve the four rate limits that the approved liquidity recipe contract ${LIQUIDITY_RECIPE} would impose on collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610 on Arbitrum (chain 42161) — the values a JIT order carries.`,
     expect: { tool: "cork_compute", params: { params: { kind: "recipe-rate-constraint", recipe: LIQUIDITY_RECIPE } }, state: "ok", answer: /1600000000000000000|1\.6/, maxCalls: 2 },
+  },
+  {
+    id: "impairment-constraint",
+    prompt: `Using the approved impairment recipe contract ${IMPAIRMENT_RECIPE} on Arbitrum (chain 42161), resolve the four rate limits a JIT order would carry for collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 vs reference 0xdDb46999F8891663a8F2828d25298f70416d7610, for a market duration of 7 days and an annual yield spread of 10% (anchor fallback 1.0 if no oracle answers). Report the four raw values.`,
+    // The stub COMPUTES the impairment band math over the args the agent encodes, anchored on
+    // the live stub oracle (0.8e18) — mis-encoded words (duration/spread swapped, wrong spread
+    // scale) produce different digits, so the answer axis grades real encoding competence. The
+    // literals were derived independently of the stub (band = 10%×7/365 of the anchor).
+    expect: { tool: "cork_compute", params: { params: { kind: "recipe-rate-constraint", recipe: IMPAIRMENT_RECIPE } }, state: "ok", answer: /801534246575342465|798465753424657535/, maxCalls: 3 },
   },
   {
     id: "predict-market",

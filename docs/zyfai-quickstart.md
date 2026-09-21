@@ -269,7 +269,7 @@ answer:
   the previous release could hit here.)
 
 **Stop 5 — recipes: the actual terms of the cover.**
-Step 1b lists the three approved recipe contracts. To see what a recipe would *actually commit you
+Step 1b lists the four approved recipe contracts. To see what a recipe would *actually commit you
 to* on your pair, ask it — `recipe-rate-constraint` is the very staticcall a fill runs (the recipe here is
 **LiquidityNav**, the nav flavor this pair needs):
 
@@ -297,7 +297,24 @@ anchor (`rateMax`), and may move at most one whole anchor per day (`rateChangePe
 total budget of three (`rateChangeCapacityMax`). Those speed limits are the product: a slow bleed
 is tracked, a flash crash is rate-limited — which is what makes the worst case computable
 (`ch compute` → `impairment-floor`). The price flavor is byte-for-byte the same policy over a
-market feed; the **fixed** recipe instead pins the rate forever (both change limits zero). Either
+market feed; the **fixed** recipe instead pins the rate forever (both change limits zero). The
+fourth recipe, **impairment** (`ApySpreadImpairmentRecipe`, `0x7340BfbE…9eCA`, mode sugar
+`impairment`), sizes the window from an annual yield spread instead: anchor ± spread ×
+duration/365 days, one day of the spread per day, seven days of capacity. It takes three
+additional-data words — anchor rate (1e18 = 1.0, honoured only while the pair's oracle is
+undeployed), duration in seconds, and the spread on the **percentage scale** (1e18 = 1%, so a
+10%/year spread is `10000000000000000000`). Pass them as `argsUints` and the tool encodes the
+bytes for you:
+
+```sh
+ch compute recipe-rate-constraint --chain-id 8453 --json \
+  --recipe 0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA \
+  --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
+  --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
+  --params '{"argsUints":["1000000000000000000","604800","10000000000000000000"]}'
+```
+
+Either
 way, **these four numbers are literally what the underwriter's order will sign**, and the market's
 identity is derived from them.
 

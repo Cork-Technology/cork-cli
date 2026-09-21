@@ -277,6 +277,13 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
   },
 };
 
+/** ABI-encode decimal uint256 words in order — the additionalData shape every current recipe
+ *  reads (liquidity: one word; impairment: three). One 32-byte word per value, no hand-built
+ *  hex; the schema's `argsUints` rides through here. */
+export function encodeUintWords(words: readonly bigint[]): `0x${string}` {
+  return encodeAbiParameters(words.map(() => ({ type: "uint256" }) as const), words);
+}
+
 /** The ApySpreadImpairmentRecipe's order-carried args, built the one way its _decode accepts
  *  them: abi.encode(anchorRate, durationSeconds, apySpreadPercentage), exactly 96 bytes.
  *  Scales are the recipe's own (its description() states them): anchorRate 1e18 = 1.0 (honoured
@@ -285,10 +292,7 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
  *  registry's maxExpiryDuration), apySpreadPercentage 1e18 = 1% (a 10%/year spread is 10e18 —
  *  the PERCENTAGE scale, not the rate scale; the recipe rejects a band of 100% or more). */
 export function encodeImpairmentArgs(a: { anchorRate: bigint; durationSeconds: bigint; apySpreadPercentage: bigint }): `0x${string}` {
-  return encodeAbiParameters(
-    [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
-    [a.anchorRate, a.durationSeconds, a.apySpreadPercentage],
-  );
+  return encodeUintWords([a.anchorRate, a.durationSeconds, a.apySpreadPercentage]);
 }
 
 /** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out).

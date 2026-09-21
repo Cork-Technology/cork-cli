@@ -9,7 +9,7 @@ import { runTool, ToolInputError } from "@cork/core";
 import { DEMO_ACCOUNT, DEMO_POOL_ID, DEMO_SIGNED_TX, TOOL_EXAMPLES } from "@cork/schemas";
 import type { TraceCall } from "./run.ts";
 import { ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
-  GROUPED_RUNG, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY,
+  GROUPED_RUNG, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY,
   RESERVED_FILLER, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, stubContext, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 
 export interface Play {
@@ -96,6 +96,7 @@ export const PLAYS: Play[] = [
   { id: "rollover-floor", calls: [c({ params: { kind: "rollover-premium-floor", dstCstProduced: "500000000000000000000", minPremiumPerShare: "10000000000000000" } })], finalText: "The guaranteed premium floor is 5000000000000000000 base units (5.0 with 18 decimals)." },
   { id: "price-dutch", calls: [c({ chainId: 1, params: { kind: "dutch-auction-price", order: dutchOrder }, at: { timestamp: "1787962200" } })], finalText: "At that moment the taker pays 1080000 for the full making amount (1.08 vbUSDC)." },
   { id: "param-scale-wholenumber", calls: [c({ params: { kind: "rollover-premium-floor", dstCstProduced: "1000000000000000000000", minPremiumPerShare: "20000000000000000" } })], finalText: "The floor is 20000000000000000000 base units (20 tokens at 18 decimals)." },
+  { id: "impairment-constraint", calls: [c({ chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: IMPAIRMENT_RECIPE, collateralAsset: CA, referenceAsset: REF, args: "0x0000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000093a800000000000000000000000000000000000000000000000008ac7230489e80000" } })], finalText: "The impairment constraint at the live oracle anchor 0.8: rateMin 798465753424657535, rateMax 801534246575342465, rateChangePerDayMax 219178082191780, rateChangeCapacityMax 1534246575342465." },
   { id: "resolve-constraint", calls: [c({ chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQUIDITY_RECIPE, collateralAsset: CA, referenceAsset: REF } })], finalText: "The constraint: rateMax 1600000000000000000 (1.6), with the other three limits as returned." },
   { id: "gated-rfq-quote", calls: [c({ chainId: 42161, params: { kind: "rfq-quote", marketTypeBucket: "stablecoin-depeg", durationSeconds: 2592000 } })], finalText: "This tool cannot price it: rfq-quote is deferred (phase gated). Instead, post a decaying auction maker order and let the market discover the premium, or ask underwriters via an RFQ." },
   // ── phoenix prepares ──

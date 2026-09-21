@@ -7,7 +7,7 @@
 // CORK_RPC_LIVE suite (impairment-recipe-live.test.ts).
 import { describe, expect, it } from "vitest";
 import { decodeErrorResult, encodeErrorResult } from "viem";
-import { encodeImpairmentArgs, RECIPE_CATALOG, recipeAbi, runTool } from "@cork/core";
+import { encodeImpairmentArgs, RECIPE_CATALOG, recipeAbi, runTool, ToolInputError } from "@cork/core";
 import type { HandlerContext } from "../src/handlers/shared.ts";
 import { stubRpc, type StubCall } from "./helpers.ts";
 
@@ -126,6 +126,35 @@ describe("the generic read/resolve machinery serves the fourth recipe", () => {
     expect(env.state).toBe("ok");
     expect((env.data as { items: Array<{ address: string }> }).items[0]?.address.toLowerCase()).toBe(IMP.toLowerCase());
     expect(env.warnings.some((w) => w.code === "deprecation_notice")).toBe(true);
+  });
+
+  it("argsUints encodes the decimal words INTO the resolve staticcall — byte-identical to the hex path, no hand-built hex", async () => {
+    const seen: string[] = [];
+    const handler = (c: StubCall): unknown => {
+      if (c.functionName === "lookupWrapper") return ZERO;
+      if (c.functionName === "simulate:deploy") return ORACLE;
+      if (c.functionName === "resolve") {
+        seen.push(String(c.args?.[3] ?? ""));
+        return { rateMin: 1n, rateMax: 2n * 10n ** 18n, rateChangePerDayMax: 10n ** 15n, rateChangeCapacityMax: 7n * 10n ** 15n };
+      }
+      const meta = metaStub(c);
+      if (meta !== undefined) return meta;
+      throw new Error(`unexpected ${c.functionName}`);
+    };
+    const base = { chainId: 8453, params: { kind: "recipe-rate-constraint", recipe: IMP, collateralAsset: CA, referenceAsset: REF } } as const;
+    const viaWords = await runTool("cork_compute", { ...base, params: { ...base.params, argsUints: ["1000000000000000000", "604800", "10000000000000000000"] } }, ctx(handler));
+    expect(viaWords.state).toBe("ok");
+    const viaHex = await runTool("cork_compute", { ...base, params: { ...base.params, args: encodeImpairmentArgs({ anchorRate: 10n ** 18n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n }) } }, ctx(handler));
+    expect(viaHex.state).toBe("ok");
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]); // the two spellings reach the recipe as the SAME bytes
+    expect((seen[0]!.length - 2) / 2).toBe(96);
+  });
+
+  it("args and argsUints together are refused — they race for the same additionalData", async () => {
+    await expect(
+      runTool("cork_compute", { chainId: 8453, params: { kind: "recipe-rate-constraint", recipe: IMP, collateralAsset: CA, referenceAsset: REF, args: "0x00", argsUints: ["1"] } }, ctx(() => 0n)),
+    ).rejects.toBeInstanceOf(ToolInputError);
   });
 
   it("a refusal while the oracle is undeployed teaches the impairment shape: 96 bytes, three words, the encoder's name", async () => {

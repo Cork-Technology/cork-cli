@@ -445,6 +445,15 @@
                     "description": "the recipe's additionalData, raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)",
                     "$ref": "#/$defs/Hex"
                   },
+                  "argsUints": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/UintStr"
+                    },
+                    "description": "the recipe's additionalData as DECIMAL uint256 words, ABI-encoded for you in order (each becomes one 32-byte word — no hand-built hex). The liquidity recipe takes one word (anchorRate, 1e18 = 1.0); the impairment recipe takes three (anchorRate 1e18 = 1.0, durationSeconds, apySpreadPercentage 1e18 = 1% — a 10%/year spread is 10000000000000000000). Each recipe's own shape: cork_query resource:'registry-recipes'. Mutually exclusive with `args`"
+                  },
                   "rate": {
                     "description": "FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against",
                     "x-units": "D18{1}",

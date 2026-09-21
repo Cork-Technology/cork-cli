@@ -6,6 +6,7 @@ import { impairmentFloor, previewAdjustedRate } from "../math/constraint.ts";
 import { previewSwap, previewUnwindSwap } from "../math/preview.ts";
 import { type CorkAddresses, readPoolState } from "../chain/reads.ts";
 import { decodeMakerTraits, hashLopOrder, LOP_ADDRESSES } from "../orders.ts";
+import { encodeUintWords } from "../market-registry.ts";
 import { auctionPhase, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, rpcProvenance, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
 import { parseOrderRecord } from "./decode.ts";
@@ -105,6 +106,9 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     // registry's percentage-band math is gone from the public surface; p.legacy reaches the
     // deprecated pre-2.1.0 bands behind the gate.
     if (p.legacy) return handleComputeResolveRecipeLegacy(input, p, ctx, chainId);
+    if (p.args !== undefined && p.argsUints !== undefined) {
+      throw new ToolInputError("cork_compute", [{ path: ["params", "argsUints"], message: "pass args (raw hex) OR argsUints (decimal words, encoded for you) — both together would race for the same additionalData" }]);
+    }
     if (!p.collateralAsset || !p.referenceAsset) {
       return unavailable(chainId, "missing_filter", "recipe-rate-constraint needs collateralAsset + referenceAsset (the pair the constraint is for), plus recipe (the approved recipe CONTRACT ADDRESS; mode survives as deprecated sugar). Optional: args (recipe additionalData hex), rate (FIXED recipes), rateOracle (explicit oracle)", ctx);
     }
@@ -124,7 +128,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
         referenceAsset: p.referenceAsset,
         fixedRate: p.rate !== undefined ? BigInt(p.rate) : undefined,
         rateOracle: p.rateOracle,
-        additionalData: p.args,
+        additionalData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,
         wantConstraint: true,
       });
       warnings.push(...res.warnings);
