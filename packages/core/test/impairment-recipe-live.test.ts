@@ -1,4 +1,4 @@
-// Live parity for the DEPLOYED ApySpreadImpairmentRecipe (0x7340BfbE…, Base) — the empirical
+// Live parity for the DEPLOYED ApySpreadImpairmentRecipe (0x7340BfbE…, BOTH chains) — the empirical
 // spine of the integration. Three claims, each settled on chain, none from memory:
 //   1. the recipe binds the CURRENT generation: its REGISTRY() equals the configured registry
 //      (the 0.4.0 release moved no registry address — this read is the proof that stays true);
@@ -20,16 +20,16 @@ const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const DAY = 86_400n;
 const YEAR = 365n * DAY;
 
-describe.skipIf(!LIVE)("ApySpreadImpairmentRecipe — live parity on Base (CORK_RPC_LIVE=1)", () => {
+describe.skipIf(!LIVE).each([{ chainId: 8453 as const }, { chainId: 42161 as const }])("ApySpreadImpairmentRecipe — live parity on chain $chainId (CORK_RPC_LIVE=1)", ({ chainId }) => {
   it("REGISTRY() binds the configured (current-generation) registry — the recipe rode 0.4.0 without a registry move", async () => {
-    const { client } = (await resolveRpc(8453, undefined))!;
+    const { client } = (await resolveRpc(chainId, undefined))!;
     const bound = (await client.readContract({ address: IMP, abi: recipeAbi, functionName: "REGISTRY" })) as string;
-    const configured = (corkDefaults as { marketRegistry: Record<string, { registry: string }> }).marketRegistry["8453"]!.registry;
+    const configured = (corkDefaults as { marketRegistry: Record<string, { registry: string }> }).marketRegistry[String(chainId)]!.registry;
     expect(bound.toLowerCase()).toBe(configured.toLowerCase());
   });
 
   it("resolve() is wei-exact against the applyBands reference: anchor 1.0, 7 days, 10%/year, no oracle", async () => {
-    const { client } = (await resolveRpc(8453, undefined))!;
+    const { client } = (await resolveRpc(chainId, undefined))!;
     const anchor = 10n ** 18n;
     const duration = 7n * DAY;
     const spread = 10n * 10n ** 18n; // 10%/year on the 1e18 = 1% scale
@@ -53,7 +53,7 @@ describe.skipIf(!LIVE)("ApySpreadImpairmentRecipe — live parity on Base (CORK_
   });
 
   it("an oversized band reverts BandTooWide on the DEPLOYED bytecode, and the shared ABI names it", async () => {
-    const { client } = (await resolveRpc(8453, undefined))!;
+    const { client } = (await resolveRpc(chainId, undefined))!;
     // band = spread×7d/365d ≥ 100e18 needs spread ≥ 100e18×365/7 ≈ 5215e18; 6000e18 clears it.
     const args = encodeImpairmentArgs({ anchorRate: 10n ** 18n, durationSeconds: 7n * DAY, apySpreadPercentage: 6000n * 10n ** 18n });
     let name: string | null = null;

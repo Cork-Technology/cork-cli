@@ -272,7 +272,7 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
     args: {
       type: "(uint256,uint256,uint256)",
       display:
-        "abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage) — exactly 96 bytes (encodeImpairmentArgs builds it). anchorRate is on the RATE scale (1e18 = 1.0) and is honoured only while the pair's oracle is undeployed; durationSeconds is plain seconds and must not exceed the registry's maxExpiryDuration; apySpreadPercentage is on the PERCENTAGE scale (1e18 = 1%, so a 10%/year spread is 10e18 — NOT the rate scale). Window = anchor ± spread×duration/365d, per-day = one day of the spread, capacity = seven",
+        "abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage) — exactly 96 bytes (encodeImpairmentArgs builds it). anchorRate is on the RATE scale (1e18 = 1.0) and is honoured only while the pair's oracle is undeployed; durationSeconds is plain seconds, must not exceed the registry's maxExpiryDuration, and is the AUTHOR'S choice independent of the pool's expiry (usually expiry minus now); apySpreadPercentage is on the PERCENTAGE scale (1e18 = 1%, so a 10%/year spread is 10e18 — NOT the rate scale). Window = anchor ± spread×duration/365d, per-day = one day of the spread, capacity = seven",
     },
   },
 };
