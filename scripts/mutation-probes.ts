@@ -109,6 +109,7 @@ const T = {
   surfaceTier: "packages/mcp/test/surface-tier.test.ts",
   makerReadiness: "packages/core/test/maker-readiness.test.ts",
   fillSim: "packages/core/test/fill-simulate.test.ts",
+  impairment: "packages/core/test/impairment-recipe.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -4486,6 +4487,50 @@ const CATALOG: Mutant[] = [
     find: '        if (walk.stoppedBy === "transport") {',
     replace: "        if (false) {",
     tests: [T.offers],
+  },
+  {
+    // The impairment args encoder swaps duration and spread: a signed order would carry a
+    // 30-day duration read as a 2.6-billion-percent spread — bytes the recipe happily decodes.
+    id: "impairment-encoder-word-order",
+    file: "packages/core/src/market-registry.ts",
+    find: "    [a.anchorRate, a.durationSeconds, a.apySpreadPercentage],",
+    replace: "    [a.anchorRate, a.apySpreadPercentage, a.durationSeconds],",
+    tests: [T.impairment],
+  },
+  {
+    // The catalog entry loses its constants: registry-recipes serves the recipe with no
+    // teaching and argsKnown decays.
+    id: "impairment-catalog-constants-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: '    constants: ["SECONDS_PER_YEAR", "CAPACITY_DAYS"],',
+    replace: "    constants: [],",
+    tests: [T.impairment],
+  },
+  {
+    // A recipe error leaves the shared ABI: its revert surfaces as a raw selector again.
+    id: "impairment-error-abi-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: '  "error BandTooWide(uint256 bandPercentage)",\n',
+    replace: "",
+    tests: [T.impairment],
+  },
+  {
+    // The refusal teaching loses the impairment shape: a MalformedAdditionalData caller is
+    // pointed at the liquidity/fixed causes only.
+    id: "impairment-teaching-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it)",
+    replace: "",
+    tests: [T.impairment],
+  },
+  {
+    // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
+    // recipe: the mode sugar silently diverges across chains.
+    id: "impairment-hint-dropped-one-chain",
+    file: "cork-defaults.json",
+    find: '        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",\n        "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"\n      },\n      "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n      "contractsVersion": "0.3.3",\n      "deployedAtBlock": 49775886',
+    replace: '        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"\n      },\n      "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n      "contractsVersion": "0.3.3",\n      "deployedAtBlock": 49775886',
+    tests: [T.impairment],
   },
   {
     // The offers-only gate dropped: probeBudget on another resource would be accepted and

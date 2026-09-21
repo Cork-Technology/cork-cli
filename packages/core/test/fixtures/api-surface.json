@@ -1529,6 +1529,10 @@
       "kind": "value"
     },
     {
+      "name": "encodeImpairmentArgs",
+      "kind": "value"
+    },
+    {
       "name": "encodeJitExtraData",
       "kind": "value"
     },
@@ -4148,6 +4152,10 @@
     },
     {
       "name": "diffJitExtraData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeImpairmentArgs",
       "kind": "value"
     },
     {

@@ -7,6 +7,10 @@ covered.
 
 ## [Unreleased]
 
+### Added
+
+- **The impairment recipe is integrated — the FOURTH recipe** (`ApySpreadImpairmentRecipe`, market-registry 0.4.0, `0x7340BfbE…9eCA` on both chains). Its window is the anchor ± `apySpread × duration / 365 days`, one day of the spread per day, seven days of capacity. Verified live 2026-09-21: it enumerates as APPROVED on the CURRENT registry on Base AND Arbitrum, its `REGISTRY()` binds the configured registry (the 0.4.0 release moved no registry/adapter address), its `resolve()` is wei-exact against the chain-verified applyBands rounding, and its `BandTooWide` revert decodes BY NAME from the deployed bytecode. What shipped: the recipe-catalog entry (both constants + the args teaching), `encodeImpairmentArgs` (SDK root and `/registry` — the 96-byte `abi.encode(anchorRate 1e18=1.0, durationSeconds, apySpreadPercentage 1e18=1%)` payload; the spread is on the PERCENTAGE scale, the sharpest hazard), the recipe's seven typed errors on the shared recipe ABI so `recipe_refused` names them, the `mode: "impairment"` deprecated-sugar hint, and the refusal teaching for the 96-byte shape. Deliberately NOT adopted: the 0.4-rc.1 shadow deployment's address set — this cut integrates the recipe alone, on the current generation.
+
 ### Changed
 
 - **A blind walk says so out loud.** A probe walk stopped by a TRANSPORT failure now also warns `chain_read_failed` (info on ok, per side) beside the quiet `data.probing.stoppedBy: "transport"` — the "unknown" verdicts prove nothing, and a caller reading only the warnings list must not mistake a blind read for a clean one. Never a verdict about any order; the read stays `ok`.

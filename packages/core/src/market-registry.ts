@@ -101,6 +101,17 @@ export const recipeAbi = parseAbi([
   "function REGISTRY() view returns (address)",
   "function resolve(address ca, address ref, address rateOracle, bytes additionalData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
   "function verify(address ca, address ref, address rateOracle, (uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint, bytes additionalData) view returns (bool ok)",
+  // ApySpreadImpairmentRecipe's typed errors (market-registry 0.4.0, src/recipes/, verified
+  // against the tag's source 2026-09-21). Carried on the shared recipe ABI so a resolve/verify
+  // revert is NAMED in recipe_refused instead of surfacing as a raw selector; selectors are
+  // recipe-specific, so they can never mis-decode another recipe's revert.
+  "error MalformedAdditionalData(uint256 length)",
+  "error ZeroAnchorRate()",
+  "error ZeroDuration()",
+  "error DurationTooLong(uint256 durationSeconds, uint256 maxDuration)",
+  "error BandTooWide(uint256 bandPercentage)",
+  "error WindowCollapsed(uint256 rateMin, uint256 rateMax)",
+  "error RateOracleNotDeployed(address ca, address ref)",
 ]);
 
 /** Token self-description for asset/denomination display (best-effort — a token that will not
@@ -251,7 +262,34 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
     constants: ["WINDOW_WIDTH"],
     args: { type: "()", display: "no payload — the fixed-rate recipe rejects any additionalData" },
   },
+  // ApySpreadImpairmentRecipe (market-registry 0.4.0, deployed 2026-08-31; identical address on
+  // 42161 + 8453; approved on the CURRENT 0.3.3-generation registry — isRecipe read live on both
+  // chains 2026-09-21). The 0.4.0 release moved NO registry/adapter address (owner statement
+  // 2026-09-03), so this entry deliberately adopts the recipe alone, not the later 0.4-rc.1
+  // shadow deployment set.
+  "0x7340bfbedf3657a7bbce0dd2b4ab205754cc9eca": {
+    constants: ["SECONDS_PER_YEAR", "CAPACITY_DAYS"],
+    args: {
+      type: "(uint256,uint256,uint256)",
+      display:
+        "abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage) — exactly 96 bytes (encodeImpairmentArgs builds it). anchorRate is on the RATE scale (1e18 = 1.0) and is honoured only while the pair's oracle is undeployed; durationSeconds is plain seconds and must not exceed the registry's maxExpiryDuration; apySpreadPercentage is on the PERCENTAGE scale (1e18 = 1%, so a 10%/year spread is 10e18 — NOT the rate scale). Window = anchor ± spread×duration/365d, per-day = one day of the spread, capacity = seven",
+    },
+  },
 };
+
+/** The ApySpreadImpairmentRecipe's order-carried args, built the one way its _decode accepts
+ *  them: abi.encode(anchorRate, durationSeconds, apySpreadPercentage), exactly 96 bytes.
+ *  Scales are the recipe's own (its description() states them): anchorRate 1e18 = 1.0 (honoured
+ *  only while the pair's oracle is undeployed — a live oracle's rate wins, the liquidity
+ *  recipe's rule), durationSeconds plain seconds (the recipe rejects 0 and anything over the
+ *  registry's maxExpiryDuration), apySpreadPercentage 1e18 = 1% (a 10%/year spread is 10e18 —
+ *  the PERCENTAGE scale, not the rate scale; the recipe rejects a band of 100% or more). */
+export function encodeImpairmentArgs(a: { anchorRate: bigint; durationSeconds: bigint; apySpreadPercentage: bigint }): `0x${string}` {
+  return encodeAbiParameters(
+    [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
+    [a.anchorRate, a.durationSeconds, a.apySpreadPercentage],
+  );
+}
 
 /** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out).
  *  Typed as plain `Abi` (the name is a runtime value, so viem cannot infer the return type);

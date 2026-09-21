@@ -463,7 +463,7 @@ the CREATE2 salt and is now keccak256(abi.encode(**registryAddress**, ca, ref, c
 refSource)) — every registry derives its own salt space, so the sUSDe/sUSDS@42161 brick cannot
 recur (verified live: the pair simulates DEPLOYABLE on the new registry, still reverts on the
 old). Every address changed again (registry `0xa78d…11F1`, adapter `0x8902…374f`, factories,
-THREE recipes — LiquidityPrice, LiquidityNav, FixedRate; attestations re-derived from the 0.3.3
+FOUR recipes — LiquidityPrice, LiquidityNav, FixedRate, and (since 2026-09-21, from market-registry 0.4.0 which moved no other address) ApySpreadImpairmentRecipe `0x7340BfbE…` — window = anchor ± spread×duration/365d, args = 96-byte abi.encode(anchorRate 1e18=1.0, durationSeconds, apySpreadPercentage 1e18=1%), `encodeImpairmentArgs` builds it, mode sugar 'impairment'; attestations re-derived from the 0.3.3
 broadcast records in packages/core/src/config.ts; the 0.3.2 set `0xF532…DC94` is superseded, git
 history keeps its record). Predicted wrapper addresses come from simulateContract(registry.deploy)
 — on-chain, never a local salt port — so the salt change needed no math changes. The controller splits fee authority

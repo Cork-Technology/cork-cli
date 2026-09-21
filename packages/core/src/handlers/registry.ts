@@ -645,7 +645,7 @@ export async function staticResolveConstraint(
     }
     const cause = o.deployed && o.rate !== null
       ? `The pair's oracle ${o.address} is deployed and answers rate() = ${o.rate}, so this is the recipe's own refusal — check additionalData against the recipe's declared args shape (cork_query registry-recipes; the fixed-rate recipe rejects any payload)`
-      : "Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData";
+      : "Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it); the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData";
     return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. ${cause}`, ctx) };
   }
 }
