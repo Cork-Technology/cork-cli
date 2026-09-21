@@ -501,6 +501,20 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(taskOf("offers-firm-vs-indicative").expect.answer!.test(`buy ${RESTING_ORDER_HASH}; the 3% quote is indicative — no live order backs it`)).toBe(true);
   });
 
+  it("answer-rfq-impairment: the play answers the impairment RFQ from its inline block alone and pins the band-math constraint the grader expects", async () => {
+    const env = await callOf("answer-rfq-impairment");
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as { kind: string; jit?: { constraint?: Record<string, string> }; answer: { inline: { schema: string; complete: boolean } | null } };
+    expect(d.kind).toBe("maker-order");
+    expect(d.answer.inline?.schema).toBe("cork-inline-impairment/1");
+    expect(d.answer.inline?.complete).toBe(true);
+    // The grader's literal is the pinned rateMax — present in the tool's own output, so the
+    // regex tests the AGENT's reporting, not a number it could only invent.
+    expect(d.jit?.constraint?.rateMax).toBe("801534246575342465");
+    expect(taskOf("answer-rfq-impairment").expect.answer!.test(`rateMax 801534246575342465 pinned`)).toBe(true);
+    expect(taskOf("answer-rfq-impairment").expect.answer!.test(`rateMax 1600000000000000000`)).toBe(false); // the liquidity shape — the wrong recipe
+  });
+
   it("answer-rfq-firm: the sugar answers the stub RFQ with the kernel-exact amounts, reserved for the requester", async () => {
     const env = await callOf("answer-rfq-firm");
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");

@@ -4587,6 +4587,24 @@ const CATALOG: Mutant[] = [
     tests: [T.answer],
   },
   {
+    // The window-vs-life disclosure goes quiet: an underwriter prices a 30-day market on a
+    // 7-day window and never hears the wall is reachable.
+    id: "answer-impairment-tenor-gap-silent",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (gap > 86_400n) {",
+    replace: "    if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // The day of slack is dropped: the clock between RFQ open and answer alone trips the
+    // disclosure on every answer, and a real gap drowns in noise.
+    id: "answer-impairment-tenor-slack-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (gap > 86_400n) {",
+    replace: "    if (gap > 0n) {",
+    tests: [T.answer],
+  },
+  {
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
     // recipe: the mode sugar silently diverges across chains.
     id: "impairment-hint-dropped-one-chain",

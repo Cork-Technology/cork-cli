@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
+import { RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 import corkDefaults from "../cork-defaults.json";
 
 // The mainnet adapter, read from config instead of re-pinned (the pinned-literal rot class the
@@ -628,6 +628,24 @@ export const TASKS: EvalTask[] = [
       // and six still identifies the order among the stub's rows.
       answer: new RegExp(`(?=[\\s\\S]*${RESTING_ORDER_HASH.slice(2, 8)})(?=[\\s\\S]*(indicative|no (live |resting )?order|not (firm|backed|buyable|available)|cannot (be )?(bought|buy)|nobody can buy))`, "i"),
       maxCalls: 3,
+    },
+  },
+  {
+    // The fourth recipe through the inline path: the RFQ's cork-inline-impairment/1 block carries
+    // the recipe AND its three words, so the sugar needs no jitMarket at all. Graded on the pinned
+    // rateMax the stub's real band math yields ONLY when those exact words reached the recipe
+    // (anchor 0.8 live, 7 days, 10%/yr) — an agent that hand-passes its own jitMarket gets
+    // different digits.
+    id: "answer-rfq-impairment",
+    prompt: `I am underwriter ${A}. Answer the open RFQ ${RFQ_IMPAIRMENT_ID} on Arbitrum with a firm cover offer at 4% annualized at the pool expiry the RFQ itself asks for. The RFQ's inline template already names the recipe and its parameters — build from those, do not invent your own. Prepare what I need to sign and report the four rate limits the order pins.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { chainId: 42161, action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04" } },
+      state: "ok",
+      forbid: ["cork_submit"],
+      answer: /801534246575342465/,
+      maxCalls: 5, // the prompt asks for the artifact AND the four limits: a compute to report them is work, not flailing
     },
   },
   {

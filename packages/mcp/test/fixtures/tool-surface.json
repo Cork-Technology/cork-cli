@@ -3245,7 +3245,7 @@
                       }
                     },
                     "additionalProperties": false,
-                    "description": "the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; additionalData/rateOverride/constraint/fees/enableJitMint/permits pass through to the maker-order jitMarket"
+                    "description": "the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; additionalData is likewise DERIVED from that template's oracle_params when omitted (cork-inline-liquidity/1 → the anchor word, cork-inline-impairment/1 → its three words, so an RFQ carrying a complete block needs NO jitMarket at all) and passes through as an override when given, as do rateOverride/constraint/fees/enableJitMint/permits"
                   },
                   "usePermit2": {
                     "type": "boolean",

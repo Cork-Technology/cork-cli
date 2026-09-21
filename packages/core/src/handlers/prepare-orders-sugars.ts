@@ -178,6 +178,18 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // matters), and a deployed oracle's rate is compared with the anchor below and disclosed.
   const inlineData = inline ? inlineAdditionalData(inline) : undefined;
   const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? inlineData;
+  // The impairment window is sized by duration_seconds — the requester's choice, which the recipe
+  // never compares with the pool's life. A window sized for 7 days on a market that lives 30 can
+  // hit its wall long before expiry; one sized for 30 on a 7-day market is looser cover than the
+  // spread implies. Either is the requester's to choose and the underwriter's to price, so it is
+  // DISCLOSED (info), never refused; a day of slack absorbs the clock between open and answer.
+  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inline.durationSeconds !== undefined) {
+    const tenor = expiryTimestamp - nowSecs;
+    const gap = inline.durationSeconds > tenor ? inline.durationSeconds - tenor : tenor - inline.durationSeconds;
+    if (gap > 86_400n) {
+      warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} impairment block sizes the rate window for duration_seconds ${inline.durationSeconds} while this answer's market lives ${tenor} s (expiry ${expiryTimestamp} − now ${nowSecs}) — ${inline.durationSeconds < tenor ? "the window can reach its wall before the market expires" : "the window is wider than the market's life needs"}; the recipe never checks the two agree. The requester chose it and the constraint (pool identity) is built from it, so the order builds as asked — price the cover on the window, not the tenor` });
+    }
+  }
   if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && action.jitMarket?.additionalData === undefined) {
     const missing = (["anchorRate", "durationSeconds", "apySpreadPercentage"] as const).filter((k) => inline![k as keyof typeof inline] === undefined);
     warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT additionalData and the recipe will refuse to resolve. Pass jitMarket.additionalData (encodeImpairmentArgs) or ask the requester for a complete block` });

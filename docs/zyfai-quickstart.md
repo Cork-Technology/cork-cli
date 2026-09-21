@@ -537,6 +537,11 @@ Conventions the live flow uses (all observable in the venue's open RFQs):
   - `expiry`: the `--expiry` you derived with, unix seconds; by convention the same value as
     `expiryWindow.notAfter`.
   - `swap_fee_wad`, `unwind_swap_fee_wad`: the pool's creation fees, `"0"` for the live flow.
+  - For the **impairment** recipe use `schema: "cork-inline-impairment/1"` and add two words the
+    recipe needs: `duration_seconds` (how long the rate window is sized for — normally your tenor)
+    and `apy_spread_percentage` (the annual yield spread, 1e18 = 1%, so 10%/year is
+    `"10000000000000000000"`). The underwriter's `answer-rfq` derives the recipe's 96-byte payload
+    from the three words and refuses to guess a missing one.
 
   With this block, an underwriter derives the pool you mean from the RFQ alone: the expiry and the
   fees pin their part of the identity on every pair, and the anchor pins the rest on a pair whose

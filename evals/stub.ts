@@ -249,6 +249,11 @@ export const RFQ_IMPAIRMENT_ID = "rfq_open10impair";
 export const RFQ_IMPAIRMENT_PARTIAL_ID = "rfq_open11impairpartial";
 export const RFQ_IMPAIRMENT_DURATION = "604800";
 export const RFQ_IMPAIRMENT_SPREAD = "10000000000000000000";
+/** The impairment RFQs' pool expiry: the duration plus an hour of open→answer slack past the
+ *  stub clock — CREATABLE (inside the registry's 30-day maxExpiryDuration, unlike the JIT task's
+ *  years-out fixture) and coherent with duration_seconds, so a well-formed answer carries no
+ *  would_revert and no window-vs-life note. Tests that want those pass their own expiry. */
+export const RFQ_IMPAIRMENT_EXPIRY = (NOW + 604_800n + 3_600n).toString();
 /** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
 export const RFQ_ANSWER_ID = "ans_eval1";
 
@@ -472,9 +477,10 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
         return r(200, { ...row, rfq_id: RFQ_INLINE_ID, market_template: inlineTemplate(RFQ_INLINE_ANCHOR), answers: inlineAnswers, answer_count: 1 });
       }
       if (id === RFQ_IMPAIRMENT_ID || id === RFQ_IMPAIRMENT_PARTIAL_ID) {
-        const params: Record<string, string> = { schema: "cork-inline-impairment/1", anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, expiry: String(JIT_TASK_EXPIRY), swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" };
+        const params: Record<string, string> = { schema: "cork-inline-impairment/1", anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, expiry: RFQ_IMPAIRMENT_EXPIRY, swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" };
         if (id === RFQ_IMPAIRMENT_ID) params.apy_spread_percentage = RFQ_IMPAIRMENT_SPREAD;
-        return r(200, { ...row, rfq_id: id, modes: ["liquidity_impairment"], market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } }, answers: [], answer_count: 0 });
+        const window = { not_before: Number(RFQ_IMPAIRMENT_EXPIRY) - 86_400, not_after: Number(RFQ_IMPAIRMENT_EXPIRY) + 86_400 };
+        return r(200, { ...row, rfq_id: id, modes: ["liquidity_impairment"], expiry_window: window, market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } }, answers: [], answer_count: 0 });
       }
       return r(404, { message: `unknown rfq ${single}` });
     }

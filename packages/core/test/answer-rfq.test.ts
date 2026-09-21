@@ -9,7 +9,7 @@ import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, 
 import { stubRpc } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
 import { encodeAnchorArgs, encodeImpairmentArgs, inlineAdditionalData, inlineParamsOfTemplate, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
-import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
+import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, RFQ_IMPAIRMENT_EXPIRY, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
 
 describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
   it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
@@ -393,14 +393,14 @@ describe("cork_prepare_orders refresh-order — the same terms on the same bit w
 describe("answer-rfq reads the impairment inline template (cork-inline-impairment/1): three words or nothing", () => {
   const ctx = stubContext();
   const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-impair-0001" };
-  const expiry = JIT_TASK_EXPIRY.toString();
+  const expiry = RFQ_IMPAIRMENT_EXPIRY; // the RFQ's own: creatable, and coherent with its duration
   type Inline = { schema: string; anchorRate: string | null; durationSeconds?: string | null; apySpreadPercentage?: string | null; complete?: boolean; additionalData: string | null };
   type Answered = { jit?: { constraint?: Record<string, string>; derivedPoolId: string }; answer: { pool: { poolId: string; oracleDeployed: boolean }; inline: Inline | null } };
 
   it("inlineParamsOfTemplate reads the two extra words under the impairment schema; inlineAdditionalData encodes all three or refuses", () => {
     const block = { schema: INLINE_IMPAIRMENT_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, apy_spread_percentage: RFQ_IMPAIRMENT_SPREAD, expiry, swap_fee_wad: "0", unwind_swap_fee_wad: "0" };
     const full = inlineParamsOfTemplate({ inline: { oracle_params: block } });
-    expect(full).toEqual({ schema: INLINE_IMPAIRMENT_SCHEMA, anchorRate: 7n * 10n ** 17n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n, expiry: JIT_TASK_EXPIRY, swapFeeWad: "0", unwindSwapFeeWad: "0" });
+    expect(full).toEqual({ schema: INLINE_IMPAIRMENT_SCHEMA, anchorRate: 7n * 10n ** 17n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n, expiry: BigInt(expiry), swapFeeWad: "0", unwindSwapFeeWad: "0" });
     expect(inlineAdditionalData(full!)).toBe(encodeImpairmentArgs({ anchorRate: 7n * 10n ** 17n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n }));
     // A partial block yields NO payload — never a zero word the requester did not ask for.
     const { apy_spread_percentage: _drop, ...partial } = block;
@@ -425,6 +425,16 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     expect(inline.additionalData).toBe(expected);
     // No "incomplete block" warning on a complete one.
     expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
+    // The stub oracle is DEPLOYED at 0.8e18 vs the carried 0.7e18: the impairment recipe anchors
+    // on the live rate too, so the drift notice fires on this path exactly as on liquidity.
+    const drift = env.warnings.find((w) => w.code === "rate_drift_notice");
+    expect(drift?.message).toContain(RFQ_INLINE_ANCHOR);
+    expect(drift?.message).toContain("ignores the carried anchor");
+    // A well-formed impairment answer is CLEAN: duration matches the tenor within the slack (no
+    // window-vs-life note), the expiry is creatable (no would_revert), and it sits inside the
+    // RFQ's window. The only notices are the ones every answer carries.
+    expect(env.warnings.some((w) => w.code === "invalid_order_terms")).toBe(false);
+    expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
     // The stub's impairment resolve COMPUTES the band math on the live 0.8e18 anchor: the pinned
     // constraint is that derivation, and the pool id matches a direct derive with the same bytes.
     expect(d.jit?.constraint).toEqual({ rateMin: "798465753424657535", rateMax: "801534246575342465", rateChangePerDayMax: "219178082191780", rateChangeCapacityMax: "1534246575342465" });
@@ -436,6 +446,18 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: built.extension } }, ctx);
     expect((decoded.data as { jit: { additionalData: string; recipe: string } }).jit.additionalData).toBe(expected);
     expect((decoded.data as { jit: { recipe: string } }).jit.recipe.toLowerCase()).toBe(IMPAIRMENT_RECIPE.toLowerCase());
+  });
+
+  it("a window sized for 7 days on a market that lives 20 is DISCLOSED (the wall is reachable) — info, the order still builds", async () => {
+    const nowSecs = 1_790_000_000n; // stubContext's clock
+    const twentyDaysOut = (nowSecs + 20n * 86_400n).toString();
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-impair-0004", action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: twentyDaysOut } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const note = env.warnings.find((w) => w.code === "invalid_order_terms" && w.message.includes("duration_seconds"));
+    expect(note?.message).toContain(RFQ_IMPAIRMENT_DURATION);
+    expect(note?.message).toContain("reach its wall before the market expires");
+    // The constraint is STILL built from the requester's duration — the tenor never leaks into it.
+    expect((env.data as Answered).jit?.constraint?.rateMax).toBe("801534246575342465");
   });
 
   it("a PARTIAL impairment block (no spread) derives no payload, warns which words are missing, and the caller's explicit additionalData wins over it", async () => {
