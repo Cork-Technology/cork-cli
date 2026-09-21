@@ -382,7 +382,7 @@ export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ct
       data: { ...base, ...saltBinding, claimedOrderHash },
       chainId,
       source: "config",
-      warnings: [...warnings, { code: "order_hash_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash (formerly digest_mismatch)` }],
+      warnings: [...warnings, { code: "order_hash_mismatch", message: `the supplied orderHash ${claimedOrderHash} does not match the locally recomputed EIP-712 hash ${orderHash} — do not act on the claimed hash` }],
       ctx,
     });
   }
