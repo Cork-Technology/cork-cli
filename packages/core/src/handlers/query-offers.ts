@@ -181,6 +181,13 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
         );
         for (const { candidate, sim } of walk.probed) (candidate.row as Record<string, unknown>).fillSimulation = sim;
         probing[side] = { probed: walk.probed.length, proven: walk.proven, stoppedBy: walk.stoppedBy };
+        // A transport-stopped walk proved nothing past the failure — say so in the LOUD channel
+        // (the warnings list), not only inside data.probing: silence that looks like success is
+        // the failure shape the probe exists to kill. Info on ok, never a verdict about any
+        // order — the liveness leg's chain_read_failed precedent.
+        if (walk.stoppedBy === "transport") {
+          simWarnings.push({ code: "chain_read_failed", message: `the ${side} probe walk stopped on a TRANSPORT failure after ${String(walk.probed.length)} probe(s) — ${String(walk.proven)} row(s) proven before it; the "unknown" fillSimulation verdicts prove nothing about the offers. Retry, or check the RPC (data.probing.${side})` });
+        }
         const failing = walk.probed.filter((p) => p.sim.verdict === "would-revert");
         if (failing.length > 0) {
           const topFails = failing[0]!.candidate.row === candidates[0]!.row;

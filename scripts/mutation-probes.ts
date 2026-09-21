@@ -4479,6 +4479,15 @@ const CATALOG: Mutant[] = [
     tests: [T.fillSim, T.offers],
   },
   {
+    // A transport-stopped walk goes quiet: the blind read looks clean in the warnings list —
+    // silence that looks like success, the exact shape the probe exists to kill.
+    id: "offers-walk-transport-silent",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: '        if (walk.stoppedBy === "transport") {',
+    replace: "        if (false) {",
+    tests: [T.offers],
+  },
+  {
     // The offers-only gate dropped: probeBudget on another resource would be accepted and
     // silently unapplied — the green no-op this repo refuses everywhere else.
     id: "query-probe-budget-refusal-dropped",

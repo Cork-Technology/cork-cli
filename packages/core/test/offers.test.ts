@@ -206,7 +206,7 @@ describe("cork_query offers — the probe walk from the top", () => {
     expect(warn?.message).toContain("stopped by budget with 0 proven");
   });
 
-  it("the first transport 'unknown' STOPS the walk — a transport that cannot judge one row cannot judge the next", async () => {
+  it("the first transport 'unknown' STOPS the walk — and says so in the WARNINGS list, not only inside data.probing", async () => {
     const [a, b, c] = await rows3();
     const seq = seqCall(["transport"]);
     const env = await offersOn(venueWith([a!, b!, c!], []), liveWithCall(seq.call));
@@ -215,6 +215,12 @@ describe("cork_query offers — the probe walk from the top", () => {
     expect(d.items.map((i) => i.fillSimulation?.verdict)).toEqual(["unknown", "unknown", undefined]);
     expect(d.probing?.SELL).toEqual({ probed: 2, proven: 0, stoppedBy: "transport" });
     expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+    // Silence that looks like success is the failure shape the probe kills: a blind walk warns.
+    const warn = env.warnings.find((w) => w.code === "chain_read_failed");
+    expect(warn?.message).toContain("SELL probe walk stopped on a TRANSPORT failure");
+    expect(warn?.message).toContain("0 row(s) proven");
+    expect(warn?.message).toContain("data.probing.SELL");
+    expect(env.state).toBe("ok"); // a disclosure, never a verdict — the read stays servable
   });
 
   it("no fill sender, no probe: without filters.account the rows carry no fillSimulation and no probing block rides", async () => {
@@ -223,11 +229,12 @@ describe("cork_query offers — the probe walk from the top", () => {
     expect((env.data as Probed).probing).toBeUndefined();
   });
 
-  it("a chain with no call model attaches the honest 'unknown' — the probe ran and could not judge", async () => {
+  it("a chain with no call model attaches the honest 'unknown' — the probe ran, could not judge, and the blind walk warns", async () => {
     const env = await offersOn(venueWith([await row("p-5")], []), live);
     expect((env.data as Probed).items[0]!.fillSimulation?.verdict).toBe("unknown");
     expect((env.data as Probed).probing?.SELL?.stoppedBy).toBe("transport");
     expect(env.warnings.some((w) => w.code === "would_revert")).toBe(false);
+    expect(env.warnings.some((w) => w.code === "chain_read_failed")).toBe(true);
   });
 });
 
