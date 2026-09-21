@@ -64,7 +64,7 @@ plain reads — you sign/broadcast with your own stack.
 | 1 | **Zyfai selects the asset and submits an RFQ** (off-chain — CLI/MCP only) | Pick REF + CA + recipe + term from the registry, derive the market it names, then open a request-for-quote on the venue | `ch query` → `registry-assets` / `registry-recipes` / `derive-cork-pool`; `ch submit` → `rfq-open`; watch with `ch query` → `rfqs` |
 | 2 | **The underwriter mints cST and creates a limit order (to sell)** | The underwriter answers your RFQ with priced options, then rests a signed SELL order (makerAsset = cST, takerAsset = CA). The cST usually doesn't exist yet — the order carries the market's recipe + constraint, and the mint happens inside the fill | The underwriter's side. You watch: `ch query` → `rfqs` / `orderbook`; inspect what a fill commits to with `ch decode` → `order` |
 | 3 | **Zyfai buys the underwriter's cST** (by filling their limit order) | Verify the order/market, simulate, then fill on the LOP; the adapter JIT-creates the market (if new) and JIT-mints cST to you, pulling the CA premium from you — **atomic** | `ch query` → `cork-pool`; `ch prepare order` → `taker-fill`; `ch track` → `simulate` |
-| 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch prepare pool` → `exercise` / `exercise-other` |
+| 4 | **Zyfai exercises the cST**, swapping an impaired REF asset for a stable CA asset | Hand in cST + REF, receive CA at the market's rate — a **direct** Phoenix call, *not* an LOP fill | `ch compute` → `cst-swap-rate` (size it); `ch prepare pool` → `exercise` / `exercise-other`; `ch track` → `simulate` |
 
 One piece of one-time prep per CA/REF pair comes before step 1: deploying the pair's rate oracle
 (`ch prepare market` → `deploy-oracle`). It is permissionless, idempotent, and optional — a JIT
@@ -731,17 +731,99 @@ When your risk monitor sees impairment on the user's REF, exercise the cover: ha
 receive **CA** at the market's tracked rate. This is a direct Phoenix call, not an LOP fill — no
 counterparty needed, so it works exactly when the market is stressed.
 
+**The arithmetic is fixed by the pool, so size the call before you build it.** One cST plus
+`1 / swapRate` REF buys one CA. The pool takes its swap fee from the CA leg only
+(`swapFeePercentage`, 1e18 = 1%; the fee is fixed at market creation, and the step 3 pool read
+shows it). So the CA you receive depends only on the cST you hand in and the fee. The REF you pay
+depends on the rate, and the rate moves — that is the number your cap protects.
+
+Three commands, the same shape as step 3: preview, build, dry-run.
+
 ```sh
-# replace 0xYOUR_SAFE (used for both account and receiver); REF (mwUSDC) and CA (sUSDe) are both 18-dec
-# amounts use exact sugar: 1000e18 cST in, floor 0.95 sUSDe out, at most 1 mwUSDC (1e18) in
+# 1. preview: what do 1000 CA cost in cST + REF right now? (the exercise math, exact-out form)
+ch compute cst-swap-rate --chain-id 8453 --json \
+  --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8 \
+  --collateral-assets-out 1000e18
+# alternative — the rest in one --params blob:
+ch compute --chain-id 8453 --json \
+  --params '{"kind":"cst-swap-rate","poolId":"0x4a97…30b8","collateralAssetsOut":"1000000000000000000000"}'
+```
+The trimmed response below was read live from Base on 2026-09-21 against a pool that exists
+today (USDC / baseUSD, CA 6-dec, pool `0x4bb6…3886`), because the pilot expiry from step 1c does
+not exist yet. The pilot pair answers in the same shape, with an 18-dec CA:
+```json
+{
+  "state": "ok",
+  "data": {
+    "kind": "cst-swap-rate",
+    "swapRate": "1090028000000000000",
+    "cstSharesIn": "1000000000000000000000",
+    "referenceAssetsIn": "917407626226115292452",
+    "fee": "0",
+    "scales": {
+      "swapRate": "1e18 = 1.0 (WAD)",
+      "cstSharesIn": "cST shares, always 18-decimals",
+      "referenceAssetsIn": "native decimals of the reference asset (18)",
+      "fee": "native decimals of the collateral asset (6)"
+    },
+    "collateralDecimals": 6,
+    "referenceDecimals": 18
+  },
+  "warnings": []
+}
+```
+Read it as: 1000 CA out cost 1000 cST plus 917.41 REF, at 1.090028 CA per REF, with no fee. The
+`scales` block names the unit of every field — this CA has 6 decimals, the pilot's sUSDe has 18.
+Three numbers size the build:
+- `cstSharesIn` is exact — it becomes `cstSharesIn`.
+- `referenceAssetsIn` plus a margin becomes `maxReferenceAssetsIn`. The margin covers the rate
+  moving between preview and broadcast. A cap that is too tight reverts; a cap that is too loose
+  overpays only if the rate moved, and the unspent part comes back (see the sweep leg below).
+- `collateralAssetsOut` minus a small margin becomes `minCollateralAssetsOut`. The cST count and
+  the fee fix this amount, so a tight floor is safe.
+- A zero preview means the market cannot pay right now, not that the cover is free (§5, item D).
+
+```sh
+# 2. build the unsigned exercise (replace 0xYOUR_SAFE — used for both account and receiver)
+#    bounds sized from the preview: 1000e18 cST in (exact), floor 995e18 CA out, cap 1100e18 REF in
+#    (20% over the preview's 917.41). Take the numbers from YOUR preview — the pilot pair's rate
+#    is not the one above. Pilot pair: REF (mwUSDC) and CA (sUSDe) are both 18-dec.
 ch exercise --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
   --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8 \
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE \
-  --min-collateral-assets-out 95e16 --max-reference-assets-in 1e18
+  --min-collateral-assets-out 995e18 --max-reference-assets-in 1100e18
 # alternative — the canonical wire blob behind the positional chainId:
 ch prepare pool 8453 --json \
-  --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x4a97…30b8","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"950000000000000000","maxReferenceAssetsIn":"1000000000000000000"}}'
+  --input '{"account":"0xYOUR_SAFE","clientRequestId":"exercise-0001","action":{"type":"exercise","poolId":"0x4a97…30b8","cstSharesIn":"1000000000000000000000","receiver":"0xYOUR_SAFE","minCollateralAssetsOut":"995000000000000000000","maxReferenceAssetsIn":"1100000000000000000000"}}'
+
+# 3. dry-run: does it revert at current state? (paste the artifact object from step 2's output)
+ch track simulate --chain-id 8453 --subject '{"kind":"artifact","artifact":{…}}' --json
 ```
+The build's `summary` is the part to read before you sign. This one was read live on Base on
+2026-09-21 against the same USDC / baseUSD pool, with a stand-in account `0xC0FF…0001` where your
+Safe goes. Four legs, in execution order:
+```text
+summary
+  1. fund via Permit2: pull 1000000000000000000000 of cST (0x99CC…079d) from you into the adapter (0xfa8A…72AD)
+  2. fund via Permit2: pull 1100000000000000000000 of reference (0x9c68…c831) from you into the adapter (0xfa8A…72AD)
+  3. run Cork 'safeExercise' on the adapter (0xfa8A…72AD) — proceeds to you (0xC0FF…0001)
+  4. return the entire remaining balance of reference (0x9c68…c831) to you (0xC0FF…0001)
+warnings
+  sweep_back   this bundle ends with 1 sweep-back leg(s) returning any unspent balance of 0x9c68…c831 to you
+```
+Check three things. The two pulls match your cST count and your REF cap. Leg 3 names your Safe
+after `proceeds to`. Leg 4 returns the unspent REF — the cap minus what the rate took — to the
+same Safe; the `sweep_back` warning announces that leg and is expected. The dry-run then answers
+`wouldRevert`. With the stand-in account, which holds no cST, it answers as an unfunded Safe would:
+```json
+{
+  "state": "ok",
+  "data": { "mode": "simulate", "wouldRevert": true, "to": "0x6BFd…20C4", "from": "0xC0FF…0001", "revertReason": "Execution reverted for an unknown reason." },
+  "warnings": [ { "code": "would_revert", "message": "the frozen bytes REVERT at the current state … common causes: expired deadline, missing funding/allowance, pool state moved …" } ]
+}
+```
+Require `wouldRevert: false` from your own run before you sign.
+
 The funding legs resolve the pool's token addresses over the default RPC ladder; pass
 `--rpc-url <your node>` to pin your own endpoint. With no reachable endpoint the prepare refuses
 (`requires_rpc`) rather than emit an action-only bundle. Then sign with your Safe stack, routing the call through your
@@ -757,9 +839,25 @@ signatures already collected.
 Once that adapter is deployed, skip the routing step and build the twin call directly: add
 `--for-self '{"adapter":"0xYOUR_ADAPTER"}'` and the artifact becomes a single `exerciseForSelf`
 transaction — no Bundler3 legs, output structurally to the Safe, allowances to the adapter (each
-flow's exact allowance needs are machine-readable in `data.forSelf.allowances`). Keep in mind:
-- `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-check the preview at
-  send time, and treat a zero preview as *unavailable*, not free (§5, item D).
+flow's exact allowance needs are machine-readable in `data.forSelf.allowances`).
+
+**Variation — pin the REF leg instead (`exercise-other`).** Same trade, the other number fixed:
+you pass the exact REF you spend (`referenceAssetsIn`), cap the cST (`maxCstSharesIn`) and floor
+the CA (`minCollateralAssetsOut`). Use it when the REF amount is the number your accounting fixes —
+for example, you sweep a wallet's whole impaired REF balance. The pool converts REF to cST at the
+rate (900 REF → 981.03 cST at the rate above) and the adapter returns the unspent cST to the Safe in
+the same transaction. Its `*ForSelf` twin is `exerciseOtherForSelf`.
+
+```sh
+ch prepare pool exercise-other --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-other-0001 --json \
+  --pool-id 0x4a97f106f1e43dfd7adda6aa5de18ad8810d49d6384909923b40f37dcccb30b8 \
+  --reference-assets-in 900e18 --receiver 0xYOUR_SAFE \
+  --min-collateral-assets-out 975e18 --max-cst-shares-in 1000e18
+```
+
+Keep in mind:
+- `exercise` has no built-in slippage guard beyond the `min*/max*` you pass. Re-run command 1 at
+  send time and re-derive the bounds; treat a zero preview as *unavailable*, not free (§5, item D).
 - A REF pause blocks the REF transfer — i.e. the exercise leg itself — so keep positions small and
   monitor REF liveness (§5, item E).
 - Approvals: REF → CorkPoolManager. cST needs **no** pool-manager approval on the direct path
@@ -980,8 +1078,8 @@ same goes for cPT if you ever exit an underwriter position.
 
 **D. `exercise` has no built-in slippage protection.** The only bounds on what you receive and pay
 are the `min*`/`max*` numbers you pass in yourself (and the call can also be blocked by the
-market's rate-change budget or a pause). Compute the expected payout immediately before sending and
-pass tight bounds — and read a zero preview as *"the market cannot pay right now,"* never as
+market's rate-change budget or a pause). Preview the payout with `ch compute cst-swap-rate` (step 4,
+command 1) immediately before sending and pass tight bounds — and read a zero preview as *"the market cannot pay right now,"* never as
 *"it's free."*
 
 **E. If the REF token can be paused, your cover freezes with it.** Exercising means transferring
@@ -1030,7 +1128,8 @@ Two rules make redeploys safe to live through:
    CA/REF/cST → the adapter; raw route: CA→LOP, REF→PoolManager).
 4. **Wire the four-step flow against the tool** — select + derive with `registry-*`/`derive-cork-pool`,
    RFQ with `submit rfq-open` / watch `rfqs`, **simulate every artifact before signing**, fill with
-   `taker-fill` (target pinned), exercise with `prepare_phoenix`, reconcile with `track`.
+   `taker-fill` (target pinned), size the exercise with `cst-swap-rate` and build it with `prepare pool
+   exercise`, reconcile with `track`.
 5. **Confirm ownership + timeline back to Cork** — Cork needs no protocol change from you; it needs to
    know when your adapter routes will be ready so the pilot's fill/exercise path lands inside your
    trust boundary. Also confirm the RFQ package catalog (`packageIds`) and notional units for step 1d.
@@ -1109,8 +1208,8 @@ with *"call `cork_capabilities` first"* when in doubt, so it grounds itself befo
 > "Using cork-defi, derive the sUSDe / mwUSDC market on Arbitrum that expires in 7 days, and give
 > me the poolId and cST address."
 
-> "What's the `ch` command to build an unsigned exercise bundle — 1000 cST out of pool
-> `0x…`, receiver my Safe `0x…`?"
+> "What's the `ch` command to build an unsigned exercise bundle — 1000 cST into pool
+> `0x…`, payout to my Safe `0x…`?"
 
 > "List the Cork registry recipes on Arbitrum and explain the difference between the fixed and
 > liquidity recipes for my cover."
