@@ -411,7 +411,9 @@ never read). The admission slot is released when the cancelled work settles, not
 deadline — it accounts for work, not for the response (RPC/HyperSync keep their own per-call
 timeouts). The body is parsed ONCE
 and passed to the transport. Concurrency keys on the CLIENT: `X-Forwarded-For` is trusted only
-when an ingress is declared (`trustForwardedFor`, default = any non-loopback bind) and only its
+when an ingress is declared EXPLICITLY (`trustForwardedFor`, default OFF since 2026-09-21, audit
+DB-002 — CLI `--trust-forwarded-for` / `CORK_MCP_TRUST_FORWARDED_FOR=1`; the bind address alone
+never enables it; `/readyz` discloses the posture; `packaging/phala-compose.yml` sets it) and only its
 LAST hop — earlier entries are caller-authored, and an untrusted header would let anyone mint a
 fresh principal per request.
 
