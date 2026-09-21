@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.4.2"
+  "version": "0.4.3"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -8715,6 +8715,5777 @@
          "recipe",
          "collateral_asset",
          "reference_asset"
+        ],
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "constraint": {
+           "additionalProperties": false,
+           "properties": {
+            "rate_change_capacity_max": {
+             "additionalProperties": false,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "rate_change_per_day_max": {
+             "additionalProperties": false,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "rate_max": {
+             "additionalProperties": false,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "rate_min": {
+             "additionalProperties": false,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            }
+           },
+           "required": [
+            "rate_min",
+            "rate_max",
+            "rate_change_per_day_max",
+            "rate_change_capacity_max"
+           ],
+           "type": "object"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "rate_oracle": {
+           "additionalProperties": false,
+           "properties": {
+            "address": {
+             "description": "The oracle address, lowercased; null when none applies.",
+             "nullable": true,
+             "type": "string"
+            },
+            "mode": {
+             "description": "The oracle mode the wrapper was derived in; null for a fixed-rate recipe.",
+             "enum": [
+              "price",
+              "nav"
+             ],
+             "nullable": true,
+             "type": "string"
+            },
+            "rate": {
+             "additionalProperties": false,
+             "description": "The live rate that was read, or null when the oracle is not deployed.",
+             "nullable": true,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "status": {
+             "description": "`live` when the oracle is already deployed and its rate was read. `predicted` when the address was derived but no contract exists there yet — the recipe was then handed the zero address, so a recipe with an anchor in its payload falls back to that. `none` when no oracle applies to this recipe.",
+             "enum": [
+              "live",
+              "predicted",
+              "none"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "address",
+            "status",
+            "mode",
+            "rate"
+           ],
+           "type": "object"
+          },
+          "recipe": {
+           "description": "The recipe that answered, lowercased.",
+           "type": "string"
+          },
+          "source": {
+           "description": "The recipe's own source(), read live.",
+           "enum": [
+            "price",
+            "nav",
+            "fixed"
+           ],
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "recipe",
+          "source",
+          "constraint",
+          "rate_oracle",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/registries": {
+   "get": {
+    "description": "List the registries this deployment serves. Use the returned chain_id values as the {chain_id} prefix of every read route, and `contracts_version` to confirm which deployment you are talking to.",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "registries": {
+           "description": "The registries this deployment serves.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "chain_id": {
+              "description": "The chain this registry is deployed on.",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "chain_name": {
+              "description": "Human-readable chain name.",
+              "type": "string"
+             },
+             "contracts_version": {
+              "description": "Which contracts release is live at this address. It matters: three registry generations are deployed on Arbitrum and none can read another's storage.",
+              "type": "string"
+             },
+             "fixed_rate_oracle_factory": {
+              "description": "Read live from the registry's FIXED_RATE_ORACLE_FACTORY immutable.",
+              "type": "string"
+             },
+             "multicall3": {
+              "description": "The Multicall3 used to batch reads on this chain.",
+              "nullable": true,
+              "type": "string"
+             },
+             "owner": {
+              "description": "The registry's current owner, read live.",
+              "type": "string"
+             },
+             "registry": {
+              "description": "The MarketRegistry contract address.",
+              "type": "string"
+             },
+             "wrapper_factory": {
+              "description": "Read live from the registry's WRAPPER_FACTORY immutable.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "chain_id",
+             "chain_name",
+             "registry",
+             "contracts_version",
+             "wrapper_factory",
+             "fixed_rate_oracle_factory",
+             "owner",
+             "multicall3"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "registries"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/assets": {
+   "get": {
+    "description": "Every asset the registry holds. An asset has two NAMED source slots — a price source and a net-asset-value source — rather than a list; either may be null. `denomination` is carried on the source itself and returned verbatim.",
+    "parameters": [
+     {
+      "description": "Page size; values above 500 are clamped to 500.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 9007199254740991,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Page start offset.",
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "items": {
+           "description": "The page of rows after pagination.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "address": {
+              "description": "The asset token's contract address, lowercased. The whole natural key.",
+              "type": "string"
+             },
+             "kind": {
+              "description": "Descriptive only — value derivation probes `asset()` live rather than trusting this.",
+              "enum": [
+               "ERC20",
+               "ERC4626"
+              ],
+              "type": "string"
+             },
+             "name": {
+              "description": "The human-readable label recorded on the registry.",
+              "type": "string"
+             },
+             "nav_source": {
+              "additionalProperties": false,
+              "description": "The net-asset-value source, or null when the asset has none. In nav mode a leg without one falls back to its price source.",
+              "nullable": true,
+              "properties": {
+               "address": {
+                "description": "The aggregator (for AGGREGATOR_V3) or the tokenized vault (for ERC4626) this source reads from, lowercased.",
+                "type": "string"
+               },
+               "denomination": {
+                "description": "The denomination unit address this source quotes in, lowercased: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Its symbol and name are served by GET /registry/v2/{chain_id}/denominations/{address}.",
+                "type": "string"
+               },
+               "source_interface": {
+                "description": "How this source is read: a Chainlink-style latestRoundData() feed, or a tokenized vault read through convertToAssets.",
+                "enum": [
+                 "AGGREGATOR_V3",
+                 "ERC4626"
+                ],
+                "type": "string"
+               },
+               "source_type": {
+                "description": "What this source measures: a market price, or a net asset value.",
+                "enum": [
+                 "PRICE",
+                 "NAV"
+                ],
+                "type": "string"
+               }
+              },
+              "required": [
+               "address",
+               "source_type",
+               "source_interface",
+               "denomination"
+              ],
+              "type": "object"
+             },
+             "price_source": {
+              "additionalProperties": false,
+              "description": "The price source, or null when the asset has none. Price-mode oracles require one on every leg.",
+              "nullable": true,
+              "properties": {
+               "address": {
+                "description": "The aggregator (for AGGREGATOR_V3) or the tokenized vault (for ERC4626) this source reads from, lowercased.",
+                "type": "string"
+               },
+               "denomination": {
+                "description": "The denomination unit address this source quotes in, lowercased: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Its symbol and name are served by GET /registry/v2/{chain_id}/denominations/{address}.",
+                "type": "string"
+               },
+               "source_interface": {
+                "description": "How this source is read: a Chainlink-style latestRoundData() feed, or a tokenized vault read through convertToAssets.",
+                "enum": [
+                 "AGGREGATOR_V3",
+                 "ERC4626"
+                ],
+                "type": "string"
+               },
+               "source_type": {
+                "description": "What this source measures: a market price, or a net asset value.",
+                "enum": [
+                 "PRICE",
+                 "NAV"
+                ],
+                "type": "string"
+               }
+              },
+              "required": [
+               "address",
+               "source_type",
+               "source_interface",
+               "denomination"
+              ],
+              "type": "object"
+             },
+             "token": {
+              "additionalProperties": false,
+              "properties": {
+               "decimals": {
+                "description": "Live-read ERC-20 decimals.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "name": {
+                "description": "Live-read ERC-20 name; empty when the token omits it.",
+                "type": "string"
+               },
+               "symbol": {
+                "description": "Live-read ERC-20 symbol; empty when the token omits it.",
+                "type": "string"
+               }
+              },
+              "required": [
+               "decimals",
+               "symbol",
+               "name"
+              ],
+              "type": "object"
+             }
+            },
+            "required": [
+             "address",
+             "name",
+             "kind",
+             "price_source",
+             "nav_source",
+             "token"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "limit": {
+           "description": "Page size that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "offset": {
+           "description": "Page start offset that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "total": {
+           "description": "Total number of rows, before pagination.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/assets/{address}": {
+   "get": {
+    "description": "Get one asset by address. The address alone is the key within a chain — a registry only holds its own chain's assets.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "address",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "description": "The asset token's contract address, lowercased. The whole natural key.",
+           "type": "string"
+          },
+          "kind": {
+           "description": "Descriptive only — value derivation probes `asset()` live rather than trusting this.",
+           "enum": [
+            "ERC20",
+            "ERC4626"
+           ],
+           "type": "string"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "name": {
+           "description": "The human-readable label recorded on the registry.",
+           "type": "string"
+          },
+          "nav_source": {
+           "additionalProperties": false,
+           "description": "The net-asset-value source, or null when the asset has none. In nav mode a leg without one falls back to its price source.",
+           "nullable": true,
+           "properties": {
+            "address": {
+             "description": "The aggregator (for AGGREGATOR_V3) or the tokenized vault (for ERC4626) this source reads from, lowercased.",
+             "type": "string"
+            },
+            "denomination": {
+             "description": "The denomination unit address this source quotes in, lowercased: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Its symbol and name are served by GET /registry/v2/{chain_id}/denominations/{address}.",
+             "type": "string"
+            },
+            "source_interface": {
+             "description": "How this source is read: a Chainlink-style latestRoundData() feed, or a tokenized vault read through convertToAssets.",
+             "enum": [
+              "AGGREGATOR_V3",
+              "ERC4626"
+             ],
+             "type": "string"
+            },
+            "source_type": {
+             "description": "What this source measures: a market price, or a net asset value.",
+             "enum": [
+              "PRICE",
+              "NAV"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "address",
+            "source_type",
+            "source_interface",
+            "denomination"
+           ],
+           "type": "object"
+          },
+          "price_source": {
+           "additionalProperties": false,
+           "description": "The price source, or null when the asset has none. Price-mode oracles require one on every leg.",
+           "nullable": true,
+           "properties": {
+            "address": {
+             "description": "The aggregator (for AGGREGATOR_V3) or the tokenized vault (for ERC4626) this source reads from, lowercased.",
+             "type": "string"
+            },
+            "denomination": {
+             "description": "The denomination unit address this source quotes in, lowercased: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Its symbol and name are served by GET /registry/v2/{chain_id}/denominations/{address}.",
+             "type": "string"
+            },
+            "source_interface": {
+             "description": "How this source is read: a Chainlink-style latestRoundData() feed, or a tokenized vault read through convertToAssets.",
+             "enum": [
+              "AGGREGATOR_V3",
+              "ERC4626"
+             ],
+             "type": "string"
+            },
+            "source_type": {
+             "description": "What this source measures: a market price, or a net asset value.",
+             "enum": [
+              "PRICE",
+              "NAV"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "address",
+            "source_type",
+            "source_interface",
+            "denomination"
+           ],
+           "type": "object"
+          },
+          "token": {
+           "additionalProperties": false,
+           "properties": {
+            "decimals": {
+             "description": "Live-read ERC-20 decimals.",
+             "maximum": 9007199254740991,
+             "minimum": -9007199254740991,
+             "type": "integer"
+            },
+            "name": {
+             "description": "Live-read ERC-20 name; empty when the token omits it.",
+             "type": "string"
+            },
+            "symbol": {
+             "description": "Live-read ERC-20 symbol; empty when the token omits it.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "decimals",
+            "symbol",
+            "name"
+           ],
+           "type": "object"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "address",
+          "name",
+          "kind",
+          "price_source",
+          "nav_source",
+          "token",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/denominations": {
+   "get": {
+    "description": "The registered denomination units, sorted by address. A denomination is what an asset's source quotes in and what a feed's endpoints are. The registry stores only the unit address; `symbol` and `name` are read from the unit's own ERC-20 symbol() and name(), with the two seed denominations (USD, ETH) coming from a fixed table because their units are code-less Chainlink pseudo-addresses. A unit that will not name itself is served with null symbol and name.",
+    "parameters": [
+     {
+      "description": "Page size; values above 500 are clamped to 500.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 9007199254740991,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Page start offset.",
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "items": {
+           "description": "The page of rows after pagination.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "address": {
+              "description": "The unit address: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased. The whole natural key.",
+              "type": "string"
+             },
+             "name": {
+              "description": "The unit's ERC-20 name() read live; USD and ETH come from a fixed table. Null when the unit does not answer or answers with an empty string.",
+              "nullable": true,
+              "type": "string"
+             },
+             "symbol": {
+              "description": "The unit's ERC-20 symbol() read live; USD and ETH come from a fixed table. Null when the unit does not answer or answers with an empty string.",
+              "nullable": true,
+              "type": "string"
+             }
+            },
+            "required": [
+             "address",
+             "symbol",
+             "name"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "limit": {
+           "description": "Page size that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "offset": {
+           "description": "Page start offset that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "total": {
+           "description": "Total number of rows, before pagination.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/denominations/{address}": {
+   "get": {
+    "description": "Get one registered denomination by its unit address. Answers from the same pinned-block snapshot as the list route. 404 when the address is not a registered denomination.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The denomination's unit address. Matched case-insensitively.",
+      "in": "path",
+      "name": "address",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "description": "The unit address: a token, or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased. The whole natural key.",
+           "type": "string"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "name": {
+           "description": "The unit's ERC-20 name() read live; USD and ETH come from a fixed table. Null when the unit does not answer or answers with an empty string.",
+           "nullable": true,
+           "type": "string"
+          },
+          "symbol": {
+           "description": "The unit's ERC-20 symbol() read live; USD and ETH come from a fixed table. Null when the unit does not answer or answers with an empty string.",
+           "nullable": true,
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "address",
+          "symbol",
+          "name",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/feeds": {
+   "get": {
+    "description": "A feed is one edge in the graph the registry walks to prove an asset can reach US dollars: this base unit is priced in this quote unit, by this aggregator. `live` is read from the aggregator at the pinned block and is null unless both latestRoundData() and decimals() answered, because an answer with an unknown scale is not usable.",
+    "parameters": [
+     {
+      "description": "Page size; values above 500 are clamped to 500.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 9007199254740991,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Page start offset.",
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "items": {
+           "description": "The page of rows after pagination.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "aggregator": {
+              "description": "The aggregator contract, lowercased.",
+              "type": "string"
+             },
+             "base": {
+              "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
+              "type": "string"
+             },
+             "live": {
+              "additionalProperties": false,
+              "description": "Read from the aggregator at the pinned block; null unless both latestRoundData() and decimals() answered, because an answer with an unknown scale is not usable.",
+              "nullable": true,
+              "properties": {
+               "answer": {
+                "additionalProperties": false,
+                "description": "The aggregator's latest answer, scaled by the aggregator's decimals() read in the same batch.",
+                "properties": {
+                 "decimals": {
+                  "description": "How many decimal places `raw` is scaled by. Always present.",
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                 },
+                 "formatted": {
+                  "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+                  "type": "string"
+                 },
+                 "raw": {
+                  "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "raw",
+                 "decimals",
+                 "formatted"
+                ],
+                "type": "object"
+               },
+               "updated_at": {
+                "description": "ISO-8601 UTC time of the aggregator's last update.",
+                "type": "string"
+               }
+              },
+              "required": [
+               "answer",
+               "updated_at"
+              ],
+              "type": "object"
+             },
+             "quote": {
+              "description": "The unit the value is quoted in. Lowercased.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "base",
+             "quote",
+             "aggregator",
+             "live"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "limit": {
+           "description": "Page size that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "offset": {
+           "description": "Page start offset that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "total": {
+           "description": "Total number of rows, before pagination.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/feeds/{base}/{quote}": {
+   "get": {
+    "description": "Get one conversion feed by its ordered pair. Direction matters: base to quote and quote to base are different records.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "base",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "quote",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "aggregator": {
+           "description": "The aggregator contract, lowercased.",
+           "type": "string"
+          },
+          "base": {
+           "description": "The unit the feed reports on: either a real token or a Chainlink pseudo-address such as 0x…0348 for US dollars. Lowercased.",
+           "type": "string"
+          },
+          "live": {
+           "additionalProperties": false,
+           "description": "Read from the aggregator at the pinned block; null unless both latestRoundData() and decimals() answered, because an answer with an unknown scale is not usable.",
+           "nullable": true,
+           "properties": {
+            "answer": {
+             "additionalProperties": false,
+             "description": "The aggregator's latest answer, scaled by the aggregator's decimals() read in the same batch.",
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "updated_at": {
+             "description": "ISO-8601 UTC time of the aggregator's last update.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "answer",
+            "updated_at"
+           ],
+           "type": "object"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "quote": {
+           "description": "The unit the value is quoted in. Lowercased.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "base",
+          "quote",
+          "aggregator",
+          "live",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/market/predict": {
+   "post": {
+    "description": "Predict a market's oracle, pool id, and share tokens without deploying. Deploys nothing, signs nothing, and moves no funds. The rate constraint comes from a recipe contract, so the request takes a recipe address and its payload. The oracle address depends on the oracle salt and the pool id depends on the swap fees, so predict with the salt and the fees the market will be created with (all three are required). CAVEAT: while market.exists is false, the pool id and predicted share tokens are conditioned on the oracle's live rate at the returned block and can change block to block until the pool is created; once exists is true they are pinned.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "properties": {
+         "args": {
+          "description": "The recipe's payload, raw hex: the ABI encoding of the recipe's `args.type` tuple from GET /registry/v2/{chain_id}/recipes. Same rules as POST /registry/v2/{chain_id}/resolve.",
+          "pattern": "^0x([0-9a-fA-F]{2})*$",
+          "type": "string"
+         },
+         "collateral_asset": {
+          "description": "The collateral asset — the quote slot of the pair.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "expiry": {
+          "description": "Market expiry as a Unix timestamp in seconds, as a decimal string. A string, not a number, so a value past the ~9.007e15 exact-integer ceiling survives intact.",
+          "pattern": "^\\d{1,78}$",
+          "type": "string"
+         },
+         "oracle_salt": {
+          "description": "The oracle salt, a 0x-prefixed 32-byte hex word. The registry's deploy(ca, ref, mode, oracleSalt) takes a caller-chosen salt and a different salt gives a different oracle address, so pass the salt the oracle will actually be deployed with. Echoed back lowercased.",
+          "pattern": "^0x[0-9a-fA-F]{64}$",
+          "type": "string"
+         },
+         "recipe": {
+          "description": "The recipe contract. Must pass isRecipe on chain.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "reference_asset": {
+          "description": "The reference asset — the base slot of the pair. Must differ from `collateral_asset`.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "swap_fee_percentage": {
+          "description": "Fee on the 1e18 = 1% scale, strictly below 100e18 (100%). Required: the fee is part of the pool id, so it changes the predicted pool id and share tokens.",
+          "pattern": "^\\d{1,78}$",
+          "type": "string"
+         },
+         "unwind_swap_fee_percentage": {
+          "description": "Fee on the 1e18 = 1% scale, strictly below 100e18 (100%). Required: the fee is part of the pool id, so it changes the predicted pool id and share tokens.",
+          "pattern": "^\\d{1,78}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "collateral_asset",
+         "reference_asset",
+         "expiry",
+         "recipe",
+         "oracle_salt",
+         "swap_fee_percentage",
+         "unwind_swap_fee_percentage"
+        ],
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "chain_id": {
+           "description": "The registry chain the market was predicted on.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "input": {
+           "additionalProperties": false,
+           "properties": {
+            "collateral_asset": {
+             "description": "The collateral asset, echoed back lowercased.",
+             "type": "string"
+            },
+            "expiry": {
+             "description": "The expiry, echoed back as a decimal string.",
+             "type": "string"
+            },
+            "oracle_salt": {
+             "description": "The oracle salt the prediction deployed with, echoed back lowercased.",
+             "type": "string"
+            },
+            "recipe": {
+             "description": "The recipe that set the constraint, echoed back lowercased.",
+             "type": "string"
+            },
+            "reference_asset": {
+             "description": "The reference asset, echoed back lowercased.",
+             "type": "string"
+            },
+            "swap_fee_percentage": {
+             "description": "The swap fee that went into the pool id, echoed back as the request string.",
+             "type": "string"
+            },
+            "unwind_swap_fee_percentage": {
+             "description": "The unwind swap fee that went into the pool id, echoed back as the request string.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "collateral_asset",
+            "reference_asset",
+            "expiry",
+            "recipe",
+            "oracle_salt",
+            "swap_fee_percentage",
+            "unwind_swap_fee_percentage"
+           ],
+           "type": "object"
+          },
+          "market": {
+           "additionalProperties": false,
+           "description": "Null when the oracle is not deployed and no rate can be read.",
+           "nullable": true,
+           "properties": {
+            "constraint": {
+             "additionalProperties": false,
+             "properties": {
+              "rate_change_capacity_max": {
+               "additionalProperties": false,
+               "properties": {
+                "decimals": {
+                 "description": "How many decimal places `raw` is scaled by. Always present.",
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "formatted": {
+                 "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+                 "type": "string"
+                },
+                "raw": {
+                 "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "raw",
+                "decimals",
+                "formatted"
+               ],
+               "type": "object"
+              },
+              "rate_change_per_day_max": {
+               "additionalProperties": false,
+               "properties": {
+                "decimals": {
+                 "description": "How many decimal places `raw` is scaled by. Always present.",
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "formatted": {
+                 "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+                 "type": "string"
+                },
+                "raw": {
+                 "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "raw",
+                "decimals",
+                "formatted"
+               ],
+               "type": "object"
+              },
+              "rate_max": {
+               "additionalProperties": false,
+               "properties": {
+                "decimals": {
+                 "description": "How many decimal places `raw` is scaled by. Always present.",
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "formatted": {
+                 "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+                 "type": "string"
+                },
+                "raw": {
+                 "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "raw",
+                "decimals",
+                "formatted"
+               ],
+               "type": "object"
+              },
+              "rate_min": {
+               "additionalProperties": false,
+               "properties": {
+                "decimals": {
+                 "description": "How many decimal places `raw` is scaled by. Always present.",
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "formatted": {
+                 "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+                 "type": "string"
+                },
+                "raw": {
+                 "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "raw",
+                "decimals",
+                "formatted"
+               ],
+               "type": "object"
+              }
+             },
+             "required": [
+              "rate_min",
+              "rate_max",
+              "rate_change_per_day_max",
+              "rate_change_capacity_max"
+             ],
+             "type": "object"
+            },
+            "exists": {
+             "description": "True once the pool exists on-chain. While false, `pool_id` and the share tokens are conditioned on the live rate at this block and may change until the pool is created.",
+             "type": "boolean"
+            },
+            "pool_id": {
+             "description": "The predicted pool id (bytes32 hex).",
+             "type": "string"
+            },
+            "swap_fee_percentage": {
+             "additionalProperties": false,
+             "description": "The swap fee hashed into the pool id, on the 1e18 = 1% scale (18 decimals).",
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            },
+            "unwind_swap_fee_percentage": {
+             "additionalProperties": false,
+             "description": "The unwind swap fee hashed into the pool id, on the 1e18 = 1% scale (18 decimals).",
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            }
+           },
+           "required": [
+            "pool_id",
+            "exists",
+            "constraint",
+            "swap_fee_percentage",
+            "unwind_swap_fee_percentage"
+           ],
+           "type": "object"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "oracle": {
+           "additionalProperties": false,
+           "properties": {
+            "address": {
+             "description": "The rate oracle address, lowercased.",
+             "nullable": true,
+             "type": "string"
+            },
+            "deployed": {
+             "description": "True once the oracle contract exists on-chain.",
+             "type": "boolean"
+            },
+            "rate": {
+             "additionalProperties": false,
+             "description": "The oracle's live rate. Null when it is not deployed yet, in which case `market` and `shares` are null too. A rate of zero is a real, degenerate rate and is reported as zero, not null.",
+             "nullable": true,
+             "properties": {
+              "decimals": {
+               "description": "How many decimal places `raw` is scaled by. Always present.",
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "formatted": {
+               "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+               "type": "string"
+              },
+              "raw": {
+               "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "raw",
+              "decimals",
+              "formatted"
+             ],
+             "type": "object"
+            }
+           },
+           "required": [
+            "address",
+            "deployed",
+            "rate"
+           ],
+           "type": "object"
+          },
+          "shares": {
+           "additionalProperties": false,
+           "description": "Null when the oracle is not deployed and no rate can be read.",
+           "nullable": true,
+           "properties": {
+            "principal_token": {
+             "description": "Predicted principal token (cPT), lowercased.",
+             "type": "string"
+            },
+            "shares_token": {
+             "description": "Predicted shares token (cST), lowercased.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "shares_token",
+            "principal_token"
+           ],
+           "type": "object"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "chain_id",
+          "input",
+          "oracle",
+          "market",
+          "shares",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/oracles/fixed/{rate}": {
+   "get": {
+    "description": "Get the fixed-rate oracle for a rate. Keyed on a rate rather than on a pair, because a fixed rate is not a fact about any pair. predictFixedRateOracle is a plain view, so this answers before anything is deployed.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The fixed rate as an 18-decimal integer string, on the rate scale where 1e18 is 1.0.",
+      "in": "path",
+      "name": "rate",
+      "required": true,
+      "schema": {
+       "pattern": "^\\d{1,78}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "oracle": {
+           "description": "The fixed-rate oracle address, lowercased.",
+           "type": "string"
+          },
+          "rate": {
+           "additionalProperties": false,
+           "description": "The fixed rate this oracle reports, on the rate scale.",
+           "properties": {
+            "decimals": {
+             "description": "How many decimal places `raw` is scaled by. Always present.",
+             "maximum": 9007199254740991,
+             "minimum": -9007199254740991,
+             "type": "integer"
+            },
+            "formatted": {
+             "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+             "type": "string"
+            },
+            "raw": {
+             "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "raw",
+            "decimals",
+            "formatted"
+           ],
+           "type": "object"
+          },
+          "status": {
+           "description": "`live` when code already exists at the address, `predicted` otherwise.",
+           "enum": [
+            "live",
+            "predicted"
+           ],
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "rate",
+          "oracle",
+          "status",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/oracles/{mode}/{ca}/{ref}": {
+   "get": {
+    "description": "Get the rate oracle for a pair in one mode. Takes a MODE because one pair can hold a price wrapper and a net-asset-value wrapper simultaneously. PREDICTS when the oracle is not deployed, because on the limit-order path the adapter deploys it inside the fill — so at the moment a caller most wants the address, looking it up returns zero. Prediction simulates deploy with the caller's oracle_salt rather than re-deriving the address off-chain, so it cannot drift from what the adapter will actually do; a different salt gives a different address, so pass the salt the oracle will be deployed with.",
+    "parameters": [
+     {
+      "description": "The oracle salt, a 0x-prefixed 32-byte hex word. The registry's deploy(ca, ref, mode, oracleSalt) takes a caller-chosen salt and a different salt gives a different oracle address, so pass the salt the oracle will actually be deployed with. Echoed back lowercased.",
+      "in": "query",
+      "name": "oracle_salt",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{64}$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "mode",
+      "required": true,
+      "schema": {
+       "enum": [
+        "price",
+        "nav"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "ca",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "ref",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "collateral_asset": {
+           "description": "The collateral asset, lowercased.",
+           "type": "string"
+          },
+          "legs": {
+           "additionalProperties": false,
+           "description": "Which source each side actually resolved to. DERIVED BY THIS SERVICE, not read from the chain — no view returns it. It is informational only — the oracle address itself always comes from simulation.",
+           "properties": {
+            "collateral": {
+             "additionalProperties": false,
+             "properties": {
+              "source": {
+               "description": "The source address this leg resolved to, lowercased.",
+               "type": "string"
+              },
+              "source_type": {
+               "description": "The kind of source that was USED, not the mode that was asked for. In nav mode a leg with no net-asset-value source falls back to its price source, and this is what makes that visible.",
+               "enum": [
+                "PRICE",
+                "NAV"
+               ],
+               "type": "string"
+              }
+             },
+             "required": [
+              "source",
+              "source_type"
+             ],
+             "type": "object"
+            },
+            "reference": {
+             "additionalProperties": false,
+             "properties": {
+              "source": {
+               "description": "The source address this leg resolved to, lowercased.",
+               "type": "string"
+              },
+              "source_type": {
+               "description": "The kind of source that was USED, not the mode that was asked for. In nav mode a leg with no net-asset-value source falls back to its price source, and this is what makes that visible.",
+               "enum": [
+                "PRICE",
+                "NAV"
+               ],
+               "type": "string"
+              }
+             },
+             "required": [
+              "source",
+              "source_type"
+             ],
+             "type": "object"
+            }
+           },
+           "required": [
+            "collateral",
+            "reference"
+           ],
+           "type": "object"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "mode": {
+           "description": "Which kind of rate oracle this is. One pair can hold both simultaneously, which is why the mode is part of the request.",
+           "enum": [
+            "price",
+            "nav"
+           ],
+           "type": "string"
+          },
+          "morpho_oracle": {
+           "description": "The Morpho oracle underneath the wrapper, read from its MORPHO_ORACLE() immutable. Available directly for a deployed wrapper. For a PREDICTED one there is no code to call, so it is only obtainable by chaining two calls inside one simulated block (eth_simulateV1); where the node cannot do that this is null rather than guessed.",
+           "nullable": true,
+           "type": "string"
+          },
+          "oracle": {
+           "description": "The rate oracle address, lowercased.",
+           "type": "string"
+          },
+          "oracle_salt": {
+           "description": "The oracle salt the prediction deployed with, echoed back lowercased.",
+           "type": "string"
+          },
+          "rate": {
+           "additionalProperties": false,
+           "description": "Null when the oracle is not deployed yet.",
+           "nullable": true,
+           "properties": {
+            "decimals": {
+             "description": "How many decimal places `raw` is scaled by. Always present.",
+             "maximum": 9007199254740991,
+             "minimum": -9007199254740991,
+             "type": "integer"
+            },
+            "formatted": {
+             "description": "`raw` shifted by `decimals`, as an exact decimal string. Lossless, and safe to display directly.",
+             "type": "string"
+            },
+            "raw": {
+             "description": "The integer exactly as the chain holds it, as a decimal string. Authoritative. A string because these values exceed the ~9.007e15 ceiling for exact integers in JSON numbers.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "raw",
+            "decimals",
+            "formatted"
+           ],
+           "type": "object"
+          },
+          "reference_asset": {
+           "description": "The reference asset, lowercased.",
+           "type": "string"
+          },
+          "status": {
+           "description": "`live` when the wrapper is already deployed; `predicted` when its address was derived by simulating deploy with the given oracle_salt.",
+           "enum": [
+            "live",
+            "predicted"
+           ],
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "mode",
+          "collateral_asset",
+          "reference_asset",
+          "oracle_salt",
+          "oracle",
+          "status",
+          "morpho_oracle",
+          "rate",
+          "legs",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/recipes": {
+   "get": {
+    "description": "A recipe is an approved CONTRACT ADDRESS implementing IMarketRecipe, not a record keyed by a mode string. `source`, `description` and `version` are read live from the recipe; `label`, `args` and `constants` come from a built-in table of reviewed recipe ABIs, matched by deployed code. A recipe whose code is not in the table still appears here and still resolves, with `args.known` false, no constants and a null label. Note that getRecipes returns nothing until the owner Safe calls addRecipes, so an empty list is a correct answer, not a fault.",
+    "parameters": [
+     {
+      "description": "Page size; values above 500 are clamped to 500.",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 9007199254740991,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Page start offset.",
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "items": {
+           "description": "The page of rows after pagination.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "address": {
+              "description": "The recipe contract, lowercased. Its whole identity.",
+              "type": "string"
+             },
+             "args": {
+              "description": "How to build the recipe's payload, from the `encodeExtraData` function in a built-in table of reviewed recipe ABIs, matched by deployed code. `known: false` when the recipe's code is not in the table — the recipe is still listed and still resolvable, only its argument names are missing.",
+              "oneOf": [
+               {
+                "additionalProperties": false,
+                "properties": {
+                 "display": {
+                  "description": "The same argument list written for a human, as `abi.encode(uint256 anchorRate, ...)`, or `empty` when the recipe takes no payload.",
+                  "type": "string"
+                 },
+                 "known": {
+                  "enum": [
+                   true
+                  ],
+                  "type": "boolean"
+                 },
+                 "params": {
+                  "description": "One entry per field, in order.",
+                  "items": {
+                   "additionalProperties": false,
+                   "properties": {
+                    "description": {
+                     "description": "What the field means, from the recipe's developer documentation. Null when the documentation carries none.",
+                     "nullable": true,
+                     "type": "string"
+                    },
+                    "name": {
+                     "description": "The parameter name from the recipe's `encodeExtraData` signature.",
+                     "type": "string"
+                    },
+                    "type": {
+                     "description": "The field's ABI type.",
+                     "type": "string"
+                    }
+                   },
+                   "required": [
+                    "name",
+                    "type",
+                    "description"
+                   ],
+                   "type": "object"
+                  },
+                  "type": "array"
+                 },
+                 "type": {
+                  "description": "The full argument list in standard ABI tuple notation — the exact string to hand an encoder. `()` means the recipe takes no payload.",
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "known",
+                 "type",
+                 "display",
+                 "params"
+                ],
+                "type": "object"
+               },
+               {
+                "additionalProperties": false,
+                "properties": {
+                 "known": {
+                  "enum": [
+                   false
+                  ],
+                  "type": "boolean"
+                 }
+                },
+                "required": [
+                 "known"
+                ],
+                "type": "object"
+               }
+              ]
+             },
+             "constants": {
+              "description": "Every ALL_CAPS zero-input uint256 getter in the recipe's reviewed ABI, with its live value. Empty when the recipe's code is not in the table. Scales differ per constant and are documented by the recipe, not normalised here.",
+              "items": {
+               "additionalProperties": false,
+               "properties": {
+                "description": {
+                 "description": "What the constant means, from the recipe's developer documentation. Null when the source carries none.",
+                 "nullable": true,
+                 "type": "string"
+                },
+                "name": {
+                 "description": "The getter's name, exactly as the recipe declares it.",
+                 "type": "string"
+                },
+                "value": {
+                 "description": "The raw uint256 value as a decimal string, read live from the recipe. Its scale is the recipe's own business; see `description`. Null when the getter did not answer.",
+                 "nullable": true,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "name",
+                "value",
+                "description"
+               ],
+               "type": "object"
+              },
+              "type": "array"
+             },
+             "description": {
+              "description": "What the recipe does, in its own words, read live from the contract.",
+              "type": "string"
+             },
+             "label": {
+              "description": "The recipe's contract name, for example `FixedRateRecipe`, from a built-in table of reviewed recipe ABIs, matched by deployed code. Null when the recipe's code is not in the table.",
+              "nullable": true,
+              "type": "string"
+             },
+             "registry": {
+              "description": "The registry this recipe is pinned to, lowercased.",
+              "type": "string"
+             },
+             "registry_matches": {
+              "description": "False when the recipe is pinned to a different registry than the one serving this request. That is a misconfiguration and should be treated as one.",
+              "type": "boolean"
+             },
+             "source": {
+              "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode — a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
+              "enum": [
+               "price",
+               "nav",
+               "fixed"
+              ],
+              "type": "string"
+             },
+             "version": {
+              "description": "The recipe's own version() string, read live. Null when the recipe does not implement version().",
+              "nullable": true,
+              "type": "string"
+             }
+            },
+            "required": [
+             "address",
+             "label",
+             "source",
+             "description",
+             "version",
+             "registry",
+             "registry_matches",
+             "args",
+             "constants"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "limit": {
+           "description": "Page size that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "offset": {
+           "description": "Page start offset that was applied.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "total": {
+           "description": "Total number of rows, before pagination.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/recipes/{address}": {
+   "get": {
+    "description": "Get one recipe by address, with its live registration status. `label`, `args` and `constants` come from a built-in table of reviewed recipe ABIs, matched by deployed code; a recipe not in the table still answers, with `args.known` false.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "address",
+      "required": true,
+      "schema": {
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "description": "The recipe contract, lowercased. Its whole identity.",
+           "type": "string"
+          },
+          "args": {
+           "description": "How to build the recipe's payload, from the `encodeExtraData` function in a built-in table of reviewed recipe ABIs, matched by deployed code. `known: false` when the recipe's code is not in the table — the recipe is still listed and still resolvable, only its argument names are missing.",
+           "oneOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "display": {
+               "description": "The same argument list written for a human, as `abi.encode(uint256 anchorRate, ...)`, or `empty` when the recipe takes no payload.",
+               "type": "string"
+              },
+              "known": {
+               "enum": [
+                true
+               ],
+               "type": "boolean"
+              },
+              "params": {
+               "description": "One entry per field, in order.",
+               "items": {
+                "additionalProperties": false,
+                "properties": {
+                 "description": {
+                  "description": "What the field means, from the recipe's developer documentation. Null when the documentation carries none.",
+                  "nullable": true,
+                  "type": "string"
+                 },
+                 "name": {
+                  "description": "The parameter name from the recipe's `encodeExtraData` signature.",
+                  "type": "string"
+                 },
+                 "type": {
+                  "description": "The field's ABI type.",
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "name",
+                 "type",
+                 "description"
+                ],
+                "type": "object"
+               },
+               "type": "array"
+              },
+              "type": {
+               "description": "The full argument list in standard ABI tuple notation — the exact string to hand an encoder. `()` means the recipe takes no payload.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "known",
+              "type",
+              "display",
+              "params"
+             ],
+             "type": "object"
+            },
+            {
+             "additionalProperties": false,
+             "properties": {
+              "known": {
+               "enum": [
+                false
+               ],
+               "type": "boolean"
+              }
+             },
+             "required": [
+              "known"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "constants": {
+           "description": "Every ALL_CAPS zero-input uint256 getter in the recipe's reviewed ABI, with its live value. Empty when the recipe's code is not in the table. Scales differ per constant and are documented by the recipe, not normalised here.",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "description": {
+              "description": "What the constant means, from the recipe's developer documentation. Null when the source carries none.",
+              "nullable": true,
+              "type": "string"
+             },
+             "name": {
+              "description": "The getter's name, exactly as the recipe declares it.",
+              "type": "string"
+             },
+             "value": {
+              "description": "The raw uint256 value as a decimal string, read live from the recipe. Its scale is the recipe's own business; see `description`. Null when the getter did not answer.",
+              "nullable": true,
+              "type": "string"
+             }
+            },
+            "required": [
+             "name",
+             "value",
+             "description"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "description": {
+           "description": "What the recipe does, in its own words, read live from the contract.",
+           "type": "string"
+          },
+          "is_registered": {
+           "description": "Read live from isRecipe — the only membership gate there is.",
+           "type": "boolean"
+          },
+          "label": {
+           "description": "The recipe's contract name, for example `FixedRateRecipe`, from a built-in table of reviewed recipe ABIs, matched by deployed code. Null when the recipe's code is not in the table.",
+           "nullable": true,
+           "type": "string"
+          },
+          "meta": {
+           "additionalProperties": false,
+           "properties": {
+            "reads": {
+             "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+               "block_number": {
+                "description": "Block number every read for this chain was pinned to.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               },
+               "block_timestamp": {
+                "description": "ISO-8601 UTC timestamp of the pinned block.",
+                "type": "string"
+               },
+               "fetched_at": {
+                "description": "ISO-8601 UTC time the service finished producing this answer.",
+                "type": "string"
+               },
+               "registry": {
+                "description": "Registry contract address these reads were made against.",
+                "type": "string"
+               },
+               "stale": {
+                "description": "True when this data is being served past its cache lifetime because a refresh is currently failing.",
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "registry",
+               "block_number",
+               "block_timestamp",
+               "fetched_at",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "description": "Per-chain read provenance, keyed by the registry's chain id. Agents read the configured chain set from here.",
+             "type": "object"
+            }
+           },
+           "required": [
+            "reads"
+           ],
+           "type": "object"
+          },
+          "registry": {
+           "description": "The registry this recipe is pinned to, lowercased.",
+           "type": "string"
+          },
+          "registry_matches": {
+           "description": "False when the recipe is pinned to a different registry than the one serving this request. That is a misconfiguration and should be treated as one.",
+           "type": "boolean"
+          },
+          "source": {
+           "description": "Which kind of rate this recipe works against, read from its own source(). `fixed` has no oracle mode — a fixed-rate market's oracle is keyed on a rate rather than on a pair.",
+           "enum": [
+            "price",
+            "nav",
+            "fixed"
+           ],
+           "type": "string"
+          },
+          "version": {
+           "description": "The recipe's own version() string, read live. Null when the recipe does not implement version().",
+           "nullable": true,
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "address",
+          "label",
+          "source",
+          "description",
+          "version",
+          "registry",
+          "registry_matches",
+          "args",
+          "constants",
+          "is_registered",
+          "meta"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "configured_chains": {
+           "description": "For `unknown-chain`: the chain ids this deployment is configured to serve.",
+           "items": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "type": "array"
+          },
+          "detail": {
+           "description": "Human-readable explanation specific to this occurrence.",
+           "type": "string"
+          },
+          "status": {
+           "description": "The HTTP status code, repeated for convenience.",
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "title": {
+           "description": "Short, human-readable summary of the problem type.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Problem type slug: one of `invalid-parameter`, `unknown-chain`, `not-found`, `contract-refused`, `rate-limited`, `registry-unavailable`, `internal`.",
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "type",
+          "title",
+          "status"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "Registry"
+    ]
+   }
+  },
+  "/registry/v2/{chain_id}/resolve": {
+   "post": {
+    "description": "Ask a recipe what rate limits it would impose on a pair — a staticcall to recipe.resolve(...), and what a caller uses at order-signing time, because a pool's identity includes its rate constraint. RECIPE-AGNOSTIC: `args` is raw hex passed verbatim, so this works for every recipe that will ever be registered. When no rate_oracle is given, the oracle is derived by simulating deploy with the required oracle_salt. A POST because the payload is arbitrary bytes.",
+    "parameters": [
+     {
+      "description": "The chain whose registry to read. Must be one of this deployment's served chains — see GET /registry/v2/registries. An unserved chain is a 400 `unknown-chain`.",
+      "in": "path",
+      "name": "chain_id",
+      "required": true,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "properties": {
+         "args": {
+          "description": "The recipe's payload, raw hex, passed verbatim as extraData. Build it by ABI-encoding the tuple in `args.type` of the recipe's row from GET /registry/v2/{chain_id}/recipes (the recipe's `encodeExtraData` inputs). Omitting it is VALID — some recipes require an empty payload (`args.type` of `()`), and FixedRateRecipe rejects any payload at all.",
+          "pattern": "^0x([0-9a-fA-F]{2})*$",
+          "type": "string"
+         },
+         "collateral_asset": {
+          "description": "The collateral asset — the quote slot of the pair.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "oracle_salt": {
+          "description": "The oracle salt, a 0x-prefixed 32-byte hex word. When no rate_oracle is given, the API derives the oracle by simulating deploy(ca, ref, mode, oracleSalt) with this salt; a different salt gives a different oracle address. Required even when rate_oracle is given, so every resolve carries the salt the market will be created with.",
+          "pattern": "^0x[0-9a-fA-F]{64}$",
+          "type": "string"
+         },
+         "rate_oracle": {
+          "description": "An explicit rate oracle. Omit and the API derives one from the pair and the recipe's own source().",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "recipe": {
+          "description": "The recipe contract. Must pass isRecipe on chain — that is the only membership gate.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         },
+         "reference_asset": {
+          "description": "The reference asset — the base slot of the pair.",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "recipe",
+         "collateral_asset",
+         "reference_asset",
+         "oracle_salt"
         ],
         "type": "object"
        }
