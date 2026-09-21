@@ -5,6 +5,14 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+### Fixed
+
+- **answer-rfq refused every real RFQ.** The venue serves an RFQ as an envelope: row facts (`rfq_id`, `state`, `version`, `answers`) beside `request`, the requester's posted body stored verbatim. This tool's fixtures served the body flat, so every consumer read the flat shape and no offline test could see the gap. The 2026-09-21 staging rehearsal found it: "the RFQ record carries no reference_asset address". One flatten now runs at the boundary (`normalizeRfqRow`, SDK root and `/venue`): the body's fields are lifted beside the row's, a row-level key wins a collision, `request` stays for the verbatim body. The eval stub now serves the real nested envelope. Verified on staging after the fix: `answer-rfq` on a real impairment RFQ builds a signable order with the recipe, the 96-byte payload and the pinned constraint.
+- **`trustForwardedFor` is explicit. The default is OFF.** The server used to trust `X-Forwarded-For` for any non-loopback bind. That was a guess about an ingress. With no proxy in front, any caller could set the header and get a fresh per-client slot set on every request. Trust is now an operator statement: `ch mcp --http --trust-forwarded-for`, or `CORK_MCP_TRUST_FORWARDED_FOR=1`. Without it, the socket peer is the client. `/readyz` reports the posture under `subsystems.admission.trustForwardedFor`. The hosted compose file sets the flag; it sits behind the CVM's ingress. (Audit DB-002.)
+- **A filter the read shape never applies is refused.** `rfqs` with `rfqId` is a single-record read; `state`, `account`, `underwriter`, `excludeRequestPrefix`, `withAnswers` and `referenceAsset` beside it were accepted and then ignored. `rollover-orders` reads a different venue feed per `kind`; a key from another kind's feed was accepted and ignored too. Both now refuse with the same teaching a wrong-resource key gets, and the message names the read shape and its own keys. Inputs that "worked" by accident now fail loudly. (Audit DB-006.)
+
 ## [0.5.1-rc.7] — 2026-09-21
 
 This cut integrates the fourth recipe end to end — the impairment recipe on the registry, in the compute surface, in the RFQ inline path, and in the evals — and makes the offers probe walk report a blind read out loud.

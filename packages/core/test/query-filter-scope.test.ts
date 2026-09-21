@@ -48,6 +48,55 @@ describe("per-resource filter applicability", () => {
   });
 });
 
+describe("variant-scoped applicability (audit DB-006): a key the READ SHAPE never applies is refused", () => {
+  const issueOf = async (resource: string, filters: Record<string, unknown>) => {
+    const err = await q(resource, filters).catch((e: ToolInputError) => e);
+    expect(err).toBeInstanceOf(ToolInputError);
+    return (err as ToolInputError & { issues: Array<{ path: unknown[]; message: string }> }).issues[0]!;
+  };
+
+  it("rfqs single record: list-only keys beside rfqId are refused, naming the single-record shape and its two keys", async () => {
+    // Every value is VALID for its key (the schema's own type checks run first — an invalid
+    // value would fail there and prove nothing about applicability).
+    const valid: Record<string, unknown> = { state: "expired", account: "0x00000000000000000000000000000000000000dd", underwriter: "0x00000000000000000000000000000000000000dd", excludeRequestPrefix: "healthcheck-", withAnswers: true, referenceAsset: "0x00000000000000000000000000000000000000dd" };
+    for (const key of Object.keys(valid)) {
+      const issue = await issueOf("rfqs", { rfqId: "rfq_x", [key]: valid[key] });
+      expect(issue.path).toEqual(["filters", key]);
+      expect(issue.message).toContain("single record");
+      expect(issue.message).toContain("consumes: rfqId, view");
+    }
+  });
+
+  it("rfqs single record: `view` is the one companion key it consumes — the pair passes the gate", async () => {
+    // Reaching the venue at all is the proof: the gate throws BEFORE any fetch, so a non-throw
+    // with an envelope back means rfqId+view were admitted (the stub venue's answer shape is
+    // irrelevant here).
+    const env = await q("rfqs", { rfqId: "rfq_x", view: "current" });
+    expect(["ok", "unavailable"]).toContain(env.state);
+  });
+
+  it("rfqs LIST reads keep the whole union (state, account, underwriter, …) — the narrowing is rfqId-conditional", async () => {
+    const env = await q("rfqs", { state: "open", underwriter: "0x00000000000000000000000000000000000000dd", withAnswers: true });
+    expect(env.state).toBe("ok");
+  });
+
+  it("rollover-orders: each kind refuses the other kinds' keys — a contracts filter on the orders feed, a fills filter on contracts", async () => {
+    const onOrders = await issueOf("rollover-orders", { factory: "0x00000000000000000000000000000000000000dd" }); // kind defaults to orders
+    expect(onOrders.path).toEqual(["filters", "factory"]);
+    expect(onOrders.message).toContain("kind=orders");
+    const onContracts = await issueOf("rollover-orders", { kind: "contracts", filler: "0x00000000000000000000000000000000000000dd" });
+    expect(onContracts.message).toContain("kind=contracts");
+    const onFills = await issueOf("rollover-orders", { kind: "fills", poolId: `0x${"ab".repeat(32)}` });
+    expect(onFills.message).toContain("kind=fills");
+  });
+
+  it("rollover-orders: each kind still accepts its OWN keys (the over-refusal direction)", async () => {
+    expect((await q("rollover-orders", { kind: "orders", settler: "0x00000000000000000000000000000000000000dd", fillable: true })).state).toBe("ok");
+    expect((await q("rollover-orders", { kind: "fills", filler: "0x00000000000000000000000000000000000000dd" })).state).toBe("ok");
+    expect((await q("rollover-orders", { kind: "contracts", factory: "0x00000000000000000000000000000000000000dd" })).state).toBe("ok");
+  });
+});
+
 describe("RESOURCE_FILTER_KEYS drift gates", () => {
   const resources = (QueryInput.shape.resource as unknown as { options: readonly string[] }).options;
 

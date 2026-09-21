@@ -4625,6 +4625,33 @@ const CATALOG: Mutant[] = [
     tests: [T.venue],
   },
   {
+    // DB-002 regresses: the bind address infers trust again, and a bare --host 0.0.0.0 lets any
+    // caller mint a fresh principal per request.
+    id: "http-trust-forwarded-inferred-from-bind",
+    file: "packages/mcp/src/http.ts",
+    find: "  const trustForwardedFor = opts.trustForwardedFor ?? false;",
+    replace: '  const trustForwardedFor = opts.trustForwardedFor ?? ((opts.host ?? "127.0.0.1") !== "127.0.0.1");',
+    tests: [T.httpAdmission],
+  },
+  {
+    // DB-006 regresses: the variant narrowing is gone and the union admits list-only keys on a
+    // single-record read — the green no-op returns.
+    id: "filters-variant-scope-dropped",
+    file: "packages/core/src/handlers/filters.ts",
+    find: "  const applicable = variant?.keys ?? union;",
+    replace: "  const applicable = union;",
+    tests: [T.filterScope],
+  },
+  {
+    // The rollover kind default drifts: an omitted kind is scoped as fills, refusing the orders
+    // feed's own keys.
+    id: "filters-rollover-kind-default",
+    file: "packages/core/src/handlers/filters.ts",
+    find: '    const kind = raw?.kind === undefined ? "orders" : String(raw.kind);',
+    replace: '    const kind = raw?.kind === undefined ? "fills" : String(raw.kind);',
+    tests: [T.filterScope],
+  },
+  {
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
     // recipe: the mode sugar silently diverges across chains.
     id: "impairment-hint-dropped-one-chain",

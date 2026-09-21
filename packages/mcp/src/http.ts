@@ -65,9 +65,12 @@ function bearerOk(header: string | null, token: string): boolean {
 /** The pure fetch handler — testable without a listening socket. `peerAddress` is supplied by
  *  the server wrapper (Bun knows the socket's peer; a bare Request does not). */
 export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, peerAddress?: string) => Promise<Response> {
-  const host = opts.host ?? "127.0.0.1";
-  const loopback = host === "127.0.0.1" || host === "::1" || host === "localhost";
-  const trustForwardedFor = opts.trustForwardedFor ?? !loopback;
+  // X-Forwarded-For is trusted only when the OPERATOR says an ingress is in front (audit
+  // DB-002). It used to default on for any non-loopback bind — a guess: a bare
+  // `--host 0.0.0.0` on a box with no proxy let every caller mint a fresh principal per request
+  // and walk past the per-client cap. Default OFF fails the safe way (one shared bucket behind
+  // an undeclared ingress, visible in /readyz) instead of the silent one.
+  const trustForwardedFor = opts.trustForwardedFor ?? false;
   // ONE controller per handler: the counters are the server's, not the request's.
   const admission = new AdmissionController(opts.deadlineMs, opts.scheduleDeadline);
   return async (req: Request, peerAddress?: string): Promise<Response> => {
@@ -85,7 +88,7 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
         subsystems: {
           rpc: { ...rpc, degraded: rpc.breakers.some((b) => b.open) },
           venue: { ...venue, degraded: venue.breaker?.open === true || venue.lastOutcome?.ok === false },
-          admission: { ...admission.inFlight(), limits: MCP_HTTP_LIMITS, degraded: false },
+          admission: { ...admission.inFlight(), limits: MCP_HTTP_LIMITS, trustForwardedFor, degraded: false },
           config: config ? { ...config } : { source: null, degraded: false, note: "no config resolution yet this process" },
         },
       };

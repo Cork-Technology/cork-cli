@@ -15,7 +15,10 @@ services:
     image: ghcr.io/cork-technology/cork-cli@${DIGEST}
     # --host 0.0.0.0: the server's default bind is loopback-only (workstation safety); the mapped
     # port needs a non-loopback bind, and Phala's ingress fronts the CVM.
-    command: ["mcp", "--http", "--host", "0.0.0.0"]
+    # --trust-forwarded-for: this deployment sits behind the CVM's ingress, so the per-client
+    # admission cap counts the LAST X-Forwarded-For hop. Without it every caller behind the
+    # ingress shares one 8-slot bucket (safe, but one busy client starves the rest).
+    command: ["mcp", "--http", "--host", "0.0.0.0", "--trust-forwarded-for"]
     ports:
       - "8080:8080"
     restart: unless-stopped

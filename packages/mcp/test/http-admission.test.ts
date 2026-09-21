@@ -254,3 +254,49 @@ describe("principalOf: a principal must not be mintable by the caller", () => {
 
 // A real listening socket is exercised by http-e2e.test.ts, which spawns the actual `ch mcp
 // --http` process — vitest's workers run under Node, where Bun.serve does not exist.
+
+describe("trustForwardedFor is EXPLICIT (audit DB-002): a non-loopback bind alone never trusts the header", () => {
+  // Real requests through the REAL handler whose admitted WORK blocks: a cork_query orderbook
+  // call whose venue fetch never resolves holds its admission slot open, so a saturation from ONE
+  // socket peer carrying DIFFERENT X-Forwarded-For hops shows which principal the handler
+  // counted — the peer (header ignored) or the spoofed hop (header trusted).
+  const call = (id: number) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "cork_query", arguments: { resource: "orderbook", chainId: 1 } } });
+  const post = (id: number, xff?: string) =>
+    new Request("http://mcp.test/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(xff ? { "x-forwarded-for": xff } : {}) }, body: call(id) });
+  const hanging = (): { ctx: { venueFetch: () => Promise<Response>; resolveRpc: () => Promise<null> }; release: () => void } => {
+    let release: () => void = () => {};
+    const gate = new Promise<Response>((r) => { release = () => r(new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 })); });
+    return { ctx: { venueFetch: () => gate, resolveRpc: async () => null }, release };
+  };
+  const n = MCP_HTTP_LIMITS.principalRequests;
+
+  async function saturateFromOnePeer(opts: { trustForwardedFor?: boolean }): Promise<{ refused: number; settle: () => Promise<void> }> {
+    const { ctx, release } = hanging();
+    const handler = createHttpHandler({ host: "0.0.0.0", ctx: ctx as never, ...opts });
+    // n requests from peer 10.0.0.1, each claiming a DIFFERENT forwarded hop, all in flight…
+    const held = Array.from({ length: n }, (_, i) => handler(post(i, `9.9.9.${String(i)}`), "10.0.0.1"));
+    await new Promise((r) => setTimeout(r, 20));
+    // …then the (n+1)th, also spoofing a fresh hop.
+    const extra = await handler(post(n, `9.9.9.${String(n)}`), "10.0.0.1");
+    return { refused: extra.status === 429 ? 1 : 0, settle: async () => { release(); await Promise.all(held); } };
+  }
+
+  it("bound to 0.0.0.0 with NO trust flag: spoofed hops all land in the socket peer's bucket — the (n+1)th is refused", async () => {
+    const { refused, settle } = await saturateFromOnePeer({});
+    expect(refused).toBe(1);
+    await settle();
+  });
+
+  it("with trustForwardedFor: true, each distinct last hop is its own principal — the (n+1)th is admitted", async () => {
+    const { refused, settle } = await saturateFromOnePeer({ trustForwardedFor: true });
+    expect(refused).toBe(0);
+    await settle();
+  });
+
+  it("/readyz discloses the trust posture so an operator can see which way the deployment counts clients", async () => {
+    const off = await createHttpHandler({ host: "0.0.0.0" })(new Request("http://mcp.test/readyz"));
+    expect(((await off.json()) as { subsystems: { admission: { trustForwardedFor: boolean } } }).subsystems.admission.trustForwardedFor).toBe(false);
+    const on = await createHttpHandler({ host: "0.0.0.0", trustForwardedFor: true })(new Request("http://mcp.test/readyz"));
+    expect(((await on.json()) as { subsystems: { admission: { trustForwardedFor: boolean } } }).subsystems.admission.trustForwardedFor).toBe(true);
+  });
+});

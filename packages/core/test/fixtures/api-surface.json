@@ -1873,6 +1873,10 @@
       "kind": "value"
     },
     {
+      "name": "normalizeRfqRow",
+      "kind": "value"
+    },
+    {
       "name": "ocoGroupNonce",
       "kind": "value"
     },
@@ -4374,6 +4378,10 @@
     },
     {
       "name": "getRolloverOrders",
+      "kind": "value"
+    },
+    {
+      "name": "normalizeRfqRow",
       "kind": "value"
     },
     {

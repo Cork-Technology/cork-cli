@@ -111,18 +111,40 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "offers": ["poolId", "side", "account", "rfqId"],
 };
 
+/** The keys a resource's VARIANT consumes when the resource has several read shapes under one
+ *  name (audit DB-006). `rfqs` with `rfqId` is a single-record read: the list-only keys (state,
+ *  requester, underwriter, prefix, withAnswers — the record embeds its answers regardless) are
+ *  accepted by the union above and then never applied. `rollover-orders` reads a different
+ *  venue feed per `kind`, each with its own filter set. A key outside the variant's set is
+ *  refused with the same teaching a wrong-resource key gets — an unfiltered answer must never
+ *  pass for a filtered one. Keys that SELECT the variant (`rfqId`, `kind`) are always applicable. */
+export function variantFilterKeys(resource: string, raw: Record<string, unknown> | undefined): { variant: string; keys: readonly string[] } | undefined {
+  if (resource === "rfqs" && raw?.rfqId !== undefined) return { variant: "rfqs (single record, filters.rfqId)", keys: ["rfqId", "view"] };
+  if (resource === "rollover-orders") {
+    const kind = raw?.kind === undefined ? "orders" : String(raw.kind);
+    if (kind === "orders") return { variant: "rollover-orders kind=orders", keys: ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest"] };
+    if (kind === "fills") return { variant: "rollover-orders kind=fills", keys: ["kind", "orderDigest", "filler", "settler"] };
+    if (kind === "contracts") return { variant: "rollover-orders kind=contracts", keys: ["kind", "account", "address", "factory"] };
+  }
+  return undefined;
+}
+
 /** Refuse a KNOWN filter key the named resource does not consume. Runs after parseQueryFilters
  *  (globally unknown keys get its did-you-mean first), so every refusal here is a real key on
- *  the wrong resource — the teaching names the resource's own keys. */
+ *  the wrong resource — the teaching names the resource's own keys. A resource with variants
+ *  (see variantFilterKeys) narrows the check to the variant the input selects. */
 export function assertFiltersApplicable(resource: string, raw: Record<string, unknown> | undefined): void {
-  const applicable = RESOURCE_FILTER_KEYS[resource];
-  if (applicable === undefined) return; // an unmapped resource never over-refuses (schema drift is the gate's job)
+  const union = RESOURCE_FILTER_KEYS[resource];
+  if (union === undefined) return; // an unmapped resource never over-refuses (schema drift is the gate's job)
+  const variant = variantFilterKeys(resource, raw);
+  const applicable = variant?.keys ?? union;
+  const scope = variant?.variant ?? resource;
   for (const key of Object.keys(raw ?? {})) {
     if (!(applicable as readonly string[]).includes(key)) {
       const near = nearestValue(key, applicable);
       throw new ToolInputError("cork_query", [{
         path: ["filters", key],
-        message: `filters.${key} does not apply to resource '${resource}' — it would be silently unapplied, and an unfiltered answer must never pass for a filtered one. ${applicable.length ? `'${resource}' consumes: ${applicable.join(", ")}` : `'${resource}' takes no filters`}${near ? ` — did you mean '${near}'?` : ""}`,
+        message: `filters.${key} does not apply to ${variant ? `this read shape — ${scope}` : `resource '${resource}'`} — it would be silently unapplied, and an unfiltered answer must never pass for a filtered one. ${applicable.length ? `${variant ? scope : `'${resource}'`} consumes: ${applicable.join(", ")}` : `'${resource}' takes no filters`}${near ? ` — did you mean '${near}'?` : ""}`,
       }]);
     }
   }

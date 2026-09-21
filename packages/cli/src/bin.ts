@@ -40,6 +40,10 @@ if (argv[0] === "mcp") {
         "  --port <n>       HTTP port (default 8080)\n" +
         "  --host <addr>    bind address (default 127.0.0.1 — loopback only; containers/ingress\n" +
         "                   deployments pass --host 0.0.0.0 to accept external connections)\n" +
+        "  --trust-forwarded-for\n" +
+        "                   count clients by the LAST X-Forwarded-For hop instead of the socket peer.\n" +
+        "                   Set it ONLY behind an ingress you control (also CORK_MCP_TRUST_FORWARDED_FOR=1);\n" +
+        "                   without it every caller behind a proxy shares one per-client slot set.\n" +
         "Bearer auth: set CORK_MCP_TOKEN (unset = open, which is the public deployment's shape).\n" +
         "Admission (always on): 1 MiB body, JSON depth 32, batch 50, 8 in-flight per client, 64 per\n" +
         "server, 30 s deadline. Per-client accounting uses X-Forwarded-For only on a non-loopback\n" +
@@ -93,7 +97,8 @@ if (argv[0] === "mcp") {
     // declared in package.json so the package graph stays honest.
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
-    const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
+    const trustForwardedFor = argv.includes("--trust-forwarded-for") || process.env["CORK_MCP_TRUST_FORWARDED_FOR"] === "1";
+    const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(trustForwardedFor ? { trustForwardedFor } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
     // Register BEFORE announcing readiness: an orchestrator may stop the container the moment
     // it sees the ready line, and a signal that lands before the handler exists takes the
     // default action (found by the spawn test under load).
