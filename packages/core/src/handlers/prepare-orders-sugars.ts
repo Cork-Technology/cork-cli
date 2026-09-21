@@ -7,7 +7,7 @@ import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrd
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
-import { answerOcoGroup, coverMakingAmount, encodeAnchorArgs, impliedPremiumWad, INLINE_LIQUIDITY_SCHEMA, inlineParamsOfTemplate, premiumAmount, premiumFraction, reRestExpirySeconds, type InlineLiquidityParams } from "../orders-answer.ts";
+import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, INLINE_IMPAIRMENT_SCHEMA, inlineAdditionalData, inlineParamsOfTemplate, premiumAmount, premiumFraction, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
@@ -115,7 +115,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   let quoteRef: { rfqId: string; answerId: string; optionId: string } | undefined;
   let templateRecipe: `0x${string}` | undefined = recipeOfTemplate(rfq.market_template);
   // The requester's inline block (anchor, expiry, fees) — the cited option's when it carries one.
-  let inline: InlineLiquidityParams | undefined = inlineParamsOfTemplate(rfq.market_template);
+  let inline: InlineTemplateParams | undefined = inlineParamsOfTemplate(rfq.market_template);
   let inlineSource: "rfq" | "cited option" = "rfq";
   let optionEcho: Record<string, unknown> | null = null;
   if (cited) {
@@ -167,14 +167,21 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template (oracle_params.expiry) names pool expiry ${inline.expiry}, but this answer builds at ${expiryTimestamp} — the requester derived its pool at ${inline.expiry}; the expiry is part of pool identity, so a different value is a different pool. The order still builds` });
   }
 
-  // ── the requester's anchor: carried as the liquidity recipes' additionalData ──
-  // The anchor decides the constraint ONLY while the pair's oracle is undeployed (the recipe's
-  // resolve reads it in place of the missing oracle). Against a DEPLOYED oracle the recipe
-  // anchors on the live rate and ignores the payload — verified live 2026-09-11 on Arbitrum: the
-  // same call with and without an anchor answered the live NAV, and two calls seconds apart
-  // answered two different rates. So the anchor is carried (the undeployed case is exactly when
-  // it matters), and a deployed oracle's rate is compared with it below and disclosed.
-  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? (inline?.anchorRate !== undefined ? encodeAnchorArgs(inline.anchorRate) : undefined);
+  // ── the requester's inline block: carried as the recipe's additionalData, BY SCHEMA ──
+  // Liquidity: abi.encode(anchorRate). Impairment: abi.encode(anchorRate, durationSeconds,
+  // apySpreadPercentage) — all three words or nothing (a partial block would encode a zero the
+  // requester never asked for). The anchor decides the constraint ONLY while the pair's oracle
+  // is undeployed (the recipe's resolve reads it in place of the missing oracle). Against a
+  // DEPLOYED oracle every current recipe anchors on the live rate and ignores that word —
+  // verified live 2026-09-11 on Arbitrum for the liquidity recipe and read in the 0.4.0 source
+  // for the impairment one. So the payload is carried (the undeployed case is exactly when it
+  // matters), and a deployed oracle's rate is compared with the anchor below and disclosed.
+  const inlineData = inline ? inlineAdditionalData(inline) : undefined;
+  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? inlineData;
+  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && action.jitMarket?.additionalData === undefined) {
+    const missing = (["anchorRate", "durationSeconds", "apySpreadPercentage"] as const).filter((k) => inline![k as keyof typeof inline] === undefined);
+    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT additionalData and the recipe will refuse to resolve. Pass jitMarket.additionalData (encodeImpairmentArgs) or ask the requester for a complete block` });
+  }
 
   // ── reach: the declared FILL SENDER, or open when nobody declared one ──
   // The LOP compares allowedSender with the address that CALLS it. A requester that fills
@@ -199,7 +206,11 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, ...(additionalData !== undefined ? { args: additionalData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
   );
-  if (derive.state !== "ok") return { ...derive, warnings: [{ code: derive.warnings[0]?.code ?? "invalid_state", message: `answer-rfq could not derive the pool the cover creates: ${derive.warnings[0]?.message ?? derive.state}` }, ...derive.warnings.slice(1)] };
+  // A gated derive keeps its reason FIRST (the envelope contract) — but the warnings gathered
+  // before it (an incomplete inline block, an undeclared fill sender, an out-of-window expiry)
+  // ride along: they are often WHY the derive gated, and dropping them sent a caller to the
+  // recipe's raw revert with no hint that the RFQ's own block was the cause.
+  if (derive.state !== "ok") return { ...derive, warnings: [{ code: derive.warnings[0]?.code ?? "invalid_state", message: `answer-rfq could not derive the pool the cover creates: ${derive.warnings[0]?.message ?? derive.state}` }, ...warnings, ...derive.warnings.slice(1)] };
   type DerivedConstraint = { rateMin: bigint | string; rateMax: bigint | string; rateChangePerDayMax: bigint | string; rateChangeCapacityMax: bigint | string };
   const dd = derive.data as { pool: { poolId: `0x${string}`; exists: boolean; constraint?: DerivedConstraint } | null; shares: { corkSwapToken: `0x${string}` | null } | null; recipe: `0x${string}`; oracle: { address: `0x${string}` | null; deployed: boolean; rate?: bigint | string } };
   if (!dd.pool) return unavailable(chainId, "oracle_not_deployable", "the pair cannot get an oracle as registered — no pool id, no cST, no order", ctx);
@@ -209,7 +220,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // and this pool agree only when the live rate equals the anchor at signing.
   const liveRate = typeof dd.oracle.rate === "bigint" ? dd.oracle.rate : typeof dd.oracle.rate === "string" && /^\d+$/.test(dd.oracle.rate) ? BigInt(dd.oracle.rate) : undefined;
   if (inline?.anchorRate !== undefined && dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {
-    warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the liquidity recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in additionalData for the undeployed-oracle case` });
+    warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in additionalData for the undeployed-oracle case` });
   }
   // The derived constraint is PINNED into the order explicitly: the maker path then verifies
   // the carried numbers (recipe.verify) instead of resolving a second time — one derivation,
@@ -295,7 +306,18 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         ocoGroup,
         pool: { poolId: dd.pool.poolId, exists: dd.pool.exists, corkSwapToken: cst, recipe: dd.recipe, oracleDeployed: dd.oracle.deployed, ...(liveRate !== undefined ? { oracleRate: liveRate.toString() } : {}) },
         inline: inline
-          ? { schema: INLINE_LIQUIDITY_SCHEMA, source: inlineSource, anchorRate: inline.anchorRate?.toString() ?? null, expiry: inline.expiry?.toString() ?? null, swapFeeWad: inline.swapFeeWad ?? null, unwindSwapFeeWad: inline.unwindSwapFeeWad ?? null, additionalData: additionalData ?? null, anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed, note: "the liquidity recipe reads the anchor (additionalData) only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ" }
+          ? {
+              schema: inline.schema,
+              source: inlineSource,
+              anchorRate: inline.anchorRate?.toString() ?? null,
+              expiry: inline.expiry?.toString() ?? null,
+              swapFeeWad: inline.swapFeeWad ?? null,
+              unwindSwapFeeWad: inline.unwindSwapFeeWad ?? null,
+              ...(inline.schema === INLINE_IMPAIRMENT_SCHEMA ? { durationSeconds: inline.durationSeconds?.toString() ?? null, apySpreadPercentage: inline.apySpreadPercentage?.toString() ?? null, complete: inlineData !== undefined } : {}),
+              additionalData: additionalData ?? null,
+              anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed,
+              note: "the recipe reads the anchor word of additionalData only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ",
+            }
           : null,
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
       },

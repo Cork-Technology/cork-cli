@@ -691,8 +691,8 @@ const CATALOG: Mutant[] = [
     // reads it); dropping the encode leaves the recipe with no anchor on a fresh pair.
     id: "answer-inline-anchor-not-encoded",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? (inline?.anchorRate !== undefined ? encodeAnchorArgs(inline.anchorRate) : undefined);",
-    replace: "const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData;",
+    find: "  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? inlineData;",
+    replace: "  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData;",
     tests: [T.answer],
   },
   {
@@ -717,7 +717,7 @@ const CATALOG: Mutant[] = [
     // block's numbers as ours.
     id: "answer-inline-schema-gate-dropped",
     file: "packages/core/src/orders-answer.ts",
-    find: "if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;",
+    find: "  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;",
     replace: "",
     tests: [T.answer],
   },
@@ -4539,6 +4539,52 @@ const CATALOG: Mutant[] = [
     find: "    if (p.args !== undefined && p.argsUints !== undefined) {",
     replace: "    if (false) {",
     tests: [T.impairment],
+  },
+  {
+    // The impairment inline block encodes a PARTIAL block with the missing word as zero: the
+    // requester gets a window it never asked for (ZeroAnchorRate/ZeroDuration revert at best, a
+    // zero spread = a collapsed window at worst) instead of a refusal.
+    id: "inline-impairment-partial-encodes-zero",
+    file: "packages/core/src/orders-answer.ts",
+    find: "    if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;\n    return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });",
+    replace: "    return encodeImpairmentArgs({ anchorRate: p.anchorRate ?? 0n, durationSeconds: p.durationSeconds ?? 0n, apySpreadPercentage: p.apySpreadPercentage ?? 0n });",
+    tests: [T.answer],
+  },
+  {
+    // The impairment schema is no longer recognised: its block reads as a foreign schema and the
+    // answer silently builds without the requester's words.
+    id: "inline-impairment-schema-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: '  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;',
+    replace: '  if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;',
+    tests: [T.answer],
+  },
+  {
+    // The impairment block's words are dropped on the parse: the schema is recognised but the
+    // two extra words never land, so no payload can be derived from a complete block.
+    id: "inline-impairment-words-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: "    return { schema: INLINE_IMPAIRMENT_SCHEMA, ...common, ...(durationSeconds !== undefined ? { durationSeconds } : {}), ...(apySpreadPercentage !== undefined ? { apySpreadPercentage } : {}) };",
+    replace: "    return { schema: INLINE_IMPAIRMENT_SCHEMA, ...common };",
+    tests: [T.answer],
+  },
+  {
+    // The liquidity path regresses under the dispatch: the anchor-only block stops yielding the
+    // one-word payload.
+    id: "inline-liquidity-payload-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: "  return p.anchorRate !== undefined ? encodeAnchorArgs(p.anchorRate) : undefined;",
+    replace: "  return undefined;",
+    tests: [T.answer],
+  },
+  {
+    // The incomplete-block teaching goes quiet: a partial impairment block builds with no
+    // additionalData and nobody is told which word is missing.
+    id: "answer-impairment-incomplete-silent",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && action.jitMarket?.additionalData === undefined) {",
+    replace: "  if (false) {",
+    tests: [T.answer],
   },
   {
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the

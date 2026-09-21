@@ -413,7 +413,15 @@
       "kind": "value"
     },
     {
+      "name": "INLINE_IMPAIRMENT_SCHEMA",
+      "kind": "value"
+    },
+    {
       "name": "INLINE_LIQUIDITY_SCHEMA",
+      "kind": "value"
+    },
+    {
+      "name": "INLINE_TEMPLATE_SCHEMAS",
       "kind": "value"
     },
     {
@@ -433,7 +441,19 @@
       "kind": "type"
     },
     {
+      "name": "InlineImpairmentParams",
+      "kind": "type"
+    },
+    {
       "name": "InlineLiquidityParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineTemplateParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineTemplateSchema",
       "kind": "type"
     },
     {
@@ -1726,6 +1746,10 @@
     },
     {
       "name": "impliedPremiumWad",
+      "kind": "value"
+    },
+    {
+      "name": "inlineAdditionalData",
       "kind": "value"
     },
     {
@@ -3385,11 +3409,31 @@
       "kind": "type"
     },
     {
+      "name": "INLINE_IMPAIRMENT_SCHEMA",
+      "kind": "value"
+    },
+    {
       "name": "INLINE_LIQUIDITY_SCHEMA",
       "kind": "value"
     },
     {
+      "name": "INLINE_TEMPLATE_SCHEMAS",
+      "kind": "value"
+    },
+    {
+      "name": "InlineImpairmentParams",
+      "kind": "type"
+    },
+    {
       "name": "InlineLiquidityParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineTemplateParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineTemplateSchema",
       "kind": "type"
     },
     {
@@ -3858,6 +3902,10 @@
     },
     {
       "name": "impliedPremiumWad",
+      "kind": "value"
+    },
+    {
+      "name": "inlineAdditionalData",
       "kind": "value"
     },
     {

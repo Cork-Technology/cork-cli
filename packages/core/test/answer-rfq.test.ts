@@ -8,8 +8,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, impliedPremiumWad, LOP_ADDRESSES, premiumAmount, premiumFraction, RE_REST_MAX_SECONDS, RE_REST_MIN_SECONDS, reRestExpirySeconds, runTool, ToolInputError, YEAR_SECONDS, type HandlerContext, type ResolvedRpc } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { encodeAnchorArgs, inlineParamsOfTemplate, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
-import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext } from "../../../evals/stub.ts";
+import { encodeAnchorArgs, encodeImpairmentArgs, inlineAdditionalData, inlineParamsOfTemplate, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
+import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
 
 describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
   it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
@@ -181,9 +181,9 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     expect(inlineParamsOfTemplate({ inline: { oracle_recipe: LIQUIDITY_RECIPE, oracle_params: {} } })).toBeUndefined();
     expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: "someone-else/1", anchor_rate: "1" } } })).toBeUndefined();
     const full = inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, expiry, swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" } } });
-    expect(full).toEqual({ anchorRate: 7n * 10n ** 17n, expiry: JIT_TASK_EXPIRY, swapFeeWad: "1000000000000000000", unwindSwapFeeWad: "0" });
+    expect(full).toEqual({ schema: INLINE_LIQUIDITY_SCHEMA, anchorRate: 7n * 10n ** 17n, expiry: JIT_TASK_EXPIRY, swapFeeWad: "1000000000000000000", unwindSwapFeeWad: "0" });
     // Non-digit or zero anchor/expiry are absent, not zero; fee strings are passed through as digits only.
-    expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: "0.7", expiry: "0", swap_fee_wad: "1e18" } } })).toEqual({});
+    expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: "0.7", expiry: "0", swap_fee_wad: "1e18" } } })).toEqual({ schema: INLINE_LIQUIDITY_SCHEMA });
     expect(encodeAnchorArgs(7n * 10n ** 17n)).toBe(`0x${(7n * 10n ** 17n).toString(16).padStart(64, "0")}`);
   });
 
@@ -387,5 +387,76 @@ describe("cork_prepare_orders refresh-order — the same terms on the same bit w
     expect(d.extension).toBe(a.extension);
     expect(d.refreshes.extensionCarried).toBe(true);
     expect(d.nonce).toBe(a.nonce);
+  });
+});
+
+describe("answer-rfq reads the impairment inline template (cork-inline-impairment/1): three words or nothing", () => {
+  const ctx = stubContext();
+  const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-impair-0001" };
+  const expiry = JIT_TASK_EXPIRY.toString();
+  type Inline = { schema: string; anchorRate: string | null; durationSeconds?: string | null; apySpreadPercentage?: string | null; complete?: boolean; additionalData: string | null };
+  type Answered = { jit?: { constraint?: Record<string, string>; derivedPoolId: string }; answer: { pool: { poolId: string; oracleDeployed: boolean }; inline: Inline | null } };
+
+  it("inlineParamsOfTemplate reads the two extra words under the impairment schema; inlineAdditionalData encodes all three or refuses", () => {
+    const block = { schema: INLINE_IMPAIRMENT_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, apy_spread_percentage: RFQ_IMPAIRMENT_SPREAD, expiry, swap_fee_wad: "0", unwind_swap_fee_wad: "0" };
+    const full = inlineParamsOfTemplate({ inline: { oracle_params: block } });
+    expect(full).toEqual({ schema: INLINE_IMPAIRMENT_SCHEMA, anchorRate: 7n * 10n ** 17n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n, expiry: JIT_TASK_EXPIRY, swapFeeWad: "0", unwindSwapFeeWad: "0" });
+    expect(inlineAdditionalData(full!)).toBe(encodeImpairmentArgs({ anchorRate: 7n * 10n ** 17n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n }));
+    // A partial block yields NO payload — never a zero word the requester did not ask for.
+    const { apy_spread_percentage: _drop, ...partial } = block;
+    const p = inlineParamsOfTemplate({ inline: { oracle_params: partial } });
+    expect(p?.schema).toBe(INLINE_IMPAIRMENT_SCHEMA);
+    expect(inlineAdditionalData(p!)).toBeUndefined();
+    // The liquidity path is unchanged by the second schema.
+    expect(inlineAdditionalData({ schema: INLINE_LIQUIDITY_SCHEMA, anchorRate: 3n })).toBe(encodeAnchorArgs(3n));
+    expect(inlineAdditionalData({ schema: INLINE_LIQUIDITY_SCHEMA })).toBeUndefined();
+  });
+
+  it("a complete impairment RFQ: the recipe comes from the template, the three words ride as additionalData, and the pool is the one derive-cork-pool answers for those bytes", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    const inline = d.answer.inline!;
+    expect(inline.schema).toBe(INLINE_IMPAIRMENT_SCHEMA);
+    expect(inline.durationSeconds).toBe(RFQ_IMPAIRMENT_DURATION);
+    expect(inline.apySpreadPercentage).toBe(RFQ_IMPAIRMENT_SPREAD);
+    expect(inline.complete).toBe(true);
+    const expected = encodeImpairmentArgs({ anchorRate: BigInt(RFQ_INLINE_ANCHOR), durationSeconds: BigInt(RFQ_IMPAIRMENT_DURATION), apySpreadPercentage: BigInt(RFQ_IMPAIRMENT_SPREAD) });
+    expect(inline.additionalData).toBe(expected);
+    // No "incomplete block" warning on a complete one.
+    expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
+    // The stub's impairment resolve COMPUTES the band math on the live 0.8e18 anchor: the pinned
+    // constraint is that derivation, and the pool id matches a direct derive with the same bytes.
+    expect(d.jit?.constraint).toEqual({ rateMin: "798465753424657535", rateMax: "801534246575342465", rateChangePerDayMax: "219178082191780", rateChangeCapacityMax: "1534246575342465" });
+    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: IMPAIRMENT_RECIPE, args: expected } }, ctx);
+    expect(derived.state, JSON.stringify(derived.warnings)).toBe("ok");
+    expect(d.answer.pool.poolId.toLowerCase()).toBe((derived.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
+    // The signed bytes carry exactly those 96 bytes.
+    const built = env.data as { typedData: { message: Record<string, string> }; extension: string };
+    const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: built.extension } }, ctx);
+    expect((decoded.data as { jit: { additionalData: string; recipe: string } }).jit.additionalData).toBe(expected);
+    expect((decoded.data as { jit: { recipe: string } }).jit.recipe.toLowerCase()).toBe(IMPAIRMENT_RECIPE.toLowerCase());
+  });
+
+  it("a PARTIAL impairment block (no spread) derives no payload, warns which words are missing, and the caller's explicit additionalData wins over it", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-impair-0002", action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_PARTIAL_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry } }, ctx);
+    // The recipe refuses a 0x payload (MalformedAdditionalData) and the derive gates — and the
+    // TEACHING that landed before the derive, naming the missing word, must SURVIVE the gate:
+    // it is the cause the raw revert cannot name. (A mutation probe caught the version of this
+    // test that accepted "gated" alone — the gated return used to drop every earlier warning.)
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("recipe_refused"); // the reason stays FIRST
+    const missing = env.warnings.find((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"));
+    expect(missing, JSON.stringify(env.warnings)).toBeDefined();
+    expect(missing!.message).toContain("apySpreadPercentage");
+    expect(missing!.message).not.toContain("anchorRate"); // only the truly missing word is named
+    // Explicit bytes from the caller bypass the block entirely and the order builds.
+    const explicit = encodeImpairmentArgs({ anchorRate: BigInt(RFQ_INLINE_ANCHOR), durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n });
+    const fixed = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-impair-0003", action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_PARTIAL_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry, jitMarket: { additionalData: explicit } } }, ctx);
+    expect(fixed.state, JSON.stringify(fixed.warnings)).toBe("ok");
+    const inline = (fixed.data as Answered).answer.inline!;
+    expect(inline.complete).toBe(false);
+    expect(inline.additionalData).toBe(explicit);
+    expect(fixed.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
   });
 });

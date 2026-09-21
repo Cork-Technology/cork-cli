@@ -241,6 +241,14 @@ export const RFQ_INLINE_ID = "rfq_open9inline";
 export const RFQ_INLINE_ANCHOR = "700000000000000000";
 export const RFQ_INLINE_OPTION_ANCHOR = "800000000000000000"; // = the stub oracle's rate()
 export const RFQ_INLINE_ANSWER_ID = "ans_inline1";
+/** Two RFQs under the cork-inline-impairment/1 convention (the fourth recipe's three-word
+ *  block). COMPLETE carries anchor + duration (7 days) + spread (10%/year, 1e18 = 1%); PARTIAL
+ *  omits the spread — the recipe's payload cannot be derived from it, and answer-rfq must say
+ *  so instead of encoding a zero. Served on the single-record read only. */
+export const RFQ_IMPAIRMENT_ID = "rfq_open10impair";
+export const RFQ_IMPAIRMENT_PARTIAL_ID = "rfq_open11impairpartial";
+export const RFQ_IMPAIRMENT_DURATION = "604800";
+export const RFQ_IMPAIRMENT_SPREAD = "10000000000000000000";
 /** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
 export const RFQ_ANSWER_ID = "ans_eval1";
 
@@ -462,6 +470,11 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
         const inlineTemplate = (anchor: string) => ({ inline: { oracle_recipe: LIQUIDITY_RECIPE, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: anchor, expiry: String(JIT_TASK_EXPIRY), swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" } } });
         const inlineAnswers = [{ answer_id: RFQ_INLINE_ANSWER_ID, underwriter: RESTING_MAKER.address, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.05", expiry: Number(JIT_TASK_EXPIRY), market_template: inlineTemplate(RFQ_INLINE_OPTION_ANCHOR) }] } }];
         return r(200, { ...row, rfq_id: RFQ_INLINE_ID, market_template: inlineTemplate(RFQ_INLINE_ANCHOR), answers: inlineAnswers, answer_count: 1 });
+      }
+      if (id === RFQ_IMPAIRMENT_ID || id === RFQ_IMPAIRMENT_PARTIAL_ID) {
+        const params: Record<string, string> = { schema: "cork-inline-impairment/1", anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: RFQ_IMPAIRMENT_DURATION, expiry: String(JIT_TASK_EXPIRY), swap_fee_wad: "1000000000000000000", unwind_swap_fee_wad: "0" };
+        if (id === RFQ_IMPAIRMENT_ID) params.apy_spread_percentage = RFQ_IMPAIRMENT_SPREAD;
+        return r(200, { ...row, rfq_id: id, modes: ["liquidity_impairment"], market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } }, answers: [], answer_count: 0 });
       }
       return r(404, { message: `unknown rfq ${single}` });
     }

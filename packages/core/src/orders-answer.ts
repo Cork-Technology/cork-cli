@@ -9,6 +9,7 @@
 //   tenor is pinned at signing (pool expiry − now).
 // Nothing here chooses a premium: the caller's quote is an input.
 
+import { encodeImpairmentArgs } from "./market-registry.ts";
 import { encodeAbiParameters } from "viem";
 import { ceilDiv, normalizeDecimals } from "./math/fixed.ts";
 
@@ -60,37 +61,83 @@ export function impliedPremiumWad(premiumAmountNative: bigint, notionalAssets: b
   return (premiumAmountNative * YEAR_SECONDS * 10n ** 18n) / (notionalAssets * tenorSeconds);
 }
 
-/** The inline template's `oracle_params` block under the `cork-inline-liquidity/1` contract —
- *  the shape the Cork status-page heartbeat RFQs carry: the requester's anchor rate (the rate it
- *  derived its pool with, ABSOLUTE 1e18 = 1.0), the pool expiry it derived with, and the two
- *  creation fees, every value a decimal string. The venue requires the field on an inline
- *  template and nothing about its content, so every value is read defensively: another schema
- *  name, a missing field, or a non-digit value reads as absent, never as a guess. */
+/** The inline template's `oracle_params` block. The venue types the block as a FREE-FORM bag
+ *  (verified against api-phoenix 0.4.3's openapi: `additionalProperties: string | number |
+ *  boolean | null`, nothing named), so the schema names below are THIS tool's conventions —
+ *  the requester and the answering underwriter agree on them, the venue merely relays them.
+ *
+ *  `cork-inline-liquidity/1` is the shape the Cork status-page heartbeat RFQs carry: the
+ *  requester's anchor rate (the rate it derived its pool with, ABSOLUTE 1e18 = 1.0), the pool
+ *  expiry it derived with, and the two creation fees, every value a decimal string.
+ *
+ *  `cork-inline-impairment/1` adds the ApySpreadImpairmentRecipe's two extra words —
+ *  `duration_seconds` (plain seconds, the author's choice; the recipe never checks it against
+ *  the expiry) and `apy_spread_percentage` (1e18 = 1%, the PERCENTAGE scale — a 10%/year spread
+ *  is "10000000000000000000"). Both are REQUIRED by the recipe's resolve; a block missing either
+ *  cannot build the recipe's 96-byte additionalData and reads as incomplete (`complete: false`),
+ *  so the caller is told to pass jitMarket.additionalData instead of getting a guessed word.
+ *
+ *  Every value is read defensively: another schema name, a missing field, or a non-digit value
+ *  reads as absent, never as a guess. */
 export const INLINE_LIQUIDITY_SCHEMA = "cork-inline-liquidity/1";
-export interface InlineLiquidityParams {
+export const INLINE_IMPAIRMENT_SCHEMA = "cork-inline-impairment/1";
+export const INLINE_TEMPLATE_SCHEMAS = [INLINE_LIQUIDITY_SCHEMA, INLINE_IMPAIRMENT_SCHEMA] as const;
+export type InlineTemplateSchema = (typeof INLINE_TEMPLATE_SCHEMAS)[number];
+interface InlineCommonParams {
   anchorRate?: bigint;
   expiry?: bigint;
   swapFeeWad?: string;
   unwindSwapFeeWad?: string;
 }
-export function inlineParamsOfTemplate(t: unknown): InlineLiquidityParams | undefined {
+export interface InlineLiquidityParams extends InlineCommonParams {
+  schema: typeof INLINE_LIQUIDITY_SCHEMA;
+}
+export interface InlineImpairmentParams extends InlineCommonParams {
+  schema: typeof INLINE_IMPAIRMENT_SCHEMA;
+  durationSeconds?: bigint;
+  apySpreadPercentage?: bigint;
+}
+export type InlineTemplateParams = InlineLiquidityParams | InlineImpairmentParams;
+export function inlineParamsOfTemplate(t: unknown): InlineTemplateParams | undefined {
   if (!t || typeof t !== "object") return undefined;
   const inline = (t as { inline?: unknown }).inline;
   const op = inline && typeof inline === "object" ? (inline as { oracle_params?: unknown }).oracle_params : undefined;
   if (!op || typeof op !== "object") return undefined;
   const o = op as Record<string, unknown>;
-  if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;
+  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;
   const digits = (v: unknown): string | undefined => {
     const s = typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
     return s !== undefined && /^\d+$/.test(s) ? s : undefined;
   };
-  const anchor = digits(o.anchor_rate), expiry = digits(o.expiry), swapFee = digits(o.swap_fee_wad), unwindFee = digits(o.unwind_swap_fee_wad);
-  return {
-    ...(anchor !== undefined && BigInt(anchor) > 0n ? { anchorRate: BigInt(anchor) } : {}),
-    ...(expiry !== undefined && BigInt(expiry) > 0n ? { expiry: BigInt(expiry) } : {}),
+  const positive = (v: unknown): bigint | undefined => {
+    const d = digits(v);
+    return d !== undefined && BigInt(d) > 0n ? BigInt(d) : undefined;
+  };
+  const anchor = positive(o.anchor_rate), expiry = positive(o.expiry), swapFee = digits(o.swap_fee_wad), unwindFee = digits(o.unwind_swap_fee_wad);
+  const common: InlineCommonParams = {
+    ...(anchor !== undefined ? { anchorRate: anchor } : {}),
+    ...(expiry !== undefined ? { expiry } : {}),
     ...(swapFee !== undefined ? { swapFeeWad: swapFee } : {}),
     ...(unwindFee !== undefined ? { unwindSwapFeeWad: unwindFee } : {}),
   };
+  if (o.schema === INLINE_IMPAIRMENT_SCHEMA) {
+    const durationSeconds = positive(o.duration_seconds), apySpreadPercentage = positive(o.apy_spread_percentage);
+    return { schema: INLINE_IMPAIRMENT_SCHEMA, ...common, ...(durationSeconds !== undefined ? { durationSeconds } : {}), ...(apySpreadPercentage !== undefined ? { apySpreadPercentage } : {}) };
+  }
+  return { schema: INLINE_LIQUIDITY_SCHEMA, ...common };
+}
+
+/** The recipe `additionalData` an inline block resolves to, by its schema — or undefined when
+ *  the block cannot yield the recipe's payload (liquidity: no anchor; impairment: any of the
+ *  three words missing — the recipe's _decode takes exactly 96 bytes, so a partial block is
+ *  NOT encoded with zeros: a zero anchor/duration/spread would revert or produce a window the
+ *  requester never asked for). */
+export function inlineAdditionalData(p: InlineTemplateParams): `0x${string}` | undefined {
+  if (p.schema === INLINE_IMPAIRMENT_SCHEMA) {
+    if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;
+    return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });
+  }
+  return p.anchorRate !== undefined ? encodeAnchorArgs(p.anchorRate) : undefined;
 }
 
 /** The liquidity recipes' `additionalData`: `abi.encode(uint256 anchorRate)`. */
