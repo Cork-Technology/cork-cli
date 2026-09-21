@@ -5,7 +5,9 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [Unreleased]
+## [0.5.1-rc.7] — 2026-09-21
+
+This cut integrates the fourth recipe end to end — the impairment recipe on the registry, in the compute surface, in the RFQ inline path, and in the evals — and makes the offers probe walk report a blind read out loud.
 
 ### Added
 
