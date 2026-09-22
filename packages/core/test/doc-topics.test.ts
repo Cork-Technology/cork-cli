@@ -265,6 +265,39 @@ describe("doc topic: orders", () => {
   // interpolation deleted.
 });
 
+describe("doc topic: generations", () => {
+  it("resolves by name and by every alias, case-insensitively, and teaches the three resolution rules", async () => {
+    for (const key of ["generations", "GENERATION", "wires", "Primary"]) {
+      const env = await runTool("cork_capabilities", { topic: key });
+      expect(env.state).toBe("ok");
+      const d = env.data as { topic: string; summary: string; body: string };
+      expect(d.topic).toBe("generations");
+      expect(d.summary).toBe(DOC_TOPICS.generations!.summary);
+      for (const needle of ["phoenix/v0.4-rc.1", "pool_not_found", "generation_unknown", "generation_read_only", "shares(poolId)", "`10-field`", "`nested`", "oracleSalt"]) {
+        expect(d.body, `generations topic body must teach ${needle}`).toContain(needle);
+      }
+    }
+  });
+
+  it("surfaces in search results as a topic card for the words people actually use", async () => {
+    for (const q of ["which generation is this pool on", "what does the primary generation mean", "8-field vs 10-field wire"]) {
+      const env = await runTool("cork_capabilities", { search: q });
+      expect(env.state).toBe("ok");
+      const matches = (env.data as { matches: Array<{ topic?: string; reference?: string }> }).matches;
+      const topic = matches.find((m) => m.topic === "generations");
+      expect(topic, `search: ${q}`).toBeDefined();
+      expect(topic!.reference).toBe('cork_capabilities topic:"generations"');
+    }
+  });
+
+  it("names every configured generation label of the bundled config, so a relabel fails here before it ships", () => {
+    const body = DOC_TOPICS.generations!.body;
+    for (const label of ["mainnet", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]) {
+      expect(body, `label ${label}`).toContain(`\`${label}\``);
+    }
+  });
+});
+
 describe("data.execution on prepare results (offline-buildable variants)", () => {
   const execOf = (env: { data: unknown }) => (env.data as { execution?: { kind: string; sign: string; then: string[]; reference: string } } | null)?.execution;
 

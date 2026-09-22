@@ -347,7 +347,7 @@ they are the same claim, so a field description and this table can be checked ag
 | Notation | Schema description says | 5% is written | Fields | Unit owner |
 |---|---|---|---|---|
 | \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax (the four constraint values a JIT order carries and signs), rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
-| \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (cap 5e18 = 5%), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
+| \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (the bound follows the pool manager's wire: cap 5e18 = 5% inclusive on an 8-field manager; strictly below 100e18 = 100% on a 10-field manager, where the two fees are also PART OF THE POOL ID — two markets that differ only in a fee are two pools), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
 | \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing (cork_submit lop-order and the finalize listing block) — REMOVED by the venue 2026-08-17; the field survives in this tool's schema only to refuse with teaching. Its successor is the fraction-string premiumAnnualized in the next row | cork-api ≤0.3.14 (the legacy book scale) |
 | \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized — AND, since cork-api 0.3.3, the BOOK listing's premiumAnnualized (same name, same convention, per-surface bounds: RFQ pattern \`^(0\|0\\.[0-9]{1,18})$\` with the < 0.5 cap; book pattern \`^\\d{1,3}(\\.\\d{1,18})?$\` with a ≤ 100 cap mirroring the legacy 10000% ceiling — the patterns are structure, both caps are relaxable POLICY) | the venue — scale SCHEMA-GATED at write on every surface; quote ECONOMICS stored verbatim. PINNED forever by R13 — a WAD variant would be a NEW field name |
 | \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
@@ -378,6 +378,15 @@ ABSOLUTE rates at \`D18{1}\`. On the pre-2.1.0 path the same names carried PERCE
 legacy path is gated (\`legacy: true\` plus CORK_ENABLE_DEPRECATED=1) and every result is labelled,
 but the hazard is that the old generation still ANSWERS: 2.1.0-shaped calls against it decode into
 plausible nonsense rather than failing.
+
+**The fee bound is a wire fact, not a constant.** Both fee fields stay \`D18{%}\` on every
+generation, but WHAT bounds them follows the pool manager's wire (\`cork_capabilities
+topic:"generations"\`): an 8-field manager (mainnet, \`phoenix/v0.3-rc.1\`, the older Arbitrum
+eras) caps each fee at 5e18 inclusive through \`MAX_FEE_PERCENTAGE\`; a 10-field manager
+(\`phoenix/v0.4-rc.1\`, the primary) has NO such getter and reverts \`InvalidFees()\` at or above
+100e18 — and folds both fees into the \`Market\` struct, so they are part of the pool id.
+\`derive-cork-pool\` takes them as filters (default 0) for that reason; a fee that changes the
+identity is a different market, not a parameter of the same one.
 
 ## Converting safely
 
@@ -537,6 +546,113 @@ The invalidator bit says only SPENT: filled, cancelled, and dead-by-sibling read
 `,
     searchText:
       "reserved order dedicated order private order single taker allowed sender allowedSender who can fill this order reserve for one taker fill sender msg.sender adapter PrivateOrder one cancels the other oco oca ladder rung group shared nonce bit invalidator partial fill single fill multiple fills all or nothing epoch series mass cancel decaying price auction dutch cited quote quoteRef firm quote indicative offer resting live dead order sibling liveness expired cancelled filled order lifecycle exclusivity watch monitor poll long-poll watermark since wait better order appeared gone changes notify",
+  },
+  generations: {
+    name: "generations",
+    aliases: ["generation", "wires", "primary"],
+    summary:
+      "A chain hosts a SET of contract generations, one of them primary: a generation is the set of Cork contracts deployed to work together (a phoenix pool-manager stack, a market-registry stack, a rollover stack, a reference ForSelf adapter) plus the WIRE each block speaks — the config declares the wire, the code implements it and refuses one it does not know. A prepare targets the primary unless the optional `generation` label on every chain-backed input selects another active set; a read, prepare or compute keyed on a poolId follows the generation the POOL lives on, resolved from the chain, and every such result carries `data.generation` and `provenance.generation`. `protocol-config` lists a chain's generations with each block's addresses and wire. Call cork_capabilities topic:\"generations\" for the labels, the statuses, the resolution rules and the wire table.",
+    body: `# Generations — which contracts a call talks to, and how the tool decides
+
+Cork redeploys. A redeploy does not retire the previous contracts: their pools stay readable, their
+orders keep filling, their settlers keep settling. So a chain hosts a SET of contract generations,
+and the tool needs one answer to three questions — which set a PREPARE should target, which set a
+POOL lives on, and which set an ADDRESS seen in bytes or logs belongs to. One record answers all
+three: the generation.
+
+## What a generation is
+
+A generation is the set of contracts that were deployed to work together, plus the wire shapes
+they speak:
+
+- \`phoenix\` — the pool-manager stack (poolManager, constraintAdapter, corkAdapter, bundler3,
+  whitelistManager, controller). Wire: \`8-field\` or \`10-field\` (the width of the \`Market\` struct).
+- \`marketRegistry\` — the registry, the JIT adapter, the market creator, the recipes. Wire:
+  \`legacy\` | \`flat\` | \`nested\`.
+- \`rollover\` — the ERC-7683 factory and its two settlers (plus the BaseFiller). Wire: \`rc.1\` |
+  \`rc.2\` | \`0.2\`.
+- \`forSelf\` — the reference CorkForSelfAdapter of that set.
+
+The config (\`cork-defaults.v2.json\`, schema 2) DECLARES each block's wire; the code IMPLEMENTS the
+wires it knows and refuses a declared wire it does not (\`phase_gated\`) — it never guesses a layout
+from bytes. A block can be absent (mainnet has only a phoenix block).
+
+## Labels and statuses
+
+Labels are the Distribution's names where one exists and the tool's own for the eras before it:
+
+| Chain | Label | Status | Contents |
+|---|---|---|---|
+| 1 | \`mainnet\` (primary) | active | the original chain-1 stack (8-field) |
+| 42161, 8453 | \`phoenix/v0.4-rc.1\` (**primary**) | active | phoenix 1.4.0-rc.1 (10-field), market-registry 0.5.0 (nested), rollover 0.2.0 (0.2), cork-periphery 0.2.0-rc.1 |
+| 42161, 8453 | \`phoenix/v0.3-rc.1\` | active | phoenix v1.3.0-rc.1 (8-field), market-registry 0.3.3 (flat), rollover v0.1.0-rc.2 (rc.2) |
+| 42161 | \`arbitrum-v1.1\` | active | the previous production stack, where the venue's existing markets live (8-field; a pre-2.1.0 registry behind the deprecation gate; the retired July 2026 rollover set, rc.1) |
+| 42161 | \`arbitrum-legacy\` | read-only | the pre-launch calibration pools (8-field) |
+
+\`active\` = readable AND preparable (name it with \`generation\` when it is not the primary).
+\`read-only\` = reads, decode, attribution and classification only; a pre-expiry prepare against it
+refuses \`generation_read_only\` (the post-expiry settles — withdraw, withdraw-other, redeem — still
+build). The rollover block keeps its own \`retired\` date: venue admission is a rollover fact.
+Identical addresses across Arbitrum and Base in every Distribution set; bundler3 is per chain.
+
+## How a call picks a generation
+
+1. **A prepare** targets the primary. The optional \`generation: "<label>"\` on every chain-backed
+   input (query, compute, prepare_phoenix, prepare_orders, prepare_market, track) selects another
+   set. An unknown label refuses \`generation_unknown\` and lists the chain's labels.
+2. **Anything keyed on a poolId** — cork-pool, account-state, pool-whitelist, the three chain
+   compute kinds, track marketRef, the 13 pool actions and their ForSelf twins — resolves the
+   generation FROM THE CHAIN: one batched \`shares(poolId)\` read across every generation's pool
+   manager; the manager that knows the pool wins. \`generation\` narrows the search to one set.
+   No manager knows it: \`pool_not_found\`, naming every manager asked. A bundle for a pool on an
+   older set targets THAT set's adapter, bundler and whitelist manager. The result carries
+   \`data.generation\` (\`{ label, status, distribution? }\`) and \`provenance.generation\`.
+3. **An address** seen in calldata, a log, or a venue row (an adapter, a settler, a factory, a pool
+   manager) is classified by one function into \`{ label, status, role }\` — decode labels
+   (\`jit.generation\`, \`jit.wire\`), event attribution, settler classification and the book's row
+   verification all read it. Decode picks the layout from the adapter's generation FIRST and never
+   trial-decodes; nested bytes at a flat adapter get no label.
+4. **A rollover intent** takes its jitMarket wire from the SETTLER's generation.
+
+\`protocol-config\` reports the selected generation and the chain's full list with every block's
+addresses and wire.
+
+## The wire table
+
+| Wire | Block | What differs |
+|---|---|---|
+| \`8-field\` | phoenix | \`Market\` has 8 fields; the fees live OUTSIDE the pool id; \`MarketCreated\` has 7 arguments; each fee is capped at 5% inclusive (\`MAX_FEE_PERCENTAGE\`) |
+| \`10-field\` | phoenix | the two fee percentages are INSIDE \`Market\` and therefore part of the pool id; \`MarketCreated\` has 9 arguments (a different topic); the bound is strictly below 100% (\`InvalidFees()\`); no \`MAX_FEE_PERCENTAGE\` getter |
+| \`legacy\` | marketRegistry | pre-2.1.0: mode strings, the constraint derived at fill time; reachable only with \`legacy: true\` and CORK_ENABLE_DEPRECATED=1 |
+| \`flat\` | marketRegistry | 0.3.x: a flat JITMarketParams with \`additionalData\`; \`verify\` takes 5 arguments; \`deploy(ca, ref, mode)\`; the JIT adapter holds the controller roles and emits \`JITMarketCreated\` |
+| \`nested\` | marketRegistry | 0.5.0: \`(MarketParams market, bool enableJitMint)\` with \`extraData\` (the new name; \`additionalData\` is accepted as an alias) and \`oracleSalt\` (default zero; consumed only by a pair's FIRST oracle deploy); \`verify\` takes 7 arguments (pool expiry + a \`creating\` flag); \`deploy(ca, ref, mode, oracleSalt)\`; the CorkMarketCreator ships inside the registry package and holds the controller role; the adapter binds \`MARKET_CREATOR\`, the creator binds \`MARKET_REGISTRY\`; denominations are address units; the creator emits \`MarketCreated\` |
+| \`rc.1\` | rollover | the retired July 2026 OrderData (no \`jitMarketHash\`); refuses a jitMarket |
+| \`rc.2\` | rollover | \`RolloverParams.jitMarketHash\`; the JITMarketParams typehash without a salt |
+| \`0.2\` | rollover | \`bytes32 oracleSalt\` after \`additionalData\` in JITMarketParams — a different typehash; OrderData and RolloverParams identical to rc.2 |
+
+A non-zero \`oracleSalt\` against a flat, legacy or rc.2 target is refused and names the generation.
+The rollover typed-data output keeps the struct's own \`additionalData\` member: the signer sees what
+the contract hashes.
+
+## Attestations and trust
+
+\`cork_capabilities topic:"verify"\` re-derives every attested address from (deployer, salt,
+initCodeHash); each attestation names the generation it binds. The \`mainnet\` and
+\`phoenix/v0.3-rc.1\` sets are attested. The \`phoenix/v0.4-rc.1\` set has NO CREATE2 attestation:
+the Distribution component records carry no salt, initCodeHash or deployer, and nothing is
+fabricated. Its trust anchor is instead the approved-implementations allowlist — the live code
+hash of every role in every generation, captured on chain and cross-checked against the
+Distribution records, compiled into this build and never read from the remote config
+(\`implementation_not_approved\` when the code behind an address is not on the list).
+
+## Why the config schema changed
+
+\`cork-defaults.json\` (schema 1) is frozen for the 0.5 line. A schema-1 file whose primary moved
+would send a 0.5.x binary to a generation whose wire it does not speak — and an 8-field decode of a
+10-field \`market()\` return succeeds silently with a wrong pool id. Two files, two lines; older
+binaries keep the addresses they understand.`,
+    searchText:
+      "generation generations which contracts primary set label phoenix/v0.4-rc.1 phoenix/v0.3-rc.1 arbitrum-v1.1 wire wires 8-field 10-field flat nested legacy rc.2 0.2 which registry which adapter which pool manager is this pool on old pool older generation redeploy retired read-only active pool_not_found generation_unknown generation_read_only select generation oracleSalt extraData additionalData market creator distribution",
   },
   warnings: {
     name: "warnings",

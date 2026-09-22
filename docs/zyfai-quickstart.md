@@ -2,16 +2,26 @@
 
 **Audience:** the Zyfai engineering team. **Assumes:** fluency with Safe/ERC-7579, 1inch LOP v4,
 EIP-712/ERC-1271, ERC-2612 permits, ERC-4626/7540, CREATE2. **Chain:** Base (8453).
-**Status:** as of 2026-08-12, against MarketRegistry contracts release **0.3.3** (registry
-`0xa78d8137…11F1`) and the phoenix v1.3 pool-manager stack it binds — both deployed at
-**identical addresses on Base and Arbitrum One**, so everything here transfers to 42161 by
-changing only the chain id and the asset addresses. Base is **post-first-market**: the JIT
-adapter's POOL_CREATOR + FEE_MANAGER roles were granted on both chains 2026-08-10, the first JIT
-market-creating fills landed the same day, and the venue has listed ~50 short-dated pilot pools
-on Base since — all on this doc's own sUSDe/mwUSDC pair. **Tool:** cork-cli `v0.2.0-rc.2`. Every
-live output below was re-captured 2026-08-12 against 0.3.3; still, **treat this doc as
-orientation and pull the authoritative values from the tool** (`ch query protocol-config`),
-never hardcode them.
+**Status:** the worked examples below were captured 2026-08-12 against MarketRegistry contracts
+release **0.3.3** (registry `0xa78d8137…11F1`) and the phoenix v1.3 pool-manager stack it binds —
+the generation the tool now labels **`phoenix/v0.3-rc.1`**. Since 2026-09-22 a chain hosts a SET
+of contract generations, one primary: the primary on Base and Arbitrum One is
+**`phoenix/v0.4-rc.1`** — contracts release **0.5.0** (registry `0xe1f569f1…55c5`, adapter
+`0x3E01C558…B104`, market creator `0x1A074F17…2DeA`; recipes liquidity `0x679Cbd01…964d`, nav
+`0xed6A6b04…87e3`, fixed `0xEC26bb7d…8C49`, impairment `0xd5e8F76A…0Ed9`) on the phoenix
+1.4.0-rc.1 pool manager (`0xcC17224A…0C2D`). Both sets are live at **identical addresses on Base
+and Arbitrum One**, so everything here transfers to 42161 by changing only the chain id and the
+asset addresses. A prepare targets the primary unless you pass `--generation phoenix/v0.3-rc.1`;
+a read of an existing pool follows the generation the pool lives on. Every pool the venue has
+listed so far lives on the 0.3.3 / v1.3 set, and the 0.5.0 registry holds **no approved assets
+yet** — so the 0.3.3 outputs below are still what a live read of today's markets returns, and the
+0.5.0 set is what a NEW market you create will use once its assets are registered. Base is
+**post-first-market**: the JIT adapter's POOL_CREATOR + FEE_MANAGER roles were granted on both
+chains 2026-08-10, the first JIT market-creating fills landed the same day, and the venue has
+listed ~50 short-dated pilot pools on Base since — all on this doc's own sUSDe/mwUSDC pair.
+**Tool:** cork-cli `0.6.0-rc.1` (`v0.2.0-rc.2` at capture time). **Treat this doc as orientation
+and pull the authoritative values from the tool** (`ch query protocol-config` lists both
+generations with every address and wire), never hardcode them.
 
 This is a two-part handoff: (1) a compact model of what Cork gives you and where your agent plugs
 in, and (2) `cork-cli` — a helper you drive from an MCP client or the shell to read state,
@@ -216,7 +226,11 @@ ch query registry-denominations --input '{"chainId":8453}' --json
 ```
 Labels are **exact bytes** (case-sensitive; `labelHash` is the real identity). Two assets whose
 sources are denominated in the *same* label compare directly; different labels need a bridge —
-which is the next stop.
+which is the next stop. (Generation note: that label-keyed table is the 0.3.3 registry's. The
+0.5.0 registry — the primary — keys denominations by unit **address** and lists
+`{ unit, symbol, name }`; look one up with `--address`, not `--label`. It also requires a USD
+path — a unit must be a denomination AND have a feed to USD before an asset denominated in it is
+accepted.)
 
 **Stop 3 — feeds: the bridges between denominations.**
 
@@ -231,7 +245,8 @@ ch query registry-feeds --input '{"chainId":8453}' --json
   "aggregator": "0x7e860098…", "feedDecimals": 8,
   "live": { "answer": "99981162", "decimals": 8, "updatedAt": "1786458815" } }
 ```
-Feeds are **directed** conversion edges with live answers — base→quote is not quote→base. When
+Feeds are **directed** conversion edges with live answers — base→quote is not quote→base
+(`feedDecimals` is a 0.3.3 field; the 0.5.0 registry records only `live.decimals`). When
 your CA's and REF's sources speak different denominations, the registry needs a feed path to
 reconcile them; a pair with **no path cannot get a price oracle at all** (you'd see
 `oracle_not_deployable` at the next stop). Today every edge converts into USD, so USD is the hub.
@@ -631,20 +646,22 @@ ch decode order --chain-id 8453 --data '{…the signed order row…}' --json
 ch decode order --chain-id 8453 --input '{"data":{…the signed order row…}}' --json
 ```
 ```jsonc
-{ "state": "ok", "data": { "jit": {          // what a current-generation (0.3.3) order decodes to
-  "generation": "2.1.0", "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
+{ "state": "ok", "data": { "jit": {          // what a 0.3.3 (flat-wire) order decodes to
+  "generation": "phoenix/v0.3-rc.1", "wire": "flat", "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
   "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0xc1256Ae5…A2Ca",
   "recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
   "constraint": { "rateMin": "1", "rateMax": "1745164538586574996", /* … */ },
   "enableJitMint": true, "permits": 0 } } }  // ← enableJitMint: the fill WILL mint just-in-time
 ```
 (Captured from a tool-prepared, permit-free order against the step-1c market — an underwriter's
-live row decodes identically and additionally shows `"permits": 1`. The `generation` label reads
-`2.1.0` for every recipe-carrying order — that
-is the payload LAYOUT's name; the **adapter address** is what tells you which deployment
-generation the row fills through. `0x8902…374f` is the 0.3.3 stack the Distribution pins,
-identical on both chains; rows naming an older adapter fill through a superseded deployment —
-fine for reading, but not the stack this doc targets.)
+live row decodes identically and additionally shows `"permits": 1`. The `generation` label is the
+chain's label for the adapter the row names, and `wire` is the payload layout that generation
+speaks: `phoenix/v0.3-rc.1` / `flat` for `0x8902…374f` (the 0.3.3 stack, identical on both
+chains); `phoenix/v0.4-rc.1` / `nested` for the 0.5.0 adapter `0x3E01…B104`, whose payload wraps
+the creator's `MarketParams` with `extraData` + `oracleSalt` and the two fees inside the pool id.
+The tool classifies the adapter FIRST and decodes on that generation's layout — it never
+trial-decodes. Rows naming an older adapter fill through a superseded deployment — fine for
+reading, but not a stack you would sign against today.)
 
 **What `"permits": 1` means — the JIT permit rule.** A token that does not exist yet cannot be
 pre-approved, so the order carries the maker's **ERC-2612 permit over the predicted cST**:
@@ -1117,9 +1134,34 @@ chain outranks the indexer on any disagreement.
 from `ch query protocol-config` and the registry stack from `ch query registry-assets` — the
 whole registry stack (registry, adapter, all three recipes) was redeployed 2026-08-10 as
 contracts release **0.3.3** (identical addresses on Base and Arbitrum One), so anything cached
-before then is stale. Installed copies of the tool pick up redeployed addresses automatically
-within an hour (remote config), so reads need no update from you. The current venue pool list is
-`api-phoenix.cork.tech/pools/v1/`.
+before then is stale; and since 2026-09-22 the tool's primary is contracts release **0.5.0**
+(`phoenix/v0.4-rc.1`, a second set of addresses beside 0.3.3 — nothing was retired). A chain now
+hosts a SET of generations: `ch query protocol-config` lists them all with each block's addresses
+and wire, every result names the generation it answered from (`data.generation`), and
+`--generation <label>` selects a non-primary set for a prepare. Installed copies of the tool pick
+up redeployed addresses automatically within an hour (remote config, `cork-defaults.v2.json`),
+so reads need no update from you. The current venue pool list is `api-phoenix.cork.tech/pools/v1/`.
+
+The primary set on Base and Arbitrum One (`phoenix/v0.4-rc.1`, contracts release **0.5.0** on the
+phoenix 1.4.0-rc.1 pool manager; identical addresses on both chains, from `ch query protocol-config`
+2026-09-22):
+
+| Role | Address |
+|---|---|
+| MarketRegistry 0.5.0 | `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5` |
+| CorkLimitOrderAdapter (JIT hook, nested wire) | `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` |
+| CorkMarketCreator (holds `POOL_CREATOR_ROLE`) | `0x1A074F17647504D1c50B436074a74d051D502dEa` |
+| LiquidityPriceRecipe | `0x679Cbd016587c423f342e5Ba31e58356228c964d` |
+| LiquidityNavRecipe | `0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3` |
+| FixedRateRecipe | `0xEC26bb7d911aFe374721Ecd963543f7e52468C49` |
+| ApySpreadImpairmentRecipe | `0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9` |
+| CorkPoolManager 1.4.0-rc.1 (10-field `Market`) | `0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D` |
+| CorkAdapter (pool actions) | `0x71eB628c3A40FB3896613804847840426f9284A7` |
+| CorkForSelfAdapter v0.2.0-rc.1 (reference) | `0x3864902695DC930Df406ef5dEB74c4DC249e23f1` |
+
+The 0.5.0 registry holds no approved assets yet, so no market exists on this set today; the 0.3.3
+addresses the worked examples show (`phoenix/v0.3-rc.1`) are what every listed pool still reads
+as. Pass `--generation phoenix/v0.3-rc.1` to build against that set on purpose.
 
 Two rules make redeploys safe to live through:
 - **An abandoned generation does not go dark — it answers.** The interfaces are identical across
@@ -1128,11 +1170,16 @@ Two rules make redeploys safe to live through:
   current".
 - **The "which generation am I on" check:** compare the `registry` field that every `registry-*`
   read echoes (and `ch query protocol-config`'s addresses) against the Distribution manifest your
-  integration pins. Anything that *signs* against an adapter must confirm the adapter's
-  `MARKET_REGISTRY()` immutable equals that pinned registry — `ch` runs this guard automatically
-  on every order prepare and refuses a mismatch (`adapter_binding_mismatch`), so the check is
-  only manual when you bypass the tool (e.g. constructing calls in your own stack, or deploying
-  a ForSelf adapter from copied constructor addresses).
+  integration pins, and read the `generation` label every result carries. Anything that *signs*
+  against an adapter must confirm the adapter binds that pinned registry — on the 0.3.3 adapter
+  the `MARKET_REGISTRY()` immutable; on the 0.5.0 adapter the chain `MARKET_CREATOR()` →
+  `creator.MARKET_REGISTRY()` — `ch` runs this guard automatically on every order prepare and
+  refuses a mismatch (`adapter_binding_mismatch`), so the check is only manual when you bypass
+  the tool (e.g. constructing calls in your own stack, or deploying a ForSelf adapter from copied
+  constructor addresses). Two things differ when you build against 0.5.0: the recipe bytes are
+  named `extraData` (the tool still accepts `additionalData`), and the pool id includes the two
+  fee percentages plus an `oracleSalt` on the pair's first oracle deploy (both default to zero in
+  the tool; `derive-cork-pool` takes them as filters).
 
 ---
 

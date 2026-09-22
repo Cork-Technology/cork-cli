@@ -13,6 +13,14 @@ Common flags everywhere: `--chain-id <id|name>` (`mainnet`/`arbitrum`/`base` wor
 `--rpc-url <url>`, `--explain`. Amounts take exact sugar: `1000e18`, `95e16`, `1_000000`.
 Retrying the same request? Reuse its `--client-request-id`; new intent, new id.
 
+**Generations.** A chain hosts a SET of contract generations, one of them primary
+(`phoenix/v0.4-rc.1` on Arbitrum and Base). Every chain-backed command takes
+`--generation <label>`. Omit it and a prepare targets the primary; a pool-scoped read or bundle
+(`--pool-id …`) follows the generation the POOL lives on, resolved from the chain, and reports it
+as `data.generation`. `ch query protocol-config` lists a chain's generations with each block's
+addresses and wire; `ch capabilities --topic generations` explains the model. A pool no generation
+knows is `pool_not_found`; a label the chain does not configure is `generation_unknown`.
+
 ## Read state — `ch query`
 
 ```sh
@@ -36,13 +44,15 @@ Market-level registry facts (a pair's oracle serves every expiry of that pair):
 ```sh
 ch query registry-assets --chain-id <id> [--address <0x…>]   # the approved assets + their price/NAV sources
 ch query registry-recipes --chain-id <id>                    # the approved recipe contracts + live constants
-ch query registry-denominations --chain-id <id>              # label → unit table
+ch query registry-denominations --chain-id <id>              # denomination units (address-keyed on the 0.5.0 registry; label → unit on 0.3.3)
 ch query registry-feeds --chain-id <id>                      # directed conversion feeds, live answers
 ch query registry-oracle --chain-id <id> \
   --collateral-asset <0x…> --reference-asset <0x…> --oracle-mode <price|nav>   # the pair's oracle status
 ch query derive-cork-pool --chain-id <id> \
-  --collateral-asset <0x…> --reference-asset <0x…> --expiry <unix> --recipe <0x…>
+  --collateral-asset <0x…> --reference-asset <0x…> --expiry <unix> --recipe <0x…> \
+  [--swap-fee-percentage <1e18=1%>] [--unwind-swap-fee-percentage <…>] [--oracle-salt <bytes32>]
   # derive one pool BEFORE it exists: poolId, cST/cPT, constraint, existence
+  # (on the 10-field primary the two fees are part of the pool id; the salt matters only for a pair's first oracle)
 ```
 
 **Registry semantics these commands assume** (the contract-level rules; the JIT-order side is
@@ -57,9 +67,14 @@ ch query derive-cork-pool --chain-id <id> \
   with different oracles, and one pair can hold a `price` wrapper *and* a `nav` wrapper at
   different addresses. A wrapper's identity also folds in which source each leg actually
   resolved to (a `nav` leg that fell back to price is part of the key, not hidden).
-- **Feeds are directed edges with two decimals fields.** base→quote ≠ quote→base. Each feed
-  carries `feedDecimals` (recorded at registration) and `live.decimals` (the aggregator now);
-  comparing them is how you spot a feed whose decimals drifted after registration.
+- **Feeds are directed edges.** base→quote ≠ quote→base. Each feed carries `live.decimals`
+  (the aggregator now); on the 0.3.3 registry (`flat` wire) it also carries `feedDecimals`
+  (recorded at registration), and comparing the two is how you spot a feed whose decimals drifted
+  after registration. The 0.5.0 registry records no `feedDecimals`.
+- **Denominations are keyed by wire.** The 0.5.0 registry (`nested`, the primary) lists address
+  units (`{ unit, symbol, name }`) and takes `--address` for a single lookup; the 0.3.3 registry
+  (`flat`, `--generation phoenix/v0.3-rc.1`) keys them by exact-bytes `--label`. Passing `--label`
+  to a nested-wire registry is refused with teaching.
 - **Recipe values mix two scales by name.** In `registry-recipes` constants, anything ending
   `_PERCENTAGE` is on the 1e18-=-1% scale; `RATE_MIN`-style values are absolute rates
   (1e18 = 1.0); a bare count is neither. Read each value's own name — `ch capabilities
@@ -124,9 +139,19 @@ ch prepare order rollover-intent --settler <0x…> …    # signable ERC-7683 ro
 Market infrastructure (market-level; permissionless + idempotent):
 
 ```sh
-ch prepare market deploy-oracle --chain-id <id> --collateral-asset <0x…> --reference-asset <0x…>
+ch prepare market deploy-oracle --chain-id <id> --collateral-asset <0x…> --reference-asset <0x…> \
+  [--mode price|nav] [--oracle-salt <bytes32>]      # the 0.5.0 registry takes the salt; 0.3.3 does not
 ch prepare market deploy-fixed-oracle --chain-id <id> --rate <1e18-scale>
+ch prepare market create-pool --chain-id <id> --client-request-id <id> \
+  --collateral-asset <0x…> --reference-asset <0x…> --expiry-timestamp <unix> --recipe <0x…> \
+  [--extra-data <0x…>] [--swap-fee-percentage <…>] [--unwind-swap-fee-percentage <…>]
+  # create the pool a JIT order derives AHEAD of the fill (the smart-account path around EOA-only permits)
 ```
+
+The JIT market block (`--jit-market '{…}'` on orders, the flags above on `create-pool`) names the
+recipe bytes `extraData`; `additionalData` is accepted as an alias with a deprecation notice. The
+bytes follow the selected generation's registry wire: nested (`MarketParams` + `oracleSalt`, a
+10-field pool id with the fees inside) on `phoenix/v0.4-rc.1`; flat on `phoenix/v0.3-rc.1`.
 
 ## Inspect bytes — `ch decode`
 

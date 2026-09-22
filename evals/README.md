@@ -118,6 +118,8 @@ regexes must accept the teaching message itself — fixture rot and regex rot fa
 never an LLM run. Coverage is partial and grows with the set (the rc.2 tasks, the highest-value
 earlier tasks, and a canary today); extend it when a new task's outcome depends on stub fixtures.
 
+**The `generation` input (0.6).** Every chain-backed tool takes an optional `generation` label. The stub answers every configured generation's getters address-aware, so a task can pin a set by naming it (`generation: "phoenix/v0.3-rc.1"` for the flat-wire 0.3.3 stack) while the default reaches the nested-wire `phoenix/v0.4-rc.1` primary. Task prompts name a generation only where a human would (an integrator pinned to the older set); the JIT and derive prompts rely on the default and never spell out `oracleSalt`, which the tool defaults to zero. The recipe addresses tasks cite come from the SAME bundled config the stub reads (`LIQUIDITY_RECIPE`, `IMPAIRMENT_RECIPE` in `evals/stub.ts` resolve to the primary's block), so a primary move refreshes the fixtures without a hand edit. The held-out task `ho-nonexistent-pool` expects `pool_not_found` since the 0.6 pool-generation resolution — a behaviour change the task had to reflect; its prompt and answer regex are unchanged.
+
 **Held-out rule: never tune tool descriptions, examples, or teaching text against the held-out
 set.** It exists to catch description overfitting. Run it occasionally (`EVAL_HELD_OUT=1`) and
 expect scores close to the active set; a gap means the active set has leaked into the surface.

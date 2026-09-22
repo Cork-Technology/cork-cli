@@ -151,7 +151,7 @@ import { buildMakerOrder } from "@cork/core/orders";        // order primitives 
 | `@cork/core/bundle` | Bundler3 action encoders, decode, funding legs, the signer summary. |
 | `@cork/core/venue` | The typed venue (api-phoenix) client with cursor pagination. |
 | `@cork/core/indexer` | HyperSync event-archive access for full-decentralized reads. |
-| `@cork/core/config` | Deployment config, CREATE2 attestations, implementation guards. |
+| `@cork/core/config` | Deployment config and the generation model (`generationsOf`, `selectGeneration`, `classifyAddress`, `resolvePoolGeneration`), CREATE2 attestations, implementation guards. |
 
 <details>
 <summary><b>Deeper: a pure-math example with no network at all</b></summary>
@@ -160,9 +160,10 @@ The math tier works offline, in any runtime. Here is the pool identity hash — 
 derivation the contracts run:
 
 ```ts
-import { computeMarketId, type Market } from "@cork/core/math";
+import { computeMarketId, type Market8, type Market10 } from "@cork/core/math";
 
-const market: Market = {
+// An 8-field market — the phoenix/v0.3-rc.1 pool manager and mainnet. The fees live outside the id.
+const market8: Market8 = {
   collateralAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
   referenceAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e",
   expiryTimestamp: 1_900_000_000n,
@@ -172,9 +173,28 @@ const market: Market = {
   rateChangeCapacityMax: 100_000_000_000_000_000n,
   rateOracle: "0x0000000000000000000000000000000000000000",
 };
+const poolId8 = computeMarketId(market8, "8-field");   // `0x…` — bit-exact vs the chain
 
-const poolId = computeMarketId(market);       // `0x…` — bit-exact vs the chain
+// A 10-field market — the phoenix/v0.4-rc.1 pool manager (the primary on Arbitrum and Base).
+// The two fees are part of the struct AND the id: two markets that differ only in a fee are two pools.
+const market10: Market10 = {
+  ...market8,
+  swapFeePercentage: 1_000_000_000_000_000_000n,        // 1% — fees use 1e18 = 1%
+  unwindSwapFeePercentage: 500_000_000_000_000_000n,    // 0.5%
+};
+const poolId10 = computeMarketId(market10, "10-field");
 ```
+
+`Market` is the union `Market8 | Market10`. `computeMarketId` takes the wire explicitly and
+refuses a market whose shape contradicts it — an 8-field decode of a 10-field `market()` return
+succeeds silently in viem, so the wire is never inferred from the fields. The wire comes from the
+pool's generation: `generationsOf(defaults, chainId)` lists a chain's generations (primary first),
+each block with its `wire`; `resolvePoolGeneration(client, list, poolId)` finds the generation a
+pool lives on with one batched `shares(poolId)` read; `resolveDeployment(chainId, deps, generation)`
+(and `resolveRollover`, `resolveMarketRegistry`) take an optional generation label and return
+`generation: { label, status, wire }`. `runTool` does all of this for you: every chain-backed input
+takes an optional `generation`, a pool-scoped read follows the pool's generation, and every such
+result carries `data.generation` and `provenance.generation`.
 
 Amounts and rates are `bigint` in base units throughout. The SDK never uses floating point for
 money.

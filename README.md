@@ -228,15 +228,22 @@ These read **live chain state** and work out of the box.
 > - "What's the current cST swap rate for 1e18 collateral out of that pool?"
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
-Arbitrum (chainId 42161) is a **full** deployment like mainnet: reads, bundle building, orders,
-and the MarketRegistry 2.1.0 resources (registry-assets / registry-oracle / registry-recipes /
-registry-denominations / registry-feeds / derive-cork-pool, plus `cork_prepare_market` oracle
-deploys) all work there. `derive-cork-pool` predicts the pool a JIT LOP fill would create — the
-recipe's oracle, the off-chain-resolved constraint, pool id, and cST/cPT tokens — before
-anything is deployed or signed.
+Arbitrum (chainId 42161) and Base (8453) are **full** deployments like mainnet: reads, bundle
+building, orders, and the MarketRegistry resources (registry-assets / registry-oracle /
+registry-recipes / registry-denominations / registry-feeds / derive-cork-pool, plus
+`cork_prepare_market` oracle deploys and `create-pool`) all work there. `derive-cork-pool`
+predicts the pool a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved
+constraint, pool id, and cST/cPT tokens — before anything is deployed or signed.
 
-Reading a pool that does not exist on the queried chain returns `unavailable` with
-`chain_read_failed`, not a crash. That is expected; it is not a broken install.
+Each chain hosts a **set of contract generations**, one of them primary (`phoenix/v0.4-rc.1` on
+Arbitrum and Base since 2026-09-22; the previous `phoenix/v0.3-rc.1` set stays active). A prepare
+targets the primary unless you pass `generation: "<label>"`; a read of an existing pool follows
+the generation the pool lives on and reports it as `data.generation`. `protocol-config` lists a
+chain's generations; `cork_capabilities topic:"generations"` explains the model.
+
+Reading a pool that exists on no generation of the queried chain returns `unavailable` with
+`pool_not_found`, naming every pool manager it asked. That is expected; it is not a broken
+install. `chain_read_failed` means the chain answered with a revert.
 
 <details>
 <summary><b>Remote / HTTP transport (<code>ch mcp --http</code>) and the server env contract</b></summary>
@@ -267,7 +274,7 @@ are always client-side (see `cork_capabilities topic:"signing"`).
 | `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target (Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl — those builds say so); `ch version` shows which binding a binary carries. |
 | `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech). |
 | `CORK_PROBE_BUDGET` | Default eth_call budget of the offers probe walk, per side (integer 1..25; default 6; a per-call `probeBudget` input wins). Values outside the range are ignored. |
-| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs (see "Address config" in CLAUDE.md). |
+| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs — the config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire; see "Address config" in CLAUDE.md). |
 
 `GET /docs/signing` serves the sign-and-broadcast guide as markdown — the same constant that
 backs `cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the
@@ -582,10 +589,12 @@ Implemented + tested:
   which keys on `(maker, nonce)` rather than order hash, so the nonce is derived per
   `clientRequestId`: give each order you want live at the same time its own id, or they share a bit
   and filling one invalidates the others.
-- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode)` oracle-wrapper txs and
-  `deployFixedRateOracle(rate)` fixed-rate oracle txs (permissionless, idempotent; Arbitrum).
-- **cork_query** — chain reads (cork-pool — one expiry of a market / account-state incl. balances +
-  funding allowances for both spenders / pool-whitelist / protocol-config / registry-assets /
+- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode[, oracleSalt])` oracle-wrapper
+  txs, `deployFixedRateOracle(rate)` fixed-rate oracle txs, and `CorkMarketCreator.createNewPool`
+  txs that create a JIT pool ahead of the fill (permissionless, idempotent; Arbitrum + Base; built
+  on the selected generation's registry wire).
+- **cork_query** — chain reads, each following the pool's or the selected generation (cork-pool — one expiry of a market / account-state incl. balances +
+  funding allowances for both spenders / pool-whitelist / protocol-config (incl. the chain's generations) / registry-assets /
   registry-oracle / registry-recipes / registry-denominations / registry-feeds / derive-cork-pool —
   predict a pool's oracle, pool id, constraint, and cST/cPT before it exists); venue-discovered,
   chain-verified reads labeled `provenance.mode: "hybrid"` (cork-pools, orderbook, fills,

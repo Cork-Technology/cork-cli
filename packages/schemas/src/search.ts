@@ -26,7 +26,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "orderbook", text: "orderbook open resting limit orders book depth quotes" },
     { variant: "fills", text: "fills executed trades trade history filled orders past swaps" },
     { variant: "trading-pairs", text: "limit order markets trading pairs listed limit-order-markets" },
-    { variant: "protocol-config", text: "deployed contract addresses protocol config fees bounds" },
+    { variant: "protocol-config", text: "deployed contract addresses protocol config fees bounds generations primary generation list which set wire" },
     { variant: "registry-assets", text: "registry approved assets eligible tokens market ingredients whitelisted assets price source nav source denomination" },
     { variant: "registry-oracle", text: "rate oracle status pair wrapper deployed deployable price nav mode fixed rate oracle exists" },
     { variant: "registry-recipes", text: "recipes approved recipe contracts addresses constraint policy liquidity fixed constants args isRecipe" },
@@ -78,6 +78,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   cork_prepare_market: [
     { variant: "deploy-oracle", text: "deploy oracle wrapper rate feed pair create registry permissionless idempotent price nav mode" },
     { variant: "deploy-fixed-oracle", text: "deploy fixed rate oracle rateOverride create2 salted permissionless idempotent" },
+    { variant: "create-pool", text: "create pool ahead of the fill market creator createNewPool smart account safe no permit extraData oracleSalt fees identity generation" },
   ],
   cork_track: [
     { variant: "verify/marketRef", text: "verify pool market against chain rehash marketid check" },
