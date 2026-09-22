@@ -1671,7 +1671,9 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/shared.ts",
     find: "  if (opts.purpose === \"prepare\" && r.generation && r.generation.status !== \"active\") {",
     replace: "  if (false) {",
-    tests: [T.handlers],
+    // Since 2c the pool actions gate in getPoolDep; getDep's own gate still guards the authority
+    // ops and every registry-scoped prepare, and pool-generation.test.ts asserts it directly.
+    tests: [T.handlers, T.poolgen],
   },
   {
     // The resolver must THREAD the caller's generation: ignoring it silently answers the

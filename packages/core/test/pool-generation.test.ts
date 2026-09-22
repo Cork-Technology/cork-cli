@@ -235,6 +235,28 @@ describe("read-only generations: reads and post-expiry settles yes, pre-expiry p
     expect(env.warnings[0]?.code).toBe("unknown_deployment");
     expect(env.warnings[0]?.message).toContain("arbitrum-legacy");
   });
+  it("getDep (no poolId): an authority-onboard aimed at the read-only arbitrum-legacy set refuses generation_read_only — the authority ops have no pool, so getDep's own prepare gate is the ONLY gate on that path", async () => {
+    // arbitrum-legacy has no corkAdapter block, so the spender is the pool manager (any address
+    // would do — the gate must fire BEFORE any byte is built or any spender role is named).
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: CHAIN, account: RCV, clientRequestId: "gen-ro-auth-0001", generation: "arbitrum-legacy", action: { type: "authority-onboard", token: CST, spender: LEGACY_PM }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("generation_read_only");
+    expect(env.warnings[0]?.message).toContain("arbitrum-legacy");
+    expect(env.provenance.generation).toMatchObject({ label: "arbitrum-legacy", status: "read-only" });
+    // …and the same op against an ACTIVE non-primary set builds.
+    const ok = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: CHAIN, account: RCV, clientRequestId: "gen-ro-auth-0002", generation: "phoenix/v0.3-rc.1", action: { type: "authority-onboard", token: CST, spender: V03_PM }, format: "concise" },
+      { nowSeconds: NOW },
+    );
+    expect(ok.state).toBe("ok");
+    expect(ok.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", status: "active" });
+  });
+
   it("getPoolDep: purpose read serves a read-only set; purpose prepare refuses it; the shares ride along", async () => {
     const resolved = await poolRpc(LEGACY_PM)();
     const read = await getPoolDep({ nowSeconds: NOW }, CHAIN, resolved, POOL, { tool: "t" });

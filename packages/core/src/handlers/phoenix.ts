@@ -13,7 +13,8 @@ import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { approvedImplementationGuard, PHOENIX_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { POST_EXPIRY_ACTIONS } from "../bundle/preflight.ts";
-import { chainReadFailed, envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable } from "./shared.ts";
+import { chainReadFailed, envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable, generationRefusal, generationRefOf } from "./shared.ts";
+import type { GenerationRef } from "../generations.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
 
 
@@ -75,7 +76,10 @@ export function buildPhoenixCall(
 
 /** cork_prepare_phoenix authority-onboard / authority-revoke: byte-building lives in
  *  bundle/authority.ts; this wraps it in the envelope with the spender-role disclosure. */
-export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Array<{ code: string; message: string }>, dep: CorkDeployment, ctx: HandlerContext): Envelope {
+/** `generation` = the SELECTED set the allowance targets (the authority ops have no pool, so the
+ *  label comes from getDep, never from a pool resolution) — carried in data + provenance like every
+ *  other chain-backed result, so an accepted and a refused authority op describe the set alike. */
+export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Array<{ code: string; message: string }>, dep: CorkDeployment, ctx: HandlerContext, generation?: GenerationRef): Envelope {
   const a = input.action as AuthorityAction;
   const tx = buildAuthorityTx(a);
   return envelope({
@@ -94,10 +98,12 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
       note: "a direct tx from the token owner (an ERC-20 allowance is keyed to msg.sender, so this cannot ride inside a Bundler3 bundle); current allowances are readable via cork_query account-state",
       execution: executionEthTransaction(),
       clientRequestId: input.clientRequestId,
+      ...generationData(generation),
     },
     chainId: input.chainId,
     source: "config",
     warnings: depWarn,
+    ...(generation ? { generation: generationRefOf(generation) } : {}),
     ctx,
   });
 }
@@ -128,14 +134,14 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   // the pool LIVES on, resolved from the chain below — so the selected-generation read here only
   // keeps the no-deployment refusal and the config warning; its prepare gate is applied by the
   // pool resolver (a post-expiry settle stays buildable on a read-only set).
-  const { dep, depWarn, refusal } = await getDep(ctx, input.chainId, { purpose: isAuthority ? "prepare" : "read" });
+  const { dep, depWarn, generation: selectedGeneration, refusal } = await getDep(ctx, input.chainId, { purpose: isAuthority ? "prepare" : "read" });
   if (action.type === "authority-onboard" || action.type === "authority-revoke") {
-    if (refusal) return unavailable(input.chainId, refusal.code, refusal.message, ctx);
+    if (refusal) return generationRefusal(input.chainId, refusal, selectedGeneration, ctx);
     if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
     if (!dep.corkAdapter || !dep.bundler3) {
       return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
     }
-    return handlePhoenixAuthority(input, depWarn, dep, ctx);
+    return handlePhoenixAuthority(input, depWarn, dep, ctx, selectedGeneration);
   }
   if (!dep && !refusal) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const nowSecs = nowSecondsOf(ctx);

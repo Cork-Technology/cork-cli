@@ -8,7 +8,7 @@ import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveGenerations } from "../config-remote.ts";
 import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
-import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
+import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR, generationRefusal } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
 
 
@@ -20,7 +20,7 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
   | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>; wire: MarketRegistryWire; phoenixWire: PhoenixWire; generation?: { label: string }; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
 > {
   const { mr, mrWarn, generation, phoenixWire, refusal } = await getMarketRegistry(ctx, chainId);
-  if (refusal) return { gate: unavailable(chainId, refusal.code, refusal.message, ctx) };
+  if (refusal) return { gate: generationRefusal(chainId, refusal, generation, ctx) };
   if (!mr) {
     return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }

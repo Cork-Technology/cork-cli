@@ -433,6 +433,15 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
   return envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code, message }], ctx });
 }
 
+/** The envelope for a generation refusal (`generation_unknown` / `generation_read_only`) from
+ *  getDep / getMarketRegistry: `unavailable` PLUS `provenance.generation` naming the set the call
+ *  resolved to, so a refused prepare and an accepted one describe the same generation in the same
+ *  place — the caller never rebuilds this by hand (six handlers dropped the label before this
+ *  helper existed; the killer test for `getdep-readonly-prepare-gate-dropped` found the gap). */
+export function generationRefusal(chainId: ChainId, refusal: { code: string; message: string }, generation: GenerationRef | undefined, ctx: HandlerContext): Envelope {
+  return envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code: refusal.code, message: refusal.message }], ...(generation ? { generation: generationRefOf(generation) } : {}), ctx });
+}
+
 export const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as const;
 
 /** Canonical Uniswap Permit2 — single-sourced from the PUBLIC order-approvals module (part of

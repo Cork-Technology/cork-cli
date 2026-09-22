@@ -3,7 +3,7 @@
 import { type ChainId, Envelope, executionEthTransaction, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { buildDeployFixedRateOracleCall, deriveJitMarket, marketCreatorAbi, marketCreatorNestedAbi, type OracleModeName, predictShares, type PredictSharesResult, rateOverrideCoherence, readRoleHolder, type ResolvedConstraint, wireCodec } from "../market-registry.ts";
 import { approvedImplementationGuard, CREATE_POOL_IMPLEMENTATION_ROLES, PREPARE_MARKET_IMPLEMENTATION_ROLES } from "../implementations.ts";
-import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
+import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable, generationRefusal } from "./shared.ts";
 import { jitValueGate, maxExpiryBoundWarning, resolveFeeRule, resolveJitBytesInput, type ValueGateSite } from "./jit.ts";
 import { refreshContractConstant } from "../chain/constants-cache.ts";
 import type { MarketRegistryWire, PhoenixWire } from "../generations.ts";
@@ -47,7 +47,7 @@ export async function handlePrepareMarket(
   // A prepare: the selected generation must be active (the read-only gate lives here because
   // resolveMarketRegistry is a read; a read-only set's registry stays readable).
   const { mr, mrWarn, generation, phoenixWire: phoenixWireResolved, refusal } = await getMarketRegistry(ctx, chainId);
-  if (refusal) return unavailable(chainId, refusal.code, refusal.message, ctx);
+  if (refusal) return generationRefusal(chainId, refusal, generation, ctx);
   if (generation && generation.status !== "active") {
     return unavailable(chainId, "generation_read_only", `generation '${generation.label}' is read-only: no new bytes are built against its contracts — omit \`generation\` to target the primary, or name another active generation`, ctx);
   }

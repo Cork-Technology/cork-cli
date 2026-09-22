@@ -12,7 +12,7 @@ import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rollove
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
@@ -743,7 +743,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   // list — every block's addresses and wire, so a reader can see which set is primary, which
   // sets are preparable, and which wire each speaks (generations.ts).
   if (input.resource === "protocol-config") {
-    if (refusal) return unavailable(chainId, refusal.code, refusal.message, ctx);
+    if (refusal) return generationRefusal(chainId, refusal, generation, ctx);
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
     const { generations } = await resolveGenerations(chainId);
     const selected = generations.find((g) => g.label === generation?.label) ?? generations.find((g) => g.primary);

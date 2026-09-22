@@ -19,7 +19,7 @@ import { whitelistManagerAbi } from "../chain/abis.ts";
 import { POST_EXPIRY_ACTIONS, poolPreflightWarnings } from "../bundle/preflight.ts";
 import { decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR } from "./shared.ts";
+import { envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR, generationRefusal } from "./shared.ts";
 
 const ZERO = ZERO_ADDR;
 
@@ -373,7 +373,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
       ]);
     }
   }
-  const { dep: selectedDep, depWarn, refusal } = await getDep(ctx, input.chainId);
+  const { dep: selectedDep, depWarn, generation: selectedGeneration, refusal } = await getDep(ctx, input.chainId);
   if (!selectedDep && !refusal) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const warnings: Warning[] = [...depWarn];
   const nowSecs = nowSecondsOf(ctx);
@@ -400,7 +400,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     dep = pd.dep!;
     gen = pd.generation;
   }
-  if (!dep) return unavailable(input.chainId, refusal?.code ?? "unknown_deployment", refusal?.message ?? `no known Cork deployment for chainId ${input.chainId}`, ctx);
+  if (!dep) return refusal ? generationRefusal(input.chainId, refusal, selectedGeneration, ctx) : unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const bind = await verifyForSelfBindings({
     client: resolved?.client ?? null,
     ctx,
