@@ -4,12 +4,12 @@
 // The produced orderHash is proven equal to on-chain LOP.hashOrder(order) in the fork tests.
 import { concatHex, decodeFunctionData, encodeFunctionData, getAddress, hashTypedData, isAddressEqual, keccak256, pad, parseAbi, parseSignature, recoverAddress, signatureToCompactSignature, size, sliceHex, stringToHex, toFunctionSelector, toHex, type PublicClient, zeroAddress } from "viem";
 
-import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
+import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
 import { U256_MAX } from "./math/fixed.ts";
 import { OCO_GROUP_NONCE_NAMESPACE } from "@cork/schemas";
 
 /** Canonical 1inch order-settlement contract (Aggregation Router V6, embeds the LOP order mixin).
- *  Sourced from the bundled cork-defaults.json — no address literals in source. BUNDLED-PINNED
+ *  Sourced from the bundled cork-defaults.v2.json — no address literals in source. BUNDLED-PINNED
  *  by design (module-load constant): unlike deployments/marketRegistry/rollover, a remote-config
  *  edit to lopAddresses does NOT take effect — the 1inch router is immutable canonical
  *  infrastructure, and hash/domain math must not change under a ship without a code release. */

@@ -18,10 +18,13 @@ import {
   BUNDLED_DEFAULTS,
   checkApprovedImplementations,
   CREATE_POOL_IMPLEMENTATION_ROLES,
+  generationsOf,
   implementationRoleAddress,
+  IMPLEMENTATION_ROLES,
   JIT_IMPLEMENTATION_ROLES,
-  LEGACY_JIT_IMPLEMENTATION_ROLES,
+  marketRegistryForWire,
   parseDefaults,
+  primaryOf,
   PHOENIX_IMPLEMENTATION_ROLES,
   PREPARE_MARKET_IMPLEMENTATION_ROLES,
   resetConfigMemo,
@@ -39,17 +42,19 @@ const POOL = `0x${"11".repeat(32)}` as const;
 const ACCOUNT = "0x00000000000000000000000000000000000000aa" as const;
 const EIP1967_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 
-const MAINNET_ADAPTER = BUNDLED_DEFAULTS.deployments["1"]!.corkAdapter! as `0x${string}`;
-const MAINNET_WLM = BUNDLED_DEFAULTS.deployments["1"]!.whitelistManager! as `0x${string}`;
+const MAINNET = primaryOf(generationsOf(BUNDLED_DEFAULTS, 1))!;
+const MAINNET_ADAPTER = MAINNET.phoenix!.corkAdapter! as `0x${string}`;
+const MAINNET_WLM = MAINNET.phoenix!.whitelistManager! as `0x${string}`;
+const ARBITRUM = generationsOf(BUNDLED_DEFAULTS, 42161);
 
 /** The bundled defaults with the mainnet adapter moved to ATTACKER, whose code the document
  *  itself "approves" — what a tampered remote would look like after passing shape validation. */
 function hostileDefaults(): Record<string, unknown> {
   const raw = JSON.parse(JSON.stringify(BUNDLED_DEFAULTS)) as {
-    deployments: Record<string, Record<string, string>>;
+    generations: Record<string, { primary: string; sets: Record<string, { phoenix: Record<string, string> }> }>;
     approvedImplementations: Record<string, Record<string, { approved: string[] }>>;
   };
-  raw.deployments["1"]!.corkAdapter = getAddress(ATTACKER);
+  raw.generations["1"]!.sets["mainnet"]!.phoenix.corkAdapter = getAddress(ATTACKER);
   raw.approvedImplementations["1"]!.corkAdapter = { approved: [HASH_ATTACK] };
   return raw;
 }
@@ -145,7 +150,7 @@ describe("remote-first config + bundled allowlist, end to end", () => {
   it("a hostile remote that moves the adapter and 'approves' its code: the bundle follows the address, the guard still warns", async () => {
     const cfg = await resolveConfig();
     expect(cfg.source).toBe("github"); // the remote path really served — not the bundled fallback
-    expect(cfg.defaults.deployments["1"]!.corkAdapter!.toLowerCase()).toBe(ATTACKER);
+    expect(cfg.defaults.generations["1"]!.sets["mainnet"]!.phoenix!.corkAdapter!.toLowerCase()).toBe(ATTACKER);
 
     const reads = { code: [] as string[], storage: [] as string[] };
     const env = await runTool(
@@ -193,42 +198,82 @@ describe("role scoping: each artifact path fingerprints only the contracts its b
       { nowSeconds: 1n, rpcUrl: "https://stub.example/rpc", resolveRpc: chainRpc({}, reads) },
     );
     expect(env.state).toBe("ok");
-    const registry = implementationRoleAddress("marketRegistry", BUNDLED_DEFAULTS, 42161)!;
+    // stage 2: the registry-bound paths fingerprint the generation they BIND — the flat-wire
+    // set — not the primary's nested-wire registry (handlers/shared.ts getMarketRegistry).
+    const registry = implementationRoleAddress("marketRegistry", marketRegistryForWire(ARBITRUM, "flat"))!;
+    expect(registry.toLowerCase()).not.toBe(implementationRoleAddress("marketRegistry", primaryOf(ARBITRUM))!.toLowerCase());
     expect(reads.code).toEqual([registry.toLowerCase()]);
     expect(reads.storage).toEqual([]);
     expect(env.warnings.filter((w) => w.code === "implementation_not_approved").map((w) => w.message)).toEqual([expect.stringContaining("marketRegistry")]);
   });
 
-  it("the scope constants name exactly the contracts each path executes", () => {
+  it("the scope constants name exactly the contracts each path executes (no legacy role names since 0.6)", () => {
+    expect(IMPLEMENTATION_ROLES).toEqual(["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "marketCreator"]);
     expect(PHOENIX_IMPLEMENTATION_ROLES).toEqual(["corkAdapter", "whitelistManager"]);
     expect(PREPARE_MARKET_IMPLEMENTATION_ROLES).toEqual(["marketRegistry"]);
     expect(JIT_IMPLEMENTATION_ROLES).toEqual(["jitAdapter", "marketRegistry"]);
     expect(CREATE_POOL_IMPLEMENTATION_ROLES).toEqual(["marketCreator", "marketRegistry"]);
-    expect(LEGACY_JIT_IMPLEMENTATION_ROLES).toEqual(["legacyJitAdapter", "legacyMarketRegistry"]);
   });
 
   it("an explicit role filter is honored by the checker itself, whatever the allowlist names", async () => {
     const reader: CodeReader = { getCode: async () => "0x" };
     const all = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS });
-    expect(all.map((c) => c.role).sort()).toEqual(["corkAdapter", "jitAdapter", "legacyJitAdapter", "legacyMarketRegistry", "marketCreator", "marketRegistry", "whitelistManager"]);
+    expect(all.map((c) => c.role).sort()).toEqual(["corkAdapter", "jitAdapter", "marketCreator", "marketRegistry", "whitelistManager"]);
     const scoped = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: ["marketRegistry"] });
     expect(scoped.map((c) => c.role)).toEqual(["marketRegistry"]);
   });
 });
 
-describe("the deprecated generation is held to the same standard", () => {
-  it("legacy roles resolve from marketRegistryLegacy and are allowlisted with the live Arbitrum code hashes", async () => {
-    // Hashes recomputed on 2026-08-26 from live Arbitrum bytecode: keccak256(eth_getCode).
-    expect(implementationRoleAddress("legacyJitAdapter", BUNDLED_DEFAULTS, 42161)).toBe("0xea15BF1E5565181Ed8678CcFf39D797272858505");
-    expect(implementationRoleAddress("legacyMarketRegistry", BUNDLED_DEFAULTS, 42161)).toBe("0xF674488bf4643e205ccd826951e8b0d29f77600A");
+describe("roles resolve INSIDE the selected generation; the allowlist is the union of every generation's code", () => {
+  const reader: CodeReader = { getCode: async () => "0x" };
+  const primary = primaryOf(ARBITRUM)!;
+  const flat = ARBITRUM.find((g) => g.label === "phoenix/v0.3-rc.1")!;
+  const legacy = marketRegistryForWire(ARBITRUM, "legacy")!;
+
+  it("implementationRoleAddress answers the generation it is given — phoenix roles from its phoenix block, registry roles from its marketRegistry block", () => {
+    expect(implementationRoleAddress("corkAdapter", primary)).toBe("0x71eB628c3A40FB3896613804847840426f9284A7");
+    expect(implementationRoleAddress("corkAdapter", flat)).toBe("0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD");
+    expect(implementationRoleAddress("marketRegistry", primary)).toBe("0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5");
+    expect(implementationRoleAddress("marketRegistry", flat)).toBe("0xa78d8137B01058dD23e545b6557209eBBc9611F1");
+    expect(implementationRoleAddress("jitAdapter", legacy)).toBe("0xea15BF1E5565181Ed8678CcFf39D797272858505");
+    expect(implementationRoleAddress("marketRegistry", legacy)).toBe("0xF674488bf4643e205ccd826951e8b0d29f77600A");
+    // A generation without the block, an unknown role, no generation at all: nothing, never a guess.
+    expect(implementationRoleAddress("marketCreator", legacy)).toBeUndefined();
+    expect(implementationRoleAddress("marketRegistry", ARBITRUM.find((g) => g.label === "arbitrum-legacy"))).toBeUndefined();
+    expect(implementationRoleAddress("bundler3", primary)).toBeUndefined();
+    expect(implementationRoleAddress("corkAdapter", undefined)).toBeUndefined();
+  });
+
+  it("the checker fingerprints the SELECTED generation's addresses (primary by default), and an unknown label fingerprints nothing", async () => {
+    const byDefault = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES });
+    expect(byDefault.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x3e01c558fc0854e92e6ef2a84c19d6bf9d82b104"], ["marketRegistry", "0xe1f569f152bdb6ebb2d49cfd9d4ab98ecee955c5"]]);
+    const flatChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "phoenix/v0.3-rc.1" });
+    expect(flatChecks.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x8902a88912a334263fe3d731d03c267715b9374f"], ["marketRegistry", "0xa78d8137b01058dd23e545b6557209ebbc9611f1"]]);
+    const legacyChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "arbitrum-v1.1" });
+    expect(legacyChecks.map((c) => [c.role, c.verdict]).sort()).toEqual([["jitAdapter", "no_code"], ["marketRegistry", "no_code"]]);
+    expect(await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "no-such-generation" })).toEqual([]);
+    // Base has no legacy generation — the same label resolves nothing there.
+    expect(await checkApprovedImplementations(reader, 8453, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "arbitrum-v1.1" })).toEqual([]);
+  });
+
+  it("the per-chain allowlist admits every generation's live code hash under ONE role name (union; hashes cross-checked against the Distribution records 2026-09-22)", () => {
     const chain = BUNDLED_DEFAULTS.approvedImplementations!["42161"]!;
-    expect(chain.legacyJitAdapter!.approved).toEqual(["0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1"]);
-    expect(chain.legacyMarketRegistry!.approved).toEqual(["0x0fc7787ec85619dfc68dab244ac8e3b0696672b3ce7c5a14609c07129d69cb0c"]);
-    // A chain without a legacy generation resolves nothing for those roles — skipped, no warning.
-    expect(implementationRoleAddress("legacyJitAdapter", BUNDLED_DEFAULTS, 8453)).toBeUndefined();
-    const reader: CodeReader = { getCode: async () => "0x" };
-    expect(await checkApprovedImplementations(reader, 8453, { allowlist: BUNDLED_DEFAULTS, roles: LEGACY_JIT_IMPLEMENTATION_ROLES })).toEqual([]);
-    const legacy = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: LEGACY_JIT_IMPLEMENTATION_ROLES });
-    expect(legacy.map((c) => [c.role, c.verdict]).sort()).toEqual([["legacyJitAdapter", "no_code"], ["legacyMarketRegistry", "no_code"]]);
+    expect(chain.marketRegistry!.approved).toEqual([
+      "0x455b91170500a48e745346e799831271e709da030ef3a05016b33d3200106a26", // 0.5.0
+      "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284", // 0.3.3
+      "0x0fc7787ec85619dfc68dab244ac8e3b0696672b3ce7c5a14609c07129d69cb0c", // pre-2.1.0 (legacy)
+    ]);
+    expect(chain.jitAdapter!.approved).toEqual([
+      "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
+      "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320",
+      "0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1",
+    ]);
+    expect(chain.corkAdapter!.approved).toEqual(["0xc8c05b7eb9f80d0207025ecb09beefaf046965e4ee81c8476513109be47b81f6", "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"]);
+    expect(chain.whitelistManager).toEqual({ proxy: "eip1967", approved: ["0xc3757fe479d4a44aa3a3954159ba1281747b6de0dc78a58139390bfd9c2f4cb0", "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"] });
+    expect(chain.marketCreator!.approved).toEqual(["0x2fde0d65ebd999c5bb7202f80a8dd1f8b0bc86b405237c93ea4a096e88c08766", "0x2f7dd61e18e4d3ca5d432771ee2eeb7000b3e609f26c151eb57dc147e5310287"]);
+    expect(chain).not.toHaveProperty("legacyJitAdapter");
+    expect(chain).not.toHaveProperty("legacyMarketRegistry");
+    // Base never hosted the pre-2.1.0 generation: two hashes per registry role, not three.
+    expect(BUNDLED_DEFAULTS.approvedImplementations!["8453"]!.marketRegistry!.approved).toHaveLength(2);
   });
 });

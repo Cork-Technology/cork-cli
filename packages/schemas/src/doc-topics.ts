@@ -91,8 +91,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "gates",
     envelope: "unavailable",
     contract:
-      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, or the deprecation gate; deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
-    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice"],
+      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
+    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only"],
   },
   {
     family: "scan honesty",

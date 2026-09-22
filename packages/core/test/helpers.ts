@@ -3,19 +3,20 @@
 // set of methods. These two helpers remove the `{ url, source, client: … as never }` envelope
 // boilerplate that was hand-rolled across the handler test files.
 import type { HandlerContext } from "@cork/core";
-import corkDefaults from "../../../cork-defaults.json";
+import { BUNDLED_DEFAULTS, generationsOf } from "@cork/core";
 
 /** Every address the approved-implementations guard fingerprints, read from the same config the
- *  guard resolves them from. A stub that holds no bytecode must not answer "0x" for these — that
- *  would be the FALSE statement "the adapter is an empty account", which the bytes-decoder gate
- *  (the versioning policy's bytes-layout rule) now REFUSES on. Throwing is the honest answer: unreadable, silent degradation.
- *  A test that wants a verdict passes real (or off-list) code through opts.code. */
+ *  guard resolves them from — every GENERATION's corkAdapter/whitelistManager/registry/adapter/
+ *  creator, since a prepare may target any active set. A stub that holds no bytecode must not
+ *  answer "0x" for these — that would be the FALSE statement "the adapter is an empty account",
+ *  which the bytes-decoder gate (the versioning policy's bytes-layout rule) now REFUSES on.
+ *  Throwing is the honest answer: unreadable, silent degradation. A test that wants a verdict
+ *  passes real (or off-list) code through opts.code. */
 const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
-  Object.values((corkDefaults as { deployments: Record<string, { corkAdapter?: string; whitelistManager?: string }> }).deployments)
-    .flatMap((d) => [d.corkAdapter, d.whitelistManager])
-    .concat(Object.values((corkDefaults as { marketRegistry?: Record<string, { registry?: string; adapter?: string; marketCreator?: string }> }).marketRegistry ?? {}).flatMap((m) => [m.registry, m.adapter, m.marketCreator]))
-    .concat(Object.values((corkDefaults as { marketRegistryLegacy?: Record<string, { registry?: string; adapter?: string }> }).marketRegistryLegacy ?? {}).flatMap((m) => [m.registry, m.adapter]))
-    .filter((a): a is string => typeof a === "string")
+  Object.keys(BUNDLED_DEFAULTS.generations)
+    .flatMap((chainId) => generationsOf(BUNDLED_DEFAULTS, Number(chainId)))
+    .flatMap((g) => [g.phoenix?.corkAdapter, g.phoenix?.whitelistManager, g.marketRegistry?.registry, g.marketRegistry?.adapter, g.marketRegistry?.marketCreator])
+    .filter((a): a is `0x${string}` => typeof a === "string")
     .map((a) => a.toLowerCase()),
 );
 

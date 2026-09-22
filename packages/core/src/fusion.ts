@@ -11,12 +11,12 @@
 // Known deployed-getter gotchas carried from the spike: the on-chain selectors use the
 // all-uint256 Order tuple, and public-node eth_call runs with block.basefee = 0.
 import { concatHex, size, sliceHex, toHex } from "viem";
-import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
+import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
 import { decodeExtensionFields, saltExtensionBinding, type LopExtensionFields, type LopOrder } from "./orders.ts";
 
 type Hex = `0x${string}`;
 
-/** Classification reference set (cork-defaults.json). The ACTIVE settlement is always decoded
+/** Classification reference set (cork-defaults.v2.json). The ACTIVE settlement is always decoded
  *  from the order's extension — this set only says which layout/deployment it is. BUNDLED-PINNED
  *  by design (module-load constant, same rule as LOP_ADDRESSES in orders.ts): a remote-config
  *  edit does NOT take effect — pricing-layout classification must not move under a ship. */
@@ -187,7 +187,7 @@ export function encodeAuctionGetterData(a: FusionAuction): Hex {
  *  invariant decodeFusionOrder enforces). */
 export function buildAuctionAmountData(chainId: number, auction: FusionAuction): { makingAmountData: Hex; takingAmountData: Hex; settlement: Hex } {
   const settlement = FUSION_SETTLEMENTS[chainId]?.current;
-  if (!settlement) throw new Error(`no known Fusion settlement (amount getter) for chainId ${chainId} — cork-defaults.json fusionSettlements has no entry`);
+  if (!settlement) throw new Error(`no known Fusion settlement (amount getter) for chainId ${chainId} — cork-defaults.v2.json fusionSettlements has no entry`);
   const data = concatHex([settlement, encodeAuctionGetterData(auction)]);
   return { makingAmountData: data, takingAmountData: data, settlement };
 }

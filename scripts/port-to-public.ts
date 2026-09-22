@@ -54,8 +54,8 @@ export const REPOINTS: ReadonlyArray<{ file: string; from: string; to: string }>
   },
   {
     file: "packages/core/src/config-remote.ts",
-    from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";',
-    to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";',
+    from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";',
+    to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";',
   },
   {
     file: "packaging/VERIFY.md",

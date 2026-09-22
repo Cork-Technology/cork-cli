@@ -4,8 +4,9 @@ import { keccak256, stringToHex } from "viem";
 import { type ChainId, Envelope, SCHEMA_VERSION, type Teaching } from "@cork/schemas";
 import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcChainMismatchError, RpcChainVerificationError } from "../chain/rpc.ts";
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
-import { resolveDeployment as resolveDeploymentBuiltin } from "../config-remote.ts";
+import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, resolveMarketRegistry, type CorkMarketRegistry } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
+import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
@@ -27,8 +28,14 @@ export interface HandlerContext {
   nowSeconds?: bigint;
   /** RPC URL enabling chain-backed compute (else those return `unavailable`). */
   rpcUrl?: string;
-  /** Address overrides; defaults to the built-in deployment for the chainId. */
+  /** Address overrides; defaults to the built-in deployment for the chainId (the SDK override —
+   *  wins over `generation`). */
   deployment?: CorkDeployment;
+  /** Select a non-primary GENERATION by label (generations.ts) for every chain-backed read and
+   *  prepare in this call; omitted = the chain's primary. An unknown label refuses
+   *  `generation_unknown` (listing the chain's labels); a read-only set refuses a PREPARE with
+   *  `generation_read_only`. */
+  generation?: string;
   /** Pin all chain reads to this block (else latest). Makes chain-backed compute reproducible. */
   atBlock?: bigint;
   /**
@@ -127,12 +134,59 @@ export async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<Res
 
 /**
  * Resolve the deployment for a chain: ctx override -> remote-first defaults (GitHub-fetched,
- * TTL-cached, bundled fallback). Returns any config-sourcing warning to append to the envelope.
+ * TTL-cached, bundled fallback) of the generation `ctx.generation` selects (the primary when
+ * omitted). Returns any config-sourcing warning to append to the envelope, the generation
+ * reference the block came from, and — when the label was refused — the typed `refusal`
+ * (also pushed into `depWarn` so a caller that only forwards the warnings still names the
+ * cause) beside an undefined `dep`. `purpose: "prepare"` applies the read-only gate.
  */
-export async function getDep(ctx: HandlerContext, chainId: number): Promise<{ dep: CorkDeployment | undefined; depWarn: Array<{ code: string; message: string }> }> {
+export async function getDep(
+  ctx: HandlerContext,
+  chainId: number,
+  opts: { purpose?: "read" | "prepare"; /** Override the label (a registry path passes the generation its `mr` came from, so dep and mr are ONE set). */ generation?: string } = {},
+): Promise<{ dep: CorkDeployment | undefined; depWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: PhoenixWire }; refusal?: GenerationRefusal }> {
   if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
-  const r = await resolveDeploymentBuiltin(chainId);
-  return { dep: r.deployment, depWarn: r.warning ? [r.warning] : [] };
+  const r = await resolveDeploymentBuiltin(chainId, undefined, opts.generation ?? ctx.generation);
+  const depWarn = r.warning ? [r.warning] : [];
+  if (r.refusal) return { dep: undefined, depWarn: [...depWarn, r.refusal], refusal: r.refusal };
+  if (opts.purpose === "prepare" && r.generation && r.generation.status !== "active") {
+    const refusal: GenerationRefusal = {
+      code: "generation_read_only",
+      message: `generation '${r.generation.label}' is read-only: its contracts are kept for reads, decode and attribution, but no new bytes are built against them — omit \`generation\` to target the primary, or name another active generation`,
+    };
+    return { dep: undefined, depWarn: [...depWarn, refusal], generation: r.generation, refusal };
+  }
+  return { dep: r.deployment, depWarn, ...(r.generation ? { generation: r.generation } : {}) };
+}
+
+/**
+ * Resolve the market-registry block a registry-bound path (JIT ladder, registry-* reads,
+ * derive-cork-pool, create-pool, deploy-oracle) builds against: `ctx.generation` when the caller
+ * named one, else the first generation whose block speaks an IMPLEMENTED wire (the flat 0.3.x
+ * set today), else the primary. A named generation whose wire this build does not implement is
+ * refused `phase_gated` — a typed refusal, never bytes the deployed adapter cannot decode. The
+ * `generation` reference rides along so the caller's `getDep(ctx, chainId, { generation })` and
+ * its implementation-guard scope address the SAME set.
+ */
+export async function getMarketRegistry(
+  ctx: HandlerContext,
+  chainId: number,
+): Promise<{ mr: CorkMarketRegistry | undefined; mrWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: MarketRegistryWire }; refusal?: GenerationRefusal | { code: "phase_gated"; message: string } }> {
+  const { generations, warning } = await resolveGenerations(chainId);
+  const mrWarn = warning ? [warning] : [];
+  const label = ctx.generation ?? IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generations, w)?.label).find((l) => l !== undefined);
+  const r = await resolveMarketRegistry(chainId, undefined, label);
+  if (r.refusal) return { mr: undefined, mrWarn: [...mrWarn, r.refusal], refusal: r.refusal };
+  if (r.marketRegistry && !IMPLEMENTED_MARKET_REGISTRY_WIRES.includes(r.marketRegistry.wire)) {
+    const refusal = {
+      code: "phase_gated" as const,
+      message: r.marketRegistry.wire === "legacy"
+        ? `generation '${r.generation?.label}' carries the pre-2.1.0 (legacy-wire) registry — it is served only through the deprecated lane (jitMarket.legacy / filters.legacy / params.legacy with CORK_ENABLE_DEPRECATED=1), not by selecting the generation`
+        : `generation '${r.generation?.label}' carries a '${r.marketRegistry.wire}'-wire MarketRegistry (${r.marketRegistry.contractsVersion ?? "unversioned"}) that this build does not encode yet — its JIT extraData, verify and deploy shapes differ from the ${IMPLEMENTED_MARKET_REGISTRY_WIRES.join("/")} wire this build implements, so no bytes are built; target a generation on an implemented wire (${generations.filter((g) => g.marketRegistry && IMPLEMENTED_MARKET_REGISTRY_WIRES.includes(g.marketRegistry.wire)).map((g) => g.label).join(", ") || "none on this chain"}) or update to a build that implements '${r.marketRegistry.wire}'`,
+    };
+    return { mr: undefined, mrWarn: [...mrWarn, refusal], refusal, ...(r.generation ? { generation: r.generation } : {}) };
+  }
+  return { mr: r.marketRegistry, mrWarn, ...(r.generation ? { generation: r.generation } : {}) };
 }
 
 /** Transparency warning when chain reads fell back to a community RPC (not the configured default). */

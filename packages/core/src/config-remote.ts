@@ -1,7 +1,14 @@
 // Remote-first config sourcing [R6/§8]: deployment addresses are fetched from this repo's
-// canonical GitHub `cork-defaults.json` (TTL-cached in memory + on disk), with the committed copy
-// bundled in the distribution as the fallback. Never bare hardcodes: the single source of truth is
-// the JSON file, remote copy preferred, and every result can say which one served it.
+// canonical GitHub `cork-defaults.v2.json` (TTL-cached in memory + on disk), with the committed
+// copy bundled in the distribution as the fallback. Never bare hardcodes: the single source of
+// truth is the JSON file, remote copy preferred, and every result can say which one served it.
+//
+// SCHEMA 2 (cork-cli 0.6, 2026-09-22): the document records GENERATIONS per chain — a set of
+// contract generations, one primary (generations.ts has the model). `cork-defaults.json`
+// (schema 1) is FROZEN for the 0.5 line and is neither read nor written by this build: a
+// v1-shaped file whose primary moved would send 0.5.x binaries to a generation whose wire they
+// do not speak, so the two lines keep two files, and the v1 file keeps its current primary
+// addresses forever (config-remote.test pins that it still parses under the v1 schema).
 //
 // Fetched content is UNTRUSTED until validated: it is parsed against strict zod schemas (checksummed
 // addresses, closed shape) — a malformed or tampered remote file is treated as a fetch failure and
@@ -19,63 +26,42 @@ import { atomicWriteFileSync } from "./atomic-file.ts";
 import { fetchWithTimeout } from "./fetch-timeout.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import bundledDefaults from "../../../cork-defaults.json" with { type: "json" };
+import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
 import type { CorkDeployment } from "./config.ts";
-import { rolloverGenerations } from "./rollover.ts";
+import {
+  ChainGenerationsSchema,
+  generationsOf,
+  type GenerationLabel,
+  type GenerationRef,
+  type GenerationRefusal,
+  type MarketRegistryBlock,
+  type MarketRegistryWire,
+  type PhoenixWire,
+  type ResolvedGeneration,
+  type RolloverGenerationEntry,
+  type RolloverWire,
+  rolloverGenerationsOf,
+  selectGeneration,
+} from "./generations.ts";
+import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
 
-/** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. */
+/** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. The
+ *  v2 path: the schema-1 file at the sibling path stays frozen for 0.5.x binaries. */
 export const CORK_DEFAULTS_URL =
-  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";
+  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";
 
-const DeploymentSchema = z
-  .object({
-    poolManager: Address,
-    constraintAdapter: Address,
-    corkAdapter: Address.optional(),
-    bundler3: Address.optional(),
-    whitelistManager: Address.optional(),
-  })
-  .strip();
+/** A generation's market-registry block as consumers receive it (the block plus its wire). */
+export type CorkMarketRegistry = MarketRegistryBlock;
 
-// Rollover venue contracts (rollover): the factory that self-deploys per-user clones and
-// the two ERC-7683 settlers. `settlerDomain` is the EIP-712 domain OrderData is signed under
-// (verifyingContract = the settler). `seededAtBlock` = the generation's seeding block (its
-// earliest deployment) — the backfill start for event reconstruction.
-//
-// A deployment is a SET of generations (see `rolloverGenerations` in rollover.ts — the one
-// flattening every consumer reads). The top-level fields are the PRIMARY generation, the set
-// this distribution pins. `activeGenerations` are the OTHER sets the venue admits — wire-
-// compatible with the primary: the venue keeps every non-archived factory live and admits a
-// settler through the factory that approves it (cork-api 0.4.2, `resolveLiveFactories`), and
-// since 2026-09-11 rollover v0.1.0-rc.2 and the Distribution 0.4-rc.1 set run side by side on
-// 42161 + 8453. A wire-format release retires a whole generation at once (observed: rc.2's
-// jitMarketHash typehash change, 2026-08-13): the venue archives that factory/settlers and
-// digests typed for one wire do not verify on the other. Retired sets move to
-// `legacyGenerations` — kept so event-history scans still see their fills/clones and so
-// prepare/submit can name a retired settler precisely instead of calling it unknown.
-//
-// Older binaries validate this record with `.strip()`, so a remote config that carries
-// `activeGenerations` still loads there — they only keep treating those settlers as unknown.
-const RolloverGenerationSchema = z
-  .object({
-    factory: Address,
-    exactSettler: Address,
-    partialSettler: Address,
-    seededAtBlock: z.number().int().nonnegative(),
-    /** ISO date the generation stopped being venue-admissible. */
-    retired: z.string().optional(),
-    label: z.string().optional(),
-    contractsVersion: z.string().optional(),
-  })
-  .strip();
-export type CorkRolloverGeneration = z.infer<typeof RolloverGenerationSchema>;
-const RolloverDeploymentSchema = RolloverGenerationSchema.extend({
-  settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
-  /** Other venue-admissible, wire-compatible generations beside the primary one. */
-  activeGenerations: z.array(RolloverGenerationSchema).optional(),
-  legacyGenerations: z.array(RolloverGenerationSchema).optional(),
-}).strip();
-export type CorkRolloverDeployment = z.infer<typeof RolloverDeploymentSchema>;
+/** One rollover generation as the config records it, normalized (rollover.ts's flattening
+ *  shape — label, status, primary and wire always present). */
+export type CorkRolloverGeneration = RolloverGeneration;
+
+/** The rollover record `resolveRollover` serves: the SELECTED generation's block as the top-level
+ *  fields (the shape every pre-0.6 consumer reads — factory, settlers, settlerDomain, seed) plus
+ *  `generations`, the chain's ONE flattened rollover list (primary first, other live blocks,
+ *  retired blocks). `rolloverGenerations(dep)` in rollover.ts returns that list. */
+export type CorkRolloverDeployment = RolloverGenerationEntry & { generations: RolloverGenerationEntry[] };
 
 /** Event-scan targets across EVERY generation of a rollover deployment: retired settlers'
  *  fills and retired factories' clones stay on-chain, so history reads span every generation's
@@ -136,68 +122,25 @@ export function rolloverScanTargets(dep: CorkRolloverDeployment): {
   };
 }
 
-// MarketRegistry stack (market-registry-api, contracts release 2.1.0): the registry, the JIT
-// CorkLimitOrderAdapter, the two oracle factories (pair wrappers + fixed-rate), and named recipe
-// hints. Addresses are VOLATILE by team guidance (the whole set was redeployed from scratch for
-// 2.1.0, and an older generation still ANSWERS 2.1.0-shaped calls with misdecoded garbage) —
-// consumers re-verify the adapter's on-chain bindings (MARKET_REGISTRY() == registry) + role
-// grants at use time rather than trusting this record. `recipes` is a convenience map for the
-// deprecated mode sugar only; recipe membership is decided solely by isRecipe on chain.
-const MarketRegistrySchema = z
-  .object({
-    registry: Address,
-    adapter: Address.optional(),
-    // CorkMarketCreator (cork-periphery): direct permissionless pool creation — the same
-    // derivation a JIT fill runs, callable ahead of the fill. Optional: an older config
-    // without it simply gates the create-pool prepare (unknown_deployment).
-    marketCreator: Address.optional(),
-    controller: Address.optional(),
-    wrapperFactory: Address.optional(),
-    fixedRateOracleFactory: Address.optional(),
-    aggregatorAdapterFactory: Address.optional(),
-    recipes: z.record(z.string(), Address).optional(),
-    owner: Address.optional(),
-    contractsVersion: z.string().optional(),
-    deployedAtBlock: z.number().int().nonnegative().optional(),
-  })
-  .strip();
-export type CorkMarketRegistry = z.infer<typeof MarketRegistrySchema>;
-
-// The pre-2.1.0 registry generation, kept ONLY for the gated deprecated path (deprecation.ts).
-// Its interface is the old one (mode-keyed recipes, percentage bands, two-arg deploy).
-const MarketRegistryLegacySchema = z
-  .object({
-    registry: Address,
-    oracleFactory: Address.optional(),
-    adapter: Address.optional(),
-    controller: Address.optional(),
-  })
-  .strip();
-export type CorkMarketRegistryLegacy = z.infer<typeof MarketRegistryLegacySchema>;
-
 const DefaultsSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   updated: z.string(),
-  deployments: z.record(z.string(), DeploymentSchema),
   lopAddresses: z.record(z.string(), Address),
   // 1inch Fusion settlement reference set — classification data for pricing/decode, never a call
   // target we choose (the active settlement is decoded from the order's own extension bytes).
   fusionSettlements: z
     .record(z.string(), z.object({ current: Address, legacy: z.array(Address).default([]) }).strip())
     .optional(),
-  marketRegistry: z.record(z.string(), MarketRegistrySchema).optional(),
-  // Pre-2.1.0 registry generation — served ONLY through resolveMarketRegistryLegacy, whose
-  // callers must first pass the deprecation gate (CORK_ENABLE_DEPRECATED=1).
-  marketRegistryLegacy: z.record(z.string(), MarketRegistryLegacySchema).optional(),
-  // Named alternate Phoenix deployments on a chain that already has a primary entry (e.g. the
-  // Arbitrum "arbitrum-legacy" pre-launch pair, kept so its calibration pools stay readable
-  // after the 2026-07-22 promotion of the announced deployment to primary).
-  // Consumers must opt in by profile name; `deployments` stays the default read path.
-  deploymentProfiles: z.record(z.string(), z.record(z.string(), DeploymentSchema)).optional(),
-  rollover: z.record(z.string(), RolloverDeploymentSchema).optional(),
+  // Per chain: the primary label and every generation set (generations.ts). Everything an
+  // address read answers — deployment, market registry, rollover, ForSelf, classification —
+  // derives from this one block; there is no separate deployments/marketRegistry/rollover/
+  // deploymentProfiles/marketRegistryLegacy record any more (those were schema 1's five
+  // vocabularies for the same fact).
+  generations: z.record(z.string(), ChainGenerationsSchema),
   // Approved-implementations allowlist (interface-first model, mirrored in the distribution-repo
-  // proposal): per chain, per ROLE (resolved against deployments/marketRegistry — addresses are
-  // never duplicated here), the runtime-codehash set admitted by the behavioral suite. Optional:
+  // proposal): per chain, per ROLE (resolved against the generation blocks — addresses are
+  // never duplicated here), the runtime-codehash set admitted by the behavioral suite — the
+  // UNION over every generation's code, because every generation's code is approved. Optional:
   // an older bundled copy without it simply skips the guard.
   approvedImplementations: z
     .record(
@@ -249,8 +192,10 @@ export interface ConfigDeps {
 const TTL_MS = 3_600_000; // success: re-check GitHub at most hourly
 const FAILURE_TTL_MS = 600_000; // negative outcome: don't re-attempt for 10 min (shared across CLI processes via disk)
 
+// The v2 document caches under its own file name: a 0.5.x binary sharing the cache dir keeps
+// its v1 copy at `cork-defaults.json`, and neither line can serve the other's shape.
 function cachePath(): string {
-  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "cork-defaults.json");
+  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "cork-defaults.v2.json");
 }
 
 async function realFetchRemote(): Promise<RemoteFetchResult> {
@@ -285,18 +230,19 @@ export function realConfigDeps(): ConfigDeps {
 export const STALE_CACHE_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not refresh cork-defaults.json from GitHub — serving the last successfully fetched copy (may be up to a refresh cycle stale); will retry after the failure back-off",
+    "could not refresh cork-defaults.v2.json from GitHub — serving the last successfully fetched copy (may be up to a refresh cycle stale); will retry after the failure back-off",
 } as const;
 
 export const FETCH_FAILED_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not fetch the latest cork-defaults.json from GitHub — serving the bundled copy; addresses may be stale if Cork has redeployed (private repo? check for updates with an authenticated `gh`/GitHub MCP)",
+    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale if Cork has redeployed (private repo? check for updates with an authenticated `gh`/GitHub MCP)",
 } as const;
 
 let memo: { at: number; ttl: number; resolved: ResolvedConfig } | null = null;
 
-/** Parse+validate an untrusted defaults payload; throws on any shape/checksum violation. */
+/** Parse+validate an untrusted defaults payload; throws on any shape/checksum violation. A
+ *  schema-1 document is rejected here too: the 0.6 line reads only v2, by design. */
 export function parseDefaults(raw: unknown): CorkDefaults {
   return DefaultsSchema.parse(raw);
 }
@@ -394,44 +340,97 @@ export function configDiagnostics(now: number = Date.now()): { source: ResolvedC
   return { source: memo.resolved.source, ageMs: Math.max(0, now - memo.at), ttlMs: memo.ttl, degraded: memo.resolved.warning !== undefined };
 }
 
-/** Deployment lookup over the resolved defaults (remote-first, bundled fallback). */
+// ── Generation-aware resolvers ──────────────────────────────────────────────────────────────────
+// Every resolver below keeps its pre-0.6 name and return shape (callers destructure `deployment`
+// / `rollover` / `marketRegistry` + `source` + `warning`) and ADDS: an optional `generation`
+// label argument (omitted = the chain's primary), a `generation` reference on the result naming
+// the set that answered, and — when the label was refused — `refusal` beside an undefined block
+// (`generation_unknown` lists the chain's labels; `generation_read_only` is the prepare gate a
+// handler applies through `selectGeneration(..., "prepare")`).
+
+/** The shared tail of every resolver result. */
+interface ResolverProvenance {
+  source: ResolvedConfig["source"];
+  warning?: { code: string; message: string };
+  refusal?: GenerationRefusal;
+}
+
+function provenanceOf(cfg: ResolvedConfig): ResolverProvenance {
+  return { source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+}
+
+const refOf = (g: ResolvedGeneration): GenerationRef => ({ label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}) });
+
+/** The chain's generations (resolution order) over the resolved defaults (remote-first). */
+export async function resolveGenerations(
+  chainId: number,
+  deps?: ConfigDeps,
+): Promise<{ generations: ResolvedGeneration[]; primary: ResolvedGeneration | undefined } & ResolverProvenance> {
+  const cfg = await resolveConfig(deps);
+  const generations = generationsOf(cfg.defaults, chainId);
+  return { generations, primary: generations.find((g) => g.primary), ...provenanceOf(cfg) };
+}
+
+/** Deployment lookup over the resolved defaults (remote-first, bundled fallback): the phoenix
+ *  block of the selected generation (the primary when `generation` is omitted). */
 export async function resolveDeployment(
   chainId: number,
   deps?: ConfigDeps,
-): Promise<{ deployment: CorkDeployment | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  generation?: GenerationLabel,
+): Promise<{ deployment: CorkDeployment | undefined; generation?: GenerationRef & { wire?: PhoenixWire } } & ResolverProvenance> {
   const cfg = await resolveConfig(deps);
-  const deployment = cfg.defaults.deployments[String(chainId)] as CorkDeployment | undefined;
-  return { deployment, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+  const list = generationsOf(cfg.defaults, chainId);
+  if (list.length === 0) return { deployment: undefined, ...provenanceOf(cfg) };
+  const sel = selectGeneration(list, generation);
+  if (!sel.ok) return { deployment: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
+  const g = sel.generation;
+  return {
+    deployment: g.phoenix as CorkDeployment | undefined,
+    generation: { ...refOf(g), ...(g.phoenix ? { wire: g.phoenix.wire } : {}) },
+    ...provenanceOf(cfg),
+  };
 }
 
-/** Rollover venue contracts for a chain (undefined where the rollover protocol isn't deployed). */
+/** Rollover venue contracts for a chain (undefined where the selected generation carries no
+ *  rollover block — chain 1 today). The record's top-level fields are the SELECTED generation's
+ *  block; `generations` is the chain's whole flattened list, so consumers that classify a
+ *  settler against every generation keep working unchanged. */
 export async function resolveRollover(
   chainId: number,
   deps?: ConfigDeps,
-): Promise<{ rollover: CorkRolloverDeployment | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  generation?: GenerationLabel,
+): Promise<{ rollover: CorkRolloverDeployment | undefined; generation?: GenerationRef & { wire?: RolloverWire } } & ResolverProvenance> {
   const cfg = await resolveConfig(deps);
-  const rollover = cfg.defaults.rollover?.[String(chainId)];
-  return { rollover, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+  const list = generationsOf(cfg.defaults, chainId);
+  if (list.length === 0) return { rollover: undefined, ...provenanceOf(cfg) };
+  const sel = selectGeneration(list, generation);
+  if (!sel.ok) return { rollover: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
+  const g = sel.generation;
+  const generations = rolloverGenerationsOf(list);
+  const own = generations.find((r) => r.label === g.label);
+  if (!own) return { rollover: undefined, generation: refOf(g), ...provenanceOf(cfg) };
+  return { rollover: { ...own, generations }, generation: { ...refOf(g), wire: own.wire }, ...provenanceOf(cfg) };
 }
 
-/** The MarketRegistry stack for a chain (registry/oracleFactory/adapter/controller), or
- *  undefined where none is configured — currently Arbitrum only (Base pending owner check). */
+/** The MarketRegistry stack of the selected generation (registry / adapter / creator / factories
+ *  / recipe hints + its wire), or undefined where that generation carries none (chain 1). The
+ *  DEPRECATED pre-2.1.0 lane is the generation whose block declares `wire: "legacy"` — callers
+ *  find it with `marketRegistryForWire(generations, "legacy")` (generations.ts) after passing
+ *  the deprecation gate; `resolveMarketRegistryLegacy` no longer exists. */
 export async function resolveMarketRegistry(
   chainId: number,
   deps?: ConfigDeps,
-): Promise<{ marketRegistry: CorkMarketRegistry | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
+  generation?: GenerationLabel,
+): Promise<{ marketRegistry: CorkMarketRegistry | undefined; generation?: GenerationRef & { wire?: MarketRegistryWire } } & ResolverProvenance> {
   const cfg = await resolveConfig(deps);
-  const marketRegistry = cfg.defaults.marketRegistry?.[String(chainId)];
-  return { marketRegistry, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
-}
-
-/** The DEPRECATED pre-2.1.0 registry stack. Callers must pass the deprecation gate
- *  (deprecation.ts) BEFORE resolving this — it exists only for the gated legacy path. */
-export async function resolveMarketRegistryLegacy(
-  chainId: number,
-  deps?: ConfigDeps,
-): Promise<{ marketRegistry: CorkMarketRegistryLegacy | undefined; source: ResolvedConfig["source"]; warning?: { code: string; message: string } }> {
-  const cfg = await resolveConfig(deps);
-  const marketRegistry = cfg.defaults.marketRegistryLegacy?.[String(chainId)];
-  return { marketRegistry, source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+  const list = generationsOf(cfg.defaults, chainId);
+  if (list.length === 0) return { marketRegistry: undefined, ...provenanceOf(cfg) };
+  const sel = selectGeneration(list, generation);
+  if (!sel.ok) return { marketRegistry: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
+  const g = sel.generation;
+  return {
+    marketRegistry: g.marketRegistry,
+    generation: { ...refOf(g), ...(g.marketRegistry ? { wire: g.marketRegistry.wire } : {}) },
+    ...provenanceOf(cfg),
+  };
 }

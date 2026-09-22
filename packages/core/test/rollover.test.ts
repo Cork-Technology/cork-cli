@@ -207,7 +207,7 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("settler_mode_mismatch");
     expect(env.warnings[0]?.message).toContain(CANDIDATE_PARTIAL);
-    expect(env.warnings[0]?.message).toContain("0.4-rc.1-candidate");
+    expect(env.warnings[0]?.message).toContain("phoenix/v0.4-rc.1");
     expect(env.warnings[0]?.message).not.toContain(PARTIAL);
     const back = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_PARTIAL, allowPartialFills: false } }, ctx);
     expect(back.warnings[0]?.code).toBe("settler_mode_mismatch");
@@ -219,13 +219,14 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     const exact = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_EXACT } }, ctx);
     expect(exact.state).toBe("ok");
     expect(exact.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
-    expect(exact.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "0.4-rc.1-candidate" });
+    expect(exact.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "phoenix/v0.4-rc.1" });
     const partial = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_PARTIAL, allowPartialFills: true } }, ctx);
     expect(partial.state).toBe("ok");
-    expect(partial.data).toMatchObject({ settlerKind: "PARTIAL", settlerGeneration: "0.4-rc.1-candidate" });
-    // The primary generation's label is its contractsVersion (the config names no label there).
-    const primary = await runTool("cork_prepare_orders", base, ctx);
-    expect(primary.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "v0.1.0-rc.2" });
+    expect(partial.data).toMatchObject({ settlerKind: "PARTIAL", settlerGeneration: "phoenix/v0.4-rc.1" });
+    // Since 2026-09-22 the rc.2 set is the phoenix/v0.3-rc.1 generation's rollover — active,
+    // no longer primary (the Distribution 0.2 set is): it builds, named by its chain generation.
+    const rc2 = await runTool("cork_prepare_orders", base, ctx);
+    expect(rc2.data).toMatchObject({ settlerKind: "EXACT", settlerGeneration: "phoenix/v0.3-rc.1" });
   });
 
   it("rejects the PartialSettler without allowPartialFills", async () => {
@@ -556,7 +557,7 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
       expect(env.state).toBe("unavailable");
       expect(env.warnings[0]?.code).toBe("settler_retired");
       expect(env.warnings[0]?.message).toContain(active);
-      expect(env.warnings[0]?.message).toContain("july-2026");
+      expect(env.warnings[0]?.message).toContain("arbitrum-v1.1");
       // Every ACTIVE generation's replacement of the same kind is named, the primary marked.
       expect(env.warnings[0]?.message).toContain(retired === RETIRED_EXACT ? CANDIDATE_EXACT : CANDIDATE_PARTIAL);
       expect(env.warnings[0]?.message).toContain("primary");
@@ -567,11 +568,11 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
     const record = async () => (await resolveRollover(42161)).rollover!;
     it("classifies every configured settler with its kind AND its generation, case-insensitively", async () => {
       const dep = await record();
-      expect(classifyRolloverSettler(dep, EXACT.toLowerCase())).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "v0.1.0-rc.2", primary: true } });
-      expect(classifyRolloverSettler(dep, PARTIAL)).toMatchObject({ status: "active", kind: "PARTIAL", generation: { primary: true } });
-      expect(classifyRolloverSettler(dep, CANDIDATE_EXACT)).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "0.4-rc.1-candidate", primary: false, partialSettler: CANDIDATE_PARTIAL } });
-      expect(classifyRolloverSettler(dep, CANDIDATE_PARTIAL.toUpperCase().replace("0X", "0x"))).toMatchObject({ status: "active", kind: "PARTIAL", generation: { label: "0.4-rc.1-candidate" } });
-      expect(classifyRolloverSettler(dep, RETIRED_EXACT)).toMatchObject({ status: "retired", kind: "EXACT", generation: { label: "july-2026", retired: "2026-08-13", primary: false } });
+      expect(classifyRolloverSettler(dep, EXACT.toLowerCase())).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "phoenix/v0.3-rc.1", primary: false, wire: "rc.2" } });
+      expect(classifyRolloverSettler(dep, PARTIAL)).toMatchObject({ status: "active", kind: "PARTIAL", generation: { primary: false } });
+      expect(classifyRolloverSettler(dep, CANDIDATE_EXACT)).toMatchObject({ status: "active", kind: "EXACT", generation: { label: "phoenix/v0.4-rc.1", primary: true, wire: "0.2", partialSettler: CANDIDATE_PARTIAL } });
+      expect(classifyRolloverSettler(dep, CANDIDATE_PARTIAL.toUpperCase().replace("0X", "0x"))).toMatchObject({ status: "active", kind: "PARTIAL", generation: { label: "phoenix/v0.4-rc.1" } });
+      expect(classifyRolloverSettler(dep, RETIRED_EXACT)).toMatchObject({ status: "retired", kind: "EXACT", generation: { label: "arbitrum-v1.1", retired: "2026-08-13", primary: false } });
       expect(classifyRolloverSettler(dep, RETIRED_PARTIAL)).toMatchObject({ status: "retired", kind: "PARTIAL" });
       expect(classifyRolloverSettler(dep, "0x00000000000000000000000000000000DeaDBeef")).toEqual({ status: "unknown" });
       // A factory is not a settler.
@@ -579,15 +580,15 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
     });
     it("activeSettlersTeaching lists the active generations of ONE kind, primary first and marked", async () => {
       const dep = await record();
-      expect(activeSettlersTeaching(dep, "EXACT")).toBe(`ExactSettler ${EXACT} (v0.1.0-rc.2, primary), ExactSettler ${CANDIDATE_EXACT} (0.4-rc.1-candidate)`);
-      expect(activeSettlersTeaching(dep, "PARTIAL")).toBe(`PartialSettler ${PARTIAL} (v0.1.0-rc.2, primary), PartialSettler ${CANDIDATE_PARTIAL} (0.4-rc.1-candidate)`);
+      expect(activeSettlersTeaching(dep, "EXACT")).toBe(`ExactSettler ${CANDIDATE_EXACT} (phoenix/v0.4-rc.1, primary), ExactSettler ${EXACT} (phoenix/v0.3-rc.1)`);
+      expect(activeSettlersTeaching(dep, "PARTIAL")).toBe(`PartialSettler ${CANDIDATE_PARTIAL} (phoenix/v0.4-rc.1, primary), PartialSettler ${PARTIAL} (phoenix/v0.3-rc.1)`);
     });
     it("retiredSettlerTeaching is ONE string for prepare and submit and carries every active replacement", async () => {
       const dep = await record();
       const cls = classifyRolloverSettler(dep, RETIRED_PARTIAL);
       if (cls.status !== "retired") throw new Error("fixture: expected retired");
       const text = retiredSettlerTeaching(RETIRED_PARTIAL, cls, dep);
-      expect(text).toContain("PartialSettler of the RETIRED july-2026 rollover generation (retired 2026-08-13)");
+      expect(text).toContain("PartialSettler of the RETIRED arbitrum-v1.1 rollover generation (retired 2026-08-13)");
       expect(text).toContain(activeSettlersTeaching(dep, "PARTIAL"));
       expect(text).not.toContain(EXACT); // the other KIND is never offered as a replacement
     });
@@ -698,16 +699,19 @@ describe("rollover jitMarket — venue-gap notice, far-future expiry, and the po
   };
   // The pool this instruction derives, computed through the independently golden-tested
   // Market-tuple hash (marketid.ts) — NOT through the handler under test.
-  const derivedPoolId = computeMarketId({
-    collateralAsset: CA,
-    referenceAsset: REF,
-    expiryTimestamp: 1_900_000_000n,
-    rateMin: 900000000000000000n,
-    rateMax: 1100000000000000000n,
-    rateChangePerDayMax: 10000000000000000n,
-    rateChangeCapacityMax: 50000000000000000n,
-    rateOracle: ORACLE,
-  });
+  const derivedPoolId = computeMarketId(
+    {
+      collateralAsset: CA,
+      referenceAsset: REF,
+      expiryTimestamp: 1_900_000_000n,
+      rateMin: 900000000000000000n,
+      rateMax: 1100000000000000000n,
+      rateChangePerDayMax: 10000000000000000n,
+      rateChangeCapacityMax: 50000000000000000n,
+      rateOracle: ORACLE,
+    },
+    "8-field",
+  );
   const registryStub = (c: { functionName: string }) => {
     if (c.functionName === "MARKET_REGISTRY") return "0xa78dd18B10dCae13801237E5A0cAe98a1a2811F1";
     if (c.functionName === "isRecipe") return true;

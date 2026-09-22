@@ -148,13 +148,16 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const rpc = () => rpcProvenance(input.format, resolved);
     try {
       const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
-      const idMatches = computeMarketId(s.market).toLowerCase() === subj.poolId.toLowerCase();
+      // stage 3: readPoolState reads the 8-field market() tuple, so the re-hash is pinned to the
+      // 8-field wire; the pool-scoped generation resolver (resolvePoolGeneration) will pick the
+      // manager AND its wire, and a 10-field manager's pool re-hashes with its fees.
+      const idMatches = computeMarketId(s.market, "8-field").toLowerCase() === subj.poolId.toLowerCase();
       return envelope({
         state: idMatches ? "ok" : "conflict",
         data: {
           verified: idMatches,
           poolId: s.poolId,
-          marketIdRecomputed: computeMarketId(s.market),
+          marketIdRecomputed: computeMarketId(s.market, "8-field"),
           swapRate: s.onChainSwapRate,
           market: s.market,
           // Same labels as the cork-pool read (audit R1.6): this result carries the same raw

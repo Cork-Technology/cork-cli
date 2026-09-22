@@ -12,7 +12,7 @@ import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData
 import type { PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import { controllerViewsAbi } from "./market-registry.ts";
-import type { Market } from "./types.ts";
+import type { Market8 } from "./types.ts";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
@@ -188,9 +188,10 @@ export function deriveJitMarket(args: {
   oracle: `0x${string}`;
   rate: bigint;
   bands: ConstraintBands;
-}): { market: Market; poolId: `0x${string}`; resolved: ResolvedConstraint } {
+}): { market: Market8; poolId: `0x${string}`; resolved: ResolvedConstraint } {
   const resolved = applyBandsLocal(args.bands, args.rate);
-  const market: Market = {
+  // The pre-2.1.0 generation lives on an 8-field pool manager (arbitrum-v1.1) — pinned.
+  const market: Market8 = {
     collateralAsset: args.params.collateralAsset,
     referenceAsset: args.params.referenceAsset,
     expiryTimestamp: args.params.expiryTimestamp,
@@ -200,7 +201,7 @@ export function deriveJitMarket(args: {
     rateChangeCapacityMax: resolved.rateChangeCapacityMax,
     rateOracle: args.oracle,
   };
-  return { market, poolId: computeMarketId(market), resolved };
+  return { market, poolId: computeMarketId(market, "8-field"), resolved };
 }
 
 /** Unsigned MarketRegistry.deploy(ca, ref) calldata — permissionless + idempotent (an existing
@@ -210,7 +211,7 @@ export function buildDeployOracleCall(ca: `0x${string}`, ref: `0x${string}`): `0
 }
 
 /** controller.createNewPool calldata for eth_simulateV1 share-prediction chains (from: adapter). */
-export function buildCreatePoolCall(market: Market, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
+export function buildCreatePoolCall(market: Market8, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
   return encodeFunctionData({
     abi: controllerCreatePoolAbi,
     functionName: "createNewPool",
@@ -247,7 +248,7 @@ export async function predictShares(
     adapter: `0x${string}`;
     controller: `0x${string}`;
     poolManager: `0x${string}`;
-    market: Market;
+    market: Market8;
     poolId: `0x${string}`;
     unwindSwapFeePercentage?: bigint;
     swapFeePercentage?: bigint;

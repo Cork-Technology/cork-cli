@@ -25,24 +25,29 @@
 // (below), so an unrelated role's drift cannot noise up an unrelated artifact.
 import { keccak256 } from "viem";
 import { BUNDLED_DEFAULTS, resolveConfig, type CorkDefaults } from "./config-remote.ts";
+import { generationsOf, selectGeneration, type Generation, type GenerationLabel } from "./generations.ts";
 
 /** ERC-1967 implementation slot: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1). */
 export const EIP1967_IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" as const;
 
-/** The roles the allowlist can name, and the config block each resolves from. */
-export const IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "marketCreator", "legacyMarketRegistry", "legacyJitAdapter"] as const;
+/** The roles the allowlist can name, and the generation block each resolves from (phoenix:
+ *  corkAdapter, whitelistManager; marketRegistry: marketRegistry, jitAdapter, marketCreator).
+ *  Since cork-cli 0.6 a role resolves INSIDE the selected generation — the schema-1
+ *  `legacyMarketRegistry`/`legacyJitAdapter` role names are gone: the legacy generation's
+ *  registry and adapter are `marketRegistry`/`jitAdapter` of the generation whose block declares
+ *  `wire: "legacy"`, and the per-chain allowlist is the union of every generation's code. */
+export const IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager", "marketRegistry", "jitAdapter", "marketCreator"] as const;
 export type ImplementationRole = (typeof IMPLEMENTATION_ROLES)[number];
 
 /** Per-artifact role scopes: exactly the contracts whose code the produced bytes will execute.
  *  A Bundler3 bundle runs the CorkAdapter (and a gated pool consults the WhitelistManager);
- *  an oracle-deploy tx runs the MarketRegistry; a 2.1.0 JIT hook runs the JIT adapter, which
- *  calls the registry; a create-pool tx runs the CorkMarketCreator, which calls the registry;
- *  the deprecated hook runs the previous generation of both. */
+ *  an oracle-deploy tx runs the MarketRegistry; a JIT hook runs the JIT adapter, which calls the
+ *  registry (the deprecated legacy-wire hook runs the same two roles of ITS generation); a
+ *  create-pool tx runs the CorkMarketCreator, which calls the registry. */
 export const PHOENIX_IMPLEMENTATION_ROLES = ["corkAdapter", "whitelistManager"] as const satisfies readonly ImplementationRole[];
 export const PREPARE_MARKET_IMPLEMENTATION_ROLES = ["marketRegistry"] as const satisfies readonly ImplementationRole[];
 export const JIT_IMPLEMENTATION_ROLES = ["jitAdapter", "marketRegistry"] as const satisfies readonly ImplementationRole[];
 export const CREATE_POOL_IMPLEMENTATION_ROLES = ["marketCreator", "marketRegistry"] as const satisfies readonly ImplementationRole[];
-export const LEGACY_JIT_IMPLEMENTATION_ROLES = ["legacyJitAdapter", "legacyMarketRegistry"] as const satisfies readonly ImplementationRole[];
 
 /** The minimal client surface the guard needs. Structural on purpose: handler stubs that do not
  *  implement these views skip the guard silently, exactly like the other best-effort legs. */
@@ -61,15 +66,15 @@ export interface ImplementationCheck {
   verdict: "approved" | "not_approved" | "no_code" | "proxy_unresolved" | "unreadable";
 }
 
-/** Resolve a config role to the address the guard fingerprints — against the SAME blocks that
- *  already own the addresses (deployments / marketRegistry / marketRegistryLegacy), so the
- *  allowlist never duplicates an address that could then skew. Unknown roles resolve to
- *  undefined and are skipped: an UPDATED config may name roles an older binary does not know,
- *  and that must not warn. */
-export function implementationRoleAddress(role: string, defaults: CorkDefaults, chainId: number): `0x${string}` | undefined {
-  const dep = defaults.deployments[String(chainId)];
-  const mr = defaults.marketRegistry?.[String(chainId)];
-  const legacy = defaults.marketRegistryLegacy?.[String(chainId)];
+/** Resolve a role to the address the guard fingerprints — INSIDE the generation the caller is
+ *  about to use, against the SAME blocks that already own the addresses (its phoenix block for
+ *  corkAdapter/whitelistManager, its marketRegistry block for the registry roles), so the
+ *  allowlist never duplicates an address that could then skew. Unknown roles — and roles the
+ *  generation has no block for — resolve to undefined and are skipped: an UPDATED config may
+ *  name roles an older binary does not know, and that must not warn. */
+export function implementationRoleAddress(role: string, generation: Pick<Generation, "phoenix" | "marketRegistry"> | undefined): `0x${string}` | undefined {
+  const dep = generation?.phoenix;
+  const mr = generation?.marketRegistry;
   switch (role) {
     case "corkAdapter":
       return dep?.corkAdapter as `0x${string}` | undefined;
@@ -81,10 +86,6 @@ export function implementationRoleAddress(role: string, defaults: CorkDefaults, 
       return mr?.adapter as `0x${string}` | undefined;
     case "marketCreator":
       return mr?.marketCreator as `0x${string}` | undefined;
-    case "legacyMarketRegistry":
-      return legacy?.registry as `0x${string}` | undefined;
-    case "legacyJitAdapter":
-      return legacy?.adapter as `0x${string}` | undefined;
     default:
       return undefined;
   }
@@ -137,6 +138,11 @@ export interface ApprovedImplementationsOptions {
   /** Where role ADDRESSES resolve from — the resolved (remote-first) config in production.
    *  Default: the allowlist document (the single-document case). */
   addresses?: CorkDefaults;
+  /** The generation whose contracts the caller's bytes execute (its label in the addresses
+   *  document); omitted = the chain's primary. Every prepare path passes the generation it
+   *  resolved its `dep`/`mr` from — the guard must fingerprint THAT set's code, not the
+   *  primary's, or a non-primary prepare would be judged against the wrong contracts. */
+  generation?: GenerationLabel;
   /** Scope to the roles the caller's artifact executes; omitted = every allowlisted role. */
   roles?: readonly string[];
   atBlock?: bigint;
@@ -151,13 +157,18 @@ export async function checkApprovedImplementations(
   chainId: number,
   opts: ApprovedImplementationsOptions,
 ): Promise<ImplementationCheck[]> {
-  const { allowlist, addresses = allowlist, roles, atBlock } = opts;
+  const { allowlist, addresses = allowlist, generation, roles, atBlock } = opts;
   const chain = allowlist.approvedImplementations?.[String(chainId)];
   if (!chain || typeof client.getCode !== "function") return [];
+  // An unknown label resolves to no generation → no addresses → nothing fingerprinted. The
+  // prepare that named it has already refused upstream (generation_unknown); the guard never
+  // invents a verdict for a set it cannot find.
+  const sel = selectGeneration(generationsOf(addresses, chainId), generation);
+  const set = sel.ok ? sel.generation : undefined;
   const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
   const jobs = Object.entries(chain).flatMap(([role, entry]) => {
     if (roles !== undefined && !roles.includes(role)) return [];
-    const address = implementationRoleAddress(role, addresses, chainId);
+    const address = implementationRoleAddress(role, set);
     return address ? [checkOne(client, role, entry, address, blockArg)] : [];
   });
   return Promise.all(jobs);
@@ -171,7 +182,7 @@ export async function checkApprovedImplementations(
 export async function approvedImplementationGuard(
   client: CodeReader,
   chainId: number,
-  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock"> = {},
+  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock" | "generation"> = {},
 ): Promise<Array<{ code: string; message: string }>> {
   return (await approvedImplementationChecks(client, chainId, opts)).warnings;
 }
@@ -182,7 +193,7 @@ export async function approvedImplementationGuard(
 export async function approvedImplementationChecks(
   client: CodeReader,
   chainId: number,
-  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock"> = {},
+  opts: Pick<ApprovedImplementationsOptions, "roles" | "atBlock" | "generation"> = {},
 ): Promise<{ checks: ImplementationCheck[]; warnings: Array<{ code: string; message: string }> }> {
   try {
     const cfg = await resolveConfig();

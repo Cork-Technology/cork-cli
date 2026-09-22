@@ -120,7 +120,8 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   if (input.forSelf) {
     return preparePhoenixForSelf(input, ctx);
   }
-  const { dep, depWarn } = await getDep(ctx, input.chainId);
+  const { dep, depWarn, generation, refusal } = await getDep(ctx, input.chainId, { purpose: "prepare" });
+  if (refusal) return unavailable(input.chainId, refusal.code, refusal.message, ctx);
   if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const { corkAdapter, bundler3 } = dep;
   if (!corkAdapter || !bundler3) {
@@ -187,7 +188,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     // Interface-first guard, same posture, scoped to the contracts this bundle executes: warn
     // when a trusted role's live code is off the allowlist bundled into this build (a proxy
     // upgrade nobody admitted yet, or an address that moved ahead of a release).
-    ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
+    ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(generation ? { generation: generation.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
   );
   // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
   // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's

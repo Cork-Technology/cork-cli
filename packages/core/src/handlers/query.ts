@@ -8,7 +8,7 @@ import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
-import { resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
+import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
@@ -733,12 +733,56 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.resource === "derive-cork-pool") {
     return handleQueryMarketPredict(input, filters, chainId, ctx);
   }
-  const { dep, depWarn } = await getDep(ctx, chainId);
+  const { dep, depWarn, generation, refusal } = await getDep(ctx, chainId);
 
-  // protocol-config is pure config (no RPC needed).
+  // protocol-config is pure config (no RPC needed): the SELECTED generation's deployment under
+  // the pre-0.6 `deployment` key, the generation it came from, and the chain's whole generation
+  // list — every block's addresses and wire, so a reader can see which set is primary, which
+  // sets are preparable, and which wire each speaks (generations.ts).
   if (input.resource === "protocol-config") {
+    if (refusal) return unavailable(chainId, refusal.code, refusal.message, ctx);
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
-    return envelope({ state: "ok", data: { resource: input.resource, chainId, deployment: dep, create2Deployer: CREATE2_DEPLOYER }, chainId, source: "config", warnings: depWarn, ctx });
+    const { generations } = await resolveGenerations(chainId);
+    const selected = generations.find((g) => g.label === generation?.label) ?? generations.find((g) => g.primary);
+    return envelope({
+      state: "ok",
+      data: {
+        resource: input.resource,
+        chainId,
+        deployment: dep,
+        ...(selected
+          ? {
+              generation: {
+                label: selected.label,
+                status: selected.status,
+                primary: selected.primary,
+                ...(selected.distribution !== undefined ? { distribution: selected.distribution } : {}),
+                contractsVersions: {
+                  ...(selected.phoenix?.contractsVersion !== undefined ? { phoenix: selected.phoenix.contractsVersion } : {}),
+                  ...(selected.marketRegistry?.contractsVersion !== undefined ? { marketRegistry: selected.marketRegistry.contractsVersion } : {}),
+                  ...(selected.rollover?.contractsVersion !== undefined ? { rollover: selected.rollover.contractsVersion } : {}),
+                  ...(selected.forSelf?.contractsVersion !== undefined ? { forSelf: selected.forSelf.contractsVersion } : {}),
+                },
+              },
+            }
+          : {}),
+        generations: generations.map((g) => ({
+          label: g.label,
+          status: g.status,
+          primary: g.primary,
+          ...(g.distribution !== undefined ? { distribution: g.distribution } : {}),
+          ...(g.phoenix ? { phoenix: g.phoenix } : {}),
+          ...(g.marketRegistry ? { marketRegistry: g.marketRegistry } : {}),
+          ...(g.rollover ? { rollover: g.rollover } : {}),
+          ...(g.forSelf ? { forSelf: g.forSelf } : {}),
+        })),
+        create2Deployer: CREATE2_DEPLOYER,
+      },
+      chainId,
+      source: "config",
+      warnings: depWarn,
+      ctx,
+    });
   }
 
   const chainResources = new Set(["cork-pool", "account-state", "pool-whitelist"]);

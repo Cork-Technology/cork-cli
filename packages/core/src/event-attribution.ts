@@ -8,7 +8,7 @@
 // from the wrong emitter as `unattributed` (with the reason), an unrecognized log byte-exact as
 // `other` — because a decoder that drops what it cannot name hides exactly what a reader most
 // needs to see. Neither of those two collections is lifecycle evidence.
-import { resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "./config-remote.ts";
+import { resolveGenerations, resolveRollover } from "./config-remote.ts";
 import { JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC } from "./market-registry.ts";
 import { SETTLER_EVENTS } from "./rollover-verify.ts";
 import { rolloverGenerations } from "./rollover.ts";
@@ -21,9 +21,8 @@ export interface ProtocolEmitter {
   address: `0x${string}`;
   role: EmitterRole;
   generation: "active" | "retired";
-  /** The rollover generation's label (every settler emitter carries one: "primary" for the
-   *  pinned set when the config names none, "july-2026" for the retired set, …). JIT adapters
-   *  have no generation label. */
+  /** The chain generation's label (every emitter carries one since 0.6: "phoenix/v0.4-rc.1",
+   *  "arbitrum-v1.1" for the retired July settlers and the legacy JIT adapter, …). */
   label?: string;
 }
 
@@ -39,13 +38,13 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
 
 /** Every contract this build recognizes as a protocol emitter on `chainId`, from the same
  *  config every other trust decision reads: every rollover generation's settlers (active and
- *  retired, primary first), and the JIT adapters of both registry generations. */
+ *  retired, primary first), then every generation's JIT adapter in resolution order — the
+ *  flat/nested-wire adapters as `jitAdapter` (active), the legacy-wire adapter as
+ *  `legacyJitAdapter` (retired — the deprecated lane's emitter keeps its own role because its
+ *  JITMarketCreated carries a different signature). Every emitter carries its chain
+ *  generation's label. */
 export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmitter[]> {
-  const [{ rollover }, { marketRegistry }, { marketRegistry: legacy }] = await Promise.all([
-    resolveRollover(chainId),
-    resolveMarketRegistry(chainId),
-    resolveMarketRegistryLegacy(chainId),
-  ]);
+  const [{ rollover }, { generations }] = await Promise.all([resolveRollover(chainId), resolveGenerations(chainId)]);
   const out: ProtocolEmitter[] = [];
   if (rollover) {
     for (const g of rolloverGenerations(rollover)) {
@@ -53,8 +52,12 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
       out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: g.status, label: g.label });
     }
   }
-  if (marketRegistry?.adapter) out.push({ address: marketRegistry.adapter as `0x${string}`, role: "jitAdapter", generation: "active" });
-  if (legacy?.adapter) out.push({ address: legacy.adapter as `0x${string}`, role: "legacyJitAdapter", generation: "retired" });
+  for (const g of generations) {
+    const adapter = g.marketRegistry?.adapter as `0x${string}` | undefined;
+    if (!adapter) continue;
+    if (g.marketRegistry!.wire === "legacy") out.push({ address: adapter, role: "legacyJitAdapter", generation: "retired", label: g.label });
+    else out.push({ address: adapter, role: "jitAdapter", generation: g.status === "active" ? "active" : "retired", label: g.label });
+  }
   return out;
 }
 

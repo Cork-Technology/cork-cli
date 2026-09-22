@@ -19,7 +19,7 @@ import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import { cachedContractConstantBytes32, refreshContractConstant } from "./chain/constants-cache.ts";
-import type { Market } from "./types.ts";
+import type { Market8 } from "./types.ts";
 
 const ZERO_ADDRESS = zeroAddress;
 
@@ -477,8 +477,11 @@ export function deriveJitMarket(args: {
   expiryTimestamp: bigint;
   constraint: ResolvedConstraint;
   oracle: `0x${string}`;
-}): { market: Market; poolId: `0x${string}` } {
-  const market: Market = {
+}): { market: Market8; poolId: `0x${string}` } {
+  // stage 2: the flat-wire (0.3.x) adapter creates pools on an 8-field pool manager, so this
+  // derivation is pinned to the 8-field id; the nested-wire codec derives a 10-field market
+  // (fees inside the struct and the id) and hashes it on the 10-field wire.
+  const market: Market8 = {
     collateralAsset: args.collateralAsset,
     referenceAsset: args.referenceAsset,
     expiryTimestamp: args.expiryTimestamp,
@@ -488,7 +491,7 @@ export function deriveJitMarket(args: {
     rateChangeCapacityMax: args.constraint.rateChangeCapacityMax,
     rateOracle: args.oracle,
   };
-  return { market, poolId: computeMarketId(market) };
+  return { market, poolId: computeMarketId(market, "8-field") };
 }
 
 /** Unsigned MarketRegistry.deploy(ca, ref, mode) calldata — permissionless + idempotent (an
@@ -505,7 +508,7 @@ export function buildDeployFixedRateOracleCall(rate: bigint): `0x${string}` {
 }
 
 /** controller.createNewPool calldata for share-prediction simulations. */
-export function buildCreatePoolCall(market: Market, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
+export function buildCreatePoolCall(market: Market8, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
   return encodeFunctionData({
     abi: controllerCreatePoolAbi,
     functionName: "createNewPool",
@@ -627,7 +630,7 @@ export async function predictShares(
     adapter: `0x${string}`;
     controller: `0x${string}`;
     poolManager: `0x${string}`;
-    market: Market;
+    market: Market8;
     poolId: `0x${string}`;
     unwindSwapFeePercentage?: bigint;
     swapFeePercentage?: bigint;

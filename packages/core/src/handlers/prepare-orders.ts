@@ -5,12 +5,12 @@ import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTr
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
-import { resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { resolveRollover } from "../config-remote.ts";
 import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
-import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
@@ -245,7 +245,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const swapFee = BigInt(jm.swapFeePercentage);
       const unwindFee = BigInt(jm.unwindSwapFeePercentage);
       const expiryTimestamp = BigInt(jm.expiryTimestamp);
-      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { capWei: await resolveFeeCap(chainId, "adapter") });
+      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { capWei: await resolveFeeCap(chainId, "adapter", ctx) });
       if (valueGate) return valueGate;
       const farFuture = farFutureExpiryWarning(expiryTimestamp, nowSecs);
       if (farFuture) warnings.push(farFuture);
@@ -277,7 +277,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             // simulation (role granted in-memory — works before AND after the governance grant).
             // When the oracle is not deployed, the simulation prepends the SAME permissionless
             // deploy the fill performs, so the pool actually creates in-memory.
-            const { dep: jitDep } = await getDep(ctx, chainId);
+            const { dep: jitDep } = await getDep(ctx, chainId, { ...(ladder.generation ? { generation: ladder.generation.label } : {}) });
             const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
             if (!oracle.deployed) {
               preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
@@ -524,7 +524,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const jm = action.jitMarket;
       // Same value-domain gate the LOP JIT builders run (fee cap + future expiry, one place so
       // the boundary rules cannot drift), plus the rollover-specific window rule.
-      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { capWei: await resolveFeeCap(chainId, "adapter") });
+      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { capWei: await resolveFeeCap(chainId, "adapter", ctx) });
       if (gate) return gate;
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
         return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
@@ -537,7 +537,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // LOP JIT ladder: runs whenever an RPC resolves; silent without one.
       try {
         const resolved = await getRpc(ctx, chainId);
-        const { marketRegistry: mr } = await resolveMarketRegistry(chainId);
+        const { mr } = await getMarketRegistry(ctx, chainId);
         if (resolved && mr) {
           const res = await resolveRecipeOracleConstraint({
             client: resolved.client,

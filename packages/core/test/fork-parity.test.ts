@@ -39,7 +39,7 @@ describe.skipIf(!RPC)("fork parity vs live vnet fixture pool", () => {
   });
 
   it("MarketId re-hashes to the pool id", () => {
-    expect(computeMarketId(s.market)).toBe(POOL);
+    expect(computeMarketId(s.market, "8-field")).toBe(POOL);
   });
 
   it("previewAdjustedRate reproduces on-chain swapRate exactly", () => {

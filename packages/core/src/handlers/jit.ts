@@ -7,9 +7,10 @@ import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtensi
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
-import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
-import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, LEGACY_JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
-import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
+import { resolveGenerations } from "../config-remote.ts";
+import { marketRegistryForWire } from "../generations.ts";
+import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
+import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
 import { oracleRateUnreadableMessage, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
@@ -28,8 +29,8 @@ const JIT_VALUE_SITE: ValueGateSite = { fees: "JIT fee percentages", expiryField
  *  compiled 5e18 answers only while the cache is cold or offline. Config-only resolution, so
  *  the value gates keep running FIRST and offline; the ladder/create-pool refresh the cache
  *  once a client exists, converging one call after any redeploy that moves the cap. */
-export async function resolveFeeCap(chainId: ChainId, capSource: "adapter" | "creator"): Promise<bigint> {
-  const { marketRegistry: mr } = await resolveMarketRegistry(chainId);
+export async function resolveFeeCap(chainId: ChainId, capSource: "adapter" | "creator", ctx: HandlerContext = {}): Promise<bigint> {
+  const { mr } = await getMarketRegistry(ctx, chainId);
   const address = capSource === "creator" ? mr?.marketCreator : mr?.adapter;
   if (!address) return MAX_FEE_PERCENTAGE_FALLBACK;
   return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? MAX_FEE_PERCENTAGE_FALLBACK;
@@ -121,6 +122,8 @@ export type JitLadderResult =
       gate?: undefined;
       adapter: `0x${string}`;
       registry: `0x${string}`;
+      /** The generation the adapter/registry pair came from (dep, guard scope and shares follow it). */
+      generation?: { label: string };
       recipe: `0x${string}`;
       rateOverride: bigint;
       additionalData: `0x${string}`;
@@ -183,11 +186,12 @@ export async function runJitPreflightLadder(args: {
   const words = LADDER_SIDE[side];
   const warnings: Array<{ code: string; message: string }> = [];
   const expiryTimestamp = BigInt(jm.expiryTimestamp);
-  const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistry(chainId);
+  const { mr, mrWarn, generation: mrGeneration, refusal: mrRefusal } = await getMarketRegistry(ctx, chainId);
+  if (mrRefusal) return { gate: unavailable(chainId, mrRefusal.code, mrRefusal.message, ctx) };
   if (!mr?.adapter) {
     return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — ${words.live} are live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
-  if (mrWarn) warnings.push(mrWarn);
+  warnings.push(...mrWarn);
   // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,
   // so the sugar also works offline).
   let recipe = jm.recipe;
@@ -204,7 +208,7 @@ export async function runJitPreflightLadder(args: {
   let constraint: ResolvedConstraint | undefined = jm.constraint
     ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
     : undefined;
-  const base = { adapter: mr.adapter, registry: mr.registry, recipe, rateOverride, additionalData, warnings } as const;
+  const base = { adapter: mr.adapter, registry: mr.registry, ...(mrGeneration ? { generation: { label: mrGeneration.label } } : {}), recipe, rateOverride, additionalData, warnings } as const;
 
   // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
   const resolved = await getRpc(ctx, chainId);
@@ -219,7 +223,7 @@ export async function runJitPreflightLadder(args: {
   // Interface-first guard on the two contracts the hook executes (adapter + registry): the
   // binding reads below prove WHICH contracts, this proves their CODE is the admitted one.
   {
-    const impl = await approvedImplementationChecks(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    const impl = await approvedImplementationChecks(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, ...(mrGeneration ? { generation: mrGeneration.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
     warnings.push(...impl.warnings);
     const gate = bytesDecoderGate({ checks: impl.checks, roles: ["jitAdapter"], chainId, ctx, artifact: words.artifact, adapterName: "JIT adapter" });
     if (gate.gate) return { gate: gate.gate };
@@ -341,7 +345,8 @@ export async function buildTakerJitInteraction(args: {
           /* the order's extension is not a JIT payload (e.g. Fusion) — nothing to cross-check */
         }
       }
-      const { dep: jitDep } = await getDep(ctx, chainId);
+      // The pool manager of the SAME generation the adapter belongs to (dep and mr are one set).
+      const { dep: jitDep } = await getDep(ctx, chainId, { ...(ladder.generation ? { generation: ladder.generation.label } : {}) });
       const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
       if (!oracle.deployed) {
         preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
@@ -431,7 +436,11 @@ export async function prepareJitLegacy(args: {
   }
   if (jm.mode === undefined) return { gate: unavailable(chainId, "missing_filter", "legacy JIT orders need jitMarket.mode (the old registry's exact case-sensitive mode string)", ctx) };
   const mode = jm.mode;
-  const { marketRegistry: mr, warning: mrWarn } = await resolveMarketRegistryLegacy(chainId);
+  // The legacy lane is the generation whose marketRegistry block declares `wire: "legacy"`
+  // (generations.ts) — there is no separate legacy config block since 0.6.
+  const { generations, warning: mrWarn } = await resolveGenerations(chainId);
+  const legacyGen = marketRegistryForWire(generations, "legacy");
+  const mr = legacyGen?.marketRegistry;
   if (!mr?.adapter) {
     return { gate: unavailable(chainId, "unknown_deployment", `no LEGACY JIT CorkLimitOrderAdapter configured for chainId ${chainId}`, ctx) };
   }
@@ -458,12 +467,13 @@ export async function prepareJitLegacy(args: {
     return { extension, jitData, warnings };
   }
   const client = resolved.client;
-  // The deprecated lane is held to the same standard as the current one: its adapter and
-  // registry have their own allowlist roles, so a swapped implementation warns here too.
+  // The deprecated lane is held to the same standard as the current one: the same two roles,
+  // resolved INSIDE the legacy generation (its registry and adapter hashes are on the shared
+  // per-role allowlist), so a swapped implementation warns here too.
   {
-    const impl = await approvedImplementationChecks(client, chainId, { roles: LEGACY_JIT_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    const impl = await approvedImplementationChecks(client, chainId, { roles: JIT_IMPLEMENTATION_ROLES, generation: legacyGen!.label, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
     warnings.push(...impl.warnings);
-    const gate = bytesDecoderGate({ checks: impl.checks, roles: ["legacyJitAdapter"], chainId, ctx, artifact: "extension", adapterName: "legacy JIT adapter" });
+    const gate = bytesDecoderGate({ checks: impl.checks, roles: ["jitAdapter"], chainId, ctx, artifact: "extension", adapterName: "legacy JIT adapter" });
     if (gate.gate) return { gate: gate.gate };
     warnings.push(...gate.warnings);
   }

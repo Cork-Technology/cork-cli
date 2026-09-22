@@ -265,7 +265,7 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     expect(d.count).toBe(2);
     expect(d.items[0]!.verification).toBe("confirmed");
     expect(d.items[0]!.settlerGeneration).toBe("retired");
-    expect(d.items[0]!.settlerGenerationLabel).toBe("july-2026");
+    expect(d.items[0]!.settlerGenerationLabel).toBe("arbitrum-v1.1");
     expect(d.items[1]!.verification).toBe("unverified"); // unknown vocabulary kept, labeled
     expect(d.verification.dropped).toBe(1);
   });
@@ -291,8 +291,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as VerifiedData;
     expect(asked.sort()).toEqual([candidate.toLowerCase(), rc2.toLowerCase()].sort());
     const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
-    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "0.4-rc.1-candidate" });
-    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "v0.1.0-rc.2" });
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.3-rc.1" });
     expect(env.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
   });
 

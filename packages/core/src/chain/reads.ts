@@ -2,7 +2,7 @@
 // swapRate / preview* in pure TS. All reads are pinned to one blockNumber so a mutable
 // oracle cannot race the parity comparison.
 import type { PublicClient } from "viem";
-import type { ConstraintState, Market } from "../types.ts";
+import type { ConstraintState, Market8 } from "../types.ts";
 import { constraintAdapterAbi, erc20Abi, poolManagerAbi, poolShareAbi, rateOracleAbi } from "./abis.ts";
 
 export interface CorkAddresses {
@@ -14,7 +14,12 @@ export interface PoolStateRead {
   poolId: `0x${string}`;
   blockNumber: bigint;
   blockTimestamp: bigint;
-  market: Market;
+  // stage 3: this read decodes the 8-field `market()` tuple (poolManagerAbi) and reads the fees
+  // from their separate views — the shape of every pool manager up to v1.3.0-rc.1. A 10-field
+  // manager (phoenix/v0.4-rc.1) answers the same call with two more words, which viem's 8-field
+  // decode drops SILENTLY; the pool-scoped generation resolver will choose the ABI by the
+  // manager's wire and type `market` as Market10 there.
+  market: Market8;
   constraintState: ConstraintState;
   oracleRate: bigint;
   onChainSwapRate: bigint;
@@ -78,7 +83,7 @@ export async function readPoolState(
       client.readContract({ ...pm, functionName: "shares", args: [poolId], blockNumber }),
     ]);
 
-  const market: Market = {
+  const market: Market8 = {
     collateralAsset: marketTuple.collateralAsset,
     referenceAsset: marketTuple.referenceAsset,
     expiryTimestamp: marketTuple.expiryTimestamp,

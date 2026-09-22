@@ -6,17 +6,19 @@ import { rateOracleAbi } from "../chain/abis.ts";
 import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, erc20MetadataAbi, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, type OracleModeName, predictShares, type PredictSharesResult, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, type RecipeSourceName, type ResolvedConstraint, SOURCE_INTERFACE, SOURCE_TYPE } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
-import { resolveMarketRegistry, resolveMarketRegistryLegacy } from "../config-remote.ts";
-import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
+import { resolveGenerations } from "../config-remote.ts";
+import { marketRegistryForWire } from "../generations.ts";
+import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
 
 
 /** Resolve the MarketRegistry stack + an RPC for registry-backed calls, or an honest gate. */
 export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promise<
   | { gate: Envelope }
-  | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof resolveMarketRegistry>>["marketRegistry"]>; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
+  | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>; generation?: { label: string }; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
 > {
-  const { marketRegistry: mr, warning } = await resolveMarketRegistry(chainId);
+  const { mr, mrWarn, generation, refusal } = await getMarketRegistry(ctx, chainId);
+  if (refusal) return { gate: unavailable(chainId, refusal.code, refusal.message, ctx) };
   if (!mr) {
     return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
@@ -27,7 +29,7 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
   // CONFIG warnings only — rpcWarn is deliberately NOT baked in here: the client fails over
   // in-call (mutating `resolved`), so consumers prepend rpcWarn(resolved) at ENVELOPE
   // construction, after their reads have run.
-  return { mr, resolved, warnings: warning ? [warning] : [] };
+  return { mr, ...(generation ? { generation: { label: generation.label } } : {}), resolved, warnings: mrWarn };
 }
 
 /** Best-effort 2.1.0 generation guard, cached per (chainId, adapter) for the process: the ONE
@@ -371,7 +373,8 @@ export async function handleComputeResolveRecipeLegacy(
     return unavailable(chainId, "deprecated_gated", deprecatedGateMessage("legacy recipe-rate-constraint (pre-2.1.0 percentage-band math)", "In 2.1.0 a recipe resolves its own constraint — drop `legacy` and pass the recipe CONTRACT ADDRESS."), ctx);
   }
   if (p.mode === undefined) return unavailable(chainId, "missing_filter", "legacy recipe-rate-constraint needs `mode` (the old registry's exact case-sensitive mode string)", ctx);
-  const { marketRegistry: mr, warning } = await resolveMarketRegistryLegacy(chainId);
+  const { generations, warning } = await resolveGenerations(chainId);
+  const mr = marketRegistryForWire(generations, "legacy")?.marketRegistry;
   if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
@@ -434,7 +437,8 @@ async function handleQueryRegistryLegacy(input: QueryInput, filters: QueryFilter
   if (input.resource === "registry-denominations" || input.resource === "registry-feeds") {
     return unavailable(chainId, "missing_filter", `${input.resource} does not exist in the pre-2.1.0 generation — drop filters.legacy`, ctx);
   }
-  const { marketRegistry: mr, warning } = await resolveMarketRegistryLegacy(chainId);
+  const { generations, warning } = await resolveGenerations(chainId);
+  const mr = marketRegistryForWire(generations, "legacy")?.marketRegistry;
   if (!mr) return unavailable(chainId, "unknown_deployment", `no LEGACY MarketRegistry configured for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return unavailable(chainId, "requires_rpc", `MarketRegistry reads need an RPC endpoint for chainId ${chainId} (none resolved — set CORK_RPC_URL)`, ctx);
@@ -706,7 +710,8 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     // cST / cPT — pinned when the pool exists, else predicted via the state-override simulation.
     // With an UNDEPLOYED oracle the simulation prepends the same permissionless deploy the fill
     // performs, so the pool creates in-memory and the share addresses come back real.
-    const { dep } = await getDep(ctx, chainId);
+    // The pool manager of the SAME generation as the registry (dep and mr are one set).
+    const { dep } = await getDep(ctx, chainId, { ...(r.generation ? { generation: r.generation.label } : {}) });
     let shares: PredictSharesResult = { exists: false, status: "unavailable" };
     if (dep?.poolManager && mr.controller && mr.adapter) {
       const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];

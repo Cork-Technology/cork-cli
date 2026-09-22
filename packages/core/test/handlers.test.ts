@@ -172,6 +172,72 @@ describe("runTool: cork_query", () => {
     expect(d.deployment.corkAdapter).toBe("0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407");
     expect(d.create2Deployer).toBe("0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7");
   });
+  it("protocol-config reports the selected GENERATION and the chain's whole generation list (each block's addresses + wire), keeping `deployment` for the selected set", async () => {
+    type Gen = { label: string; status: string; primary: boolean; distribution?: string; phoenix?: { wire: string; poolManager: string }; marketRegistry?: { wire: string; registry: string }; rollover?: { wire: string; factory: string }; forSelf?: { adapter: string } };
+    type Data = { deployment: { poolManager: string; wire: string }; generation: { label: string; status: string; primary: boolean; distribution?: string; contractsVersions: Record<string, string> }; generations: Gen[] };
+    const env = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const d = env.data as Data;
+    expect(d.generation).toEqual({
+      label: "phoenix/v0.4-rc.1",
+      status: "active",
+      primary: true,
+      distribution: "phoenix/v0.4-rc.1",
+      contractsVersions: { phoenix: "v1.4.0-rc.1", marketRegistry: "0.5.0", rollover: "v0.2.0", forSelf: "v0.2.0-rc.1" },
+    });
+    expect(d.deployment).toMatchObject({ poolManager: "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D", wire: "10-field" });
+    expect(d.generations.map((g) => [g.label, g.status, g.primary, g.phoenix?.wire, g.marketRegistry?.wire, g.rollover?.wire])).toEqual([
+      ["phoenix/v0.4-rc.1", "active", true, "10-field", "nested", "0.2"],
+      ["phoenix/v0.3-rc.1", "active", false, "8-field", "flat", "rc.2"],
+      ["arbitrum-v1.1", "active", false, "8-field", "legacy", "rc.1"],
+      ["arbitrum-legacy", "read-only", false, "8-field", undefined, undefined],
+    ]);
+    expect(d.generations[1]).toMatchObject({ marketRegistry: { registry: "0xa78d8137B01058dD23e545b6557209eBBc9611F1" }, rollover: { factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82" }, forSelf: { adapter: "0x5Fc04d188bf5DF6901080Df0F801FFE3d8435771" } });
+    // ctx.generation selects a non-primary set: `deployment` follows it, the list is unchanged.
+    const v03 = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v0.3-rc.1" });
+    const d03 = v03.data as Data;
+    expect(d03.deployment).toMatchObject({ poolManager: "0x02803Bb52D2184f906F45B50C66AA969C2E37263", wire: "8-field" });
+    expect(d03.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", primary: false, contractsVersions: { phoenix: "v1.3.0-rc.1", marketRegistry: "0.3.3", rollover: "v0.1.0-rc.2" } });
+    expect(d03.generations).toHaveLength(4);
+    // A read-only set is READABLE here; an unknown label refuses with the list.
+    const ro = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "arbitrum-legacy" });
+    expect(ro.state).toBe("ok");
+    expect((ro.data as Data).generation).toMatchObject({ label: "arbitrum-legacy", status: "read-only", contractsVersions: {} });
+    const bad = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v9" });
+    expect(bad.state).toBe("unavailable");
+    expect(bad.warnings[0]?.code).toBe("generation_unknown");
+    expect(bad.warnings[0]?.message).toContain("phoenix/v0.4-rc.1 (active, primary)");
+  });
+  it("the generation gate on PREPARES: a read-only set refuses generation_read_only; a registry path selecting a wire this build does not encode refuses phase_gated", async () => {
+    const ro = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 42161, account: RCV, clientRequestId: "gen-ro-0001", fundingMode: "erc20-approve", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "arbitrum-legacy" },
+    );
+    expect(ro.state).toBe("unavailable");
+    expect(ro.warnings[0]?.code).toBe("generation_read_only");
+    expect(ro.warnings[0]?.message).toContain("arbitrum-legacy");
+    // An ACTIVE non-primary set prepares against ITS contracts.
+    const v03 = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 42161, account: RCV, clientRequestId: "gen-v03-0001", fundingMode: "erc20-approve", action: { type: "deposit", poolId: POOL, collateralAssetsIn: "1", receiver: RCV, minCptAndCstSharesOut: "1" }, format: "concise" },
+      { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "phoenix/v0.3-rc.1" },
+    );
+    expect(v03.state).toBe("ok");
+    expect((v03.data as { corkAdapter: string }).corkAdapter).toBe("0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD");
+    // stage 2: the nested-wire registry is declared by the primary generation but not encoded
+    // by this build — naming it on a registry path is a typed refusal, never flat bytes at a
+    // nested adapter. Omitting `generation` binds the flat-wire set (the 0.3.3 stack).
+    const nested = await runTool("cork_query", { resource: "registry-recipes", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "phoenix/v0.4-rc.1" });
+    expect(nested.state).toBe("unavailable");
+    expect(nested.warnings[0]?.code).toBe("phase_gated");
+    expect(nested.warnings[0]?.message).toContain("'nested'-wire MarketRegistry (0.5.0)");
+    expect(nested.warnings[0]?.message).toContain("phoenix/v0.3-rc.1");
+    const legacy = await runTool("cork_query", { resource: "registry-recipes", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "arbitrum-v1.1" });
+    expect(legacy.state).toBe("unavailable");
+    expect(legacy.warnings[0]?.code).toBe("phase_gated");
+    expect(legacy.warnings[0]?.message).toContain("deprecated lane");
+  });
   it("whitelisted-addresses rejects lite-decentralized honestly (mappings are not enumerable over RPC views)", async () => {
     const env = await runTool("cork_query", { resource: "whitelisted-addresses", mode: "lite-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
@@ -263,7 +329,7 @@ describe("deployment gating per capability (42161 promoted 2026-07-22; 8453 shad
     expect(env.state).toBe("ok");
     const d = env.data as { bundler3: string; corkAdapter: string };
     expect(d.bundler3).toBe("0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13");
-    expect(d.corkAdapter).toBe("0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD"); // v1.3.0-rc.1
+    expect(d.corkAdapter).toBe("0x71eB628c3A40FB3896613804847840426f9284A7"); // v1.4.0-rc.1 — the primary generation since 2026-09-22
   });
 
   it("query on a chain with no deployment at all (11155111) → unknown_deployment, not requires_rpc", async () => {

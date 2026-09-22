@@ -27,9 +27,9 @@ const IMPL = "0x00000000000000000000000000000000000000c3" as `0x${string}`;
 
 function defaultsWith(approved: Record<string, { proxy?: "eip1967"; approved: string[] }>): CorkDefaults {
   return parseDefaults({
-    schemaVersion: 1,
+    schemaVersion: 2,
     updated: "2026-08-12",
-    deployments: { "1": { poolManager: ADAPTER, constraintAdapter: ADAPTER, corkAdapter: ADAPTER, whitelistManager: WLM } },
+    generations: { "1": { primary: "test", sets: { test: { status: "active", phoenix: { poolManager: ADAPTER, constraintAdapter: ADAPTER, corkAdapter: ADAPTER, whitelistManager: WLM, wire: "8-field" } } } } },
     lopAddresses: {},
     approvedImplementations: { "1": approved },
   });

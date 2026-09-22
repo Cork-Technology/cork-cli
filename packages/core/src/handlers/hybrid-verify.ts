@@ -25,6 +25,7 @@ import { parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.t
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
+import { generationsOf } from "../generations.ts";
 import { getRpc, type HandlerContext, nowSecondsOf } from "./shared.ts";
 import { authenticateBookRowSignature, type BookMakerSignature, extensionVerdict, recoverEoaSigner } from "./order-auth.ts";
 import { assessMakerReadiness, gatherMakerReadinessFacts, type MakerReadiness, type MakerReadinessFacts, type MakerReadinessInput, type MakerReadinessTarget, makerReadinessTargetOf } from "./maker-readiness.ts";
@@ -58,15 +59,13 @@ export interface HybridVerification {
   parsed?: ReadonlyMap<string, ParsedBookRow>;
 }
 
-/** Every configured Phoenix pool manager on the chain (primary + named profiles) — venue rows
- *  may live on ANY generation (the venue's existing markets are on the v1.1 PM), so existence
- *  is "any configured PM knows it". */
+/** Every configured Phoenix pool manager on the chain (every generation, resolution order —
+ *  read-only sets included) — venue rows may live on ANY generation (the venue's existing
+ *  markets are on the arbitrum-v1.1 PM), so existence is "any configured PM knows it". */
 export async function configuredPoolManagers(chainId: number): Promise<`0x${string}`[]> {
   const cfg = await resolveConfig();
   const pms = new Set<`0x${string}`>();
-  const primary = cfg.defaults.deployments[String(chainId)];
-  if (primary) pms.add(primary.poolManager);
-  for (const profile of Object.values(cfg.defaults.deploymentProfiles?.[String(chainId)] ?? {})) pms.add(profile.poolManager);
+  for (const g of generationsOf(cfg.defaults, chainId)) if (g.phoenix) pms.add(g.phoenix.poolManager as `0x${string}`);
   return [...pms];
 }
 

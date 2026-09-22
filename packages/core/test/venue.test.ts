@@ -1603,7 +1603,10 @@ describe("taker-fill of an auction-priced resting order", () => {
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-forself-0001", action: { type: "taker-fill", orderHash: built.orderHash, forSelf: { adapter: forSelfAdapter, poolId: `0x${"11".repeat(32)}` } }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain },
+      // The stubbed ForSelf adapter binds the v1.3.0-rc.1 pool manager: select that generation
+      // (phoenix/v0.3-rc.1) so the CORK() binding check compares against the right set — the
+      // primary's 10-field manager would rightly read as a mismatch.
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain, generation: "phoenix/v0.3-rc.1" },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { fillFunction: string; forSelf: { pullCap: string }; auction: Record<string, unknown> };

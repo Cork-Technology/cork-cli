@@ -10,13 +10,16 @@
 import { describe, expect, it } from "vitest";
 import { encodeFunctionData, keccak256, parseAbi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { BUNDLED_DEFAULTS, buildJitExtension, buildTakerFill, corkActionCall, encodeJitExtraData, encodeMulticall, generalAdapterAbi, LOP_ADDRESSES, runTool, type HandlerContext } from "@cork/core";
+import { BUNDLED_DEFAULTS, buildJitExtension, buildTakerFill, corkActionCall, encodeJitExtraData, encodeMulticall, generalAdapterAbi, generationsOf, LOP_ADDRESSES, marketRegistryForWire, primaryOf, runTool, type HandlerContext } from "@cork/core";
 
 const ctx: HandlerContext = { nowSeconds: 1n };
 const ZERO_CALLBACK = `0x${"0".repeat(64)}` as const;
-const ADAPTER_1 = BUNDLED_DEFAULTS.deployments["1"]!.corkAdapter! as `0x${string}`;
-const BUNDLER3_1 = BUNDLED_DEFAULTS.deployments["1"]!.bundler3! as `0x${string}`;
-const JIT_ADAPTER_42161 = BUNDLED_DEFAULTS.marketRegistry!["42161"]!.adapter as `0x${string}`;
+const MAINNET = primaryOf(generationsOf(BUNDLED_DEFAULTS, 1))!.phoenix!;
+const ADAPTER_1 = MAINNET.corkAdapter! as `0x${string}`;
+const BUNDLER3_1 = MAINNET.bundler3! as `0x${string}`;
+// stage 3: the JIT decode trusts the FLAT-wire generation's adapter (the layout the decoder
+// implements), not the primary's nested-wire adapter.
+const JIT_ADAPTER_42161 = marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, 42161), "flat")!.marketRegistry!.adapter as `0x${string}`;
 const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
 const FAKE = "0x00000000000000000000000000000000000000ee" as const;
 const POOL = `0x${"11".repeat(32)}` as const;

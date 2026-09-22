@@ -1,0 +1,378 @@
+{
+  "$comment": "Canonical Cork deployment addresses/config, SCHEMA 2 (the generation model, cork-cli 0.6). Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. `cork-defaults.json` (schema 1) is FROZEN for the 0.5 line and keeps serving 0.5.x binaries: a v1-shaped file whose primary moved would send those binaries to a generation whose wire they do not speak (an 8-field decode of a 10-field market() return succeeds silently in viem and yields a wrong poolId). Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately — handlers gate per capability.",
+  "schemaVersion": 2,
+  "updated": "2026-09-22",
+  "lopAddresses": {
+    "1": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "42161": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "8453": "0x111111125421cA6dc452d289314280a0f8842A65"
+  },
+  "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only — the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement; base verified 2026-08-07: runtime byte-identical to Arbitrum's SimpleSettlement except ONE 20-byte immutable, the chain's WETH — 0x4200…0006 vs 0x82aF…Bab1); legacy = recognized-but-refused older layouts (v2 present on all three chains; v1 is mainnet-only and LOP v3 era).",
+  "fusionSettlements": {
+    "1": {
+      "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840",
+        "0xA88800CD213dA5Ae406ce248380802BD53b47647"
+      ]
+    },
+    "42161": {
+      "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
+      ]
+    },
+    "8453": {
+      "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
+      "legacy": [
+        "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
+      ]
+    }
+  },
+  "$generationsComment": "A chain hosts a SET of generations; one is primary. A generation is the set of contracts deployed to work together (phoenix pool-manager stack, market-registry stack, rollover stack, the reference ForSelf adapter) plus the WIRE each block speaks — phoenix.wire 8-field|10-field (Market width; 10-field puts both fees inside the Market AND the pool id, MarketCreated gains two args, fee < 100%), marketRegistry.wire legacy|flat|nested (pre-2.1.0 mode strings | 0.3.x flat JITMarketParams + additionalData, verify(5), deploy(3) | 0.5.x (MarketParams, enableJitMint) + permits, extraData + oracleSalt, verify(7), deploy(4), creator in the registry package), rollover.wire rc.1|rc.2|0.2 (rc.2 added RolloverParams.jitMarketHash and broke the July wire; 0.2 adds bytes32 oracleSalt to JITMarketParams and changes that typehash; OrderData/RolloverParams are identical in rc.2 and 0.2). The config DECLARES wires; the code IMPLEMENTS them and refuses a wire it does not know. status active = readable AND preparable (an explicit `generation` label selects a non-primary set); read-only = reads, decode, attribution and classification only. Labels are Distribution names where one exists (phoenix/v0.4-rc.1 = distribution repo cut of phoenix v1.4.0-rc.1 + market-registry 0.5.0 + rollover v0.2.0 + cork-periphery v0.2.0-rc.1, component records verified 2026-09-22 at finalized Base 51171628/51176234/51291605/51172961 and Arbitrum 504060971/504097748/505010311/504074671; phoenix/v0.3-rc.1 = phoenix v1.3.0-rc.1 + market-registry 0.3.3 + rollover v0.1.0-rc.2, the 0.5.x line's primary) and ours for the eras before the Distribution existed: mainnet (the original chain-1 stack), arbitrum-v1.1 (the previous Arbitrum production stack where the venue's existing markets live until it migrates; its market-registry is the pre-2.1.0 generation, reachable only with CORK_ENABLE_DEPRECATED=1, and its rollover is the retired July 2026 set), arbitrum-legacy (the pre-launch calibration pair, kept read-only so its pools stay readable after the 2026-07-22 promotion). Identical CREATE2 addresses across 42161 + 8453 in every Distribution set; bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not a generation contract).",
+  "$marketRegistryComment": "MarketRegistry blocks. 0.5.0 (nested wire, market-registry public tag 0.5.0 commit 80a5e461, deployed 2026-09-11; 42161 block 503851928 / 8453 block 51145039, identical addresses via ONE AtomicDeployer 0x24DEae9D… batch per chain): the registry deploys pair oracles under (ca, ref, mode, oracleSalt), assets and denominations are address-keyed, the CorkLimitOrderAdapter (version() 0.4.0) binds LOP/POOL_MANAGER/MARKET_CREATOR and the CorkMarketCreator (version() 0.1.0, now IN the registry package — cork-periphery 0.2.0-rc.1 removed its copy) holds the controller's POOL_CREATOR role (verified live 2026-09-22: creator has the role, the adapter does not — roles moved from the adapter to the creator in this generation). 0.3.3 (flat wire, 2026-08-10 — the CREATE2-collision fix: the wrapper key doubles as the CREATE2 salt and is keccak256(abi.encode(registryAddress, ca, ref, caSource, refSource)), so every registry derives its own salt space and the sUSDe/sUSDS@42161 brick cannot recur; verified empirically 2026-08-10: the pair simulates DEPLOYABLE on 0.3.3 and still reverts on the old one; salts + initCodeHashes attested in packages/core/src/config.ts). Its marketCreator is CorkMarketCreator from cork-periphery 0.1.0 (verified 2026-08-28), the smart-account path around EOA-only ERC-2612 JIT permits. The 0.3.2 predecessor (registry 0xF5323F305360A792284814a7EDe78c2209A1DC94, adapter 0x1b754F17EDd87784b01542aAe0e4CA672CFdc7CE; no markets were ever created through it) and 0.3.0 before it are superseded and dropped — git history has their record. `recipes` are NAMED HINTS for the deprecated mode sugar only — membership is decided solely by isRecipe on chain (all four approved on both chains in both the 0.3.3 and 0.5.0 registries; 0.3.3's ApySpreadImpairmentRecipe came with market-registry 0.4.0, a release that moved no other address, enumerated as approved 2026-09-21; 0.5.0's four verified 2026-09-22 via isRecipe/getRecipes). The PRE-2.1.0 generation (different interface, misdecoding answers) is the arbitrum-v1.1 set's marketRegistry block (wire legacy): the adapter binding guard (adapter.MARKET_REGISTRY() == registry, or MARKET_CREATOR() on the nested wire) refuses cross-generation reads.",
+  "$rolloverComment": "Rollover ERC-7683 stacks, one per generation. phoenix/v0.4-rc.1 carries rollover v0.2.0 (public tag v0.2.0 commit fa247696; wire 0.2 — BaseFiller's JITMarketParams gains bytes32 oracleSalt after additionalData and the JIT commitment preimage changes; CorkSettler/1.0.0 EIP-712 domain unchanged, verified via eip712Domain() on both settlers on both chains 2026-09-22): factory 0x99A5C47C…, ExactSettler 0x0F2Ce7a5…, PartialSettler 0x5E19Be07…, identical on 42161 + 8453; seededAtBlock = the generation's earliest deployment: 42161 503918966 (exact; partial 503918978, factory 503918988 — first OwnershipTransferred logs, 2026-09-11T03:18:35Z), 8453 51153216 (exact; partial 51153218, factory 51153220 — eth_getCode bisect + first logs). phoenix/v0.3-rc.1 carries rollover v0.1.0-rc.2 (deployed 2026-08-13; chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts; seeded 494104750 on 42161 / 49917191 on 8453). Venue admission: since 2026-09-11 the venue (cork-api 0.4.2 resolveLiveFactories/pickAdmittingFactory) keeps every non-archived factory live and admits a settler through the factory that approves it — each factory approves ONLY its own two settlers (approvedSettlers read live 2026-09-11), so a mode-mismatch teaching names the same generation's partner; rc.2 and 0.2 run side by side on both chains. arbitrum-v1.1 carries the July 2026 set (wire rc.1: OrderData 832 bytes, no jitMarketHash), RETIRED 2026-08-13 when rc.2 changed the OrderData/RolloverParams typehashes: the venue archives it and rc.2-typed digests do not verify on its settlers; it stays configured for event-history scans (full-decentralized fills/contracts) and retired-settler teaching. Every consumer reads the ONE flattened list rolloverGenerations() (packages/core/src/generations.ts rolloverGenerationsOf → rollover.ts): the primary generation's live block first, other live blocks in resolution order, retired blocks last.",
+  "generations": {
+    "1": {
+      "primary": "mainnet",
+      "sets": {
+        "mainnet": {
+          "status": "active",
+          "phoenix": {
+            "poolManager": "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC",
+            "constraintAdapter": "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A",
+            "corkAdapter": "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
+            "bundler3": "0x6566194141eefa99Af43Bb5Aa71460Ca2Dc90245",
+            "whitelistManager": "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE",
+            "wire": "8-field"
+          }
+        }
+      }
+    },
+    "42161": {
+      "primary": "phoenix/v0.4-rc.1",
+      "sets": {
+        "phoenix/v0.4-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.4-rc.1",
+          "phoenix": {
+            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
+            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
+            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
+            "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "contractsVersion": "v1.4.0-rc.1",
+            "wire": "10-field"
+          },
+          "marketRegistry": {
+            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
+            "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
+            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
+            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
+            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
+            "recipes": {
+              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
+              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
+              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
+            },
+            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
+            "contractsVersion": "0.5.0",
+            "deployedAtBlock": 503851928,
+            "wire": "nested"
+          },
+          "rollover": {
+            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 503918966,
+            "contractsVersion": "v0.2.0",
+            "wire": "0.2"
+          },
+          "forSelf": {
+            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
+            "contractsVersion": "v0.2.0-rc.1"
+          }
+        },
+        "phoenix/v0.3-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.3-rc.1",
+          "phoenix": {
+            "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+            "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+            "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+            "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+            "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "contractsVersion": "v1.3.0-rc.1",
+            "wire": "8-field"
+          },
+          "marketRegistry": {
+            "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
+            "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
+            "marketCreator": "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
+            "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
+            "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
+            "recipes": {
+              "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
+              "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
+              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"
+            },
+            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
+            "contractsVersion": "0.3.3",
+            "deployedAtBlock": 492983171,
+            "wire": "flat"
+          },
+          "rollover": {
+            "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+            "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+            "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 494104750,
+            "contractsVersion": "v0.1.0-rc.2",
+            "wire": "rc.2"
+          },
+          "forSelf": {
+            "adapter": "0x5Fc04d188bf5DF6901080Df0F801FFE3d8435771",
+            "contractsVersion": "v0.1.3-rc.1"
+          }
+        },
+        "arbitrum-v1.1": {
+          "status": "active",
+          "phoenix": {
+            "poolManager": "0x4d0ab6735deF9FBAdDBf0F2FfB92353Afae623d2",
+            "constraintAdapter": "0x248B24114D6e7df0b28AED21f7814cc0dBDB9120",
+            "corkAdapter": "0xe9f364dfcc358DC745Ff7C54cb087AE2520F1bed",
+            "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+            "whitelistManager": "0xeC187bA7BBd4016d8db326ea1DFb3DD48d17Bd3A",
+            "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172",
+            "wire": "8-field"
+          },
+          "marketRegistry": {
+            "registry": "0xF674488bf4643e205ccd826951e8b0d29f77600A",
+            "oracleFactory": "0x0d81045225932C8B99a5DBD3cAe8d047b44D44A2",
+            "adapter": "0xea15BF1E5565181Ed8678CcFf39D797272858505",
+            "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172",
+            "wire": "legacy"
+          },
+          "rollover": {
+            "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
+            "exactSettler": "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D",
+            "partialSettler": "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 484973917,
+            "retired": "2026-08-13",
+            "wire": "rc.1"
+          }
+        },
+        "arbitrum-legacy": {
+          "status": "read-only",
+          "phoenix": {
+            "poolManager": "0xc2De56fb1C7a85250ce69C37B4773767C77954AE",
+            "constraintAdapter": "0x798CB4Bd8066BAeF149Cf89AED71507B334bF20E",
+            "wire": "8-field"
+          }
+        }
+      }
+    },
+    "8453": {
+      "primary": "phoenix/v0.4-rc.1",
+      "sets": {
+        "phoenix/v0.4-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.4-rc.1",
+          "phoenix": {
+            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
+            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
+            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
+            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "contractsVersion": "v1.4.0-rc.1",
+            "wire": "10-field"
+          },
+          "marketRegistry": {
+            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
+            "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
+            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
+            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
+            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
+            "recipes": {
+              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
+              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
+              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
+            },
+            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
+            "contractsVersion": "0.5.0",
+            "deployedAtBlock": 51145039,
+            "wire": "nested"
+          },
+          "rollover": {
+            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 51153216,
+            "contractsVersion": "v0.2.0",
+            "wire": "0.2"
+          },
+          "forSelf": {
+            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
+            "contractsVersion": "v0.2.0-rc.1"
+          }
+        },
+        "phoenix/v0.3-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.3-rc.1",
+          "phoenix": {
+            "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+            "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+            "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+            "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "contractsVersion": "v1.3.0-rc.1",
+            "wire": "8-field"
+          },
+          "marketRegistry": {
+            "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
+            "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
+            "marketCreator": "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
+            "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
+            "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
+            "recipes": {
+              "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
+              "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
+              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"
+            },
+            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
+            "contractsVersion": "0.3.3",
+            "deployedAtBlock": 49775886,
+            "wire": "flat"
+          },
+          "rollover": {
+            "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+            "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+            "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 49917191,
+            "contractsVersion": "v0.1.0-rc.2",
+            "wire": "rc.2"
+          }
+        }
+      }
+    }
+  },
+  "$implementationsComment": "Approved implementations per interface ROLE (interface-first model, 2026-08-12; the same schema is proposed for the distribution repo — see github.com/Cork-Technology/distribution/issues/1): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups; the 0.5.0/1.4.0-rc.1 hashes join on the Distribution component records' verified runtime equivalence, 2026-09-22, ahead of this repo's own nested-wire round trip). Hashes are keccak256(eth_getCode) — equal to EXTCODEHASH for deployed code — captured live 2026-08-12 (0.3.3 / v1.3.0-rc.1 / legacy) and 2026-09-22 (0.5.0 / v1.4.0-rc.1), each cross-checked against the Distribution record's codeHash. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Per chain per role the list is the UNION of every generation's live code hash, because every generation's code is approved; the guard checks the code behind the address of the generation IN USE (the legacy generation resolves through the same roles — the legacyMarketRegistry/legacyJitAdapter role names of schema 1 are gone). Roles resolve against the generation blocks that already own the addresses — no address is duplicated here.",
+  "approvedImplementations": {
+    "1": {
+      "corkAdapter": {
+        "approved": [
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0xda2db6d29d610aece5f4faa313ae92bf55d38b7587391eb6f33b78ff563d49eb"
+        ]
+      }
+    },
+    "42161": {
+      "corkAdapter": {
+        "approved": [
+          "0xc8c05b7eb9f80d0207025ecb09beefaf046965e4ee81c8476513109be47b81f6",
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0xc3757fe479d4a44aa3a3954159ba1281747b6de0dc78a58139390bfd9c2f4cb0",
+          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
+        ]
+      },
+      "marketRegistry": {
+        "approved": [
+          "0x455b91170500a48e745346e799831271e709da030ef3a05016b33d3200106a26",
+          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284",
+          "0x0fc7787ec85619dfc68dab244ac8e3b0696672b3ce7c5a14609c07129d69cb0c"
+        ]
+      },
+      "jitAdapter": {
+        "approved": [
+          "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
+          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320",
+          "0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1"
+        ]
+      },
+      "marketCreator": {
+        "approved": [
+          "0x2fde0d65ebd999c5bb7202f80a8dd1f8b0bc86b405237c93ea4a096e88c08766",
+          "0x2f7dd61e18e4d3ca5d432771ee2eeb7000b3e609f26c151eb57dc147e5310287"
+        ]
+      }
+    },
+    "8453": {
+      "corkAdapter": {
+        "approved": [
+          "0xc8c05b7eb9f80d0207025ecb09beefaf046965e4ee81c8476513109be47b81f6",
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0xc3757fe479d4a44aa3a3954159ba1281747b6de0dc78a58139390bfd9c2f4cb0",
+          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
+        ]
+      },
+      "marketRegistry": {
+        "approved": [
+          "0x455b91170500a48e745346e799831271e709da030ef3a05016b33d3200106a26",
+          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284"
+        ]
+      },
+      "jitAdapter": {
+        "approved": [
+          "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
+          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
+        ]
+      },
+      "marketCreator": {
+        "approved": [
+          "0x2fde0d65ebd999c5bb7202f80a8dd1f8b0bc86b405237c93ea4a096e88c08766",
+          "0x2f7dd61e18e4d3ca5d432771ee2eeb7000b3e609f26c151eb57dc147e5310287"
+        ]
+      }
+    }
+  }
+}

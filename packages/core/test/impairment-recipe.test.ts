@@ -31,11 +31,12 @@ describe("encodeImpairmentArgs — the 96-byte three-word contract, byte-pinned"
   });
 });
 
-describe("cork-defaults — the impairment hint rides BOTH chains' recipe maps", () => {
+describe("cork-defaults.v2 — the impairment hint rides BOTH chains' recipe maps of the flat-wire (0.3.3) generation", () => {
   it("42161 and 8453 both hint 'impairment' at the deployed address (identical CREATE2 address)", async () => {
-    const corkDefaults = (await import("../../../cork-defaults.json", { with: { type: "json" } })).default as { marketRegistry: Record<string, { recipes?: Record<string, string> }> };
-    for (const chain of ["42161", "8453"]) {
-      expect(corkDefaults.marketRegistry[chain]?.recipes?.["impairment"]?.toLowerCase(), `chain ${chain}`).toBe(IMP.toLowerCase());
+    const { BUNDLED_DEFAULTS, generationsOf, marketRegistryForWire } = await import("@cork/core");
+    for (const chain of [42161, 8453]) {
+      const flat = marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, chain), "flat");
+      expect(flat?.marketRegistry?.recipes?.["impairment"]?.toLowerCase(), `chain ${chain}`).toBe(IMP.toLowerCase());
     }
   });
 });

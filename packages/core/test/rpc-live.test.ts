@@ -7,7 +7,7 @@ import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeAbiParameters, keccak256, parseAbi, stringToBytes, zeroAddress } from "viem";
-import { resolveRpc, runTool } from "@cork/core";
+import { generationsOf, resolveRpc, runTool } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -396,7 +396,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
     expect(mr?.marketCreator).toBeDefined();
     expect(mr?.controller).toBeDefined();
     const cfg = await resolveConfig();
-    const pm = cfg.defaults.deployments["8453"]?.poolManager as `0x${string}`;
+    const pm = generationsOf(cfg.defaults, 8453).find((g) => g.marketRegistry?.registry === mr!.registry)?.phoenix?.poolManager as `0x${string}`;
     const r = await resolveRpc(8453, undefined);
     expect(r).not.toBeNull();
     const creator = mr!.marketCreator as `0x${string}`;

@@ -10,7 +10,8 @@ import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
 import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTargets, decodeSingleCall } from "../bundle/decode.ts";
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { resolveMarketRegistry, resolveMarketRegistryLegacy, resolveRollover } from "../config-remote.ts";
+import { resolveGenerations, resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
+import { marketRegistryForWire } from "../generations.ts";
 import { rolloverGenerations } from "../rollover.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
@@ -250,10 +251,17 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   /** The 2.1.0 registry block, for callers that also name its contracts (the tx target book). */
   marketRegistry: Awaited<ReturnType<typeof resolveMarketRegistry>>["marketRegistry"];
 }> {
-  const [{ dep, depWarn }, { marketRegistry: mr }, { marketRegistry: legacyMr }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId), resolveMarketRegistryLegacy(chainId)]);
+  const [{ dep, depWarn }, { marketRegistry: mr }, { generations }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId, undefined, ctx.generation), resolveGenerations(chainId)]);
+  // stage 3: the JIT trust book still has ONE "current" slot, and the decoder implements the
+  // FLAT extraData layout only — so the adapter it vouches for is the flat-wire generation's,
+  // not the primary's (a nested-wire adapter's bytes cannot be decoded here yet; labeling them
+  // `mismatch` against a flat decode would accuse a genuine Cork adapter). The legacy slot is the
+  // generation whose block declares `wire: "legacy"`. Stage 3 replaces both with a per-wire book.
+  const flatMr = marketRegistryForWire(generations, "flat")?.marketRegistry;
+  const legacyMr = marketRegistryForWire(generations, "legacy")?.marketRegistry;
   return {
     targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
-    jitTrust: { currentAdapter: mr?.adapter, legacyAdapter: legacyMr?.adapter },
+    jitTrust: { currentAdapter: flatMr?.adapter, legacyAdapter: legacyMr?.adapter },
     dep,
     depWarn,
     marketRegistry: mr,

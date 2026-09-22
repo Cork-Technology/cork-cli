@@ -132,8 +132,10 @@ describe("consumers read the chain's value through the cache, with the compiled 
   it("resolveFeeCap: cold cache → the compiled 5e18; warm cache → the chain's own value", async () => {
     expect(await resolveFeeCap(42161, "adapter")).toBe(5n * WAD);
     // Warm the adapter's entry (config resolves the adapter address for 42161).
-    const { resolveMarketRegistry } = await import("@cork/core");
-    const { marketRegistry: mr } = await resolveMarketRegistry(42161);
+    // stage 2: resolveFeeCap reads the cap of the adapter the JIT paths BIND — the flat-wire
+    // generation's (handlers/shared.ts getMarketRegistry), not the primary's.
+    const { marketRegistryForWire, resolveGenerations } = await import("@cork/core");
+    const mr = marketRegistryForWire((await resolveGenerations(42161)).generations, "flat")!.marketRegistry;
     seed({ [`42161:${mr!.adapter!.toLowerCase()}:MAX_FEE_PERCENTAGE`]: { v: (3n * WAD).toString(), ts: Date.now() } });
     resetConstantsCacheForTests();
     expect(await resolveFeeCap(42161, "adapter")).toBe(3n * WAD);
@@ -152,8 +154,10 @@ describe("consumers read the chain's value through the cache, with the compiled 
   });
 
   it("end-to-end: a maker-order jitMarket fee legal under 5e18 refuses once the ADAPTER's cached live cap says 3e18", async () => {
-    const { resolveMarketRegistry } = await import("@cork/core");
-    const { marketRegistry: mr } = await resolveMarketRegistry(42161);
+    // stage 2: resolveFeeCap reads the cap of the adapter the JIT paths BIND — the flat-wire
+    // generation's (handlers/shared.ts getMarketRegistry), not the primary's.
+    const { marketRegistryForWire, resolveGenerations } = await import("@cork/core");
+    const mr = marketRegistryForWire((await resolveGenerations(42161)).generations, "flat")!.marketRegistry;
     seed({ [`42161:${mr!.adapter!.toLowerCase()}:MAX_FEE_PERCENTAGE`]: { v: (3n * WAD).toString(), ts: Date.now() } });
     const env = await runTool(
       "cork_prepare_orders",

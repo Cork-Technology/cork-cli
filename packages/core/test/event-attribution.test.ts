@@ -23,6 +23,8 @@ const RETIRED_PARTIAL = "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a" as const;
 const CANDIDATE_EXACT = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E" as const;
 const CANDIDATE_PARTIAL = "0x5E19Be0743fE521d8BF85b5A558356675499bE9e" as const;
 const JIT_ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const;
+// The 0.5.0 (nested-wire) adapter of the primary phoenix/v0.4-rc.1 generation.
+const NESTED_JIT_ADAPTER = "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104" as const;
 const LEGACY_JIT_ADAPTER = "0xea15BF1E5565181Ed8678CcFf39D797272858505" as const;
 
 const ORDER_SETTLED = toEventSelector("OrderSettled(bytes32)");
@@ -35,21 +37,23 @@ const UNKNOWN_TOPIC = `0x${"ef".repeat(32)}` as const;
 type Hex = `0x${string}`;
 const receiptLog = (address: Hex, topic0: Hex, data: Hex = "0x") => ({ address, topics: [topic0, DIGEST] as [Hex, ...Hex[]], data });
 
-describe("protocolEmittersFor — the emitter table is the deployment config, both generations", () => {
-  it("Arbitrum: every rollover generation's settlers (two active, one retired) and both JIT adapters, each with its role and label", async () => {
+describe("protocolEmittersFor — the emitter table is the deployment config, every generation", () => {
+  it("Arbitrum: every rollover generation's settlers (two active, one retired) and every generation's JIT adapter, each with its role and chain-generation label", async () => {
     const emitters = await protocolEmittersFor(42161);
     const byAddress = Object.fromEntries(emitters.map((e) => [e.address.toLowerCase(), e]));
-    expect(byAddress[ACTIVE_EXACT.toLowerCase()]).toEqual({ address: ACTIVE_EXACT, role: "exactSettler", generation: "active", label: "v0.1.0-rc.2" });
-    expect(byAddress[ACTIVE_PARTIAL.toLowerCase()]).toEqual({ address: ACTIVE_PARTIAL, role: "partialSettler", generation: "active", label: "v0.1.0-rc.2" });
-    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: "active", label: "0.4-rc.1-candidate" });
-    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: "active", label: "0.4-rc.1-candidate" });
-    expect(byAddress[RETIRED_EXACT.toLowerCase()]).toMatchObject({ role: "exactSettler", generation: "retired", label: "july-2026" });
-    expect(byAddress[RETIRED_PARTIAL.toLowerCase()]).toMatchObject({ role: "partialSettler", generation: "retired", label: "july-2026" });
-    expect(byAddress[JIT_ADAPTER.toLowerCase()]).toMatchObject({ role: "jitAdapter", generation: "active" });
-    expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toMatchObject({ role: "legacyJitAdapter", generation: "retired" });
-    expect(emitters).toHaveLength(8);
+    expect(byAddress[ACTIVE_EXACT.toLowerCase()]).toEqual({ address: ACTIVE_EXACT, role: "exactSettler", generation: "active", label: "phoenix/v0.3-rc.1" });
+    expect(byAddress[ACTIVE_PARTIAL.toLowerCase()]).toEqual({ address: ACTIVE_PARTIAL, role: "partialSettler", generation: "active", label: "phoenix/v0.3-rc.1" });
+    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: "active", label: "phoenix/v0.4-rc.1" });
+    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: "active", label: "phoenix/v0.4-rc.1" });
+    expect(byAddress[RETIRED_EXACT.toLowerCase()]).toMatchObject({ role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" });
+    expect(byAddress[RETIRED_PARTIAL.toLowerCase()]).toMatchObject({ role: "partialSettler", generation: "retired", label: "arbitrum-v1.1" });
+    expect(byAddress[JIT_ADAPTER.toLowerCase()]).toEqual({ address: JIT_ADAPTER, role: "jitAdapter", generation: "active", label: "phoenix/v0.3-rc.1" });
+    expect(byAddress[NESTED_JIT_ADAPTER.toLowerCase()]).toEqual({ address: NESTED_JIT_ADAPTER, role: "jitAdapter", generation: "active", label: "phoenix/v0.4-rc.1" });
+    expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toEqual({ address: LEGACY_JIT_ADAPTER, role: "legacyJitAdapter", generation: "retired", label: "arbitrum-v1.1" });
+    // 3 rollover generations × 2 settlers + the three registry generations' JIT adapters.
+    expect(emitters).toHaveLength(9);
     // Primary first: the order is the config's flattening, not an address sort.
-    expect(emitters.slice(0, 2).map((e) => e.address)).toEqual([ACTIVE_EXACT, ACTIVE_PARTIAL]);
+    expect(emitters.slice(0, 2).map((e) => e.address)).toEqual([CANDIDATE_EXACT, CANDIDATE_PARTIAL]);
   });
   it("mainnet has no rollover or registry deployment — no emitter, so nothing can be attributed there", async () => {
     expect(await protocolEmittersFor(1)).toEqual([]);
@@ -92,7 +96,7 @@ describe("attributeLogs — evidence only from the configured emitter for that e
   });
   it("matches the emitter address case-insensitively (checksummed config vs lowercase receipt)", async () => {
     const a = attributeLogs([receiptLog(RETIRED_EXACT.toLowerCase() as Hex, ORDER_SETTLED)], await protocolEmittersFor(42161));
-    expect(a.corkEvents[0]).toMatchObject({ event: "OrderSettled", emitter: { role: "exactSettler", generation: "retired", label: "july-2026" }, topic1: DIGEST });
+    expect(a.corkEvents[0]).toMatchObject({ event: "OrderSettled", emitter: { role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" }, topic1: DIGEST });
   });
   it("an unknown topic rides byte-exact as an other log, whoever emitted it; a topic-less log too", () => {
     const a = attributeLogs(
@@ -156,12 +160,12 @@ describe("cork_track txHash — receipt events are attributed by emitter, not by
     ]);
     const data = env.data as ReceiptData;
     expect(data.corkEvents).toEqual([
-      expect.objectContaining({ event: "OrderSettled", address: ACTIVE_EXACT, emitter: { role: "exactSettler", generation: "active", label: "v0.1.0-rc.2" } }),
-      expect.objectContaining({ event: "RolloverLegFilled", address: ACTIVE_PARTIAL, emitter: { role: "partialSettler", generation: "active", label: "v0.1.0-rc.2" } }),
-      expect.objectContaining({ event: "OrderSettled", address: RETIRED_EXACT, emitter: { role: "exactSettler", generation: "retired", label: "july-2026" } }),
-      expect.objectContaining({ event: "RolloverLegFilled", address: RETIRED_PARTIAL, emitter: { role: "partialSettler", generation: "retired", label: "july-2026" } }),
-      expect.objectContaining({ event: "JITMarketCreated", address: JIT_ADAPTER, emitter: { role: "jitAdapter", generation: "active" } }),
-      expect.objectContaining({ event: "JITMarketCreated (legacy pre-2.1.0)", address: LEGACY_JIT_ADAPTER, emitter: { role: "legacyJitAdapter", generation: "retired" } }),
+      expect.objectContaining({ event: "OrderSettled", address: ACTIVE_EXACT, emitter: { role: "exactSettler", generation: "active", label: "phoenix/v0.3-rc.1" } }),
+      expect.objectContaining({ event: "RolloverLegFilled", address: ACTIVE_PARTIAL, emitter: { role: "partialSettler", generation: "active", label: "phoenix/v0.3-rc.1" } }),
+      expect.objectContaining({ event: "OrderSettled", address: RETIRED_EXACT, emitter: { role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" } }),
+      expect.objectContaining({ event: "RolloverLegFilled", address: RETIRED_PARTIAL, emitter: { role: "partialSettler", generation: "retired", label: "arbitrum-v1.1" } }),
+      expect.objectContaining({ event: "JITMarketCreated", address: JIT_ADAPTER, emitter: { role: "jitAdapter", generation: "active", label: "phoenix/v0.3-rc.1" } }),
+      expect.objectContaining({ event: "JITMarketCreated (legacy pre-2.1.0)", address: LEGACY_JIT_ADAPTER, emitter: { role: "legacyJitAdapter", generation: "retired", label: "arbitrum-v1.1" } }),
     ]);
     expect(data.unattributedEvents).toBeUndefined();
     expect(data.otherLogs).toBeUndefined();
@@ -207,7 +211,7 @@ describe("cork_track orderHash — a digest's history is scoped to ITS settler; 
 
   it("a clean history from the bound settler attributes with generation and label, and omits the empty collections", async () => {
     const v = await reconcile([row(RETIRED_EXACT, ORDER_SETTLED, "0x", "0x0")]);
-    expect(v.events).toEqual([expect.objectContaining({ address: RETIRED_EXACT, event: "OrderSettled", emitter: { role: "exactSettler", generation: "retired", label: "july-2026" } })]);
+    expect(v.events).toEqual([expect.objectContaining({ address: RETIRED_EXACT, event: "OrderSettled", emitter: { role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" } })]);
     expect(v.unattributedEvents).toBeUndefined();
     expect(v.otherLogs).toBeUndefined();
   });

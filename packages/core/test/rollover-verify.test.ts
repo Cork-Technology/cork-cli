@@ -104,9 +104,9 @@ describe("settler provenance gate [STATE-003]: only a configured generation may 
   });
 
   it.each([
-    ["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", "v0.1.0-rc.2"],
-    ["active", "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", "0.4-rc.1-candidate"], // the second active generation
-    ["retired", EXACT, "july-2026"],
+    ["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", "phoenix/v0.3-rc.1"],
+    ["active", "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", "phoenix/v0.4-rc.1"], // the second active generation
+    ["retired", EXACT, "arbitrum-v1.1"],
   ])(
     "a configured %s settler (%s) IS read, and its generation + label ride on the verification",
     async (generation, settler, label) => {
@@ -323,7 +323,7 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
 });
 
 describe("attributeLogs (history rows)", () => {
-  const retiredExact = [{ address: EXACT as `0x${string}`, role: "exactSettler" as const, generation: "retired" as const, label: "july-2026" }];
+  const retiredExact = [{ address: EXACT as `0x${string}`, role: "exactSettler" as const, generation: "retired" as const, label: "arbitrum-v1.1" }];
   it("attributes a known settler event from its configured emitter; an unknown topic rides byte-exact as otherLogs", () => {
     const known = toEventSelector("OrderSettled(bytes32)");
     const a = attributeLogs(
@@ -334,7 +334,7 @@ describe("attributeLogs (history rows)", () => {
       retiredExact,
     );
     expect(a.corkEvents).toEqual([
-      { event: "OrderSettled", address: EXACT, emitter: { role: "exactSettler", generation: "retired", label: "july-2026" }, topic1: DIGEST, txHash: `0x${"ab".repeat(32)}`, blockNumber: String(0x1de5b3a0), logIndex: "0" },
+      { event: "OrderSettled", address: EXACT, emitter: { role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" }, topic1: DIGEST, txHash: `0x${"ab".repeat(32)}`, blockNumber: String(0x1de5b3a0), logIndex: "0" },
     ]);
     expect(a.unattributedEvents).toEqual([]);
     expect(a.otherLogs).toEqual([{ address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0xbeef", txHash: `0x${"cd".repeat(32)}`, blockNumber: String(0x1de5b3a1), logIndex: "1" }]);
@@ -460,7 +460,7 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     const v = (env.data as { chainVerification: { settler: string; chainStatus: string } }).chainVerification;
     expect(v.settler.toLowerCase()).toBe(EXACT.toLowerCase());
     expect(v.chainStatus).toBe("Settled");
-    expect(v).toMatchObject({ settlerGeneration: "retired", settlerGenerationLabel: "july-2026" });
+    expect(v).toMatchObject({ settlerGeneration: "retired", settlerGenerationLabel: "arbitrum-v1.1" });
     expect(env.warnings.some((w) => w.code === "order_not_found" && w.message.includes("outranks"))).toBe(true);
   });
 
@@ -474,7 +474,7 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     expect(env.state).toBe("ok");
     const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
     expect(String(v.settler).toLowerCase()).toBe(candidatePartial.toLowerCase());
-    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: "active", settlerGenerationLabel: "0.4-rc.1-candidate" });
+    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
   });
 
   it("all settlers answering None (and the venue empty) is an honest order_not_found", async () => {

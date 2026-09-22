@@ -9,6 +9,10 @@
       "kind": "value"
     },
     {
+      "name": "AddressClassification",
+      "kind": "type"
+    },
+    {
       "name": "AllowanceReader",
       "kind": "type"
     },
@@ -129,6 +133,14 @@
       "kind": "type"
     },
     {
+      "name": "ChainGenerations",
+      "kind": "type"
+    },
+    {
+      "name": "ChainGenerationsSchema",
+      "kind": "value"
+    },
+    {
       "name": "ChainOrderStatus",
       "kind": "type"
     },
@@ -174,10 +186,6 @@
     },
     {
       "name": "CorkMarketRegistry",
-      "kind": "type"
-    },
-    {
-      "name": "CorkMarketRegistryLegacy",
       "kind": "type"
     },
     {
@@ -337,6 +345,14 @@
       "kind": "type"
     },
     {
+      "name": "ForSelfBlock",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfBlockSchema",
+      "kind": "value"
+    },
+    {
       "name": "ForSelfCallResult",
       "kind": "type"
     },
@@ -362,6 +378,50 @@
     },
     {
       "name": "FusionPostInteraction",
+      "kind": "type"
+    },
+    {
+      "name": "GENERATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "GENERATION_STATUSES",
+      "kind": "value"
+    },
+    {
+      "name": "Generation",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationLabel",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRef",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRefusal",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRefusalCode",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRole",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationSchema",
+      "kind": "value"
+    },
+    {
+      "name": "GenerationSelection",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationStatus",
       "kind": "type"
     },
     {
@@ -410,6 +470,10 @@
     },
     {
       "name": "IMPLEMENTATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "IMPLEMENTED_MARKET_REGISTRY_WIRES",
       "kind": "value"
     },
     {
@@ -501,10 +565,6 @@
       "kind": "value"
     },
     {
-      "name": "LEGACY_JIT_IMPLEMENTATION_ROLES",
-      "kind": "value"
-    },
-    {
       "name": "LOP_ADDRESSES",
       "kind": "value"
     },
@@ -569,6 +629,10 @@
       "kind": "value"
     },
     {
+      "name": "MARKET_REGISTRY_WIRES",
+      "kind": "value"
+    },
+    {
       "name": "MAX_FEE_PERCENTAGE_FALLBACK",
       "kind": "value"
     },
@@ -594,6 +658,26 @@
     },
     {
       "name": "Market",
+      "kind": "type"
+    },
+    {
+      "name": "Market10",
+      "kind": "type"
+    },
+    {
+      "name": "Market8",
+      "kind": "type"
+    },
+    {
+      "name": "MarketRegistryBlock",
+      "kind": "type"
+    },
+    {
+      "name": "MarketRegistryBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "MarketRegistryWire",
       "kind": "type"
     },
     {
@@ -657,6 +741,10 @@
       "kind": "value"
     },
     {
+      "name": "PHOENIX_WIRES",
+      "kind": "value"
+    },
+    {
       "name": "POOL_CREATOR_ROLE",
       "kind": "value"
     },
@@ -681,7 +769,27 @@
       "kind": "type"
     },
     {
+      "name": "PhoenixBlock",
+      "kind": "type"
+    },
+    {
+      "name": "PhoenixBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "PhoenixWire",
+      "kind": "type"
+    },
+    {
       "name": "PoolFees",
+      "kind": "type"
+    },
+    {
+      "name": "PoolGenerationClient",
+      "kind": "type"
+    },
+    {
+      "name": "PoolGenerationResolution",
       "kind": "type"
     },
     {
@@ -753,6 +861,10 @@
       "kind": "value"
     },
     {
+      "name": "ROLLOVER_WIRES",
+      "kind": "value"
+    },
+    {
       "name": "RankOptions",
       "kind": "type"
     },
@@ -813,12 +925,24 @@
       "kind": "type"
     },
     {
+      "name": "ResolvedGeneration",
+      "kind": "type"
+    },
+    {
       "name": "ResolvedRpc",
       "kind": "type"
     },
     {
       "name": "RfqListParams",
       "kind": "type"
+    },
+    {
+      "name": "RolloverBlock",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverBlockSchema",
+      "kind": "value"
     },
     {
       "name": "RolloverCall",
@@ -834,6 +958,10 @@
     },
     {
       "name": "RolloverGeneration",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverGenerationEntry",
       "kind": "type"
     },
     {
@@ -870,6 +998,10 @@
     },
     {
       "name": "RolloverVenuePost",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverWire",
       "kind": "type"
     },
     {
@@ -1201,6 +1333,10 @@
       "kind": "value"
     },
     {
+      "name": "assertMarketWire",
+      "kind": "value"
+    },
+    {
       "name": "attributeLogs",
       "kind": "value"
     },
@@ -1342,6 +1478,10 @@
     },
     {
       "name": "checkRolloverOrderTerms",
+      "kind": "value"
+    },
+    {
+      "name": "classifyAddress",
       "kind": "value"
     },
     {
@@ -1673,6 +1813,10 @@
       "kind": "value"
     },
     {
+      "name": "generationsOf",
+      "kind": "value"
+    },
+    {
       "name": "getLopFills",
       "kind": "value"
     },
@@ -1797,6 +1941,10 @@
       "kind": "value"
     },
     {
+      "name": "isMarket10",
+      "kind": "value"
+    },
+    {
       "name": "isTransportError",
       "kind": "value"
     },
@@ -1854,6 +2002,10 @@
     },
     {
       "name": "marketRegistryAbi",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryForWire",
       "kind": "value"
     },
     {
@@ -2005,6 +2157,10 @@
       "kind": "value"
     },
     {
+      "name": "primaryOf",
+      "kind": "value"
+    },
+    {
       "name": "protocolEmittersFor",
       "kind": "value"
     },
@@ -2109,6 +2265,10 @@
       "kind": "value"
     },
     {
+      "name": "resolveGenerations",
+      "kind": "value"
+    },
+    {
       "name": "resolveLogsEndpoint",
       "kind": "value"
     },
@@ -2117,7 +2277,7 @@
       "kind": "value"
     },
     {
-      "name": "resolveMarketRegistryLegacy",
+      "name": "resolvePoolGeneration",
       "kind": "value"
     },
     {
@@ -2153,6 +2313,10 @@
       "kind": "value"
     },
     {
+      "name": "rolloverGenerationsOf",
+      "kind": "value"
+    },
+    {
       "name": "rolloverScanTargets",
       "kind": "value"
     },
@@ -2166,6 +2330,10 @@
     },
     {
       "name": "saltExtensionBinding",
+      "kind": "value"
+    },
+    {
+      "name": "selectGeneration",
       "kind": "value"
     },
     {
@@ -2623,6 +2791,10 @@
   ],
   "./config": [
     {
+      "name": "AddressClassification",
+      "kind": "type"
+    },
+    {
       "name": "ApprovedImplementationsOptions",
       "kind": "type"
     },
@@ -2659,6 +2831,14 @@
       "kind": "value"
     },
     {
+      "name": "ChainGenerations",
+      "kind": "type"
+    },
+    {
+      "name": "ChainGenerationsSchema",
+      "kind": "value"
+    },
+    {
       "name": "CodeReader",
       "kind": "type"
     },
@@ -2676,10 +2856,6 @@
     },
     {
       "name": "CorkMarketRegistry",
-      "kind": "type"
-    },
-    {
-      "name": "CorkMarketRegistryLegacy",
       "kind": "type"
     },
     {
@@ -2703,11 +2879,67 @@
       "kind": "value"
     },
     {
+      "name": "ForSelfBlock",
+      "kind": "type"
+    },
+    {
+      "name": "ForSelfBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "GENERATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "GENERATION_STATUSES",
+      "kind": "value"
+    },
+    {
+      "name": "Generation",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationLabel",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRef",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRefusal",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRefusalCode",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationRole",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationSchema",
+      "kind": "value"
+    },
+    {
+      "name": "GenerationSelection",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationStatus",
+      "kind": "type"
+    },
+    {
       "name": "HYPERSYNC_BINDING",
       "kind": "value"
     },
     {
       "name": "IMPLEMENTATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "IMPLEMENTED_MARKET_REGISTRY_WIRES",
       "kind": "value"
     },
     {
@@ -2727,15 +2959,31 @@
       "kind": "value"
     },
     {
-      "name": "LEGACY_JIT_IMPLEMENTATION_ROLES",
-      "kind": "value"
-    },
-    {
       "name": "MAINNET_DEPLOYMENT",
       "kind": "value"
     },
     {
+      "name": "MARKET_REGISTRY_WIRES",
+      "kind": "value"
+    },
+    {
+      "name": "MarketRegistryBlock",
+      "kind": "type"
+    },
+    {
+      "name": "MarketRegistryBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "MarketRegistryWire",
+      "kind": "type"
+    },
+    {
       "name": "PHOENIX_IMPLEMENTATION_ROLES",
+      "kind": "value"
+    },
+    {
+      "name": "PHOENIX_WIRES",
       "kind": "value"
     },
     {
@@ -2747,11 +2995,55 @@
       "kind": "type"
     },
     {
+      "name": "PhoenixBlock",
+      "kind": "type"
+    },
+    {
+      "name": "PhoenixBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "PhoenixWire",
+      "kind": "type"
+    },
+    {
+      "name": "PoolGenerationClient",
+      "kind": "type"
+    },
+    {
+      "name": "PoolGenerationResolution",
+      "kind": "type"
+    },
+    {
+      "name": "ROLLOVER_WIRES",
+      "kind": "value"
+    },
+    {
       "name": "RemoteFetchResult",
       "kind": "type"
     },
     {
       "name": "ResolvedConfig",
+      "kind": "type"
+    },
+    {
+      "name": "ResolvedGeneration",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverBlock",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverBlockSchema",
+      "kind": "value"
+    },
+    {
+      "name": "RolloverGenerationEntry",
+      "kind": "type"
+    },
+    {
+      "name": "RolloverWire",
       "kind": "type"
     },
     {
@@ -2787,6 +3079,10 @@
       "kind": "value"
     },
     {
+      "name": "classifyAddress",
+      "kind": "value"
+    },
+    {
       "name": "compareVersions",
       "kind": "value"
     },
@@ -2803,6 +3099,10 @@
       "kind": "value"
     },
     {
+      "name": "generationsOf",
+      "kind": "value"
+    },
+    {
       "name": "implementationRefusals",
       "kind": "value"
     },
@@ -2815,11 +3115,19 @@
       "kind": "value"
     },
     {
+      "name": "marketRegistryForWire",
+      "kind": "value"
+    },
+    {
       "name": "parseDefaults",
       "kind": "value"
     },
     {
       "name": "parseTdxQuote",
+      "kind": "value"
+    },
+    {
+      "name": "primaryOf",
       "kind": "value"
     },
     {
@@ -2843,11 +3151,15 @@
       "kind": "value"
     },
     {
+      "name": "resolveGenerations",
+      "kind": "value"
+    },
+    {
       "name": "resolveMarketRegistry",
       "kind": "value"
     },
     {
-      "name": "resolveMarketRegistryLegacy",
+      "name": "resolvePoolGeneration",
       "kind": "value"
     },
     {
@@ -2863,7 +3175,15 @@
       "kind": "value"
     },
     {
+      "name": "rolloverGenerationsOf",
+      "kind": "value"
+    },
+    {
       "name": "rolloverScanTargets",
+      "kind": "value"
+    },
+    {
+      "name": "selectGeneration",
       "kind": "value"
     },
     {
@@ -3079,6 +3399,14 @@
       "kind": "type"
     },
     {
+      "name": "Market10",
+      "kind": "type"
+    },
+    {
+      "name": "Market8",
+      "kind": "type"
+    },
+    {
       "name": "PCT_DENOM",
       "kind": "value"
     },
@@ -3143,6 +3471,10 @@
       "kind": "value"
     },
     {
+      "name": "assertMarketWire",
+      "kind": "value"
+    },
+    {
       "name": "calculateDepositAmountWithSwapRate",
       "kind": "value"
     },
@@ -3204,6 +3536,10 @@
     },
     {
       "name": "impairmentFloor",
+      "kind": "value"
+    },
+    {
+      "name": "isMarket10",
       "kind": "value"
     },
     {

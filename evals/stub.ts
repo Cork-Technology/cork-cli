@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, computeMarketId, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, runTool, encodeBookWatermark, premiumAmount, decodeJitExtraData } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, computeMarketId, generationsOf, type HandlerContext, hashLopOrder, IMPLEMENTED_MARKET_REGISTRY_WIRES, LOP_ADDRESSES, type LopOrder, marketRegistryForWire, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeJitExtraData } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -15,35 +15,47 @@ const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
 export const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
 const NOW = 1_790_000_000n;
 
-// MarketRegistry 2.1.0 fixture — READ FROM cork-defaults.json rather than pinned: the binding
-// guard compares the stub's MARKET_REGISTRY() answer against the live config, so a hardcoded
-// address here rots on every registry redeploy (the pinned 0.3.2 literal survived the 0.3.3
-// redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found 2026-08-10
-// only because the eval log made the misses identifiable). Same for the recipe hints.
-import corkDefaults from "../cork-defaults.json";
-const MR_42161 = (corkDefaults as { marketRegistry: Record<string, { registry: string; recipes: Record<string, string> }> }).marketRegistry["42161"]!;
-// Every address the approved-implementations guard may fingerprint, from the same config the
-// guard resolves them from — so a redeploy cannot leave this set pointing at a stale literal.
+// MarketRegistry fixture — READ FROM the bundled cork-defaults.v2.json rather than pinned: the
+// binding guard compares the stub's MARKET_REGISTRY() answer against the live config, so a
+// hardcoded address here rots on every registry redeploy (the pinned 0.3.2 literal survived the
+// 0.3.3 redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found
+// 2026-08-10 only because the eval log made the misses identifiable). Same for the recipe hints.
+// The block is the one the registry-bound handlers BIND to (handlers/shared.ts
+// getMarketRegistry): the first generation on an implemented wire — the flat 0.3.x set until the
+// nested codec lands (stage 2), then the primary. The stub mirrors a flat-wire adapter, so it
+// must answer that generation's addresses, not whichever set is primary.
+const GENERATIONS_42161 = generationsOf(BUNDLED_DEFAULTS, 42161);
+const REGISTRY_GENERATION = (chainId: number) => IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, chainId), w)).find((g) => g !== undefined) ?? primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId));
+const MR_42161 = REGISTRY_GENERATION(42161)!.marketRegistry!;
+// Every address the approved-implementations guard may fingerprint — every GENERATION's — from
+// the same config the guard resolves them from, so a redeploy cannot leave this set pointing at
+// a stale literal.
 const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
-  Object.values(corkDefaults.deployments as Record<string, { corkAdapter?: string; whitelistManager?: string }>)
-    .flatMap((d) => [d.corkAdapter, d.whitelistManager])
-    .concat(Object.values((corkDefaults as { marketRegistry?: Record<string, { registry?: string; adapter?: string; marketCreator?: string }> }).marketRegistry ?? {}).flatMap((m) => [m.registry, m.adapter, m.marketCreator]))
-    .concat(Object.values((corkDefaults as { marketRegistryLegacy?: Record<string, { registry?: string; adapter?: string }> }).marketRegistryLegacy ?? {}).flatMap((m) => [m.registry, m.adapter]))
-    .filter((a): a is string => typeof a === "string")
+  Object.keys(BUNDLED_DEFAULTS.generations)
+    .flatMap((chainId) => generationsOf(BUNDLED_DEFAULTS, Number(chainId)))
+    .flatMap((g) => [g.phoenix?.corkAdapter, g.phoenix?.whitelistManager, g.marketRegistry?.registry, g.marketRegistry?.adapter, g.marketRegistry?.marketCreator])
+    .filter((a): a is `0x${string}` => typeof a === "string")
     .map((a) => a.toLowerCase()),
 );
-// The rc.2 rollover deployment + its RETIRED July generation — read from config like the
-// registry above (the pinned-literal rot class): the retired-settler task's expected teaching
-// and the sweep fixture's settler identity must track config, not a copy.
-type RolloverCfg = { factory: string; exactSettler: string; partialSettler: string; legacyGenerations?: Array<{ exactSettler: string; partialSettler: string }> };
-const ROLLOVER_42161 = (corkDefaults as { rollover: Record<string, RolloverCfg> }).rollover["42161"]!;
-export const RC2_EXACT_SETTLER = ROLLOVER_42161.exactSettler;
-export const RC2_FACTORY = ROLLOVER_42161.factory;
-export const RETIRED_EXACT_SETTLER = ROLLOVER_42161.legacyGenerations![0]!.exactSettler;
+// The rollover generations — read from config like the registry above (the pinned-literal rot
+// class): the retired-settler task's expected teaching and the sweep fixture's settler identity
+// must track config, not a copy. RC2_* name the rollover v0.1.0-rc.2 set (the phoenix/v0.3-rc.1
+// generation's block — active, no longer primary since phoenix/v0.4-rc.1); RETIRED_* the July
+// 2026 set (arbitrum-v1.1's block).
+const ROLLOVERS_42161 = rolloverGenerationsOf(GENERATIONS_42161);
+const RC2_ROLLOVER = ROLLOVERS_42161.find((g) => g.wire === "rc.2" && g.status === "active")!;
+export const RC2_EXACT_SETTLER = RC2_ROLLOVER.exactSettler;
+export const RC2_FACTORY = RC2_ROLLOVER.factory;
+export const RETIRED_EXACT_SETTLER = ROLLOVERS_42161.find((g) => g.status === "retired")!.exactSettler;
 const REGISTRY_210 = MR_42161.registry;
-export const LIQUIDITY_RECIPE = MR_42161.recipes.liquidity!;
-export const IMPAIRMENT_RECIPE = MR_42161.recipes.impairment!;
-export const FIXED_RECIPE = MR_42161.recipes.fixed!;
+export const LIQUIDITY_RECIPE = MR_42161.recipes!.liquidity!;
+export const IMPAIRMENT_RECIPE = MR_42161.recipes!.impairment!;
+export const FIXED_RECIPE = MR_42161.recipes!.fixed!;
+/** The registry-bound generation's blocks per chain — the addresses the stub answers as the
+ *  creator/adapter bindings (POOL_MANAGER, CONTROLLER); the phoenix paths use the primary. */
+const primaryPhoenix = (chainId: number) => primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId))?.phoenix;
+const registryPhoenix = (chainId: number) => REGISTRY_GENERATION(chainId)?.phoenix;
+const registryBlock = (chainId: number) => REGISTRY_GENERATION(chainId)?.marketRegistry;
 const WAD = 10n ** 18n;
 
 const MARKET = {
@@ -114,9 +126,9 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     //    the CONFIGURED addresses per chain, like MARKET_REGISTRY above — a pinned literal
     //    here rots on every redeploy (the 0.3.2 lesson at the top of this file). ──
     case "POOL_MANAGER":
-      return (corkDefaults as { deployments: Record<string, { poolManager?: string }> }).deployments[String(chainId)]?.poolManager ?? "0x0000000000000000000000000000000000000000";
+      return registryPhoenix(chainId)?.poolManager ?? "0x0000000000000000000000000000000000000000";
     case "CONTROLLER":
-      return (corkDefaults as { marketRegistry: Record<string, { controller?: string }> }).marketRegistry[String(chainId)]?.controller ?? "0x0000000000000000000000000000000000000000";
+      return registryBlock(chainId)?.controller ?? "0x0000000000000000000000000000000000000000";
     case "FEE_MANAGER_ROLE":
       return `0x${"6c".repeat(32)}`; // any stable hash — the pre-flight uses the probed value itself
     case "hasRole":
@@ -159,9 +171,9 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // The ForSelf adapter binds the POOL MANAGER (not the Cork adapter) — the pre-flight
       // compares against exactly that, because an adapter pinned to another stack would route
       // the caller's allowance to the wrong protocol.
-      return (corkDefaults as { deployments: Record<string, { poolManager: string }> }).deployments["1"]!.poolManager;
+      return primaryPhoenix(1)!.poolManager;
     case "LOP":
-      return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
+      return BUNDLED_DEFAULTS.lopAddresses["1"]!;
     // The JIT adapter's own LOP binding (the maker-order pre-flight ladder checks it against the
     // chain's configured LOP): the real adapter answers its chain's 1inch deployment.
     // The adapter's pure decode helper reads the bytes back with the hook's own
@@ -171,7 +183,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return [d.params, d.permits];
     }
     case "LIMIT_ORDER_PROTOCOL":
-      return (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses[String(chainId)] ?? (corkDefaults as { lopAddresses: Record<string, string> }).lopAddresses["1"]!;
+      return BUNDLED_DEFAULTS.lopAddresses[String(chainId)] ?? BUNDLED_DEFAULTS.lopAddresses["1"]!;
     case "WHITELIST":
       // A pre-caller-gate adapter has no such view. A REVERT here is explicitly not a conflict
       // (the pre-flight adapts) — serving it proves that branch instead of the happy one.
@@ -308,15 +320,19 @@ export const JIT_TASK_PAIR = { collateralAsset: "0x211Cc4DD073734dA055fbF44a2b46
 // Derived FROM the constraint constant above (never a second hand-written copy: a tuned string
 // twin with a stale bigint twin makes DERIVED_JIT_POOL the id of a DIFFERENT pool than the
 // constraint the prompt carries — the pinned-literal rot class, in duplicate-value form).
-export const DERIVED_JIT_POOL = computeMarketId({
-  ...JIT_TASK_PAIR,
-  expiryTimestamp: JIT_TASK_EXPIRY,
-  rateMin: BigInt(JIT_TASK_CONSTRAINT.rateMin),
-  rateMax: BigInt(JIT_TASK_CONSTRAINT.rateMax),
-  rateChangePerDayMax: BigInt(JIT_TASK_CONSTRAINT.rateChangePerDayMax),
-  rateChangeCapacityMax: BigInt(JIT_TASK_CONSTRAINT.rateChangeCapacityMax),
-  rateOracle: ORACLE,
-});
+export const DERIVED_JIT_POOL = computeMarketId(
+  {
+    ...JIT_TASK_PAIR,
+    expiryTimestamp: JIT_TASK_EXPIRY,
+    rateMin: BigInt(JIT_TASK_CONSTRAINT.rateMin),
+    rateMax: BigInt(JIT_TASK_CONSTRAINT.rateMax),
+    rateChangePerDayMax: BigInt(JIT_TASK_CONSTRAINT.rateChangePerDayMax),
+    rateChangeCapacityMax: BigInt(JIT_TASK_CONSTRAINT.rateChangeCapacityMax),
+    rateOracle: ORACLE,
+  },
+  // stage 2: the flat-wire JIT derivation the stub mirrors lands on an 8-field pool manager.
+  "8-field",
+);
 
 // One seeded GlobalWhitelistAdded(WHITELISTED_ACCT) log so whitelisted-addresses has a
 // deterministic non-empty answer. topic0 = keccak("GlobalWhitelistAdded(address)").

@@ -23,6 +23,7 @@ import {
   zeroAddress,
   zeroHash,
 } from "viem";
+import type { RolloverWire } from "./generations.ts";
 
 type Address = `0x${string}`;
 type Hex = `0x${string}`;
@@ -429,15 +430,18 @@ const U64 = (1n << 64n) - 1n;
 
 // ── Rollover generations ───────────────────────────────────────────────────────────────────────
 // A rollover DEPLOYMENT is a set of generations, each one factory + ExactSettler + PartialSettler
-// seeded at one block. The config record keeps three vocabularies for them: the top-level fields
-// are the PRIMARY generation (the one this distribution pins and the one every teaching names as
-// the replacement), `activeGenerations` are the OTHER venue-admissible sets (wire-compatible with
-// the primary — observed 2026-09-11: the venue kept rollover v0.1.0-rc.2 AND the Distribution
-// 0.4-rc.1 set live side by side on 42161 + 8453, and each factory admits only its own settlers),
-// and `legacyGenerations` are RETIRED sets (a wire-format release retires a whole generation:
-// rc.2's jitMarketHash typehash change, 2026-08-13). Every consumer — classification, scan
-// scoping, emitter attribution, decode labels — reads the ONE flattened list below, never the
-// three fields, so a fourth vocabulary cannot be half-adopted.
+// seeded at one block and speaking one wire (`rc.1` July 2026, retired; `rc.2` since 2026-08-13;
+// `0.2` since 2026-09-11). Since cork-cli 0.6 (2026-09-22) the set is DERIVED from the chain's
+// generations (generations.ts: each generation carries at most one rollover block; the primary
+// generation's live block is the primary rollover, a block with a `retired` date is a retired
+// rollover) — the three schema-1 vocabularies (top-level primary fields, `activeGenerations`,
+// `legacyGenerations`) are gone, and so is the rollover-only label ladder: a rollover generation
+// is named by its CHAIN generation's label. Every consumer — classification, scan scoping,
+// emitter attribution, decode labels — reads the ONE flattened list below, never the config
+// blocks, so a fourth vocabulary cannot be half-adopted. Observed 2026-09-11: the venue kept
+// rollover v0.1.0-rc.2 AND the Distribution 0.4-rc.1 set live side by side on 42161 + 8453, and
+// each factory admits only its own settlers — which is why every ACTIVE generation is preparable
+// and a mode-mismatch teaching names the SAME generation's partner.
 
 /** The structural shape of one generation as the config records it. */
 export interface RolloverGenerationRecord {
@@ -448,47 +452,50 @@ export interface RolloverGenerationRecord {
   retired?: string | undefined;
   label?: string | undefined;
   contractsVersion?: string | undefined;
+  wire: RolloverWire;
 }
 
-/** The structural shape of the config's rollover record every generation-aware read accepts. */
-export interface RolloverDeploymentRecord extends RolloverGenerationRecord {
-  activeGenerations?: RolloverGenerationRecord[] | undefined;
-  legacyGenerations?: RolloverGenerationRecord[] | undefined;
-}
-
-/** One normalized generation: the record plus its standing and a label that always exists. */
+/** One normalized generation: the record plus its standing, a label that always exists and the
+ *  EIP-712 domain its OrderData is signed under. */
 export interface RolloverGeneration extends RolloverGenerationRecord {
-  /** Always present: the config label, else its contractsVersion, else "primary" for the top-level set. */
+  /** Always present: the chain generation's label (`phoenix/v0.4-rc.1`, `arbitrum-v1.1`, …). */
   label: string;
+  /** `retired` = the block carries a retired date: venue-inadmissible and wire-incompatible. */
   status: "active" | "retired";
   /** The distribution-pinned set — the replacement every teaching names. Exactly one per deployment. */
   primary: boolean;
+  settlerDomain?: { name: string; version: string } | undefined;
 }
 
-/** The ONE flattening of a rollover record: primary first, then the other active generations in
- *  config order, then the retired ones in config order. Pure; every generation-aware consumer
- *  derives from this list. */
+/** The structural shape of the config's rollover record every generation-aware read accepts:
+ *  the SELECTED generation's block as the top-level fields plus the chain's whole flattened
+ *  list. A record without `generations` (a hand-built single set) is exactly one active primary. */
+export interface RolloverDeploymentRecord extends RolloverGenerationRecord {
+  generations?: readonly RolloverGeneration[] | undefined;
+}
+
+/** The ONE flattening of a rollover record: the primary first, then the other active generations,
+ *  then the retired ones — the order `rolloverGenerationsOf` (generations.ts) established from the
+ *  chain's generations. Pure; every generation-aware consumer derives from this list. */
 export function rolloverGenerations(dep: RolloverDeploymentRecord): RolloverGeneration[] {
-  // The record's fields are copied by name: the primary generation IS the deployment record,
-  // which also carries deployment-only fields (settlerDomain, the generation lists, remote-config
-  // extras) that must not leak into a generation entry — entries ride verbatim into results.
-  const normalize = (g: RolloverGenerationRecord, status: "active" | "retired", isPrimary: boolean, fallbackLabel: string): RolloverGeneration => ({
+  // Entries are copied by name: the record also carries deployment-only fields (remote-config
+  // extras, the list itself) that must not leak into a generation entry — entries ride verbatim
+  // into results.
+  const normalize = (g: RolloverGeneration): RolloverGeneration => ({
     factory: g.factory,
     exactSettler: g.exactSettler,
     partialSettler: g.partialSettler,
     seededAtBlock: g.seededAtBlock,
     ...(g.retired !== undefined ? { retired: g.retired } : {}),
     ...(g.contractsVersion !== undefined ? { contractsVersion: g.contractsVersion } : {}),
-    label: g.label ?? g.contractsVersion ?? fallbackLabel,
-    status,
-    primary: isPrimary,
+    ...(g.settlerDomain !== undefined ? { settlerDomain: g.settlerDomain } : {}),
+    wire: g.wire,
+    label: g.label,
+    status: g.status,
+    primary: g.primary,
   });
-  const { activeGenerations, legacyGenerations } = dep;
-  return [
-    normalize(dep, "active", true, "primary"),
-    ...(activeGenerations ?? []).map((g, i) => normalize(g, "active", false, `active-${i + 1}`)),
-    ...(legacyGenerations ?? []).map((g, i) => normalize(g, "retired", false, `retired-${i + 1}`)),
-  ];
+  if (dep.generations !== undefined) return dep.generations.map(normalize);
+  return [normalize({ ...dep, label: dep.label ?? dep.contractsVersion ?? "primary", status: dep.retired !== undefined ? "retired" : "active", primary: dep.retired === undefined })];
 }
 
 /** The generations the venue admits and the wire this tool speaks (primary first). */

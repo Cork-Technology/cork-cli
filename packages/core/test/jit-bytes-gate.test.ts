@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { buildMakerOrder, implementationRefusals, LOP_ADDRESSES, resolveMarketRegistry, runTool, unapprovedCodeAllowed, type HandlerContext, type ImplementationCheck } from "@cork/core";
+import { buildMakerOrder, implementationRefusals, LOP_ADDRESSES, marketRegistryForWire, resolveGenerations, runTool, unapprovedCodeAllowed, type HandlerContext, type ImplementationCheck } from "@cork/core";
 import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
 
 const CHAIN = 42161 as const;
@@ -25,7 +25,8 @@ function wrapped(patch: (client: Client, adapter: `0x${string}`) => Partial<Clie
     resolveRpc: async (chainId, url) => {
       const r = await base.resolveRpc!(chainId, url);
       if (!r) return r;
-      const adapter = (await resolveMarketRegistry(chainId)).marketRegistry!.adapter!;
+      // stage 2: the JIT ladder binds the FLAT-wire generation's adapter, not the primary's.
+      const adapter = marketRegistryForWire((await resolveGenerations(chainId)).generations, "flat")!.marketRegistry!.adapter!;
       const client = r.client as unknown as Client;
       return { ...r, client: { ...client, ...patch(client, adapter) } as never };
     },

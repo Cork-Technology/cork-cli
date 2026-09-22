@@ -3,7 +3,7 @@ import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
 import { poolTokensRpc, stubRpc, TOKEN_CODE } from "../../core/test/helpers.ts";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildMakerOrder, LOP_ADDRESSES, resolveMarketRegistry, unapprovedCodeAllowed } from "@cork/core";
+import { buildMakerOrder, LOP_ADDRESSES, marketRegistryForWire, resolveGenerations, unapprovedCodeAllowed } from "@cork/core";
 import { DEMO_ACCOUNT } from "@cork/schemas";
 import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
 
@@ -952,7 +952,8 @@ describe("--allow-unapproved-code — the bytes-decoder gate's operator override
       resolveRpc: async (chainId: 42161, url: string | undefined) => {
         const r = await base.resolveRpc!(chainId, url);
         if (!r) return r;
-        const adapter = (await resolveMarketRegistry(chainId)).marketRegistry!.adapter!.toLowerCase();
+        // stage 2: the JIT ladder binds the FLAT-wire generation's adapter, not the primary's.
+        const adapter = marketRegistryForWire((await resolveGenerations(chainId)).generations, "flat")!.marketRegistry!.adapter!.toLowerCase();
         const client = r.client as unknown as { getCode: (a: { address?: string }) => Promise<string> } & Record<string, unknown>;
         return { ...r, client: { ...client, getCode: async (a: { address?: string }) => (String(a?.address ?? "").toLowerCase() === adapter ? OFF_LIST_CODE : client.getCode(a)) } as never };
       },

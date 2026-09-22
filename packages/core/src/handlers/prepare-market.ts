@@ -2,9 +2,8 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope, executionEthTransaction, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { buildCreatorCreatePoolCall, buildDeployFixedRateOracleCall, buildDeployOracleCall, deriveJitMarket, marketCreatorAbi, type OracleModeName, predictShares, type PredictSharesResult, rateOverrideCoherence, readAdapterRoles, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
-import { resolveMarketRegistry } from "../config-remote.ts";
 import { approvedImplementationGuard, CREATE_POOL_IMPLEMENTATION_ROLES, PREPARE_MARKET_IMPLEMENTATION_ROLES } from "../implementations.ts";
-import { envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
+import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
 import { jitValueGate, maxExpiryBoundWarning, resolveFeeCap, type ValueGateSite } from "./jit.ts";
 import { refreshContractConstant } from "../chain/constants-cache.ts";
 import { oracleRateEcho, oracleRateUnreadableMessage, probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
@@ -40,17 +39,24 @@ export async function handlePrepareMarket(
   ctx: HandlerContext,
 ): Promise<Envelope> {
   const chainId = input.chainId;
-  const { marketRegistry: mr, warning } = await resolveMarketRegistry(chainId);
+  // A prepare: the selected generation must be active (the read-only gate lives here because
+  // resolveMarketRegistry is a read; a read-only set's registry stays readable).
+  const { mr, mrWarn, generation, refusal } = await getMarketRegistry(ctx, chainId);
+  if (refusal) return unavailable(chainId, refusal.code, refusal.message, ctx);
+  if (generation && generation.status !== "active") {
+    return unavailable(chainId, "generation_read_only", `generation '${generation.label}' is read-only: no new bytes are built against its contracts — omit \`generation\` to target the primary, or name another active generation`, ctx);
+  }
   if (!mr) {
     return unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx);
   }
-  const warnings: Array<{ code: string; message: string }> = warning ? [warning] : [];
+  const warnings: Array<{ code: string; message: string }> = [...mrWarn];
   const a = input.action;
-  if (a.type === "create-pool") return handleCreatePool(input, a, mr, warnings, ctx);
+  if (a.type === "create-pool") return handleCreatePool(input, a, mr, warnings, ctx, generation?.label);
   const resolved = await getRpc(ctx, chainId);
-  // Interface-first guard, scoped to the one contract this tx executes (the registry):
-  // build-and-warn, same posture as the deployability pre-check below.
-  if (resolved) warnings.push(...(await approvedImplementationGuard(resolved.client, chainId, { roles: PREPARE_MARKET_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
+  // Interface-first guard, scoped to the one contract this tx executes (the registry) INSIDE
+  // the generation the bytes target: build-and-warn, same posture as the deployability
+  // pre-check below.
+  if (resolved) warnings.push(...(await approvedImplementationGuard(resolved.client, chainId, { roles: PREPARE_MARKET_IMPLEMENTATION_ROLES, ...(generation ? { generation: generation.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
   // rpcWarn is prepended at ENVELOPE construction, not pushed here: the client fails over
   // in-call (mutating `resolved`), and the disclosure must describe the endpoint that served
   // the pre-checks.
@@ -143,9 +149,11 @@ const CREATOR_SCALES = {
 async function handleCreatePool(
   input: { chainId: ChainId; clientRequestId: string; format: "concise" | "full" },
   a: CreatePoolAction,
-  mr: NonNullable<Awaited<ReturnType<typeof resolveMarketRegistry>>["marketRegistry"]>,
+  mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>,
   warnings: Array<{ code: string; message: string }>,
   ctx: HandlerContext,
+  /** The generation `mr` came from — the implementation guard fingerprints THAT set's code. */
+  generation?: string,
 ): Promise<Envelope> {
   const chainId = input.chainId;
   const creator = mr.marketCreator;
@@ -174,7 +182,7 @@ async function handleCreatePool(
   const nowSecs = nowSecondsOf(ctx);
   // Value-domain rules (the creator restates the adapter's bounds: the MAX_FEE_PERCENTAGE cap,
   // future expiry) — the SHARED gate, creator-worded, cap from the creator's own cached view.
-  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });
+  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator", ctx) });
   if (valueGate) return valueGate;
   let constraint: ResolvedConstraint | undefined = a.constraint
     ? { rateMin: BigInt(a.constraint.rateMin), rateMax: BigInt(a.constraint.rateMax), rateChangePerDayMax: BigInt(a.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(a.constraint.rateChangeCapacityMax) }
@@ -210,14 +218,15 @@ async function handleCreatePool(
   const client = resolved.client;
   // Interface-first guard on the two contracts this tx executes (creator + registry) — the
   // binding reads below prove WHICH contracts, this proves their CODE is the admitted one.
-  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: CREATE_POOL_IMPLEMENTATION_ROLES, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
+  warnings.push(...(await approvedImplementationGuard(client, chainId, { roles: CREATE_POOL_IMPLEMENTATION_ROLES, ...(generation !== undefined ? { generation } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })));
   try {
     const [boundPm, boundController, boundRegistry] = await Promise.all([
       client.readContract({ address: creator, abi: marketCreatorAbi, functionName: "POOL_MANAGER" }),
       client.readContract({ address: creator, abi: marketCreatorAbi, functionName: "CONTROLLER" }),
       client.readContract({ address: creator, abi: marketCreatorAbi, functionName: "MARKET_REGISTRY" }),
     ]);
-    const { dep } = await getDep(ctx, chainId);
+    // The pool manager of the SAME generation as the creator (dep and mr are one set).
+    const { dep } = await getDep(ctx, chainId, { ...(generation !== undefined ? { generation } : {}) });
     // All THREE bindings the creator's graph hangs on: registry (the recipe/oracle authority),
     // pool manager (where the pool lands), and CONTROLLER (whose roles gate creation and whose
     // own pool-manager binding the share prediction follows). A controller that differs from

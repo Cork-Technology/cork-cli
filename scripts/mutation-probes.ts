@@ -110,6 +110,8 @@ const T = {
   makerReadiness: "packages/core/test/maker-readiness.test.ts",
   fillSim: "packages/core/test/fill-simulate.test.ts",
   impairment: "packages/core/test/impairment-recipe.test.ts",
+  generations: "packages/core/test/generations.test.ts",
+  configRemote: "packages/core/test/config-remote.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -117,9 +119,36 @@ const CATALOG: Mutant[] = [
   {
     id: "marketid-pair-swapped",
     file: "packages/core/src/marketid.ts",
-    find: "collateralAsset: market.collateralAsset,\n      referenceAsset: market.referenceAsset,",
-    replace: "collateralAsset: market.referenceAsset,\n      referenceAsset: market.collateralAsset,",
+    find: "  const m = market as Market8;\n  const encoded = encodeAbiParameters(MARKET8_ABI, [\n    {\n      collateralAsset: m.collateralAsset,\n      referenceAsset: m.referenceAsset,",
+    replace: "  const m = market as Market8;\n  const encoded = encodeAbiParameters(MARKET8_ABI, [\n    {\n      collateralAsset: m.referenceAsset,\n      referenceAsset: m.collateralAsset,",
     tests: [T.marketid, T.mr],
+  },
+  {
+    // 10-field id width (0.6 design §6 "id width"): the two fee words ARE the pool id on the
+    // 10-field wire — swapping them yields a plausible id of a pool that does not exist.
+    id: "marketid-10field-fee-order",
+    file: "packages/core/src/marketid.ts",
+    find: "          swapFeePercentage: m.swapFeePercentage,\n          unwindSwapFeePercentage: m.unwindSwapFeePercentage,",
+    replace: "          swapFeePercentage: m.unwindSwapFeePercentage,\n          unwindSwapFeePercentage: m.swapFeePercentage,",
+    tests: [T.marketid],
+  },
+  {
+    // The wire/shape check is what stops a 10-field market from hashing as 8 fields (viem's
+    // 8-field decode of a 10-field market() return succeeds silently upstream).
+    id: "marketid-wire-check-dropped",
+    file: "packages/core/src/marketid.ts",
+    find: "  assertMarketWire(market, wire);\n  if (wire === \"10-field\") {",
+    replace: "  if (wire === \"10-field\") {",
+    tests: [T.marketid],
+  },
+  {
+    // The 10-field ABI must append the fees AFTER rateOracle (IPoolManager.sol:33-44); the
+    // 8-field golden vector still passes, only the live getId vector catches a wrong position.
+    id: "marketid-10field-fee-position",
+    file: "packages/core/src/marketid.ts",
+    find: "      ...MARKET8_COMPONENTS,\n      { name: \"swapFeePercentage\", type: \"uint256\" },\n      { name: \"unwindSwapFeePercentage\", type: \"uint256\" },",
+    replace: "      { name: \"swapFeePercentage\", type: \"uint256\" },\n      { name: \"unwindSwapFeePercentage\", type: \"uint256\" },\n      ...MARKET8_COMPONENTS,",
+    tests: [T.marketid],
   },
   // ── CREATE2 derivation: the tamper-evidence for every trusted address ─────────────────────
   {
@@ -1557,33 +1586,161 @@ const CATALOG: Mutant[] = [
     tests: [T.rollover],
   },
   {
-    // The flattening must carry the config's `activeGenerations` — dropping them makes a
-    // second live generation (the 0.4-rc.1 candidate set, venue-admissible beside rc.2)
-    // invisible to every consumer at once: classification, scans, emitters, decode labels.
+    // The flattening must carry EVERY live rollover block — keeping only the first makes a
+    // second live generation (the rc.2 set beside the Distribution 0.2 set) invisible to every
+    // consumer at once: classification, scans, emitters, decode labels.
     id: "rollover-generations-active-list-dropped",
-    file: "packages/core/src/rollover.ts",
-    find: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
-    replace: "    ...([] as RolloverGenerationRecord[]).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
-    tests: [T.rollover, T.hypersync, T.eventAttribution, T.decodeTx],
+    file: "packages/core/src/generations.ts",
+    find: "    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
+    replace: "    ...live.slice(0, 1).map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
+    tests: [T.rollover, T.hypersync, T.eventAttribution, T.decodeTx, T.generations],
   },
   {
-    // Exactly ONE generation is primary — the flag drives decode's plain labels and the
-    // "(…, primary)" teaching marker; a regression that marks every active set primary
-    // strips the label from the candidate set's decode name.
+    // Exactly ONE rollover generation is primary — the flag drives decode's plain labels and
+    // the "(…, primary)" teaching marker; a regression that marks every live set primary
+    // strips the label from the rc.2 set's decode name.
     id: "rollover-generations-primary-flag-everywhere",
-    file: "packages/core/src/rollover.ts",
-    find: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", false, `active-${i + 1}`)),",
-    replace: "    ...(activeGenerations ?? []).map((g, i) => normalize(g, \"active\", true, `active-${i + 1}`)),",
-    tests: [T.decodeTx, T.rollover],
+    file: "packages/core/src/generations.ts",
+    find: "    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
+    replace: "    ...live.map((g) => entry(g, g.rollover!, \"active\", true)),",
+    tests: [T.decodeTx, T.rollover, T.generations],
   },
   {
-    // The label ladder is config label → contractsVersion → positional fallback; skipping
-    // contractsVersion renames the primary rc.2 set to "primary" on every output row.
-    id: "rollover-generations-label-ladder-skips-version",
-    file: "packages/core/src/rollover.ts",
-    find: "    label: g.label ?? g.contractsVersion ?? fallbackLabel,",
-    replace: "    label: g.label ?? fallbackLabel,",
-    tests: [T.eventAttribution, T.hybridVerify, T.rolloverVerify],
+    // A rollover generation is named by its CHAIN generation's label (one vocabulary); falling
+    // back to the block's contractsVersion renames the rc.2 set to "v0.1.0-rc.2" on every row.
+    id: "rollover-generations-label-from-version",
+    file: "packages/core/src/generations.ts",
+    find: "    wire: r.wire,\n    label: g.label,\n    status,",
+    replace: "    wire: r.wire,\n    label: r.contractsVersion ?? g.label,\n    status,",
+    tests: [T.eventAttribution, T.hybridVerify, T.rolloverVerify, T.generations],
+  },
+  {
+    // Retired blocks come LAST: the venue-miss sweep and the teaching lists read the order,
+    // and a retired-first list would put a dead settler at the head of every "active
+    // replacements" enumeration.
+    id: "rollover-generations-retired-first",
+    file: "packages/core/src/generations.ts",
+    find: "  return [\n    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),\n    ...retired.map((g) => entry(g, g.rollover!, \"retired\", false)),\n  ];",
+    replace: "  return [\n    ...retired.map((g) => entry(g, g.rollover!, \"retired\", false)),\n    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),\n  ];",
+    tests: [T.generations, T.configRemote, T.rollover],
+  },
+  // ── generation model (0.6): ordering, selection, classification, resolver threading ────────
+  {
+    // Resolution order is primary → other active → read-only; a read-only set ranked before an
+    // active one would win pool-resolution ties and lead every "all generations" walk.
+    id: "generations-ordering-readonly-before-active",
+    file: "packages/core/src/generations.ts",
+    find: "  return [...primary, ...active, ...readOnly];",
+    replace: "  return [...primary, ...readOnly, ...active];",
+    tests: [T.generations, T.configRemote, T.handlers],
+  },
+  {
+    // The primary flag must come from the chain's `primary` label — marking the first set in
+    // config order instead promotes whichever set the JSON happens to list first.
+    id: "generations-primary-from-config-order",
+    file: "packages/core/src/generations.ts",
+    find: "  const entries = Object.entries(chain.sets).map(([label, g]): ResolvedGeneration => ({ ...g, label, primary: label === chain.primary }));",
+    replace: "  const entries = Object.entries(chain.sets).map(([label, g], i): ResolvedGeneration => ({ ...g, label, primary: i === 0 }));",
+    tests: [T.generations, T.configRemote],
+  },
+  {
+    // An omitted label selects the PRIMARY — selecting the last set (a read-only one on
+    // Arbitrum) would send every default prepare to the calibration pair.
+    id: "generations-select-default-not-primary",
+    file: "packages/core/src/generations.ts",
+    find: "  const generation = label === undefined ? primaryOf(list) : list.find((g) => g.label === label);",
+    replace: "  const generation = label === undefined ? list[list.length - 1] : list.find((g) => g.label === label);",
+    tests: [T.generations, T.configRemote, T.handlers],
+  },
+  {
+    // A read-only set must refuse a PREPARE (its contracts are kept for reads/decode only).
+    id: "generations-select-readonly-prepare-allowed",
+    file: "packages/core/src/generations.ts",
+    find: "  if (purpose === \"prepare\" && generation.status !== \"active\") {",
+    replace: "  if (false) {",
+    tests: [T.generations],
+  },
+  {
+    // getDep's prepare gate is the handler-side twin of the selection rule above: dropping it
+    // lets cork_prepare_phoenix build a bundle against the read-only arbitrum-legacy set.
+    id: "getdep-readonly-prepare-gate-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  if (opts.purpose === \"prepare\" && r.generation && r.generation.status !== \"active\") {",
+    replace: "  if (false) {",
+    tests: [T.handlers],
+  },
+  {
+    // The resolver must THREAD the caller's generation: ignoring it silently answers the
+    // primary's addresses for a call that named another set.
+    id: "getdep-generation-threading-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  const r = await resolveDeploymentBuiltin(chainId, undefined, opts.generation ?? ctx.generation);",
+    replace: "  const r = await resolveDeploymentBuiltin(chainId);",
+    tests: [T.handlers, T.venue],
+  },
+  {
+    // classifyAddress role mapping: the registry's `adapter` field IS the JIT adapter; reporting
+    // it as the registry would let decode/attribution vouch for the wrong contract role.
+    id: "classify-address-jit-adapter-role-swapped",
+    file: "packages/core/src/generations.ts",
+    find: "    hit(\"jitAdapter\", g.marketRegistry?.adapter);",
+    replace: "    hit(\"registry\", g.marketRegistry?.adapter);",
+    tests: [T.generations],
+  },
+  {
+    // Exact vs Partial settler roles are the mode gate's whole vocabulary.
+    id: "classify-address-settler-roles-swapped",
+    file: "packages/core/src/generations.ts",
+    find: "    hit(\"exactSettler\", g.rollover?.exactSettler);\n    hit(\"partialSettler\", g.rollover?.partialSettler);",
+    replace: "    hit(\"exactSettler\", g.rollover?.partialSettler);\n    hit(\"partialSettler\", g.rollover?.exactSettler);",
+    tests: [T.generations],
+  },
+  {
+    // The pool-scoped resolver decides on the cST (shares[1]); testing the cPT word instead
+    // still "works" on healthy pools and misreads a half-populated answer.
+    id: "pool-generation-resolver-wrong-share-word",
+    file: "packages/core/src/generations.ts",
+    find: "    if (r.shares !== undefined && r.shares[1].toLowerCase() !== ZERO) {",
+    replace: "    if (r.shares !== undefined) {",
+    tests: [T.generations],
+  },
+  {
+    // A named label must ask ONLY that generation's manager — asking every manager lets another
+    // set's pool answer for a caller who pinned the generation.
+    id: "pool-generation-resolver-label-ignored",
+    file: "packages/core/src/generations.ts",
+    find: "    candidates = [sel.generation];",
+    replace: "    candidates = [...list];",
+    tests: [T.generations],
+  },
+  {
+    // The implementation guard fingerprints the SELECTED generation's addresses; ignoring the
+    // label judges a non-primary prepare against the primary's contracts.
+    id: "impl-guard-generation-ignored",
+    file: "packages/core/src/implementations.ts",
+    find: "  const sel = selectGeneration(generationsOf(addresses, chainId), generation);",
+    replace: "  const sel = selectGeneration(generationsOf(addresses, chainId));",
+    tests: [T.implTrust],
+  },
+  {
+    // Registry-bound paths bind the first generation on an IMPLEMENTED wire (flat today, stage
+    // 2 adds nested); binding the primary instead emits flat bytes at the nested adapter — the
+    // exact silent class the generation model exists to prevent. Killed by the binding-guard
+    // conflicts in the registry suites (the stubs mirror the flat generation's addresses).
+    id: "registry-binding-implemented-wire-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  const label = ctx.generation ?? IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generations, w)?.label).find((l) => l !== undefined);",
+    replace: "  const label = ctx.generation;",
+    tests: [T.mr, T.gate, T.marketCreator],
+  },
+  {
+    // A named generation whose wire this build does not encode must REFUSE (phase_gated) —
+    // building anyway is the same silent class from the other side.
+    id: "registry-binding-wire-refusal-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  if (r.marketRegistry && !IMPLEMENTED_MARKET_REGISTRY_WIRES.includes(r.marketRegistry.wire)) {",
+    replace: "  if (false) {",
+    tests: [T.handlers],
   },
   {
     // The mode-mismatch teaching names the SAME generation's partner: each factory approves
@@ -1809,8 +1966,8 @@ const CATALOG: Mutant[] = [
     // contract bound to another stack. The stub must model the real binding, not a plausible one.
     id: "eval-stub-forself-cork-binding-wrong",
     file: "evals/stub.ts",
-    find: 'return (corkDefaults as { deployments: Record<string, { poolManager: string }> }).deployments["1"]!.poolManager;',
-    replace: 'return (corkDefaults as { deployments: Record<string, { corkAdapter: string }> }).deployments["1"]!.corkAdapter;',
+    find: "      return primaryPhoenix(1)!.poolManager;",
+    replace: "      return primaryPhoenix(1)!.corkAdapter!;",
     tests: [T.taskFixtures],
   },
   {
@@ -1895,8 +2052,8 @@ const CATALOG: Mutant[] = [
     // prevent (registry vs adapter are different addresses, so the swap must fail the test).
     id: "attestation-binds-path-swapped",
     file: "packages/core/src/config.ts",
-    find: 'binds: { section: "marketRegistry", chains: [42161, 8453], path: "adapter" },',
-    replace: 'binds: { section: "marketRegistry", chains: [42161, 8453], path: "registry" },',
+    find: 'binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "adapter" },',
+    replace: 'binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "registry" },',
     tests: [T.attest],
   },
   {
@@ -3699,7 +3856,7 @@ const CATALOG: Mutant[] = [
     // answer can confirm the row it came with.
     id: "hybrid-settler-gate-dropped",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'if (digest === undefined || settler === undefined || generation === undefined || generation === "unknown") return undefined;',
+    find: 'if (digest === undefined || settler === undefined || generation === undefined || generation.status === "unknown") return undefined;',
     replace: "if (digest === undefined || settler === undefined) return undefined;",
     tests: [T.hybridVerify],
   },
@@ -4004,8 +4161,8 @@ const CATALOG: Mutant[] = [
     // The value gate's verdict is dropped: past expiries and over-cap fees build anyway.
     id: "creator-value-gate-dropped",
     file: "packages/core/src/handlers/prepare-market.ts",
-    find: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });\n  if (valueGate) return valueGate;',
-    replace: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator") });\n  void valueGate;',
+    find: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator", ctx) });\n  if (valueGate) return valueGate;',
+    replace: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator", ctx) });\n  void valueGate;',
     tests: [T.marketCreator],
   },
   {
@@ -4695,9 +4852,9 @@ const CATALOG: Mutant[] = [
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
     // recipe: the mode sugar silently diverges across chains.
     id: "impairment-hint-dropped-one-chain",
-    file: "cork-defaults.json",
-    find: '        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",\n        "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"\n      },\n      "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n      "contractsVersion": "0.3.3",\n      "deployedAtBlock": 49775886',
-    replace: '        "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"\n      },\n      "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n      "contractsVersion": "0.3.3",\n      "deployedAtBlock": 49775886',
+    file: "cork-defaults.v2.json",
+    find: '              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",\n              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"\n            },\n            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n            "contractsVersion": "0.3.3",\n            "deployedAtBlock": 49775886',
+    replace: '              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"\n            },\n            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n            "contractsVersion": "0.3.3",\n            "deployedAtBlock": 49775886',
     tests: [T.impairment],
   },
   {
