@@ -435,6 +435,20 @@ type PageTraversal =
  *  `maxPages` alone bounds the walk (10 × 200 = 2000 pools before `pagination_incomplete`). */
 export const POSITIONS_SWEEP_PAGE_SIZE = 200;
 
+/** The venue serves a pool's `expiry` as an ISO-8601 timestamp (`2026-08-10T12:30:00.000Z`,
+ *  verified live 2026-09-22); the chain scan serves unix seconds. The sweep's rows are the scan's
+ *  shape, so a venue expiry is normalised to decimal seconds here — an ISO string through
+ *  Date.parse (floored to the second), a digits-only string or number verbatim, anything else
+ *  undefined (the caller skips the row and discloses the count). The first live run against a real
+ *  position threw `Failed to parse String to BigInt` on the ISO form. */
+export function venueExpirySeconds(v: unknown): string | undefined {
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return String(Math.floor(v));
+  if (typeof v !== "string" || v.length === 0) return undefined;
+  if (/^[0-9]+$/.test(v)) return v;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;
+}
+
 export async function collectVenuePages(
   opts: { cursor?: string; maxPages: number },
   fetchPage: (cursor: string | undefined) => Promise<VenueList>,
@@ -844,6 +858,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       const deps = venueDepsOf(ctx);
       const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: POSITIONS_SWEEP_PAGE_SIZE }));
       const rows: MarketRow[] = [];
+      let unreadableExpiry = 0;
       for (const r of traversal.items) {
         const pm = String((r as { poolManagerAddress?: unknown }).poolManagerAddress ?? "").toLowerCase();
         const e = byPm.get(pm);
@@ -852,9 +867,16 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         const cst = addr((r as { swapToken?: unknown }).swapToken), cpt = addr((r as { principalToken?: unknown }).principalToken);
         const col = addr((r as { collateralToken?: unknown }).collateralToken), ref = addr((r as { referenceToken?: unknown }).referenceToken);
         if (!cst || !cpt || !col || !ref) continue;
-        rows.push({ poolId: String((r as { poolId: unknown }).poolId) as `0x${string}`, referenceAsset: ref, collateralAsset: col, expiry: String((r as { expiry?: unknown }).expiry ?? "0"), rateOracle: addr((r as { rateOracleAddress?: unknown }).rateOracleAddress) ?? "0x0000000000000000000000000000000000000000", corkPrincipalToken: cpt, corkSwapToken: cst, poolManager: e.poolManager, wire: e.wire, generation: e.label, blockNumber: String((r as { deploymentBlockNumber?: unknown }).deploymentBlockNumber ?? ""), txHash: String((r as { deploymentTxHash?: unknown }).deploymentTxHash ?? ""), emitter: e.poolManager });
+        const expiry = venueExpirySeconds((r as { expiry?: unknown }).expiry);
+        if (expiry === undefined) {
+          unreadableExpiry += 1;
+          continue;
+        }
+        rows.push({ poolId: String((r as { poolId: unknown }).poolId) as `0x${string}`, referenceAsset: ref, collateralAsset: col, expiry, rateOracle: addr((r as { rateOracleAddress?: unknown }).rateOracleAddress) ?? "0x0000000000000000000000000000000000000000", corkPrincipalToken: cpt, corkSwapToken: cst, poolManager: e.poolManager, wire: e.wire, generation: e.label, blockNumber: String((r as { deploymentBlockNumber?: unknown }).deploymentBlockNumber ?? ""), txHash: String((r as { deploymentTxHash?: unknown }).deploymentTxHash ?? ""), emitter: e.poolManager });
       }
-      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: "hybrid" as const };
+      const warnings = venueNoticeWarnings(traversal);
+      if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is neither unix seconds nor an ISO-8601 timestamp — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });
+      return { rows, complete: traversal.complete, warnings, source: "hybrid" as const };
     };
     const scanRows = async (emitters: readonly PositionsEmitter[]) => {
       const warnings: Array<{ code: string; message: string }> = [];

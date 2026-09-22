@@ -118,7 +118,7 @@ const UNLISTED_PM = "0x9999999999999999999999999999999999999999" as const;
 const P_UNLISTED = pool(0xd1);
 function venueRow(pm: string, poolId: `0x${string}`, expiry: bigint, block: number) {
   const sh = SHARES[poolId as keyof typeof SHARES] ?? { cpt: share(0x51), cst: share(0x52) };
-  return { chainId: CHAIN, poolId, poolManagerAddress: pm, swapToken: { address: sh.cst, symbol: "cST" }, principalToken: sh.cpt, collateralToken: { address: COL }, referenceToken: REF, expiry: expiry.toString(), rateOracleAddress: ORACLE, deploymentBlockNumber: block, deploymentTxHash: `0x${block.toString(16).padStart(64, "0")}` };
+  return { chainId: CHAIN, poolId, poolManagerAddress: pm, swapToken: { address: sh.cst, symbol: "cST" }, principalToken: sh.cpt, collateralToken: { address: COL }, referenceToken: REF, expiry: new Date(Number(expiry) * 1000).toISOString(), rateOracleAddress: ORACLE, deploymentBlockNumber: String(block), deploymentTxHash: `0x${block.toString(16).padStart(64, "0")}` };
 }
 const VENUE_ROWS = [venueRow(V03_PM, P_OLD, NOW + 86_400n, 10), venueRow(V03_PM, P_EXPIRED, NOW - 3_600n, 11), venueRow(PRIMARY_PM, P_NEW, NOW + 86_400n, 12), venueRow(V11_PM, P_EMPTY, NOW + 86_400n, 13), venueRow(UNLISTED_PM, P_UNLISTED, NOW + 86_400n, 14)];
 function venueOf(urls: string[], rows = VENUE_ROWS, pageOf = 3) {
@@ -309,8 +309,10 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
       [P_EXPIRED, "phoenix/v0.3-rc.1", true],
       [P_NEW, "phoenix/v0.4-rc.1", false],
     ]);
-    // Token addresses come through whether the venue serves a string or an { address } object.
-    expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt });
+    // Token addresses come through whether the venue serves a string or an { address } object;
+    // the venue's ISO-8601 `expiry` is normalised to unix seconds (the shape the scan serves and
+    // the `expired` flag compares against).
+    expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString() });
     expect(env.warnings.map((w) => w.code)).not.toContain("pagination_incomplete");
   });
   it("`mode: hybrid` passes the chain-resource mode gate for THIS read only; `previous` narrows the venue rows to that manager", async () => {
@@ -332,6 +334,16 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
     expect(d.scanned).toMatchObject({ pools: 3, complete: false, source: "hybrid" });
     const w = env.warnings.find((x) => x.code === "pagination_incomplete");
     expect(w?.message).toContain("maxPages");
+  });
+  it("a venue row whose expiry is neither seconds nor ISO-8601 is skipped and DISCLOSED, never thrown on; a digits-only expiry passes verbatim", async () => {
+    const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: (NOW - 3_600n).toString() }, VENUE_ROWS[2]!];
+    const env = await positions(ctxFor([], { venueFetch: venueOf([], rows) }), undefined, null);
+    expect(env.state).toBe("ok");
+    const d = env.data as PositionsData;
+    expect(d.scanned).toMatchObject({ pools: 2, complete: true });
+    expect(d.positions.map((p) => [p.poolId, p.expired])).toEqual([[P_EXPIRED, true], [P_NEW, false]]);
+    const w = env.warnings.find((x) => x.code === "invalid_service_response");
+    expect(w?.message).toContain("1 venue pool row(s)");
   });
   it("`mode: lite-decentralized` is refused with teaching: no RPC-only enumeration is complete", async () => {
     const env = await positions(ctxFor(), undefined, "lite-decentralized");

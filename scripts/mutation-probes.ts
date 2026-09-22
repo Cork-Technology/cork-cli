@@ -5492,8 +5492,17 @@ const CATALOG: Mutant[] = [
     // (provenance.mode is a connectivity pledge).
     id: "mig-venue-source-mislabeled",
     file: "packages/core/src/handlers/query.ts",
-    find: "      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: \"hybrid\" as const };",
-    replace: "      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: \"full-decentralized\" as const };",
+    find: "      return { rows, complete: traversal.complete, warnings, source: \"hybrid\" as const };",
+    replace: "      return { rows, complete: traversal.complete, warnings, source: \"full-decentralized\" as const };",
+    tests: [T.migration],
+  },
+  {
+    // The venue's ISO-8601 expiry passed through unparsed: the live shape (verified 2026-09-22)
+    // threw `Failed to parse String to BigInt` on the first account with a real position.
+    id: "mig-venue-iso-expiry-unparsed",
+    file: "packages/core/src/handlers/query.ts",
+    find: "  const ms = Date.parse(v);\n  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;",
+    replace: "  return v;",
     tests: [T.migration],
   },
   {

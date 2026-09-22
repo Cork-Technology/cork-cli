@@ -450,7 +450,7 @@ function migrationVenueRows(): Array<Record<string, unknown>> {
     principalToken: { address: m.cpt, symbol: "cPT" },
     collateralToken: { address: SUSDE, symbol: "sUSDe" },
     referenceToken: { address: VBUSDC, symbol: "vbUSDC" },
-    expiry: MARKET.expiryTimestamp.toString(),
+    expiry: new Date(Number(MARKET.expiryTimestamp) * 1000).toISOString(), // the venue serves ISO-8601, not seconds
     rateOracleAddress: ORACLE,
     deploymentBlockNumber: block,
     deploymentTxHash: tx,
