@@ -40,7 +40,7 @@ export interface FeeRule {
 export const TEN_FIELD_FEE_LIMIT_EXCLUSIVE = 100n * 10n ** 18n;
 
 export async function resolveFeeRule(chainId: ChainId, capSource: "adapter" | "creator", ctx: HandlerContext = {}): Promise<FeeRule> {
-  const { mr, phoenixWire } = await getMarketRegistry(ctx, chainId);
+  const { mr, phoenixWire } = await getMarketRegistry(ctx, chainId, "prepare");
   if (phoenixWire === "10-field") {
     return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE - 1n, phoenixWire, text: "strictly below 100e18 (100%) — Phoenix v1.4.0-rc.1 reverts InvalidFees() at or above it; this generation exposes no MAX_FEE_PERCENTAGE view" };
   }
@@ -255,7 +255,7 @@ export async function runJitPreflightLadder(args: {
   const expiryTimestamp = BigInt(jm.expiryTimestamp);
   const swapFee = BigInt(jm.swapFeePercentage);
   const unwindFee = BigInt(jm.unwindSwapFeePercentage);
-  const { mr, mrWarn, generation: mrGeneration, phoenixWire: phoenixWireResolved, refusal: mrRefusal } = await getMarketRegistry(ctx, chainId);
+  const { mr, mrWarn, generation: mrGeneration, phoenixWire: phoenixWireResolved, refusal: mrRefusal } = await getMarketRegistry(ctx, chainId, "prepare");
   if (mrRefusal) return { gate: unavailable(chainId, mrRefusal.code, mrRefusal.message, ctx) };
   if (!mr?.adapter) {
     return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — ${words.live} are live on Arbitrum One and Base (42161, 8453)`, ctx) };

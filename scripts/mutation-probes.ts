@@ -79,6 +79,7 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
+  migration: "packages/core/test/migration.test.ts",
   predictReason: "packages/core/test/predict-shares-reason.test.ts",
   attribution: "packages/core/test/event-attribution.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
@@ -1680,7 +1681,7 @@ const CATALOG: Mutant[] = [
     // primary's addresses for a call that named another set.
     id: "getdep-generation-threading-dropped",
     file: "packages/core/src/handlers/shared.ts",
-    find: "  const r = await resolveDeploymentBuiltin(chainId, undefined, opts.generation ?? ctx.generation);",
+    find: "  const r = await resolveDeploymentBuiltin(chainId, undefined, aliased.label);",
     replace: "  const r = await resolveDeploymentBuiltin(chainId);",
     tests: [T.handlers, T.venue],
   },
@@ -1737,8 +1738,8 @@ const CATALOG: Mutant[] = [
     // by the nested suite (the primary's adapter, wire and generation are asserted).
     id: "registry-binding-implemented-wire-dropped",
     file: "packages/core/src/handlers/shared.ts",
-    find: "  const label = ctx.generation;\n  const r = await resolveMarketRegistry(chainId, undefined, label);",
-    replace: '  const label = ctx.generation ?? generations.find((g) => g.marketRegistry?.wire === "flat")?.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);',
+    find: "  const label = aliased.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);",
+    replace: '  const label = aliased.label ?? generations.find((g) => g.marketRegistry?.wire === "flat")?.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);',
     tests: [T.nested],
   },
   {
@@ -5159,8 +5160,8 @@ const CATALOG: Mutant[] = [
     // `generation` no longer narrows the pool search (every manager asked regardless).
     id: "poolgen-narrowing-dropped",
     file: "packages/core/src/handlers/shared.ts",
-    find: "  const label = opts.generation ?? ctx.generation;\n  if (generations.length === 0) {",
-    replace: "  const label = opts.generation;\n  if (generations.length === 0) {",
+    find: '  const aliased = resolveGenerationAlias(generations, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");',
+    replace: '  const aliased = resolveGenerationAlias(generations, opts.generation, ["phoenix"], opts.purpose ?? "read");',
     tests: [T.poolgen],
   },
   {
@@ -5387,6 +5388,124 @@ const CATALOG: Mutant[] = [
     find: "oracleSalt = ",
     replace: "oracleSalt = undefined; const _ignoredSalt = ",
     tests: [T.answer],
+  },
+  // ── Migration (2026-09-22): generation aliases + the positions sweep ──
+  {
+    // `previous` resolved to the PRIMARY: a migration "from the previous set" would exit the
+    // wrong pools and a prepare would target the wrong adapter under the right-looking label.
+    id: "mig-previous-resolves-to-primary",
+    file: "packages/core/src/generations.ts",
+    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
+    replace: "  const previous = list.find((g) => g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
+    tests: [T.migration],
+  },
+  {
+    // `previous` ignoring the block kinds the call needs: a rollover call could land on a set
+    // with no settler (or a phoenix call on a registry-only set).
+    id: "mig-previous-needs-ignored",
+    file: "packages/core/src/generations.ts",
+    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
+    replace: "  const previous = list.find((g) => !g.primary && g.status === \"active\");",
+    tests: [T.migration],
+  },
+  {
+    // `all` accepted on a prepare (treated as the primary): one artifact silently built for
+    // one set under a word that promised every set.
+    id: "mig-all-accepted-on-prepare",
+    file: "packages/core/src/generations.ts",
+    find: "  if (label === \"all\") {",
+    replace: "  if (label === \"all\" && purpose !== \"prepare\") {\n    return { ok: true, label: primaryOf(list)?.label, alias: label };\n  }\n  if (label === \"all\") {",
+    tests: [T.migration, T.cli],
+  },
+  {
+    // The sweep skipping a manager (the read-only sets dropped): a position on arbitrum-legacy
+    // would vanish from "what do I hold where".
+    id: "mig-sweep-skips-readonly-manager",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "  const withPm = generations.filter((g) => g.phoenix !== undefined);",
+    replace: "  const withPm = generations.filter((g) => g.phoenix !== undefined && g.status === \"active\");",
+    tests: [T.migration],
+  },
+  {
+    // Expired flag inverted (strict > instead of >=, then flipped): the action per expiry state
+    // is chosen from this flag.
+    id: "mig-expired-flag-inverted",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "      expired: nowSecs >= expiry,",
+    replace: "      expired: nowSecs < expiry,",
+    tests: [T.migration],
+  },
+  {
+    // Zero-position pools KEPT: 185 rows of zeros bury the three that matter, and the count
+    // lies about what the account holds.
+    id: "mig-zero-position-pools-kept",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "    if (cst === 0n && cpt === 0n) continue;",
+    replace: "    if (cst === 0n && cpt === 0n && false) continue;",
+    tests: [T.migration],
+  },
+  {
+    // The narrowing dropped: `generation: previous` sweeps every manager anyway.
+    id: "mig-positions-narrowing-dropped",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "    asked = [g];",
+    replace: "    asked = withPm;",
+    tests: [T.migration],
+  },
+  {
+    // The per-generation subtotal summing the wrong share token.
+    id: "mig-subtotal-wrong-token",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "      corkSwapTokenTotal: mine.reduce((acc, p) => acc + p.balances.corkSwapToken, 0n),",
+    replace: "      corkSwapTokenTotal: mine.reduce((acc, p) => acc + p.balances.corkPrincipalToken, 0n),",
+    tests: [T.migration],
+  },
+  {
+    // A venue row on a manager no asked generation owns KEPT: a filtered-out set's pool (or
+    // venue noise) would be swept and reported under an undefined generation.
+    id: "mig-venue-unlisted-manager-kept",
+    file: "packages/core/src/handlers/query.ts",
+    find: "        if (!e) continue; // a manager no asked generation owns",
+    replace: "        if (!e) {} // a manager no asked generation owns",
+    tests: [T.migration],
+  },
+  {
+    // The mode gate's sweep exemption dropped: an explicit `mode: hybrid` on the positions
+    // read is refused as if it were a single-pool chain read.
+    id: "mig-venue-mode-gate-exemption-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "  if (!isPositionsSweep && input.mode !== undefined && input.mode !== \"lite-decentralized\") {",
+    replace: "  if (input.mode !== undefined && input.mode !== \"lite-decentralized\") {",
+    tests: [T.migration],
+  },
+  {
+    // The sweep walking the caller's presentation page size: the live default (25 × 10) stopped
+    // at 250 of 453 pools on Arbitrum.
+    id: "mig-venue-sweep-page-size-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: POSITIONS_SWEEP_PAGE_SIZE }));",
+    replace: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));",
+    tests: [T.migration],
+  },
+  {
+    // The enumeration's pledge mislabeled: venue rows served under the full-decentralized label
+    // (provenance.mode is a connectivity pledge).
+    id: "mig-venue-source-mislabeled",
+    file: "packages/core/src/handlers/query.ts",
+    find: "      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: \"hybrid\" as const };",
+    replace: "      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: \"full-decentralized\" as const };",
+    tests: [T.migration],
+  },
+  {
+    // getDep resolving the alias with the READ purpose on a prepare: `all` on a prepare would
+    // lose its ONE-artifact teaching (the authority ops have no pool, so getDep is their only
+    // alias gate). The bare "alias resolution dropped" mutant is EQUIVALENT — resolveDeployment
+    // resolves aliases itself — so the purpose is the load-bearing part here.
+    id: "mig-getdep-alias-purpose-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: '  const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");',
+    replace: '  const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], "read");',
+    tests: [T.migration, T.cli],
   },
 ];
 

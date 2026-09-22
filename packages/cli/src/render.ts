@@ -108,6 +108,38 @@ function renderValue(value: unknown, indent = 0, s: Style = PLAIN): string {
     .join("\n");
 }
 
+/**
+ * The positions read (account-state WITHOUT a poolId, 2026-09-22): one row per pool with a
+ * non-zero cST/cPT balance, each on the generation its manager belongs to — the table a migration
+ * starts from. Rendered as a table because the reader compares rows (old set vs new set, expired
+ * vs live), which the key/value tree buries under 10 keys per row. Everything else in the data
+ * (scanned, byGeneration, scales, note) follows in the ordinary tree. Returns undefined when the
+ * data is not that shape, so the generic renderer takes over.
+ */
+function renderPositions(data: unknown, s: Style): string | undefined {
+  if (!isPlainObject(data) || data["resource"] !== "account-state" || !Array.isArray(data["positions"])) return undefined;
+  const rows = data["positions"] as unknown[];
+  const { positions: _p, ...rest } = data;
+  const lines: string[] = [];
+  lines.push(s.cyan(s.bold(`positions (${rows.length})`)));
+  if (rows.length === 0) lines.push(`  ${s.dim("(none — no cST or cPT balance on any scanned pool)")}`);
+  else {
+    const cells = rows.map((r) => {
+      const o = isPlainObject(r) ? r : {};
+      const g = isPlainObject(o["generation"]) ? String(o["generation"]["label"] ?? "") : "";
+      const b = isPlainObject(o["balances"]) ? o["balances"] : {};
+      return [g, String(o["poolId"] ?? ""), String(o["expiryTimestamp"] ?? ""), o["expired"] === true ? "expired" : "live", scalar(b["corkSwapToken"]), scalar(b["corkPrincipalToken"])];
+    });
+    const header = ["generation", "poolId", "expiry", "state", "cST (18 dec)", "cPT (18 dec)"];
+    const widths = header.map((h, i) => Math.max(h.length, ...cells.map((c) => c[i]!.length)));
+    const fmt = (c: string[]) => `  ${c.map((v, i) => v.padEnd(widths[i]!)).join("  ")}`.trimEnd();
+    lines.push(s.dim(fmt(header)));
+    for (const c of cells) lines.push(fmt(c));
+  }
+  lines.push(renderValue(rest, 0, s));
+  return lines.join("\n");
+}
+
 interface Envelope {
   state?: string;
   data?: unknown;
@@ -159,7 +191,10 @@ export function renderEnvelope(env: unknown, tool: ToolDef, s: Style = PLAIN): s
 
   // `data: null` is the normal shape of a non-ok envelope; printing a bare "null" would
   // say nothing a reader does not already know from the state line.
-  if (e.data !== undefined && e.data !== null) parts.push("", renderValue(e.data, 0, s));
+  if (e.data !== undefined && e.data !== null) {
+    const table = renderPositions(e.data, s);
+    parts.push("", table !== undefined ? table : renderValue(e.data, 0, s));
+  }
 
   if (e.warnings && e.warnings.length > 0) {
     parts.push("", s.bold(`warnings (${e.warnings.length})`));

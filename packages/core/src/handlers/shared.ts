@@ -6,7 +6,7 @@ import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcC
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, resolveMarketRegistry, type CorkMarketRegistry } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
-import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolvePoolGeneration } from "../generations.ts";
+import { type GenerationBlockKind, type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, isGenerationAlias, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolveGenerationAlias, resolvePoolGeneration } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
@@ -140,13 +140,32 @@ export async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<Res
  * (also pushed into `depWarn` so a caller that only forwards the warnings still names the
  * cause) beside an undefined `dep`. `purpose: "prepare"` applies the read-only gate.
  */
+/** Resolve a `generation` ALIAS (primary | previous | all) to the label it names on this chain
+ *  for a call that needs `needs` block kinds — the migration aliases (2026-09-22) resolve ONCE,
+ *  before any block lookup, so getDep / getPoolDep / getMarketRegistry all speak labels below
+ *  and every result carries the label. A non-alias passes through; a refusal is the typed
+ *  `generation_unknown` the caller already routes (`generationRefusal` throws it as input). */
+export async function resolveGenerationLabel(
+  chainId: number,
+  label: string | undefined,
+  needs: readonly GenerationBlockKind[],
+  purpose: "read" | "prepare",
+): Promise<{ label: string | undefined; refusal?: GenerationRefusal }> {
+  if (!isGenerationAlias(label)) return { label };
+  const { generations } = await resolveGenerations(chainId);
+  const a = resolveGenerationAlias(generations, label, needs, purpose);
+  return a.ok ? { label: a.label } : { label, refusal: a.refusal };
+}
+
 export async function getDep(
   ctx: HandlerContext,
   chainId: number,
   opts: { purpose?: "read" | "prepare"; /** Override the label (a registry path passes the generation its `mr` came from, so dep and mr are ONE set). */ generation?: string } = {},
 ): Promise<{ dep: CorkDeployment | undefined; depWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: PhoenixWire }; refusal?: GenerationRefusal }> {
   if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
-  const r = await resolveDeploymentBuiltin(chainId, undefined, opts.generation ?? ctx.generation);
+  const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");
+  if (aliased.refusal) return { dep: undefined, depWarn: [aliased.refusal], refusal: aliased.refusal };
+  const r = await resolveDeploymentBuiltin(chainId, undefined, aliased.label);
   const depWarn = r.warning ? [r.warning] : [];
   if (r.refusal) return { dep: undefined, depWarn: [...depWarn, r.refusal], refusal: r.refusal };
   if (opts.purpose === "prepare" && r.generation && r.generation.status !== "active") {
@@ -211,7 +230,11 @@ export async function getPoolDep(
   if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
   const { generations, warning } = await resolveGenerations(chainId);
   const depWarn = warning ? [warning] : [];
-  const label = opts.generation ?? ctx.generation;
+  // The alias resolves against the purpose HERE (a prepare's `all` teaching differs from a
+  // read's); the resolver below then sees a label only.
+  const aliased = resolveGenerationAlias(generations, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");
+  if (!aliased.ok) throw new ToolInputError(opts.tool, [{ path: ["generation"], message: aliased.refusal.message }]);
+  const label = aliased.label;
   if (generations.length === 0) {
     return { dep: undefined, depWarn, refusal: unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx) };
   }
@@ -266,10 +289,13 @@ export async function getPoolDep(
 export async function getMarketRegistry(
   ctx: HandlerContext,
   chainId: number,
+  purpose: "read" | "prepare" = "read",
 ): Promise<{ mr: CorkMarketRegistry | undefined; mrWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: MarketRegistryWire }; phoenixWire?: PhoenixWire; refusal?: GenerationRefusal | { code: "phase_gated"; message: string } }> {
   const { generations, warning } = await resolveGenerations(chainId);
   const mrWarn = warning ? [warning] : [];
-  const label = ctx.generation;
+  const aliased = resolveGenerationAlias(generations, ctx.generation, ["marketRegistry"], purpose);
+  if (!aliased.ok) return { mr: undefined, mrWarn: [...mrWarn, aliased.refusal], refusal: aliased.refusal };
+  const label = aliased.label;
   const r = await resolveMarketRegistry(chainId, undefined, label);
   const phoenixWire = r.generation ? generations.find((g) => g.label === r.generation!.label)?.phoenix?.wire : undefined;
   if (r.refusal) return { mr: undefined, mrWarn: [...mrWarn, r.refusal], refusal: r.refusal };

@@ -46,7 +46,7 @@ export async function handlePrepareMarket(
   const chainId = input.chainId;
   // A prepare: the selected generation must be active (the read-only gate lives here because
   // resolveMarketRegistry is a read; a read-only set's registry stays readable).
-  const { mr, mrWarn, generation, phoenixWire: phoenixWireResolved, refusal } = await getMarketRegistry(ctx, chainId);
+  const { mr, mrWarn, generation, phoenixWire: phoenixWireResolved, refusal } = await getMarketRegistry(ctx, chainId, "prepare");
   if (refusal) return generationRefusal(chainId, refusal, generation, ctx, "cork_prepare_market");
   if (generation && generation.status !== "active") {
     return unavailable(chainId, "generation_read_only", `generation '${generation.label}' is read-only: no new bytes are built against its contracts — omit \`generation\` to target the primary, or name another active generation`, ctx);

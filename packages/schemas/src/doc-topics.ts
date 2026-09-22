@@ -654,6 +654,87 @@ binaries keep the addresses they understand.`,
     searchText:
       "generation generations which contracts primary set label phoenix/v0.4-rc.1 phoenix/v0.3-rc.1 arbitrum-v1.1 wire wires 8-field 10-field flat nested legacy rc.2 0.2 which registry which adapter which pool manager is this pool on old pool older generation redeploy retired read-only active pool_not_found generation_unknown generation_read_only select generation oracleSalt extraData additionalData market creator distribution",
   },
+  migration: {
+    name: "migration",
+    aliases: ["migrate", "move-funds", "previous-generation"],
+    summary:
+      "Moving funds from a pool on the previous generation to a pool on the current one is ONE workflow that spans two generations, and needs no second selector: every pool-scoped call follows the POOL's generation from the chain. Start with `cork_query account-state` WITHOUT filters.poolId — the account's positions across every generation. Exit each old pool with the pool-scoped action for its expiry state (unwind-deposit/unwind-mint before expiry; withdraw/redeem/withdraw-other after), enter a pool on the primary (deposit/mint; create-pool first when the pool does not exist; or a rollover-intent src→dst for a cST holder), and verify with cork_track. The `generation` input takes the aliases `previous` and `primary` beside labels; results always carry the resolved label.",
+    body: `# Migrating funds between generations
+
+Cork redeploys. The previous generation's pools keep working, so a migration is not forced — but
+new markets are created on the PRIMARY generation, and a holder who wants to be there moves funds
+themselves. This tool supports the previous AND the current generation at the same time: every
+pool-scoped read, compute and prepare resolves the generation the POOL lives on from the chain
+(\`shares(poolId)\` on every configured pool manager) and builds against THAT set's adapter. An
+exit from an old pool and an entry into a new one are therefore two ordinary calls; no
+"dual mode" switch re-routes bytes.
+
+## The aliases on the \`generation\` input
+
+Every chain-backed input takes \`generation\`. Besides a label (\`phoenix/v0.4-rc.1\`,
+\`phoenix/v0.3-rc.1\`, \`arbitrum-v1.1\`) it takes two ALIASES:
+
+- \`primary\` — the same as omitting it: the chain's newest Distribution set.
+- \`previous\` — the newest ACTIVE non-primary generation that carries the contracts the call
+  needs: a pool/phoenix call needs a pool manager, a registry call a market registry, a settler
+  call a rollover block. On Arbitrum and Base today that is \`phoenix/v0.3-rc.1\` for all three.
+  A chain with a single generation (mainnet) refuses \`previous\` as \`generation_unknown\`.
+
+\`all\` is NOT a selector: a prepare builds one artifact and a registry read answers for one
+registry, so it is refused with teaching. The one read that spans every generation is the
+positions read below, which needs no selector (and accepts \`all\` as "no narrowing").
+
+Aliases resolve to a LABEL in one place, before any contract is looked up, and every result
+carries the label in \`data.generation\` / \`provenance.generation\` — never the alias — so the
+provenance of a prepared artifact is exact.
+
+## The recipe
+
+1. **Read your positions.** \`cork_query\` resource \`account-state\` with \`filters.account\` and
+   NO \`filters.poolId\`: the tool takes every pool each generation's pool manager created — the
+   venue's pool list by default (hybrid: venue-discovered rows, every balance read from YOUR RPC;
+   \`mode: "full-decentralized"\` enumerates from the pool-creation event scan instead, decoded per
+   emitter wire; \`lite-decentralized\` is refused because no RPC-only enumeration is complete),
+   sweeps the account's cST and cPT balances, and returns \`positions[]\` — one row per pool with a non-zero balance, each with
+   its \`generation\`, \`poolId\`, \`expiryTimestamp\`, \`expired\`, share tokens and balances — plus
+   \`byGeneration[]\` subtotals and \`generations[]\`. \`generation: "previous"\` narrows the sweep to
+   the previous set. This result carries no \`provenance.generation\` (it spans generations).
+   CLI: \`ch query account-state --chain-id 42161 --account <a>\`.
+
+2. **Exit each old pool** with the pool-scoped \`cork_prepare_phoenix\` action for its expiry state
+   — the tool resolves the pool's generation and targets THAT adapter; you pass the poolId only:
+   - before expiry: \`unwind-deposit\` (exact collateral out, burns cPT+cST pairs) or
+     \`unwind-mint\` (exact pairs in);
+   - after expiry: \`withdraw\` (exact collateral out, cPT only), \`redeem\` (exact cPT in, pro-rata
+     reference + collateral) or \`withdraw-other\` (exact reference out).
+   A cST-only position (cover you bought) is exercised or unwound through \`exercise\` /
+   \`unwind-swap\`, not migrated as principal. Simulate first (\`cork_track\` mode \`simulate\`), sign,
+   broadcast through your own RPC (topic:"signing").
+
+3. **Enter the new pool** on the primary:
+   - \`deposit\` / \`mint\` with the new pool's poolId (a \`cork-pools\` read or \`derive-cork-pool\`
+     names it);
+   - if the pool does not exist yet, \`cork_prepare_market\` \`create-pool\` first (permissionless,
+     idempotent — the same derivation a JIT fill runs), then deposit;
+   - a cST holder rolling cover to a successor expiry signs a \`rollover-intent\` (src pool → dst
+     pool; the settler's generation sets the wire) and relays it with \`cork_submit\`.
+
+4. **Verify.** \`cork_track\` mode \`reconcile\` with each txHash, then the positions read again: the
+   old rows are gone, the new row carries the primary's label.
+
+## Two standing facts (2026-09-22)
+
+- The primary's Market Registry (0.5.0) has **no registered assets** on chain yet. No market can
+  be created on the new set until the registry owner registers pairs — so \`create-pool\` and
+  every JIT order against the primary refuse until then, and the positions read shows nothing on
+  \`phoenix/v0.4-rc.1\`. Exit and re-entry on \`phoenix/v0.3-rc.1\` keep working meanwhile.
+- The \`phoenix/v0.4-rc.1\` set has **no CREATE2 attestation** (the Distribution records carry no
+  salt or init-code hash). Its trust anchor is the approved-implementations allowlist compiled
+  into this build: a prepare against code that is not on the list warns
+  \`implementation_not_approved\`.`,
+    searchText:
+      "migration migrate move funds move my funds previous generation old pool new pool old generation current generation both generations at the same time withdraw from old deposit into new list my positions what do I hold where positions across generations account-state without poolId generation previous generation primary generation all exit old pool enter new pool rollover to new generation upgrade to new contracts",
+  },
   warnings: {
     name: "warnings",
     aliases: ["warning-codes", "codes", "envelope", "states"],

@@ -5,7 +5,7 @@ import { poolTokensRpc, stubRpc, TOKEN_CODE } from "../../core/test/helpers.ts";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, resolveGenerations, unapprovedCodeAllowed } from "@cork/core";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
+import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, MIGRATION_OLD_POOL, stubContext } from "../../../evals/stub.ts";
 
 const NOW = 1_800_000_000n;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a";
@@ -973,5 +973,36 @@ describe("--allow-unapproved-code — the bytes-decoder gate's operator override
     expect(unapprovedCodeAllowed()).toBe(false); // the flag never leaks past its own invocation
     const again = await runCli(["prepare", "orders", "--json", input], offListAdapter() as never);
     expect(again.code).toBe(EXIT.conflict);
+  });
+});
+
+// ── Migration (2026-09-22): the generation aliases on the flag, and the positions read ────────
+describe("ch --generation aliases and the positions read", () => {
+  it("--help names the aliases on --generation", async () => {
+    const r = await runCli(["query", "--help"], { nowSeconds: NOW });
+    expect(r.stdout).toMatch(/--generation <value>.*'previous'/);
+  });
+  it("`ch query account-state --account <a>` WITHOUT --pool-id lists positions across generations, prints the table, exit 0; --generation previous narrows", async () => {
+    const r = await runCli(["query", "account-state", "--chain-id", "42161", "--account", DEMO_ACCOUNT], stubContext());
+    expect(r.code).toBe(EXIT.ok);
+    expect(r.stdout).toContain("positions (1)");
+    expect(r.stdout).toMatch(/generation\s+poolId\s+expiry\s+state\s+cST/);
+    expect(r.stdout).toContain("phoenix/v0.3-rc.1");
+    expect(r.stdout).toContain(MIGRATION_OLD_POOL);
+    expect(r.stdout).toContain("live");
+    const j = await runCli(["query", "account-state", "--chain-id", "arbitrum", "--account", DEMO_ACCOUNT, "--generation", "previous", "--json"], stubContext());
+    expect(j.code).toBe(EXIT.ok);
+    const env = JSON.parse(j.stdout) as { data: { generations: Array<{ label: string }>; positions: unknown[]; scanned: { managers: number } }; provenance: Record<string, unknown> };
+    expect(env.data.generations.map((g) => g.label)).toEqual(["phoenix/v0.3-rc.1"]);
+    expect(env.data.scanned.managers).toBe(1);
+    expect(env.provenance["generation"]).toBeUndefined();
+  });
+  it("`--generation all` on a prepare is invalid input with the ONE-artifact teaching (exit 2); `previous` builds and carries the LABEL", async () => {
+    const bad = await runCli(["prepare", "phoenix", "authority-revoke", "--chain-id", "42161", "--account", RCV, "--client-request-id", "mig-cli-0001", "--token", RCV, "--spender", RCV, "--generation", "all", "--json"], { nowSeconds: NOW });
+    expect(bad.code).toBe(EXIT.invalid);
+    expect(bad.stderr).toContain("ONE artifact");
+    const ok = await runCli(["prepare", "phoenix", "authority-revoke", "--chain-id", "42161", "--account", RCV, "--client-request-id", "mig-cli-0002", "--token", RCV, "--spender", RCV, "--generation", "previous", "--json"], { nowSeconds: NOW });
+    expect(ok.code).toBe(EXIT.ok);
+    expect((JSON.parse(ok.stdout) as { provenance: { generation: { label: string } } }).provenance.generation.label).toBe("phoenix/v0.3-rc.1");
   });
 });

@@ -9,7 +9,7 @@ import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abi
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
 import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, type MarketRow, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, generationData, generationRefOf, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
@@ -19,6 +19,7 @@ import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
 import { handleQueryWait } from "./query-watch.ts";
+import { handleAccountPositions, type PositionsEmitter } from "./query-positions.ts";
 import { probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
@@ -155,6 +156,12 @@ async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperS
 async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promise<{ spec: HsScanSpec; emitters: MarketEmitter[] } | { unknownDeployment: true }> {
   const emitters = await configuredPoolManagerRefs(chainId);
   if (emitters.length === 0) return { unknownDeployment: true };
+  return marketCreatedSpecFor(emitters, filters);
+}
+
+/** The same scan over an EXPLICIT emitter set — the positions sweep narrows the managers by
+ *  generation before scanning, so it builds its spec from the managers it was asked about. */
+function marketCreatedSpecFor(emitters: MarketEmitter[], filters: QueryFilters): { spec: HsScanSpec; emitters: MarketEmitter[] } {
   return {
     emitters,
     spec: {
@@ -421,6 +428,13 @@ type PageTraversal =
   | (PageTraversalBase & { complete: false; reason: IncompleteReason; nextCursor?: string });
 
 /** Walk an opaque venue cursor to exhaustion under a hard page bound — never silently truncating. */
+/** The positions sweep walks the venue's pool list at the venue's MAXIMUM page (200 rows): the read
+ *  is about completeness — every pool on every generation — and the live count is 453 pools on
+ *  Arbitrum / 466 on Base (2026-09-22), so the default 25-row page × 10 pages answered `pools: 250,
+ *  complete: false` on both chains. `pageSize` is a per-page presentation knob for lists; here
+ *  `maxPages` alone bounds the walk (10 × 200 = 2000 pools before `pagination_incomplete`). */
+export const POSITIONS_SWEEP_PAGE_SIZE = 200;
+
 export async function collectVenuePages(
   opts: { cursor?: string; maxPages: number },
   fetchPage: (cursor: string | undefined) => Promise<VenueList>,
@@ -724,7 +738,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
 
   // Data mode is explicit, never a silent fallback [R1/§7]: chain resources serve only
   // lite-decentralized (RPC). Requesting an unwired mode fails loudly instead of being ignored.
-  if (input.mode !== undefined && input.mode !== "lite-decentralized") {
+  // ONE exception: account-state WITHOUT a poolId is the positions sweep, whose pool enumeration
+  // is venue-discovered (hybrid, the default) or a HyperSync scan (full-decentralized) — its own
+  // gate below refuses lite-decentralized with the reason.
+  const isPositionsSweep = input.resource === "account-state" && !filters.poolId;
+  if (!isPositionsSweep && input.mode !== undefined && input.mode !== "lite-decentralized") {
     return unavailable(chainId, "mode_unavailable", `data mode '${input.mode}' is not available for cork_query('${input.resource}') (a live chain read); omit mode or use 'lite-decentralized'`, ctx);
   }
 
@@ -809,6 +827,56 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
     return unavailable(chainId, "requires_rpc", `cork_query('${input.resource}') needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
+  }
+  if (!filters.poolId && input.resource === "account-state") {
+    // account-state WITHOUT a poolId = the account's positions across every generation
+    // (query-positions.ts). Pool ENUMERATION is the venue's job by default — this read is HYBRID
+    // like cork-pools (venue-discovered rows, every balance chain-verified): the live run of
+    // 2026-09-22 proved the alternative useless — a MarketCreated scan from each generation's
+    // seed block over a public RPC exhausts the windowed eth_getLogs budget millions of blocks
+    // short and answered `pools: 0, complete: false` on a chain with 453 known pools. A read that
+    // decides which pools a user EXITS must see them all. `mode: "full-decentralized"` keeps the
+    // venue-free pledge (an injected HyperSync source or the windowed scan) for a caller who
+    // wants it and accepts the incompleteness disclosure; `lite-decentralized` is refused here
+    // because no RPC-only enumeration is complete.
+    const venueRows = async (emitters: readonly PositionsEmitter[]) => {
+      const byPm = new Map(emitters.map((e) => [e.poolManager.toLowerCase(), e] as const));
+      const deps = venueDepsOf(ctx);
+      const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: POSITIONS_SWEEP_PAGE_SIZE }));
+      const rows: MarketRow[] = [];
+      for (const r of traversal.items) {
+        const pm = String((r as { poolManagerAddress?: unknown }).poolManagerAddress ?? "").toLowerCase();
+        const e = byPm.get(pm);
+        if (!e) continue; // a manager no asked generation owns (another chain's row cannot occur; a filtered-out set can)
+        const addr = (v: unknown): `0x${string}` | undefined => (typeof v === "string" ? (v as `0x${string}`) : typeof v === "object" && v !== null && typeof (v as { address?: unknown }).address === "string" ? ((v as { address: string }).address as `0x${string}`) : undefined);
+        const cst = addr((r as { swapToken?: unknown }).swapToken), cpt = addr((r as { principalToken?: unknown }).principalToken);
+        const col = addr((r as { collateralToken?: unknown }).collateralToken), ref = addr((r as { referenceToken?: unknown }).referenceToken);
+        if (!cst || !cpt || !col || !ref) continue;
+        rows.push({ poolId: String((r as { poolId: unknown }).poolId) as `0x${string}`, referenceAsset: ref, collateralAsset: col, expiry: String((r as { expiry?: unknown }).expiry ?? "0"), rateOracle: addr((r as { rateOracleAddress?: unknown }).rateOracleAddress) ?? "0x0000000000000000000000000000000000000000", corkPrincipalToken: cpt, corkSwapToken: cst, poolManager: e.poolManager, wire: e.wire, generation: e.label, blockNumber: String((r as { deploymentBlockNumber?: unknown }).deploymentBlockNumber ?? ""), txHash: String((r as { deploymentTxHash?: unknown }).deploymentTxHash ?? ""), emitter: e.poolManager });
+      }
+      return { rows, complete: traversal.complete, warnings: venueNoticeWarnings(traversal), source: "hybrid" as const };
+    };
+    const scanRows = async (emitters: readonly PositionsEmitter[]) => {
+      const warnings: Array<{ code: string; message: string }> = [];
+      let hs: HyperSyncSource;
+      if (ctx.hyperSync) hs = ctx.hyperSync;
+      else {
+        hs = windowedRpcSource(resolved.client);
+        warnings.push({ code: "logs_windowed_fallback", message: `pool enumeration via windowed eth_getLogs over ${hostOf(resolved.url)} (up to ${String(WINDOWED_RPC_MAX_WINDOWS)} ranges per call; a capped walk is disclosed as pagination_incomplete) — set ENVIO_HYPERSYNC_TOKEN for the archive index, or omit mode for the venue-discovered enumeration` });
+      }
+      const { spec: full } = marketCreatedSpecFor(emitters.map((e) => ({ poolManager: e.poolManager, wire: e.wire, label: e.label })), filters);
+      // No incremental cursor for the sweep: it shares the cork-pools scan's identity, and a
+      // read whose result decides which pools to EXIT must not inherit rows another read
+      // cached (the balance batch dominates the cost anyway; one call, one fresh scan).
+      const { cache: _cache, ...spec } = full;
+      const run = await runScanWithTail(ctx, chainId, hs, spec);
+      if (run.tail.status === "error") warnings.push({ code: "live_tail_unavailable", message: run.tail.message });
+      return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source: "full-decentralized" as const };
+    };
+    if (input.mode === "lite-decentralized") {
+      return unavailable(chainId, "mode_unavailable", `data mode 'lite-decentralized' cannot enumerate an account's pools completely (an RPC-only MarketCreated scan from each generation's seed block exceeds the windowed eth_getLogs budget) — omit mode for the venue-discovered enumeration (hybrid; every balance is still read from YOUR RPC), or 'full-decentralized' with a HyperSync token`, ctx);
+    }
+    return handleAccountPositions(input, filters, chainId, ctx, resolved, { enumeratePools: input.mode === "full-decentralized" ? scanRows : venueRows });
   }
   if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
 

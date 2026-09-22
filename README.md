@@ -239,7 +239,9 @@ Each chain hosts a **set of contract generations**, one of them primary (`phoeni
 Arbitrum and Base since 2026-09-22; the previous `phoenix/v0.3-rc.1` set stays active). A prepare
 targets the primary unless you pass `generation: "<label>"`; a read of an existing pool follows
 the generation the pool lives on and reports it as `data.generation`. `protocol-config` lists a
-chain's generations; `cork_capabilities topic:"generations"` explains the model.
+chain's generations; `cork_capabilities topic:"generations"` explains the model. To move funds
+between generations, `generation: "previous"` names the older active set, `account-state` without a
+poolId lists your positions across every generation, and `topic:"migration"` is the recipe.
 
 Reading a pool that exists on no generation of the queried chain returns `unavailable` with
 `pool_not_found`, naming every pool manager it asked. That is expected; it is not a broken

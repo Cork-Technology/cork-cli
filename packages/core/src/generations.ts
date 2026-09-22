@@ -216,26 +216,95 @@ export interface GenerationRefusal {
 
 export type GenerationSelection = { ok: true; generation: ResolvedGeneration } | { ok: false; refusal: GenerationRefusal };
 
+/** The block kinds a call can NEED from a generation — what the `previous` alias is resolved
+ *  against: a pool/phoenix call needs a `phoenix` block, a registry-scoped call a
+ *  `marketRegistry` block, a settler call a `rollover` block. */
+export const GENERATION_BLOCK_KINDS = ["phoenix", "marketRegistry", "rollover"] as const;
+export type GenerationBlockKind = (typeof GENERATION_BLOCK_KINDS)[number];
+
+/** The `generation` input's ALIASES (migration, 2026-09-22 — owner requirement: v0.6.0 supports
+ *  the previous AND the current generation at once so users can move funds). `primary` = omit;
+ *  `previous` = the newest ACTIVE non-primary generation that carries the block kinds the call
+ *  needs (config order after the primary — `generationsOf` already orders that way); `all` is
+ *  NOT a selector (a prepare builds one artifact, a registry read answers for one registry) and
+ *  is refused with teaching — the one read that spans every generation, `account-state`
+ *  without a poolId, treats it as "no narrowing" BEFORE calling here. Aliases resolve to a
+ *  LABEL in this one place and every result carries the label, never the alias, so provenance
+ *  stays exact. */
+export const GENERATION_ALIASES = ["primary", "previous", "all"] as const;
+export type GenerationAlias = (typeof GENERATION_ALIASES)[number];
+export function isGenerationAlias(label: string | undefined): label is GenerationAlias {
+  return label !== undefined && (GENERATION_ALIASES as readonly string[]).includes(label);
+}
+
+const describeList = (list: readonly ResolvedGeneration[]): string => list.map((g) => `${g.label} (${g.status}${g.primary ? ", primary" : ""})`).join(", ");
+
+/** Resolve a `generation` alias to the LABEL it names on this chain — the ONE place an alias
+ *  becomes a label. A non-alias label passes through untouched (its existence is `selectGeneration`'s
+ *  question). `previous` walks the resolution order after the primary and takes the first
+ *  ACTIVE set carrying every block kind in `needs` (no `needs` = any active non-primary set);
+ *  none → `generation_unknown` naming the labels, so a chain with one generation (mainnet)
+ *  refuses honestly instead of answering for the primary. */
+export function resolveGenerationAlias(
+  list: readonly ResolvedGeneration[],
+  label: GenerationLabel | undefined,
+  needs: readonly GenerationBlockKind[] = [],
+  purpose: "read" | "prepare" = "read",
+): { ok: true; label: GenerationLabel | undefined; alias?: GenerationAlias } | { ok: false; refusal: GenerationRefusal } {
+  if (!isGenerationAlias(label)) return { ok: true, label };
+  if (label === "primary") return { ok: true, label: primaryOf(list)?.label, alias: label };
+  if (label === "all") {
+    return {
+      ok: false,
+      refusal: {
+        code: "generation_unknown",
+        message:
+          purpose === "prepare"
+            ? `generation 'all' is not a selector: a prepare builds ONE artifact against ONE generation — omit \`generation\` for the primary, pass 'previous' for the newest active non-primary set, or name a label (${describeList(list)}). To move funds between generations, run one pool-scoped prepare per pool (cork_capabilities topic:"migration")`
+            : `generation 'all' is not a selector on this read: it answers for ONE generation — omit \`generation\` for the primary, pass 'previous', or name a label (${describeList(list)}). The one multi-generation read is account-state WITHOUT filters.poolId (every generation's positions), which needs no selector`,
+      },
+    };
+  }
+  // `previous`: the first non-primary ACTIVE set in resolution order that carries the blocks.
+  const previous = list.find((g) => !g.primary && g.status === "active" && needs.every((k) => g[k] !== undefined));
+  if (previous === undefined) {
+    const kinds = needs.length > 0 ? ` carrying ${needs.join(" + ")} contracts` : "";
+    return {
+      ok: false,
+      refusal: {
+        code: "generation_unknown",
+        message: `generation 'previous' names no set on this chain: no ACTIVE non-primary generation${kinds} is configured — known generations: ${describeList(list)}${list.length === 1 ? " (this chain has a single generation; there is nothing to migrate from)" : ""}; omit \`generation\` to target the primary`,
+      },
+    };
+  }
+  return { ok: true, label: previous.label, alias: label };
+}
+
 /** Select the generation a call targets: the primary when no label is given, the named set
  *  otherwise. `purpose: "prepare"` additionally refuses a read-only set — its contracts are kept
  *  for reads, decode and attribution, never for new bytes. The refusal is TYPED so a handler can
- *  route it into its envelope (`generation_unknown` lists the labels the chain knows). */
-export function selectGeneration(list: readonly ResolvedGeneration[], label?: GenerationLabel, purpose: "read" | "prepare" = "read"): GenerationSelection {
+ *  route it into its envelope (`generation_unknown` lists the labels the chain knows). `needs`
+ *  = the block kinds the call requires — it steers the `previous` alias (a phoenix call's
+ *  previous generation is the newest active set WITH a pool manager) and is otherwise inert. */
+export function selectGeneration(list: readonly ResolvedGeneration[], label?: GenerationLabel, purpose: "read" | "prepare" = "read", needs: readonly GenerationBlockKind[] = []): GenerationSelection {
   if (list.length === 0) {
     return { ok: false, refusal: { code: "unknown_deployment", message: "no generation is configured for this chain" } };
   }
+  const aliased = resolveGenerationAlias(list, label, needs, purpose);
+  if (!aliased.ok) return aliased;
+  label = aliased.label;
   const generation = label === undefined ? primaryOf(list) : list.find((g) => g.label === label);
   if (generation === undefined) {
     // The label is the caller's OWN field, so the refusal is invalid-input-class everywhere
     // (handlers/shared.ts `generationRefusal` throws it; 2026-09-22 review B1 found two exit
     // codes for one typo). A near miss gets the same did-you-mean the schema layer gives enum
     // typos — the list alone made a caller diff four labels by eye.
-    const nearest = label !== undefined ? nearestValue(label, list.map((g) => g.label)) : undefined;
+    const nearest = label !== undefined ? nearestValue(label, [...list.map((g) => g.label), ...GENERATION_ALIASES]) : undefined;
     return {
       ok: false,
       refusal: {
         code: "generation_unknown",
-        message: `generation '${label}' is not configured on this chain — known generations: ${list.map((g) => `${g.label} (${g.status}${g.primary ? ", primary" : ""})`).join(", ")}${nearest !== undefined ? `; did you mean '${nearest}'?` : ""}; omit \`generation\` to target the primary`,
+        message: `generation '${label}' is not configured on this chain — known generations: ${describeList(list)}; aliases: primary, previous${nearest !== undefined ? `; did you mean '${nearest}'?` : ""}; omit \`generation\` to target the primary`,
       },
     };
   }
@@ -431,7 +500,7 @@ export async function resolvePoolGeneration(
 ): Promise<PoolGenerationResolution> {
   let candidates: ResolvedGeneration[];
   if (label !== undefined) {
-    const sel = selectGeneration(list, label);
+    const sel = selectGeneration(list, label, "read", ["phoenix"]);
     if (!sel.ok) return { found: false, code: sel.refusal.code === "generation_unknown" ? "generation_unknown" : "unknown_deployment", message: sel.refusal.message, asked: [] };
     candidates = [sel.generation];
   } else {

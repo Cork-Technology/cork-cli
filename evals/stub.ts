@@ -56,6 +56,33 @@ export const RC2_EXACT_SETTLER = RC2_ROLLOVER.exactSettler;
 export const RC2_FACTORY = RC2_ROLLOVER.factory;
 export const RETIRED_EXACT_SETTLER = ROLLOVERS_42161.find((g) => g.status === "retired")!.exactSettler;
 const REGISTRY_210 = MR_42161.registry;
+
+// ── Migration fixtures (2026-09-22): the account's OLD pool on the phoenix/v0.3-rc.1 manager and
+//    the NEW pool on the 10-field primary, both on Arbitrum (42161). Address-aware like the rest
+//    of the stub: `shares`/`market` answer only on the manager each pool LIVES on (so a
+//    pool-scoped prepare resolves the v0.3 generation for the old pool and the primary for the
+//    new), `balanceOf` puts the position on the OLD pool only (the new set holds nothing yet —
+//    the live fact the migration topic states), and the HyperSync stub announces both pools
+//    under the MarketCreated topic of their emitter's wire.
+const PHOENIX_42161 = (label: string) => GENERATIONS_42161.find((g) => g.label === label)!.phoenix!;
+export const MIGRATION_OLD_PM = PHOENIX_42161("phoenix/v0.3-rc.1").poolManager;
+export const MIGRATION_NEW_PM = PHOENIX_42161("phoenix/v0.4-rc.1").poolManager;
+export const MIGRATION_OLD_POOL = `0x${"0d".repeat(32)}` as const;
+export const MIGRATION_NEW_POOL = `0x${"0e".repeat(32)}` as const;
+export const MIGRATION_OLD_CPT = "0x0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d01";
+export const MIGRATION_OLD_CST = "0x0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d02";
+export const MIGRATION_NEW_CPT = "0x0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e01";
+export const MIGRATION_NEW_CST = "0x0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e02";
+const MIGRATION_POOLS: Record<string, { pm: string; cpt: string; cst: string; wire: "8-field" | "10-field" }> = {
+  [MIGRATION_OLD_POOL]: { pm: MIGRATION_OLD_PM, cpt: MIGRATION_OLD_CPT, cst: MIGRATION_OLD_CST, wire: "8-field" },
+  [MIGRATION_NEW_POOL]: { pm: MIGRATION_NEW_PM, cpt: MIGRATION_NEW_CPT, cst: MIGRATION_NEW_CST, wire: "10-field" },
+};
+/** The migration pool the (manager, poolId) pair names on 42161 — undefined elsewhere. */
+const migrationPoolOf = (chainId: number, address: string, poolId: unknown) => {
+  if (chainId !== 42161 || typeof poolId !== "string") return undefined;
+  const m = MIGRATION_POOLS[poolId.toLowerCase() === MIGRATION_OLD_POOL ? MIGRATION_OLD_POOL : poolId.toLowerCase() === MIGRATION_NEW_POOL ? MIGRATION_NEW_POOL : ""];
+  return m && m.pm.toLowerCase() === address.toLowerCase() ? m : undefined;
+};
 export const LIQUIDITY_RECIPE = MR_42161.recipes!.liquidity!;
 export const IMPAIRMENT_RECIPE = MR_42161.recipes!.impairment!;
 export const FIXED_RECIPE = MR_42161.recipes!.fixed!;
@@ -86,9 +113,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
   // same live pool on every chainId, which made an agent's cross-chain disambiguation probe
   // unresolvable (observed 2026-08-17: it honestly refused to guess between three identical
   // chains). Registry/recipe reads are functionName-keyed and stay chain-agnostic.
-  const known = (typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase()) && chainId === 1;
+  const migration = migrationPoolOf(chainId, args.address, poolId);
+  const known = ((typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase()) && chainId === 1) || migration !== undefined;
   switch (args.functionName) {
     case "market":
+      // A 10-field manager answers the widened tuple (fees inside the identity).
+      if (migration) return migration.wire === "10-field" ? { ...MARKET, swapFeePercentage: WAD, unwindSwapFeePercentage: WAD } : MARKET;
       return known ? MARKET : { ...MARKET, collateralAsset: "0x0000000000000000000000000000000000000000", referenceAsset: "0x0000000000000000000000000000000000000000", rateOracle: "0x0000000000000000000000000000000000000000", expiryTimestamp: 0n };
     case "constraints":
       return [800_000_000_000_000_000n, NOW - 86_400n, 7_000_000_000_000_000n];
@@ -104,6 +134,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // own premise ("destination pool does not exist yet"); the honest prediction path is the
       // creation SIMULATION below (observed 2026-08-27: an agent that probed derive-cork-pool
       // was told the pool already existed and graded down for believing it).
+      if (migration) return [migration.cpt, migration.cst];
       return known ? [CPT, CST] : ["0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"];
     case "rate":
       return 800_000_000_000_000_000n;
@@ -111,8 +142,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return args.address.toLowerCase() === VBUSDC.toLowerCase() ? 6 : 18;
     case "issuedAt":
       return NOW - 604_800n;
-    case "balanceOf":
+    case "balanceOf": {
+      // The migration account holds the OLD pool's shares and nothing on the NEW pool.
+      const token = args.address.toLowerCase();
+      if (token === MIGRATION_NEW_CST.toLowerCase() || token === MIGRATION_NEW_CPT.toLowerCase()) return 0n;
       return 42_000_000_000_000_000_000n;
+    }
     case "allowance":
       // The RESTING maker's cST→LOP grant is LIVE: the ranked book's maker-readiness leg reads
       // it, and the fixture row must rank (a maker with no grant in place is rightly excluded
@@ -378,13 +413,59 @@ export const DERIVED_JIT_POOL = computeMarketId(
 // deterministic non-empty answer. topic0 = keccak("GlobalWhitelistAdded(address)").
 const WHITELISTED_ACCT = "0x00000000000000000000000000000000000a11ce";
 const GLOBAL_ADDED_TOPIC = "0x3dfb644c437d7ac77310a6355571af9bcbf4d2e01c805141c03aa9786737a2c5";
+const MARKET_CREATED_7 = parseAbiItem("event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)");
+const MARKET_CREATED_9 = parseAbiItem("event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)");
+/** The two migration pools' creation logs, each under ITS emitter wire's topic (a 7-arg log from
+ *  the v0.3 manager, a 9-arg log from the 10-field primary) — the positions sweep decodes each
+ *  with its emitter's ABI. */
+function migrationMarketLogs(): Array<{ address: string; topics: string[]; data: `0x${string}`; blockNumber: number; transactionHash: string }> {
+  const old = MIGRATION_POOLS[MIGRATION_OLD_POOL]!;
+  const neu = MIGRATION_POOLS[MIGRATION_NEW_POOL]!;
+  return [
+    {
+      address: old.pm,
+      topics: [...encodeEventTopics({ abi: [MARKET_CREATED_7], args: { id: MIGRATION_OLD_POOL, referenceAsset: VBUSDC, collateralAsset: SUSDE } })] as string[],
+      data: encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "address" }, { type: "address" }], [MARKET.expiryTimestamp, ORACLE, old.cpt as `0x${string}`, old.cst as `0x${string}`]),
+      blockNumber: 22_999_990,
+      transactionHash: `0x${"0d".repeat(32)}`,
+    },
+    {
+      address: neu.pm,
+      topics: [...encodeEventTopics({ abi: [MARKET_CREATED_9], args: { poolId: MIGRATION_NEW_POOL, referenceAsset: VBUSDC, collateralAsset: SUSDE } })] as string[],
+      data: encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "address" }, { type: "address" }, { type: "uint256" }, { type: "uint256" }], [MARKET.expiryTimestamp, ORACLE, neu.cpt as `0x${string}`, neu.cst as `0x${string}`, WAD, WAD]),
+      blockNumber: 22_999_991,
+      transactionHash: `0x${"0e".repeat(32)}`,
+    },
+  ];
+}
+
+/** The same two migration pools as the venue's /pools/v1 rows (the shape cork-pools reads:
+ *  `poolManagerAddress`, token OBJECTS with `address`, string `expiry`). */
+function migrationVenueRows(): Array<Record<string, unknown>> {
+  const row = (poolId: string, m: { pm: string; cpt: string; cst: string }, block: number, tx: string) => ({
+    chainId: 42161,
+    poolId,
+    poolManagerAddress: m.pm,
+    swapToken: { address: m.cst, symbol: "cST" },
+    principalToken: { address: m.cpt, symbol: "cPT" },
+    collateralToken: { address: SUSDE, symbol: "sUSDe" },
+    referenceToken: { address: VBUSDC, symbol: "vbUSDC" },
+    expiry: MARKET.expiryTimestamp.toString(),
+    rateOracleAddress: ORACLE,
+    deploymentBlockNumber: block,
+    deploymentTxHash: tx,
+  });
+  return [row(MIGRATION_OLD_POOL, MIGRATION_POOLS[MIGRATION_OLD_POOL]!, 22_999_990, `0x${"0d".repeat(32)}`), row(MIGRATION_NEW_POOL, MIGRATION_POOLS[MIGRATION_NEW_POOL]!, 22_999_991, `0x${"0e".repeat(32)}`)];
+}
+
 function whitelistHyperSync() {
   return {
-    async queryLogs(q: { topics?: Array<string[] | null> }) {
+    async queryLogs(q: { fromBlock?: number; address?: string[]; topics?: Array<string[] | null> }) {
       const wanted = new Set(q.topics?.[0] ?? []);
+      const scope = new Set((q.address ?? []).map((a) => a.toLowerCase()));
       const logs = wanted.has(GLOBAL_ADDED_TOPIC)
         ? [{ address: "0xcCccCcCccCC6e38a2772Eb42D2f408eeB89cb0eE", topics: [GLOBAL_ADDED_TOPIC, `0x${WHITELISTED_ACCT.slice(2).padStart(64, "0")}`], data: "0x", blockNumber: 23_000_000, transactionHash: `0x${"aa".repeat(32)}` }]
-        : [];
+        : migrationMarketLogs().filter((l) => wanted.has(l.topics[0]!) && (scope.size === 0 || scope.has(l.address.toLowerCase())) && l.blockNumber >= (q.fromBlock ?? 0));
       return { logs, archiveHeight: 23_000_100 };
     },
   };
@@ -488,7 +569,15 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     if (url.includes("/answers")) return r(201, { answer_id: RFQ_ANSWER_ID, rfq_id: RFQ_OPEN_ID });
     if (url.includes("/rfqs")) return r(201, { rfq_id: "rfq_eval1", state: "open" });
   }
-  if (url.includes("/pools")) return r(200, { items: [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] });
+  if (url.includes("/pools")) {
+    // The venue's pool list is chain-scoped server-side; the stub mirrors that. On 42161 it
+    // serves the two migration pools in the venue's row shape (poolManagerAddress + the token
+    // objects) — the positions sweep's DEFAULT enumeration (hybrid) reads them from here, the
+    // full-decentralized enumeration from migrationMarketLogs(); both name the same pools.
+    const chain = Number(new URL(url).searchParams.get("chainId") ?? "1");
+    const items = chain === 42161 ? migrationVenueRows() : chain === 1 ? [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] : [];
+    return r(200, { items, nextCursor: null, hasMore: false });
+  }
   if (/\/rollover\/v1\/orders\/0x/.test(url)) return r(404, { message: "not found" });
   if (url.includes("/rollover/v1/contracts")) {
     // The venue applies the factory filter server-side; the stub mirrors that so a filtered

@@ -8,7 +8,7 @@
 import { runTool, ToolInputError } from "@cork/core";
 import { DEMO_ACCOUNT, DEMO_POOL_ID, DEMO_SIGNED_TX, TOOL_EXAMPLES } from "@cork/schemas";
 import type { TraceCall } from "./run.ts";
-import { RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
+import { MIGRATION_OLD_POOL, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
   GROUPED_RUNG, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY,
   RESERVED_FILLER, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, stubContext, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING } from "./stub.ts";
 
@@ -76,6 +76,9 @@ export const PLAYS: Play[] = [
   // ── reads ──
   { id: "read-market", calls: [q({ resource: "cork-pool", chainId: 1, filters: { poolId: P } })], finalText: "The pool's swap rate is 0.8 (800000000000000000 at 1e18 = 1.0)." },
   { id: "read-balances", calls: [q({ resource: "account-state", chainId: 1, filters: { poolId: P, account: A } })], finalText: "Balances and funding allowances for the account in this pool are listed above per token." },
+  // ── migration (2026-09-22) ──
+  { id: "migration-positions", calls: [q({ resource: "account-state", chainId: 42161, filters: { account: A } })], finalText: `Positions across generations on Arbitrum: one pool with a non-zero balance, ${MIGRATION_OLD_POOL} on phoenix/v0.3-rc.1 (live, not expired). Generations checked: phoenix/v0.4-rc.1 (primary, no position), phoenix/v0.3-rc.1, arbitrum-v1.1, arbitrum-legacy.` },
+  { id: "migration-exit-old-pool", calls: [{ tool: "cork_prepare_phoenix", input: { chainId: 42161, account: A, clientRequestId: "eval-mig-exit-0001", fundingMode: "erc20-approve", action: { type: "unwind-deposit", poolId: MIGRATION_OLD_POOL, collateralAssetsOut: "1000000000000000000", owner: A, receiver: A, maxCptAndCstSharesIn: "2000000000000000000" } } }], finalText: "Unsigned unwind-deposit bundle built for the old pool; it targets generation phoenix/v0.3-rc.1 (the pool's own set, resolved from the chain). Sign and broadcast it yourself, then deposit into the new pool as step two." },
   { id: "read-config", calls: [q({ resource: "protocol-config", chainId: 1 })], finalText: "The Cork adapter on mainnet is 0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407." },
   { id: "read-whitelist", calls: [q({ resource: "pool-whitelist", chainId: 1, filters: { poolId: P, account: A } })], finalText: "The account is not whitelisted on this pool (false)." },
   { id: "venue-orderbook", calls: [q({ resource: "orderbook", chainId: 1, filters: { poolId: P } })], finalText: "The orderbook has 2 resting orders for this pool." },

@@ -401,6 +401,14 @@
       "kind": "type"
     },
     {
+      "name": "GENERATION_ALIASES",
+      "kind": "value"
+    },
+    {
+      "name": "GENERATION_BLOCK_KINDS",
+      "kind": "value"
+    },
+    {
       "name": "GENERATION_ROLES",
       "kind": "value"
     },
@@ -410,6 +418,14 @@
     },
     {
       "name": "Generation",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationAlias",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationBlockKind",
       "kind": "type"
     },
     {
@@ -2045,6 +2061,10 @@
       "kind": "value"
     },
     {
+      "name": "isGenerationAlias",
+      "kind": "value"
+    },
+    {
       "name": "isGetterWhitelisted",
       "kind": "value"
     },
@@ -2406,6 +2426,10 @@
     },
     {
       "name": "resolveDeployment",
+      "kind": "value"
+    },
+    {
+      "name": "resolveGenerationAlias",
       "kind": "value"
     },
     {
@@ -3075,6 +3099,14 @@
       "kind": "value"
     },
     {
+      "name": "GENERATION_ALIASES",
+      "kind": "value"
+    },
+    {
+      "name": "GENERATION_BLOCK_KINDS",
+      "kind": "value"
+    },
+    {
       "name": "GENERATION_ROLES",
       "kind": "value"
     },
@@ -3084,6 +3116,14 @@
     },
     {
       "name": "Generation",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationAlias",
+      "kind": "type"
+    },
+    {
+      "name": "GenerationBlockKind",
       "kind": "type"
     },
     {
@@ -3303,6 +3343,10 @@
       "kind": "value"
     },
     {
+      "name": "isGenerationAlias",
+      "kind": "value"
+    },
+    {
       "name": "marketRegistryForWire",
       "kind": "value"
     },
@@ -3336,6 +3380,10 @@
     },
     {
       "name": "resolveDeployment",
+      "kind": "value"
+    },
+    {
+      "name": "resolveGenerationAlias",
       "kind": "value"
     },
     {

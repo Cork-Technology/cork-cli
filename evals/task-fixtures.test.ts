@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING } from "./stub.ts";
+import { CST, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -562,5 +562,26 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     const dflt = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: "eval-ho-ladder-0001-dflt", action: { type: "maker-ladder", ...ladderBase, rungs: [{ takingAmount: "950000", allowedSender: RESERVED_FILLER, expirySeconds: 600 }, { takingAmount: "1000000", expirySeconds: 3600 }] } }, stubContext());
     const dd = dflt.data as { rungs: Array<{ nonce: string }> };
     expect(dd.rungs[0]!.nonce).not.toBe(dd.rungs[1]!.nonce);
+  });
+
+  // ── migration (2026-09-22) ──
+  it("migration-positions: account-state WITHOUT poolId sweeps every 42161 generation, finds the OLD pool's position on phoenix/v0.3-rc.1 and nothing on the primary, and carries no provenance.generation", async () => {
+    const env = await runTool("cork_query", { resource: "account-state", chainId: 42161, filters: { account: DEMO_ACCOUNT } }, stubContext());
+    expect(env.state).toBe("ok");
+    expect(env.provenance).not.toHaveProperty("generation");
+    const d = env.data as { positions: Array<{ poolId: string; generation: { label: string }; poolManager: string }>; byGeneration: Array<{ label: string; pools: number }>; scanned: { managers: number; pools: number } };
+    expect(d.scanned.pools).toBe(2);
+    expect(d.positions.map((p) => [p.poolId, p.generation.label, p.poolManager])).toEqual([[MIGRATION_OLD_POOL, "phoenix/v0.3-rc.1", MIGRATION_OLD_PM]]);
+    expect(d.byGeneration.find((g) => g.label === "phoenix/v0.4-rc.1")).toMatchObject({ pools: 0 });
+    expect(MIGRATION_NEW_PM).not.toBe(MIGRATION_OLD_PM);
+  });
+  it("migration-exit-old-pool: the unwind-deposit on the OLD pool resolves phoenix/v0.3-rc.1 from the chain and builds against ITS adapter", async () => {
+    const env = await runTool(
+      "cork_prepare_phoenix",
+      { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-mig-exit-0001", fundingMode: "erc20-approve", action: { type: "unwind-deposit", poolId: MIGRATION_OLD_POOL, collateralAssetsOut: "1000000000000000000", owner: DEMO_ACCOUNT, receiver: DEMO_ACCOUNT, maxCptAndCstSharesIn: "2000000000000000000" } },
+      stubContext(),
+    );
+    expect(env.state).toBe("ok");
+    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
   });
 });

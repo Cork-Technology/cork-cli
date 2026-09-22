@@ -33,6 +33,7 @@ ch query rfqs --chain-id <id>                            # open requests-for-quo
 ch query rfq --chain-id <id> --rfq-id <rfq_…>            # one RFQ with all its answers
 ch query rfqs --chain-id <id> --underwriter <0x…> --with-answers true   # the RFQs you answered (venue-side filter)
 ch query account-state --chain-id <id> --pool-id <0x…> --account <0x…>   # balances + funding allowances
+ch query account-state --chain-id <id> --account <0x…>   # NO pool id: the account's positions across every generation (venue-listed pools, balances from your RPC; --mode full-decentralized scans instead)
 ch query pool-whitelist --chain-id <id> --pool-id <0x…> --account <0x…>  # is a gated pool open to you
 ch query whitelisted-addresses --chain-id <id> --pool-id <0x…>           # whitelist membership (HyperSync)
 ch query fills --chain-id <id>                           # executed trades
@@ -94,6 +95,38 @@ ch query derive-cork-pool --chain-id <id> \
   contracts still *answer* current-shaped calls with plausible values — pin the registry
   address from `ch query protocol-config` (or the Distribution manifest) and let the prepare
   guard (`adapter_binding_mismatch`) do the cross-check on anything you sign.
+
+## Migrating between generations
+
+A chain hosts a set of contract generations, one primary (`ch query protocol-config` lists
+them). Moving funds from a pool on the previous generation to a pool on the current one takes
+ordinary commands: every pool-scoped command resolves the pool's generation from the chain and
+targets THAT set's adapter, so you pass pool ids, not generation switches.
+
+```sh
+# 1. What do I hold, where? One row per pool with a non-zero cST/cPT balance, tagged with its generation.
+ch query account-state --chain-id 42161 --account <0x…>
+ch query account-state --chain-id 42161 --account <0x…> --generation previous   # only the previous set
+
+# 2. Exit each old pool with the action for its expiry state (the tool follows the pool's generation).
+ch unwind-deposit --chain-id 42161 --pool-id <old> --collateral-assets-out 1000e18 --max-cpt-and-cst-shares-in 1100e18 \
+  --owner <0x…> --receiver <0x…> --account <0x…> --client-request-id mig-exit-0001 --funding-mode erc20-approve   # before expiry
+ch withdraw --chain-id 42161 --pool-id <old> …    # after expiry (or redeem / withdraw-other)
+
+# 3. Enter the new pool on the primary (create it first if it does not exist yet).
+ch prepare market create-pool --chain-id 42161 --collateral-asset <0x…> --reference-asset <0x…> --expiry-timestamp <unix> --recipe <0x…> …
+ch deposit --chain-id 42161 --pool-id <new> --collateral-assets-in 1000e18 --min-cpt-and-cst-shares-out 1 --receiver <0x…> …
+
+# 4. Verify.
+ch track reconcile --tx-hash <0x…>
+```
+
+`--generation` takes a label (`phoenix/v0.3-rc.1`), `previous` (the newest active non-primary set
+that carries the contracts the command needs) or `primary` (the default). Results always carry the
+resolved label, never the alias. `all` is refused on every command but the positions read, which
+spans generations by itself. `ch capabilities --topic migration` is the full recipe, including the
+two standing facts about the new set (no registered assets on its registry yet; no CREATE2
+attestation).
 
 ## Deterministic math — `ch compute`
 

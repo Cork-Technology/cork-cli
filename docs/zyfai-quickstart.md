@@ -1055,6 +1055,24 @@ fills/contracts.
 
 ---
 
+### Migrating between generations
+
+Cork redeploys as a new **generation** of contracts; the previous generation keeps working. Since
+2026-09-22 the primary on Arbitrum and Base is `phoenix/v0.4-rc.1`, and `phoenix/v0.3-rc.1` stays
+active. `cork-cli` supports both at the same time so you can move funds:
+
+- `ch query account-state --chain-id 42161 --account <you>` (no `--pool-id`) lists every pool where
+  you hold cST or cPT, each tagged with its generation and whether it expired.
+- Exit an old pool with the pool-scoped command for its expiry state (`unwind-deposit` /
+  `unwind-mint` before expiry, `withdraw` / `redeem` / `withdraw-other` after). The tool resolves
+  the pool's generation from the chain; the result names it under `provenance.generation`.
+- Enter the new pool with `deposit` / `mint` on the primary, or `ch prepare market create-pool`
+  first when it does not exist. A cST holder rolls cover with a `rollover-intent`.
+- `--generation previous` (or `primary`, or a label) targets a set explicitly; the result always
+  carries the resolved label. `ch capabilities --topic migration` has the recipe and the two
+  standing facts (the new registry holds no registered assets yet; the new set has no CREATE2
+  attestation).
+
 ## 5. Risks & ownership
 
 Sections A–C are the security core.

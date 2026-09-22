@@ -381,7 +381,7 @@ export async function resolveDeployment(
   const cfg = await resolveConfig(deps);
   const list = generationsOf(cfg.defaults, chainId);
   if (list.length === 0) return { deployment: undefined, ...provenanceOf(cfg) };
-  const sel = selectGeneration(list, generation);
+  const sel = selectGeneration(list, generation, "read", ["phoenix"]);
   if (!sel.ok) return { deployment: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
   const g = sel.generation;
   return {
@@ -403,7 +403,7 @@ export async function resolveRollover(
   const cfg = await resolveConfig(deps);
   const list = generationsOf(cfg.defaults, chainId);
   if (list.length === 0) return { rollover: undefined, ...provenanceOf(cfg) };
-  const sel = selectGeneration(list, generation);
+  const sel = selectGeneration(list, generation, "read", ["rollover"]);
   if (!sel.ok) return { rollover: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
   const g = sel.generation;
   const generations = rolloverGenerationsOf(list);
@@ -425,7 +425,7 @@ export async function resolveMarketRegistry(
   const cfg = await resolveConfig(deps);
   const list = generationsOf(cfg.defaults, chainId);
   if (list.length === 0) return { marketRegistry: undefined, ...provenanceOf(cfg) };
-  const sel = selectGeneration(list, generation);
+  const sel = selectGeneration(list, generation, "read", ["marketRegistry"]);
   if (!sel.ok) return { marketRegistry: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
   const g = sel.generation;
   return {
