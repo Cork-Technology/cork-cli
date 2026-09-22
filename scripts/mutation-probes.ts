@@ -78,6 +78,8 @@ const T = {
   cliWatchRfqs: "packages/cli/test/watch-rfqs.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
+  poolgen: "packages/core/test/pool-generation.test.ts",
+  attribution: "packages/core/test/event-attribution.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
   releaseTag: "packages/cli/test/release-tag.test.ts",
   mcpSignals: "packages/cli/test/mcp-signals.test.ts",
@@ -1181,8 +1183,8 @@ const CATALOG: Mutant[] = [
     // pairs read serves unprojected market rows.
     id: "cursor-cache-name-collision",
     file: "packages/core/src/scan-cache.ts",
-    find: "return `${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;",
-    replace: "return `${String(a.chainId)}:scan:${String(a.fromBlock)}:${addr}:${topics}`;",
+    find: "return `v${String(SCAN_CACHE_SCHEMA)}:${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;",
+    replace: "return `v${String(SCAN_CACHE_SCHEMA)}:${String(a.chainId)}:scan:${String(a.fromBlock)}:${addr}:${topics}`;",
     tests: [T.hypersync],
   },
   {
@@ -1358,8 +1360,8 @@ const CATALOG: Mutant[] = [
     // shape) disappears while the resource still answers.
     id: "trading-pairs-projection-lost",
     file: "packages/core/src/handlers/query.ts",
-    find: "decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),",
-    replace: "decode: decodeMarketRows,",
+    find: "decode: (logs) => decodeMarketRows(logs, ms.emitters).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, wire: m.wire, ...(m.generation !== undefined ? { generation: m.generation } : {}), blockNumber: m.blockNumber, txHash: m.txHash })),",
+    replace: "decode: (logs) => decodeMarketRows(logs, ms.emitters),",
     tests: [T.hypersync],
   },
   // ── port-to-public transform gates (2026-08-10): a wrong port = wrong PUBLISHED tree ─────
@@ -3164,8 +3166,8 @@ const CATALOG: Mutant[] = [
     // ("all three chain-backed kinds carry them") regresses to the pre-fix silent exception.
     id: "compute-impairment-decimals-dropped",
     file: "packages/core/src/handlers/compute.ts",
-    find: "data: { kind: p.kind, ...floor, ...decimals, scales }",
-    replace: "data: { kind: p.kind, ...floor, scales }",
+    find: "data: { kind: p.kind, ...generationData(gen), ...floor, ...decimals, scales }",
+    replace: "data: { kind: p.kind, ...generationData(gen), ...floor, scales }",
     tests: [T.handlers],
   },
   {
@@ -3192,8 +3194,8 @@ const CATALOG: Mutant[] = [
     // (consulted precisely when something already disagrees) misstates the scale 100x.
     id: "units-track-market-label-swapped",
     file: "packages/core/src/handlers/track.ts",
-    find: 'market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)"',
-    replace: 'market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: 1e18 = 1%"',
+    find: '                : "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",\n            unitsTopic: UNITS_TOPIC_REFERENCE,\n          },\n        },\n        chainId,\n        source: "chain",\n        block: s.blockNumber,\n        warnings: idMatches',
+    replace: '                : "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: 1e18 = 1%",\n            unitsTopic: UNITS_TOPIC_REFERENCE,\n          },\n        },\n        chainId,\n        source: "chain",\n        block: s.blockNumber,\n        warnings: idMatches',
     tests: [T.handlers],
   },
   {
@@ -3869,8 +3871,8 @@ const CATALOG: Mutant[] = [
     // layout) reads as lifecycle evidence.
     id: "event-attribution-role-check-dropped",
     file: "packages/core/src/event-attribution.ts",
-    find: "    if (emitter === undefined || !spec.roles.includes(emitter.role)) {",
-    replace: "    if (emitter === undefined) {",
+    find: "    if (emitter === undefined || !spec.roles.includes(emitter.role) || wireMismatch) {",
+    replace: "    if (emitter === undefined || wireMismatch) {",
     tests: [T.eventAttribution],
   },
   {
@@ -5121,6 +5123,175 @@ const CATALOG: Mutant[] = [
     find: '    return encodeFunctionData({ abi: controllerCreatePool10Abi, functionName: "createNewPool", args: [{ pool: { ...market }, isWhitelistEnabled: false }] });',
     replace: '    return encodeFunctionData({ abi: controllerCreatePool10Abi, functionName: "createNewPool", args: [{ pool: { ...market }, isWhitelistEnabled: true }] });',
     tests: [T.nested],
+  },
+  // ── Stage 2c (0.6): pool-scoped reads follow the POOL's generation, not the primary ──────────
+  {
+    // The resolver's answer ignored: the bundle targets the SELECTED generation's adapter.
+    id: "poolgen-resolver-ignored-adapter",
+    file: "packages/core/src/handlers/phoenix.ts",
+    find: "  const { corkAdapter, bundler3 } = poolDep;",
+    replace: "  const { corkAdapter, bundler3 } = dep!;",
+    tests: [T.poolgen],
+  },
+  {
+    // The pool's tokens read through the selected generation's manager and wire.
+    id: "poolgen-tokens-from-selected-manager",
+    file: "packages/core/src/handlers/phoenix.ts",
+    find: "    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock);",
+    replace: "    tokens = await resolvePoolTokens(resolved.client, dep!, poolId, ctx.atBlock);",
+    tests: [T.poolgen],
+  },
+  {
+    // cork-pool read through the selected generation's addresses (and wire).
+    id: "poolgen-query-addrs-selected",
+    file: "packages/core/src/handlers/query.ts",
+    find: "  const addrs: CorkAddresses = { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) };",
+    replace: "  const addrs: CorkAddresses = { poolManager: dep!.poolManager, constraintAdapter: dep!.constraintAdapter, wire: dep!.wire, ...(gen ? { generation: gen } : {}) };",
+    tests: [T.poolgen],
+  },
+  {
+    // `generation` no longer narrows the pool search (every manager asked regardless).
+    id: "poolgen-narrowing-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  const label = opts.generation ?? ctx.generation;\n  if (generations.length === 0) {",
+    replace: "  const label = opts.generation;\n  if (generations.length === 0) {",
+    tests: [T.poolgen],
+  },
+  {
+    // Tuple-vs-view fee comparison dropped on 10-field managers (swapFee leg).
+    id: "poolgen-fee-comparison-dropped",
+    file: "packages/core/src/chain/reads.ts",
+    find: '    if (m.swapFeePercentage !== swapFeeView) feeDisagreements.push({ field: "swapFeePercentage", tuple: m.swapFeePercentage, view: swapFeeView });\n    if (m.unwindSwapFeePercentage !== unwindSwapFeeView) feeDisagreements.push({ field: "unwindSwapFeePercentage", tuple: m.unwindSwapFeePercentage, view: unwindSwapFeeView });',
+    replace: "",
+    tests: [T.poolgen],
+  },
+  {
+    // Fees taken from the VIEWS on a 10-field manager (the tuple is the identity).
+    id: "poolgen-fee-from-view-not-tuple",
+    file: "packages/core/src/chain/reads.ts",
+    find: "    swapFeePercentage = m.swapFeePercentage;\n    unwindSwapFeePercentage = m.unwindSwapFeePercentage;",
+    replace: "",
+    tests: [T.poolgen],
+  },
+  {
+    // The 10-field market() decoded through the 8-field ABI (viem drops the fee words silently).
+    id: "poolgen-market-abi-not-by-wire",
+    file: "packages/core/src/chain/reads.ts",
+    find: '  if (pm.wire === "10-field") {\n    const t = await client.readContract({ address: pm.poolManager, abi: poolManagerMarket10Abi,',
+    replace: '  if (pm.wire === "never") {\n    const t = await client.readContract({ address: pm.poolManager, abi: poolManagerMarket10Abi,',
+    tests: [T.poolgen],
+  },
+  {
+    // track marketRef re-hashes on a fixed wire instead of the pool's.
+    id: "poolgen-track-rehash-wire-pinned",
+    file: "packages/core/src/handlers/track.ts",
+    find: "      const recomputed = computeMarketId(s.market, s.wire);",
+    replace: '      const recomputed = computeMarketId(s.wire === "10-field" ? { ...s.market, swapFeePercentage: 0n, unwindSwapFeePercentage: 0n } : s.market, s.wire);',
+    tests: [T.poolgen],
+  },
+  {
+    // MarketCreated decode ABI chosen by the wrong wire.
+    id: "poolgen-marketcreated-abi-wrong-wire",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: '      if (wire === "10-field") {\n        const d = decodeEventLog({ abi: marketCreated10Abi,',
+    replace: '      if (wire === "8-field") {\n        const d = decodeEventLog({ abi: marketCreated10Abi,',
+    tests: [T.poolgen],
+  },
+  {
+    // Topic guessing: a log from an unlisted emitter decoded anyway.
+    id: "poolgen-marketcreated-unlisted-emitter-decoded",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "    if (byAddress && emitter === undefined) return [];",
+    replace: "",
+    tests: [T.poolgen],
+  },
+  {
+    // The scan asks for ONE MarketCreated topic — 10-field managers never show a pool.
+    id: "poolgen-scan-single-topic",
+    file: "packages/core/src/handlers/query.ts",
+    find: "      topics: [[...MARKET_CREATED_TOPICS] as `0x${string}`[]],",
+    replace: "      topics: [[MARKET_CREATED_TOPICS[0]] as `0x${string}`[]],",
+    tests: [T.poolgen, T.hypersync],
+  },
+  {
+    // Scan-cache identity not bumped: 0.5.x cursors (7-arg rows) would be served as 0.6 rows.
+    id: "poolgen-scan-identity-not-bumped",
+    file: "packages/core/src/scan-cache.ts",
+    find: "  return `v${String(SCAN_CACHE_SCHEMA)}:${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;",
+    replace: "  return `${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;",
+    tests: [T.poolgen],
+  },
+  {
+    // The creator's MarketCreated loses its emitter role.
+    id: "poolgen-creator-marketcreated-role-dropped",
+    file: "packages/core/src/event-attribution.ts",
+    find: '  [CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] },',
+    replace: '  [CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (CorkMarketCreator)", roles: [] },',
+    tests: [T.poolgen, T.attribution],
+  },
+  {
+    // A pool manager attributed for the OTHER wire's MarketCreated.
+    id: "poolgen-attribution-wire-mismatch-ignored",
+    file: "packages/core/src/event-attribution.ts",
+    find: "    if (emitter === undefined || !spec.roles.includes(emitter.role) || wireMismatch) {",
+    replace: "    if (emitter === undefined || !spec.roles.includes(emitter.role)) {",
+    tests: [T.poolgen],
+  },
+  {
+    // BaseFiller never listed as an emitter.
+    id: "poolgen-basefiller-emitter-dropped",
+    file: "packages/core/src/event-attribution.ts",
+    find: '      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: g.status, label: g.label });',
+    replace: "",
+    tests: [T.poolgen, T.attribution],
+  },
+  {
+    // The read-only gate on a pre-expiry prepare dropped.
+    id: "poolgen-readonly-prepare-gate-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: '  if (opts.purpose === "prepare" && g.status !== "active") {',
+    replace: '  if (opts.purpose === "never" && g.status !== "active") {',
+    tests: [T.poolgen],
+  },
+  {
+    // The settles gated too (post-expiry exits closed on a read-only set).
+    id: "poolgen-settles-gated",
+    file: "packages/core/src/handlers/phoenix.ts",
+    find: '{ purpose: POST_EXPIRY_ACTIONS.has(input.action.type) ? "read" : "prepare", tool: "cork_prepare_phoenix" });\n  if (pd.refusal) return pd.refusal;\n  const poolDep = pd.dep!;\n  const gen = pd.generation;\n  warnings.unshift(...pd.depWarn);',
+    replace: '{ purpose: "prepare", tool: "cork_prepare_phoenix" });\n  if (pd.refusal) return pd.refusal;\n  const poolDep = pd.dep!;\n  const gen = pd.generation;\n  warnings.unshift(...pd.depWarn);',
+    tests: [T.poolgen],
+  },
+  {
+    // The generation label missing from provenance.
+    id: "poolgen-provenance-generation-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "      ...(args.generation !== undefined ? { generation: generationRefOf(args.generation) } : {}),",
+    replace: "",
+    tests: [T.poolgen],
+  },
+  {
+    // The generation label missing from data.
+    id: "poolgen-data-generation-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  return g ? { generation: generationRefOf(g) } : {};",
+    replace: "  return {};",
+    tests: [T.poolgen],
+  },
+  {
+    // "Every manager failed to answer" reported as the pool's absence.
+    id: "poolgen-all-failed-as-not-found",
+    file: "packages/core/src/handlers/shared.ts",
+    find: '    if (r.code === "pool_not_found" && r.causes !== undefined && r.causes.length === r.asked.length) {',
+    replace: '    if (false) {',
+    tests: [T.handlers],
+  },
+  {
+    // The hybrid existence probe reads every manager through the 8-field ABI.
+    id: "poolgen-hybrid-probe-abi-not-by-wire",
+    file: "packages/core/src/handlers/hybrid-verify.ts",
+    find: "          const market = (await client.readContract({ address: pm.poolManager, abi: marketAbiFor(pm.wire), functionName: \"market\", args: [poolId] })) as { collateralAsset: `0x${string}` };",
+    replace: "          const market = (await client.readContract({ address: pm.poolManager, abi: marketAbiFor(\"8-field\"), functionName: \"market\", args: [poolId] })) as { collateralAsset: `0x${string}` };",
+    tests: [T.poolgen],
   },
 ];
 

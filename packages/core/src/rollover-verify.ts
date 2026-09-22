@@ -22,6 +22,12 @@ type Address = `0x${string}`;
 export const ORDER_STATUS_NAMES = ["None", "Opened", "Settled", "Expired", "Cancelled", "Closing"] as const;
 export type ChainOrderStatus = (typeof ORDER_STATUS_NAMES)[number];
 
+/** BaseFiller's `JITMarketCreated(bytes32 indexed poolId, address indexed rateOracle, address
+ *  recipe)` (rollover BaseFiller.sol) — the rollover filler's OWN announcement when a fill creates
+ *  the destination pool just in time. A different selector from the JIT adapter's six-arg
+ *  JITMarketCreated: same name, different emitter, different role (`baseFiller`). */
+export const BASE_FILLER_JIT_MARKET_CREATED_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address)");
+
 export const SETTLER_EVENTS: Record<string, string> = Object.fromEntries(
   [
     "OrderSettled(bytes32)",

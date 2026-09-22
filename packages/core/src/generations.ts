@@ -27,8 +27,10 @@
 // because venue admission is a rollover fact, not a phoenix fact.
 //
 // Everything in this module is PURE except `resolvePoolGeneration`, which issues one batched
-// `shares(poolId)` read per generation pool manager — the mechanism pool-scoped reads use to
-// find the generation a poolId lives on (stage 3 wires the handlers to it).
+// `shares(poolId)` read per generation pool manager — the mechanism every pool-scoped read and
+// prepare uses to find the generation a poolId lives on (handlers/shared.ts `getPoolDep` wraps
+// it: cork-pool, account-state, pool-whitelist, the three chain compute kinds, track marketRef,
+// the 13 phoenix actions and the ForSelf twins all follow the POOL's set, not the primary).
 import { z } from "zod";
 import { Address } from "@cork/schemas";
 import type { PublicClient } from "viem";
@@ -120,6 +122,10 @@ export const RolloverBlockSchema = z
     partialSettler: Address,
     settlerDomain: z.object({ name: z.string(), version: z.string() }).strip(),
     seededAtBlock: z.number().int().nonnegative(),
+    /** The generation's BaseFiller (the filler contract the settlers call; emits the three-arg
+     *  JITMarketCreated when a fill creates the destination pool) — optional because the July
+     *  rc.1 record predates the Distribution's component baselines. */
+    baseFiller: Address.optional(),
     retired: z.string().optional(),
     contractsVersion: z.string().optional(),
     wire: z.enum(ROLLOVER_WIRES),
@@ -254,6 +260,7 @@ export const GENERATION_ROLES = [
   "factory",
   "exactSettler",
   "partialSettler",
+  "baseFiller",
   "forSelfAdapter",
   "recipe",
 ] as const;
@@ -297,6 +304,7 @@ export function classifyAddress(list: readonly ResolvedGeneration[], address: st
     hit("factory", g.rollover?.factory);
     hit("exactSettler", g.rollover?.exactSettler);
     hit("partialSettler", g.rollover?.partialSettler);
+    hit("baseFiller", g.rollover?.baseFiller);
     hit("forSelfAdapter", g.forSelf?.adapter);
   }
   return out;
@@ -332,6 +340,7 @@ export interface RolloverGenerationEntry {
   partialSettler: `0x${string}`;
   settlerDomain: { name: string; version: string };
   seededAtBlock: number;
+  baseFiller?: `0x${string}` | undefined;
   retired?: string | undefined;
   contractsVersion?: string | undefined;
   wire: RolloverWire;
@@ -355,6 +364,7 @@ export function rolloverGenerationsOf(list: readonly ResolvedGeneration[]): Roll
     partialSettler: r.partialSettler as `0x${string}`,
     settlerDomain: { name: r.settlerDomain.name, version: r.settlerDomain.version },
     seededAtBlock: r.seededAtBlock,
+    ...(r.baseFiller !== undefined ? { baseFiller: r.baseFiller as `0x${string}` } : {}),
     ...(r.retired !== undefined ? { retired: r.retired } : {}),
     ...(r.contractsVersion !== undefined ? { contractsVersion: r.contractsVersion } : {}),
     wire: r.wire,
@@ -392,6 +402,11 @@ export type PoolGenerationResolution =
       code: "pool_not_found" | "generation_unknown" | "unknown_deployment";
       message: string;
       asked: Array<{ label: GenerationLabel; poolManager: `0x${string}`; error?: string }>;
+      /** The raw throwables behind every `asked[].error`, in the same order — so a caller can
+       *  tell "every manager answered zero" (the pool is absent) from "no manager answered at
+       *  all" (the chain read failed) and route the latter through the transport breaker with
+       *  the original error, never a re-typed string. Absent when no read threw. */
+      causes?: unknown[];
     };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -429,7 +444,7 @@ export async function resolvePoolGeneration(
         const shares = await client.readContract({ address: poolManager, abi: poolManagerAbi, functionName: "shares", args: [poolId], ...blockArg });
         return { g, poolManager, shares: shares as readonly [`0x${string}`, `0x${string}`], error: undefined };
       } catch (err) {
-        return { g, poolManager, shares: undefined, error: err instanceof Error ? (err.message.split("\n")[0] ?? String(err)) : String(err) };
+        return { g, poolManager, shares: undefined, error: err instanceof Error ? (err.message.split("\n")[0] ?? String(err)) : String(err), cause: err };
       }
     }),
   );
@@ -439,10 +454,12 @@ export async function resolvePoolGeneration(
       return { found: true, generation: r.g, poolManager: r.poolManager, corkPrincipalToken: r.shares[0], corkSwapToken: r.shares[1], asked: asked.map(({ label: l, poolManager }) => ({ label: l, poolManager })) };
     }
   }
+  const causes = reads.filter((r) => r.shares === undefined).map((r) => (r as { cause?: unknown }).cause);
   return {
     found: false,
     code: "pool_not_found",
     message: `pool ${poolId} is unknown to every pool manager asked: ${asked.map((a) => `${a.label} (${a.poolManager}${a.error ? `, read failed: ${a.error}` : ""})`).join(", ")}`,
     asked,
+    ...(causes.length > 0 ? { causes } : {}),
   };
 }

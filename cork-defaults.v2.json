@@ -93,6 +93,7 @@
               "version": "1.0.0"
             },
             "seededAtBlock": 503918966,
+            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
             "contractsVersion": "v0.2.0",
             "wire": "0.2"
           },
@@ -142,6 +143,7 @@
               "version": "1.0.0"
             },
             "seededAtBlock": 494104750,
+            "baseFiller": "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d",
             "contractsVersion": "v0.1.0-rc.2",
             "wire": "rc.2"
           },
@@ -235,6 +237,7 @@
               "version": "1.0.0"
             },
             "seededAtBlock": 51153216,
+            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
             "contractsVersion": "v0.2.0",
             "wire": "0.2"
           },
@@ -284,6 +287,7 @@
               "version": "1.0.0"
             },
             "seededAtBlock": 49917191,
+            "baseFiller": "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d",
             "contractsVersion": "v0.1.0-rc.2",
             "wire": "rc.2"
           }

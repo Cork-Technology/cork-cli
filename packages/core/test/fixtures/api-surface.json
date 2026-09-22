@@ -49,6 +49,10 @@
       "kind": "type"
     },
     {
+      "name": "BASE_FILLER_JIT_MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
       "name": "BOOK_SORTS",
       "kind": "value"
     },
@@ -331,6 +335,10 @@
     {
       "name": "FUSION_SETTLEMENTS",
       "kind": "value"
+    },
+    {
+      "name": "FeeDisagreement",
+      "kind": "type"
     },
     {
       "name": "FillOrderForSelfArgs",
@@ -645,7 +653,15 @@
       "kind": "value"
     },
     {
+      "name": "MARKET_CREATED_10_TOPIC",
+      "kind": "value"
+    },
+    {
       "name": "MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "MARKET_CREATED_TOPICS",
       "kind": "value"
     },
     {
@@ -686,6 +702,10 @@
     },
     {
       "name": "Market8",
+      "kind": "type"
+    },
+    {
+      "name": "MarketEmitter",
       "kind": "type"
     },
     {
@@ -773,6 +793,10 @@
       "kind": "value"
     },
     {
+      "name": "POST_EXPIRY_ACTIONS",
+      "kind": "value"
+    },
+    {
       "name": "PREPARE_MARKET_IMPLEMENTATION_ROLES",
       "kind": "value"
     },
@@ -814,6 +838,10 @@
     },
     {
       "name": "PoolGenerationResolution",
+      "kind": "type"
+    },
+    {
+      "name": "PoolManagerRef",
       "kind": "type"
     },
     {
@@ -1805,6 +1833,10 @@
       "kind": "value"
     },
     {
+      "name": "feeDisagreementWarnings",
+      "kind": "value"
+    },
+    {
       "name": "fetchDigestLogs",
       "kind": "value"
     },
@@ -2069,6 +2101,10 @@
       "kind": "value"
     },
     {
+      "name": "marketAbiFor",
+      "kind": "value"
+    },
+    {
       "name": "marketCreatorAbi",
       "kind": "value"
     },
@@ -2170,6 +2206,10 @@
     },
     {
       "name": "poolManagerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolManagerMarket10Abi",
       "kind": "value"
     },
     {
@@ -2563,6 +2603,10 @@
       "kind": "value"
     },
     {
+      "name": "POST_EXPIRY_ACTIONS",
+      "kind": "value"
+    },
+    {
       "name": "PoolTokens",
       "kind": "type"
     },
@@ -2757,8 +2801,16 @@
       "kind": "value"
     },
     {
+      "name": "FeeDisagreement",
+      "kind": "type"
+    },
+    {
       "name": "KNOWN_EVENTS_ABI",
       "kind": "value"
+    },
+    {
+      "name": "PoolManagerRef",
+      "kind": "type"
     },
     {
       "name": "PoolStateRead",
@@ -2821,6 +2873,10 @@
       "kind": "value"
     },
     {
+      "name": "feeDisagreementWarnings",
+      "kind": "value"
+    },
+    {
       "name": "filterChainlistRpcs",
       "kind": "value"
     },
@@ -2833,6 +2889,10 @@
       "kind": "value"
     },
     {
+      "name": "marketAbiFor",
+      "kind": "value"
+    },
+    {
       "name": "mkClient",
       "kind": "value"
     },
@@ -2842,6 +2902,10 @@
     },
     {
       "name": "poolManagerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "poolManagerMarket10Abi",
       "kind": "value"
     },
     {
@@ -3357,8 +3421,20 @@
       "kind": "type"
     },
     {
+      "name": "MARKET_CREATED_10_TOPIC",
+      "kind": "value"
+    },
+    {
       "name": "MARKET_CREATED_TOPIC",
       "kind": "value"
+    },
+    {
+      "name": "MARKET_CREATED_TOPICS",
+      "kind": "value"
+    },
+    {
+      "name": "MarketEmitter",
+      "kind": "type"
     },
     {
       "name": "MarketRow",
@@ -3735,6 +3811,10 @@
     {
       "name": "AuctionPriceReport",
       "kind": "type"
+    },
+    {
+      "name": "BASE_FILLER_JIT_MARKET_CREATED_TOPIC",
+      "kind": "value"
     },
     {
       "name": "BOOK_SORTS",

@@ -45,6 +45,9 @@ export const KNOWN_EVENTS_ABI = parseAbi([
   // is shared with the legacy adapter — same field layout, so one declaration serves both.
   "event JITMarketCreated(bytes32 indexed poolId, address indexed rateOracle, address collateralAsset, address referenceAsset, uint256 expiryTimestamp, address recipe)",
   "event JITMinted(bytes32 indexed poolId, address indexed recipient, uint256 cstShares, uint256 collateralIn)",
+  // rollover BaseFiller (rc.2 and 0.2): the filler's own JIT-creation announcement — three args,
+  // a different selector from the adapter's six-arg event above (verbatim from BaseFiller.sol).
+  "event JITMarketCreated(bytes32 indexed poolId, address indexed rateOracle, address recipe)",
   // 1inch LOP v4 (IOrderMixin) — fills (no indexed params)
   "event OrderFilled(bytes32 orderHash, uint256 remainingAmount)",
   // ERC-20 (universal layout) — makes receipt decodes show the token flows around Cork events

@@ -9,16 +9,17 @@ import type { PublicClient } from "viem";
 import { UNITS_TOPIC_REFERENCE, type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
+import type { GenerationRef, PhoenixWire } from "../generations.ts";
 import { decodeJitExtensionAny } from "../market-registry.ts";
 import { buildTakerFill, decodeMakerTraits } from "../orders.ts";
 import { annotateApprovalStatus, approvalMissingWarning, takerApprovalRequirements } from "../order-approvals.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
 import { whitelistManagerAbi } from "../chain/abis.ts";
-import { poolPreflightWarnings } from "../bundle/preflight.ts";
+import { POST_EXPIRY_ACTIONS, poolPreflightWarnings } from "../bundle/preflight.ts";
 import { decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { envelope, getDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR } from "./shared.ts";
+import { envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR } from "./shared.ts";
 
 const ZERO = ZERO_ADDR;
 
@@ -210,8 +211,22 @@ export async function prepareForSelfTakerFill(args: {
 
   // Bindings + pool coherence, best-effort over whatever RPC resolves. Binding mismatch is
   // a hard conflict (the caller is about to approve tokens to this address).
-  const { dep } = await getDep(ctx, chainId);
-  const resolved = dep ? await getRpc(ctx, chainId) : null;
+  const { dep: selectedDep } = await getDep(ctx, chainId);
+  const resolved = selectedDep ? await getRpc(ctx, chainId) : null;
+  // The adapter's CORK() binding is compared against the manager that HOLDS the pool (the
+  // pool's generation), not the selected one — a v1.1 ForSelf adapter filling a v1.1 pool is
+  // coherent even when the primary is the 10-field set. A pool the chain does not know yet (a
+  // JIT order creates it in-fill) falls back to the selected generation and keeps the
+  // pool_not_found / would_revert advisories below, never a refusal.
+  let dep = selectedDep;
+  let gen: (GenerationRef & { wire: PhoenixWire }) | undefined;
+  if (resolved && selectedDep) {
+    const pd = await getPoolDep(ctx, chainId, resolved, forSelf.poolId, { tool: "cork_prepare_orders" });
+    if (pd.dep) {
+      dep = pd.dep;
+      gen = pd.generation;
+    }
+  }
   if (!dep) {
     warnings.push({ code: "unknown_deployment", message: `no Cork deployment configured for chainId ${chainId} — the ForSelf adapter's CORK() binding and the pool coherence pre-flight were SKIPPED; verify the adapter independently before granting it an allowance` });
   }
@@ -245,7 +260,7 @@ export async function prepareForSelfTakerFill(args: {
   }
   if (resolved && dep) {
     try {
-      const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, forSelf.poolId, ctx.atBlock);
+      const tokens = await resolvePoolTokens(resolved.client, dep, forSelf.poolId, ctx.atBlock);
       if (tokens.collateral === ZERO || tokens.cst === ZERO) {
         let hasJit = false;
         if (signed.extension && signed.extension !== "0x") {
@@ -299,6 +314,7 @@ export async function prepareForSelfTakerFill(args: {
     state: "ok",
     data: {
       kind: "taker-fill",
+      ...generationData(gen),
       to: forSelf.adapter,
       calldata: call.calldata,
       value: "0",
@@ -331,6 +347,7 @@ export async function prepareForSelfTakerFill(args: {
     chainId,
     source: "service",
     warnings,
+    ...(gen ? { generation: gen } : {}),
     ctx,
   });
 }
@@ -356,14 +373,15 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
       ]);
     }
   }
-  const { dep, depWarn } = await getDep(ctx, input.chainId);
-  if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
+  const { dep: selectedDep, depWarn, refusal } = await getDep(ctx, input.chainId);
+  if (!selectedDep && !refusal) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const warnings: Warning[] = [...depWarn];
   const nowSecs = nowSecondsOf(ctx);
   const { deadline, warning: deadlineWarning } = resolveDeadline(input, nowSecs, "the adapter reverts DeadlineExceeded");
   if (deadlineWarning) warnings.push(deadlineWarning);
 
   const call = buildPoolForSelfCall(action, deadline);
+  const poolId = (action as { poolId: `0x${string}` }).poolId;
 
   // Bindings + the same pool guards the Bundler3 path gets (expiry/pause/whitelist). The
   // whitelist subjects depend on the adapter's GENERATION: the pool manager always checks
@@ -371,6 +389,18 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   // additionally check the ACCOUNT — so the account leg of the pre-flight only runs when
   // the deployed adapter actually enforces it.
   const resolved = await getRpc(ctx, input.chainId);
+  // With an RPC the adapter's CORK() is compared against the manager that HOLDS the pool (the
+  // pool's generation; pre-expiry actions apply the read-only gate, the settles do not). Without
+  // one the selected generation stands in, as before.
+  let dep = selectedDep;
+  let gen: (GenerationRef & { wire: PhoenixWire }) | undefined;
+  if (resolved) {
+    const pd = await getPoolDep(ctx, input.chainId, resolved, poolId, { purpose: POST_EXPIRY_ACTIONS.has(action.type) ? "read" : "prepare", tool: "cork_prepare_phoenix" });
+    if (pd.refusal) return pd.refusal;
+    dep = pd.dep!;
+    gen = pd.generation;
+  }
+  if (!dep) return unavailable(input.chainId, refusal?.code ?? "unknown_deployment", refusal?.message ?? `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const bind = await verifyForSelfBindings({
     client: resolved?.client ?? null,
     ctx,
@@ -384,8 +414,8 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   let tokenAddresses: Record<string, string> | undefined;
   if (resolved) {
     try {
-      const tokens = await resolvePoolTokens(resolved.client, dep.poolManager, (action as { poolId: `0x${string}` }).poolId, ctx.atBlock);
-      if (poolMissing(tokens)) return poolNotFound(input.chainId, (action as { poolId: string }).poolId, ctx);
+      const tokens = await resolvePoolTokens(resolved.client, dep, poolId, ctx.atBlock);
+      if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
       tokenAddresses = { collateral: tokens.collateral, reference: tokens.reference, cST: tokens.cst, cPT: tokens.cpt };
       warnings.push(
         ...(await poolPreflightWarnings({
@@ -395,7 +425,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
           corkAdapter: forSelf.adapter,
           route: "for-self",
           callerGate: bind.callerGate,
-          poolId: (action as { poolId: `0x${string}` }).poolId,
+          poolId,
           actionType: action.type,
           ...(bind.callerGate === true ? { account: input.account } : {}),
           expiryTimestamp: tokens.expiryTimestamp,
@@ -428,6 +458,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     state: "ok",
     data: {
       kind: input.action.type,
+      ...generationData(gen),
       to: forSelf.adapter,
       calldata: call.calldata,
       value: "0",
@@ -448,6 +479,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     chainId: input.chainId,
     source: resolved ? "chain" : "config",
     warnings,
+    ...(gen ? { generation: gen } : {}),
     ctx,
   });
 }

@@ -12,7 +12,8 @@ import { canAutoFund, fundingPlan } from "../bundle/funding.ts";
 import { poolPreflightWarnings } from "../bundle/preflight.ts";
 import { approvedImplementationGuard, PHOENIX_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable } from "./shared.ts";
+import { POST_EXPIRY_ACTIONS } from "../bundle/preflight.ts";
+import { chainReadFailed, envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable } from "./shared.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
 
 
@@ -120,27 +121,34 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   if (input.forSelf) {
     return preparePhoenixForSelf(input, ctx);
   }
-  const { dep, depWarn, generation, refusal } = await getDep(ctx, input.chainId, { purpose: "prepare" });
-  if (refusal) return unavailable(input.chainId, refusal.code, refusal.message, ctx);
-  if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
-  const { corkAdapter, bundler3 } = dep;
-  if (!corkAdapter || !bundler3) {
-    return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
-  }
-  const nowSecs = nowSecondsOf(ctx);
-  const { deadline, warning: deadlineWarning } = resolveDeadline(input, nowSecs, "the bundle would revert its deadline check on-chain");
-  if (input.action.type === "authority-onboard" || input.action.type === "authority-revoke") {
+  const action = input.action;
+  const isAuthority = action.type === "authority-onboard" || action.type === "authority-revoke";
+  // The authority ops (a standing ERC-20 allowance to an adapter) have no pool: they target the
+  // SELECTED generation's adapter, prepare-gated as before. A POOL action targets the generation
+  // the pool LIVES on, resolved from the chain below — so the selected-generation read here only
+  // keeps the no-deployment refusal and the config warning; its prepare gate is applied by the
+  // pool resolver (a post-expiry settle stays buildable on a read-only set).
+  const { dep, depWarn, refusal } = await getDep(ctx, input.chainId, { purpose: isAuthority ? "prepare" : "read" });
+  if (action.type === "authority-onboard" || action.type === "authority-revoke") {
+    if (refusal) return unavailable(input.chainId, refusal.code, refusal.message, ctx);
+    if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
+    if (!dep.corkAdapter || !dep.bundler3) {
+      return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
+    }
     return handlePhoenixAuthority(input, depWarn, dep, ctx);
   }
-  const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
-  const warnings: Array<{ code: string; message: string }> = [...depWarn];
+  if (!dep && !refusal) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
+  const nowSecs = nowSecondsOf(ctx);
+  const { deadline, warning: deadlineWarning } = resolveDeadline(input, nowSecs, "the bundle would revert its deadline check on-chain");
+  const warnings: Array<{ code: string; message: string }> = [];
   if (deadlineWarning) warnings.push(deadlineWarning);
   // Every schema-admitted pool action has a funding model; this guards the SDK caller who casts.
   if (!canAutoFund(input.action.type)) {
     return unavailable(input.chainId, "invalid_state", `'${input.action.type}' has no funding model, so no atomic bundle can be built for it — the action is never emitted on its own`, ctx);
   }
   const mode = input.fundingMode;
-  const poolId = input.action.poolId;
+  const poolAction = action;
+  const poolId = poolAction.poolId;
 
   // The pool read is what makes the funding legs possible: token addresses come from the pool
   // manager, over the resolved endpoint. Every failure maps to an envelope, never a raw throw
@@ -154,9 +162,22 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
       ctx,
     );
   }
+  // Which generation holds the pool — a bundle for an arbitrum-v1.1 pool MUST target the v1.1
+  // adapter and its bundler3; the primary's adapter does not know that pool manager. Pre-expiry
+  // actions apply the read-only gate; the three settles do not (POST_EXPIRY_ACTIONS).
+  const pd = await getPoolDep(ctx, input.chainId, resolved, poolId, { purpose: POST_EXPIRY_ACTIONS.has(input.action.type) ? "read" : "prepare", tool: "cork_prepare_phoenix" });
+  if (pd.refusal) return pd.refusal;
+  const poolDep = pd.dep!;
+  const gen = pd.generation;
+  warnings.unshift(...pd.depWarn);
+  const { corkAdapter, bundler3 } = poolDep;
+  if (!corkAdapter || !bundler3) {
+    return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for ${gen ? `generation '${gen.label}' on ` : ""}chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
+  }
+  const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
   let tokens;
   try {
-    tokens = await resolvePoolTokens(resolved.client, dep.poolManager, poolId, ctx.atBlock);
+    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock);
   } catch (err) {
     return chainReadFailed(input.chainId, err, [], ctx, resolved);
   }
@@ -175,8 +196,8 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   warnings.push(
     ...(await poolPreflightWarnings({
       client: resolved.client,
-      poolManager: dep.poolManager,
-      whitelistManager: dep.whitelistManager,
+      poolManager: poolDep.poolManager,
+      whitelistManager: poolDep.whitelistManager,
       corkAdapter,
       poolId,
       actionType: input.action.type,
@@ -188,7 +209,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     // Interface-first guard, same posture, scoped to the contracts this bundle executes: warn
     // when a trusted role's live code is off the allowlist bundled into this build (a proxy
     // upgrade nobody admitted yet, or an address that moved ahead of a release).
-    ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(generation ? { generation: generation.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
+    ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(gen ? { generation: gen.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
   );
   // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
   // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
@@ -227,11 +248,12 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   );
   return envelope({
     state: "ok",
-    data: { bundler3, corkAdapter, deadline, action: ACTION_MAP[input.action.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
+    data: { ...generationData(gen), bundler3, corkAdapter, deadline, action: ACTION_MAP[poolAction.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId: input.chainId,
     source: "chain",
     warnings: [...rpcWarn(resolved), ...warnings],
     ...rpcProvenance(input.format, resolved),
+    ...(gen ? { generation: gen } : {}),
     ctx,
   });
 }

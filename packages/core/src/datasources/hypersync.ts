@@ -18,6 +18,7 @@
 //  - a source run imports the package by NAME; its own loader picks the binding at runtime
 //    (setting CH_HYPERSYNC_BINDING to a `.node` path in the environment overrides that).
 import { decodeEventLog, parseAbi, toEventSelector } from "viem";
+import type { PhoenixWire } from "../generations.ts";
 import { BUILD_TARGET, HYPERSYNC_BINDING } from "../version.ts";
 import { hyperSyncUrl } from "./envio.ts";
 
@@ -240,6 +241,13 @@ export function normalizeNapiLog(l: Record<string, unknown>): HyperSyncLog {
 const marketCreatedAbi = parseAbi([
   "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
 ]);
+// phoenix v1.4.0-rc.1 (the 10-field wire): the same seven plus the two fee percentages that are
+// now part of the Market struct and its id. A DIFFERENT topic0 — a scan keyed on the 7-arg form
+// alone sees nothing on a 10-field manager, so every MarketCreated scan asks for BOTH topics and
+// decodes each log with the ABI of its EMITTER's declared wire (never by trying both).
+const marketCreated10Abi = parseAbi([
+  "event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)",
+]);
 const cloneDeployedAbi = parseAbi(["event RolloverContractDeployed(address indexed user, address indexed rolloverContract)"]);
 const rolloverFillAbis = parseAbi([
   "event RolloverLegFilled(bytes32 indexed orderDigest, address indexed filler, bytes32 indexed subFiller, uint256 srcCstProvided, uint256 dstCstProduced)",
@@ -268,6 +276,9 @@ const whitelistAbi = parseAbi([
 // silently filters for events the decoder then rejects; deriving one from the other makes that
 // drift structurally impossible (each signature used to be maintained twice in this file).
 export const MARKET_CREATED_TOPIC = toEventSelector(marketCreatedAbi[0]);
+export const MARKET_CREATED_10_TOPIC = toEventSelector(marketCreated10Abi[0]);
+/** Both MarketCreated forms — what every pool-creation scan filters on (one per phoenix wire). */
+export const MARKET_CREATED_TOPICS: readonly string[] = [MARKET_CREATED_TOPIC, MARKET_CREATED_10_TOPIC];
 export const CLONE_DEPLOYED_TOPIC = toEventSelector(cloneDeployedAbi[0]);
 export const ROLLOVER_FILL_TOPICS = rolloverFillAbis.map((e) => toEventSelector(e));
 export const LOP_FILLED_TOPIC = toEventSelector(lopFilledAbi[0]);
@@ -291,7 +302,10 @@ function meta(l: HyperSyncLog): LogMeta {
   return { blockNumber: String(l.blockNumber), txHash: l.transactionHash, emitter: l.address };
 }
 
-/** One MarketCreated event: a cork-pool coming into existence on a pool manager. */
+/** One MarketCreated event: a cork-pool coming into existence on a pool manager. `wire` is the
+ *  emitter's declared phoenix wire (the ABI the row was decoded with); `generation` its label;
+ *  the two fees ride only on 10-field rows (the 7-arg event carries none — 8-field fees live in
+ *  the manager's views, outside the event). */
 export type MarketRow = LogMeta & {
   poolId: Hex;
   referenceAsset: Address;
@@ -301,7 +315,18 @@ export type MarketRow = LogMeta & {
   corkPrincipalToken: Address;
   corkSwapToken: Address;
   poolManager: string;
+  wire: PhoenixWire;
+  generation?: string;
+  swapFeePercentage?: string;
+  unwindSwapFeePercentage?: string;
 };
+
+/** A pool manager the scan asks, with the wire that picks its MarketCreated ABI and its label. */
+export interface MarketEmitter {
+  poolManager: string;
+  wire: PhoenixWire;
+  label: string;
+}
 
 /** One RolloverContractDeployed event from the rollover factory. */
 export type CloneRow = LogMeta & {
@@ -324,11 +349,28 @@ export type LopFillRow = LogMeta & {
   lop: string;
 };
 
-export function decodeMarketRows(logs: HyperSyncLog[]): MarketRow[] {
+/** Decode MarketCreated logs, choosing the ABI by the EMITTER's declared wire (`emitters`,
+ *  from the chain's generations) — a 10-field manager's 9-arg log through the 7-arg ABI fails
+ *  the strict topic count and a 7-arg log through the 9-arg ABI fails on data length, and both
+ *  failures are SKIPPED rather than retried with the other ABI: the wire is a config fact about
+ *  the emitter, not something to infer from the bytes. A log from an address the emitter table
+ *  does not name is skipped too (HyperSync only serves the addresses asked, so this is the
+ *  defensive branch). Without `emitters` every log is read as 8-field — the pre-0.6 behaviour,
+ *  kept for callers that scan one known manager. */
+export function decodeMarketRows(logs: HyperSyncLog[], emitters?: readonly MarketEmitter[]): MarketRow[] {
+  const byAddress = emitters ? new Map(emitters.map((e) => [e.poolManager.toLowerCase(), e] as const)) : undefined;
   return logs.flatMap((l) => {
+    const emitter = byAddress ? byAddress.get(l.address.toLowerCase()) : undefined;
+    if (byAddress && emitter === undefined) return [];
+    const wire: PhoenixWire = emitter?.wire ?? "8-field";
+    const tag = { poolManager: l.address, wire, ...(emitter ? { generation: emitter.label } : {}), ...meta(l) };
     try {
+      if (wire === "10-field") {
+        const d = decodeEventLog({ abi: marketCreated10Abi, topics: strictTopics(l), data: l.data as Hex });
+        return [{ poolId: d.args.poolId, referenceAsset: d.args.referenceAsset, collateralAsset: d.args.collateralAsset, expiry: d.args.expiry.toString(), rateOracle: d.args.rateOracle, corkPrincipalToken: d.args.principalToken, corkSwapToken: d.args.swapToken, swapFeePercentage: d.args.swapFeePercentage.toString(), unwindSwapFeePercentage: d.args.unwindSwapFeePercentage.toString(), ...tag }];
+      }
       const d = decodeEventLog({ abi: marketCreatedAbi, topics: strictTopics(l), data: l.data as Hex });
-      return [{ poolId: d.args.id, referenceAsset: d.args.referenceAsset, collateralAsset: d.args.collateralAsset, expiry: d.args.expiry.toString(), rateOracle: d.args.rateOracle, corkPrincipalToken: d.args.principalToken, corkSwapToken: d.args.swapToken, poolManager: l.address, ...meta(l) }];
+      return [{ poolId: d.args.id, referenceAsset: d.args.referenceAsset, collateralAsset: d.args.collateralAsset, expiry: d.args.expiry.toString(), rateOracle: d.args.rateOracle, corkPrincipalToken: d.args.principalToken, corkSwapToken: d.args.swapToken, ...tag }];
     } catch {
       return [];
     }

@@ -4,11 +4,11 @@ import { ComputeInput, type ComputeParams, Envelope, Hex } from "@cork/schemas";
 import { mulDiv, WAD } from "../math/fixed.ts";
 import { impairmentFloor, previewAdjustedRate } from "../math/constraint.ts";
 import { previewSwap, previewUnwindSwap } from "../math/preview.ts";
-import { type CorkAddresses, readPoolState } from "../chain/reads.ts";
+import { type CorkAddresses, feeDisagreementWarnings, readPoolState } from "../chain/reads.ts";
 import { decodeMakerTraits, hashLopOrder, LOP_ADDRESSES } from "../orders.ts";
 import { encodeUintWords } from "../market-registry.ts";
 import { auctionPhase, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
-import { chainReadFailed, envelope, getDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, rpcProvenance, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
+import { chainReadFailed, envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, localComputeFailed, nowSecondsOf, rpcProvenance, rpcWarn, ToolInputError, unavailable } from "./shared.ts";
 import { parseOrderRecord } from "./decode.ts";
 import { getRegistry, handleComputeResolveRecipeLegacy, resolveRecipeOracleConstraint } from "./registry.ts";
 
@@ -35,18 +35,24 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
 
   // Chain-backed kinds need an RPC + addresses.
   if (p.kind === "cst-swap-rate" || p.kind === "unwind-rate" || p.kind === "impairment-floor") {
-    const { dep, depWarn } = await getDep(ctx, chainId);
-    if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+    const { dep, refusal } = await getDep(ctx, chainId);
+    if (!dep && !refusal) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", `${p.kind} needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
     const client = resolved.client;
+    const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
+    // The POOL's generation (one batched shares read across every manager, at the pinned block)
+    // — the math must run over the manager that holds the pool, with that manager's wire.
+    const pd = await getPoolDep({ ...ctx, ...(pinnedBlock !== undefined ? { atBlock: pinnedBlock } : {}) }, chainId, resolved, p.poolId, { tool: "cork_compute" });
+    if (pd.refusal) return pd.refusal;
+    const poolDep = pd.dep!;
+    const gen = pd.generation;
     // rpcWarn/rpcProvenance are evaluated at ENVELOPE construction, not here: the client fails
     // over in-call on a dead endpoint (mutating `resolved`), and the disclosure must describe
     // the endpoint that actually served the reads.
-    const w = [...depWarn];
+    const w = [...pd.depWarn];
     const rpc = () => rpcProvenance(input.format, resolved);
-    const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
-    const pinnedBlock = input.at?.block !== undefined ? BigInt(input.at.block) : ctx.atBlock;
+    const addrs: CorkAddresses = { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) };
     if (input.at?.timestamp !== undefined) {
       // Accepted-but-reserved field (F12): validated, then ignored — say so instead of letting a
       // caller believe their replay was timestamp-pinned.
@@ -60,6 +66,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     } catch (err) {
       return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx, resolved);
     }
+    w.push(...feeDisagreementWarnings(s));
     try {
       const swapRate = previewAdjustedRate({ market: s.market, state: s.constraintState, oracleRate: s.oracleRate, nowTs: s.blockTimestamp });
       const decimals = { collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals };
@@ -74,7 +81,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
           referenceAssetsIn: `native decimals of the reference asset (${s.referenceDecimals})`,
           fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
         };
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+        return envelope({ state: "ok", data: { kind: p.kind, ...generationData(gen), swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ...(gen ? { generation: gen } : {}), ctx });
       }
       if (p.kind === "unwind-rate") {
         const r = previewUnwindSwap(BigInt(p.collateralAssetsIn), { swapRate, unwindSwapFeePercentage: s.unwindSwapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals, issuedAt: s.issuedAt, expiryTimestamp: s.market.expiryTimestamp, nowTs: s.blockTimestamp });
@@ -84,7 +91,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
           referenceAssetsOut: `native decimals of the reference asset (${s.referenceDecimals})`,
           fee: `native decimals of the collateral asset (${s.collateralDecimals})`,
         };
-        return envelope({ state: "ok", data: { kind: p.kind, swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+        return envelope({ state: "ok", data: { kind: p.kind, ...generationData(gen), swapRate, ...r, scales, ...decimals }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ...(gen ? { generation: gen } : {}), ctx });
       }
       const floor = impairmentFloor({ market: s.market, state: s.constraintState, horizonSeconds: BigInt(p.horizonSeconds), tEval: s.blockTimestamp });
       const scales = { worstRate: "1e18 = 1.0 (WAD)", maxReferencePerCst: "reference WAD per 1e18 cST (null = unbounded: impairment can be total)", availableAtEval: "WAD descent budget" };
@@ -94,7 +101,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
       // ...decimals: converting the WAD-scaled maxReferencePerCst into native reference units
       // needs the pair's decimals — and "all three chain-backed kinds carry them" is the
       // documented contract (units topic + CLAUDE.md); this kind was the silent exception.
-      return envelope({ state: "ok", data: { kind: p.kind, ...floor, ...decimals, scales }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+      return envelope({ state: "ok", data: { kind: p.kind, ...generationData(gen), ...floor, ...decimals, scales }, chainId, source: "chain", block: s.blockNumber, warnings: [...rpcWarn(resolved), ...w], ...rpc(), ...(gen ? { generation: gen } : {}), ctx });
     } catch (err) {
       return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx);
     }

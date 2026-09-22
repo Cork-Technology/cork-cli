@@ -16,7 +16,10 @@ export interface PreflightWarning {
 }
 
 /** Actions that are the post-expiry settlement path — never flagged for expiry. */
-const POST_EXPIRY_ACTIONS = new Set(["withdraw", "withdraw-other", "redeem"]);
+/** The three settles that run AFTER expiry (CPT-only burns). Exported since 0.6: the same set
+ *  decides which actions a READ-ONLY generation still builds — a settled pool's cPT is still
+ *  someone's money, so the exit stays open on a set whose entries are closed. */
+export const POST_EXPIRY_ACTIONS: ReadonlySet<string> = new Set(["withdraw", "withdraw-other", "redeem"]);
 
 /**
  * Which bit of the pool's `getPausedBitMap` gates each action.

@@ -578,6 +578,8 @@ export interface RolloverGenerationRecord {
   exactSettler: string;
   partialSettler: string;
   seededAtBlock: number;
+  /** The generation's BaseFiller (optional — the July rc.1 record predates the baselines). */
+  baseFiller?: `0x${string}` | undefined;
   retired?: string | undefined;
   label?: string | undefined;
   contractsVersion?: string | undefined;
@@ -615,6 +617,7 @@ export function rolloverGenerations(dep: RolloverDeploymentRecord): RolloverGene
     exactSettler: g.exactSettler,
     partialSettler: g.partialSettler,
     seededAtBlock: g.seededAtBlock,
+    ...(g.baseFiller !== undefined ? { baseFiller: g.baseFiller } : {}),
     ...(g.retired !== undefined ? { retired: g.retired } : {}),
     ...(g.contractsVersion !== undefined ? { contractsVersion: g.contractsVersion } : {}),
     ...(g.settlerDomain !== undefined ? { settlerDomain: g.settlerDomain } : {}),

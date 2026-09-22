@@ -156,6 +156,45 @@ export const poolManagerAbi = [
   },
 ] as const;
 
+/** The 10-field `market()` view (phoenix v1.4.0-rc.1, the phoenix/v0.4-rc.1 generation): the
+ *  same eight words plus the two fee percentages that are now PART of the Market struct and its
+ *  id. Kept as its own ABI beside the 8-field entry on `poolManagerAbi` on purpose — viem decodes
+ *  a 10-word return through the 8-field ABI SILENTLY (the trailing words are dropped, no error),
+ *  so the ABI must be chosen by the manager's declared wire, never by trying one and falling
+ *  back. `marketAbiFor(wire)` is the one chooser. */
+export const poolManagerMarket10Abi = [
+  {
+    type: "function",
+    name: "market",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      {
+        name: "parameters",
+        type: "tuple",
+        components: [
+          { name: "collateralAsset", type: "address" },
+          { name: "referenceAsset", type: "address" },
+          { name: "expiryTimestamp", type: "uint256" },
+          { name: "rateMin", type: "uint256" },
+          { name: "rateMax", type: "uint256" },
+          { name: "rateChangePerDayMax", type: "uint256" },
+          { name: "rateChangeCapacityMax", type: "uint256" },
+          { name: "rateOracle", type: "address" },
+          { name: "swapFeePercentage", type: "uint256" },
+          { name: "unwindSwapFeePercentage", type: "uint256" },
+        ],
+      },
+    ],
+  },
+] as const;
+
+/** The `market()` ABI for a pool manager's declared wire — the ONLY place the 8-field/10-field
+ *  choice is made for a read. */
+export function marketAbiFor(wire: "8-field" | "10-field"): typeof poolManagerAbi | typeof poolManagerMarket10Abi {
+  return wire === "10-field" ? poolManagerMarket10Abi : poolManagerAbi;
+}
+
 export const constraintAdapterAbi = [
   {
     type: "function",

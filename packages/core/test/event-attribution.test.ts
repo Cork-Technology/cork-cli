@@ -56,19 +56,43 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     // emits those topics).
     const nested = ARBITRUM.find((g) => g.label === "phoenix/v0.4-rc.1")!;
     expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: "active", label: "phoenix/v0.4-rc.1" });
-    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: "active", label: "phoenix/v0.4-rc.1" });
-    expect(emitters.filter((e) => e.role === "marketCreator" || e.role === "poolManager")).toHaveLength(2);
-    // 3 rollover generations × 2 settlers + the three registry generations' JIT adapters + the
-    // nested generation's creator and pool manager.
-    expect(emitters).toHaveLength(11);
+    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: "active", label: "phoenix/v0.4-rc.1", wire: "10-field" });
+    // Since stage 2c EVERY pool manager is a poolManager emitter (each tagged with its wire, so
+    // attribution admits only its own MarketCreated topic): four managers on Arbitrum, one creator.
+    expect(emitters.filter((e) => e.role === "marketCreator")).toHaveLength(1);
+    expect(emitters.filter((e) => e.role === "poolManager").map((e) => [e.label, e.wire])).toEqual([
+      ["phoenix/v0.4-rc.1", "10-field"],
+      ["phoenix/v0.3-rc.1", "8-field"],
+      ["arbitrum-v1.1", "8-field"],
+      ["arbitrum-legacy", "8-field"],
+    ]);
+    // The rollover BaseFillers (the 0.2 and rc.2 records; the July rc.1 record predates the
+    // component baselines and names none) and every rollover factory ride along.
+    expect(emitters.filter((e) => e.role === "baseFiller").map((e) => [e.address, e.label])).toEqual([
+      ["0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", "phoenix/v0.4-rc.1"],
+      ["0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d", "phoenix/v0.3-rc.1"],
+    ]);
+    expect(emitters.filter((e) => e.role === "factory")).toHaveLength(3);
+    // 3 rollover generations × (2 settlers + factory) + 2 BaseFillers + the three registry
+    // generations' JIT adapters + the nested creator + 4 pool managers + every configured
+    // whitelist manager (3: the read-only legacy set has none).
+    const whitelistManagers = ARBITRUM.filter((g) => g.phoenix?.whitelistManager !== undefined).length;
+    expect(whitelistManagers).toBe(3);
+    expect(emitters).toHaveLength(9 + 2 + 3 + 1 + 4 + whitelistManagers);
     // Primary first: the order is the config's flattening, not an address sort.
     expect(emitters.slice(0, 2).map((e) => e.address)).toEqual([CANDIDATE_EXACT, CANDIDATE_PARTIAL]);
   });
-  it("mainnet has no rollover or registry deployment — no emitter, so nothing can be attributed there", async () => {
-    expect(await protocolEmittersFor(1)).toEqual([]);
+  it("mainnet has no rollover or registry deployment — only its phoenix contracts emit (the 8-field pool manager and the whitelist manager)", async () => {
+    const mainnet = generationsOf(BUNDLED_DEFAULTS, 1)[0]!;
+    expect(await protocolEmittersFor(1)).toEqual([
+      { address: mainnet.phoenix!.poolManager, role: "poolManager", generation: "active", label: "mainnet", wire: "8-field" },
+      { address: mainnet.phoenix!.whitelistManager, role: "whitelistManager", generation: "active", label: "mainnet" },
+    ]);
   });
   it("the event registry covers every settler event plus the three JIT topics and the two nested-wire MarketCreated topics, keyed lowercase", () => {
-    expect(Object.keys(PROTOCOL_EVENTS)).toHaveLength(15);
+    // 10 settler events + 3 JIT-adapter topics + 2 nested-wire MarketCreated + the 8-field
+    // MarketCreated + the BaseFiller JITMarketCreated + RolloverContractDeployed + 6 whitelist.
+    expect(Object.keys(PROTOCOL_EVENTS)).toHaveLength(24);
     expect(PROTOCOL_EVENTS[CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]).toEqual({ event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] });
     expect(PROTOCOL_EVENTS[POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase()]).toEqual({ event: "MarketCreated (pool manager, 10-field)", roles: ["poolManager"] });
     for (const topic of Object.keys(PROTOCOL_EVENTS)) expect(topic).toBe(topic.toLowerCase());

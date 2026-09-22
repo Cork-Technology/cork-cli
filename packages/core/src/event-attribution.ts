@@ -9,12 +9,13 @@
 // `other` — because a decoder that drops what it cannot name hides exactly what a reader most
 // needs to see. Neither of those two collections is lifecycle evidence.
 import { resolveGenerations, resolveRollover } from "./config-remote.ts";
+import { CLONE_DEPLOYED_TOPIC, MARKET_CREATED_TOPIC, WHITELIST_TOPICS } from "./datasources/hypersync.ts";
 import { CREATOR_MARKET_CREATED_TOPIC, JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC, POOL_MANAGER_MARKET_CREATED_10_TOPIC } from "./market-registry.ts";
-import { SETTLER_EVENTS } from "./rollover-verify.ts";
+import { BASE_FILLER_JIT_MARKET_CREATED_TOPIC, SETTLER_EVENTS } from "./rollover-verify.ts";
 import { rolloverGenerations } from "./rollover.ts";
 
 /** Who is allowed to emit a given protocol event. */
-export type EmitterRole = "exactSettler" | "partialSettler" | "jitAdapter" | "legacyJitAdapter" | "marketCreator" | "poolManager";
+export type EmitterRole = "exactSettler" | "partialSettler" | "baseFiller" | "factory" | "jitAdapter" | "legacyJitAdapter" | "marketCreator" | "poolManager" | "whitelistManager";
 
 /** One configured emitter: the contract, its role, and which generation it belongs to. */
 export interface ProtocolEmitter {
@@ -24,7 +25,17 @@ export interface ProtocolEmitter {
   /** The chain generation's label (every emitter carries one since 0.6: "phoenix/v0.4-rc.1",
    *  "arbitrum-v1.1" for the retired July settlers and the legacy JIT adapter, …). */
   label?: string;
+  /** `poolManager` emitters only: the manager's phoenix wire — decides WHICH MarketCreated topic
+   *  it legitimately emits (7-arg on 8-field, 9-arg on 10-field). */
+  wire?: "8-field" | "10-field";
 }
+
+/** The MarketCreated topic each phoenix wire speaks; a pool-manager emitter is attributed only
+ *  for its own wire's topic. */
+const MARKET_CREATED_TOPIC_BY_WIRE: Record<"8-field" | "10-field", string> = {
+  "8-field": MARKET_CREATED_TOPIC.toLowerCase(),
+  "10-field": POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase(),
+};
 
 /** The event registry: topic0 → event name + the roles that legitimately emit it. Built from
  *  the same signature tables the rest of the tool decodes with, so a new event lands here the
@@ -38,6 +49,20 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
   // (its own MarketCreated), and the 10-field pool manager announces the pool with its fees.
   [CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] },
   [POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase()]: { event: "MarketCreated (pool manager, 10-field)", roles: ["poolManager"] },
+  // The 7-arg MarketCreated every 8-field manager emits (v1.1 … v1.3.0-rc.1) — the same role,
+  // a different topic0; `protocolEmittersFor` lists a manager under `poolManager` for exactly
+  // the topic its wire speaks, so a 7-arg log from a 10-field manager stays unattributed.
+  [MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (pool manager, 8-field)", roles: ["poolManager"] },
+  // The rollover BaseFiller's own three-arg JITMarketCreated (a fill that created the destination
+  // pool just in time) — not the adapter's six-arg event, not the settlers'.
+  [BASE_FILLER_JIT_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "JITMarketCreated (BaseFiller)", roles: ["baseFiller"] },
+  [CLONE_DEPLOYED_TOPIC.toLowerCase()]: { event: "RolloverContractDeployed", roles: ["factory"] },
+  ...Object.fromEntries(
+    (["GlobalWhitelistAdded", "GlobalWhitelistRemoved", "MarketWhitelistAdded", "MarketWhitelistRemoved", "MarketWhitelistDisabled", "MarketWhitelistEnabled"] as const).map((name, i) => [
+      WHITELIST_TOPICS[i]!.toLowerCase(),
+      { event: name, roles: ["whitelistManager"] as const },
+    ]),
+  ),
 };
 
 /** Every contract this build recognizes as a protocol emitter on `chainId`, from the same
@@ -54,6 +79,8 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
     for (const g of rolloverGenerations(rollover)) {
       out.push({ address: g.exactSettler as `0x${string}`, role: "exactSettler", generation: g.status, label: g.label });
       out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: g.status, label: g.label });
+      out.push({ address: g.factory as `0x${string}`, role: "factory", generation: g.status, label: g.label });
+      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: g.status, label: g.label });
     }
   }
   for (const g of generations) {
@@ -70,8 +97,13 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
     // be a claim about bytes those contracts never produce.
     const creator = g.marketRegistry?.marketCreator as `0x${string}` | undefined;
     if (creator && g.marketRegistry!.wire === "nested") out.push({ address: creator, role: "marketCreator", generation: standing, label: g.label });
+    // Every pool manager is a `poolManager` emitter; WHICH MarketCreated it may emit is decided
+    // at attribution by the topic ↔ wire pairing (the 7-arg event on 8-field managers, the 9-arg
+    // on 10-field) — see `poolManagerWireOf`.
     const poolManager = g.phoenix?.poolManager as `0x${string}` | undefined;
-    if (poolManager && g.phoenix!.wire === "10-field") out.push({ address: poolManager, role: "poolManager", generation: standing, label: g.label });
+    if (poolManager) out.push({ address: poolManager, role: "poolManager", generation: standing, label: g.label, wire: g.phoenix!.wire });
+    const whitelistManager = g.phoenix?.whitelistManager as `0x${string}` | undefined;
+    if (whitelistManager) out.push({ address: whitelistManager, role: "whitelistManager", generation: standing, label: g.label });
   }
   return out;
 }
@@ -148,7 +180,11 @@ export function attributeLogs(logs: readonly AttributableLog[], emitters: readon
       continue;
     }
     const emitter = emitters.find((e) => e.address.toLowerCase() === log.address.toLowerCase());
-    if (emitter === undefined || !spec.roles.includes(emitter.role)) {
+    // A pool manager emits ONE MarketCreated shape — its wire's. The other wire's topic from the
+    // same address is a role mismatch (a 7-arg log claiming to come from a 10-field manager is
+    // not that manager's creation evidence).
+    const wireMismatch = emitter?.role === "poolManager" && emitter.wire !== undefined && topic0 !== undefined && Object.values(MARKET_CREATED_TOPIC_BY_WIRE).includes(topic0) && MARKET_CREATED_TOPIC_BY_WIRE[emitter.wire] !== topic0;
+    if (emitter === undefined || !spec.roles.includes(emitter.role) || wireMismatch) {
       unattributedEvents.push({
         ...originOf(log),
         event: spec.event,

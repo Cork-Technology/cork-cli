@@ -29,6 +29,17 @@ export const Provenance = z.object({
   staleness: z.number().int().nonnegative().optional().describe("age of the served data in SECONDS (reserved; currently never emitted)"),
   /** Which RPC endpoint served a chain read (format:"full" only): resolution tier + host. */
   rpc: z.object({ source: z.enum(["explicit", "default", "chainlist"]), host: z.string() }).optional(),
+  /** The contract GENERATION the result was read from or built against (generations.ts): for a
+   *  pool-scoped call the set the POOL lives on (resolved from the chain — every configured pool
+   *  manager is asked), otherwise the selected/primary set. Absent on pure/config results and
+   *  when a ctx.deployment override bypassed the generation model. */
+  generation: z
+    .object({
+      label: z.string(),
+      status: z.enum(["active", "read-only"]),
+      distribution: z.string().optional(),
+    })
+    .optional(),
 });
 
 export const Envelope = z.object({

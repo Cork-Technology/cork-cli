@@ -3,7 +3,7 @@
 import { keccak256, stringToHex } from "viem";
 import { Envelope, TrackInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { computeMarketId } from "../marketid.ts";
-import { readPoolState } from "../chain/reads.ts";
+import { feeDisagreementWarnings, readPoolState } from "../chain/reads.ts";
 import { isTransportError } from "../chain/rpc.ts";
 import { classifyInvalidatorWord, LOP_ADDRESSES, lopInvalidatorPlan, type LopOnChainStatus, readLopInvalidator } from "../orders.ts";
 import { classifyRolloverSettler } from "../rollover.ts";
@@ -11,7 +11,7 @@ import { type AttributedLogs, attributeLogs, protocolEmittersFor } from "../even
 import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts";
 import { chainStatusName, fetchDigestLogs, LogsRangeLimited, resolveLogsEndpoint, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages } from "./query.ts";
 
 /** [K7] chain-verification payload on rollover-order reconcile results: the settler's live
@@ -139,44 +139,59 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   }
 
   // chain-authoritative subjects need an RPC.
-  const { dep, depWarn } = await getDep(ctx, chainId);
+  const { dep, depWarn, refusal } = await getDep(ctx, chainId);
+  void depWarn;
   if (subj.kind === "marketRef") {
-    if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
+    if (!dep && !refusal) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
     const resolved = await getRpc(ctx, chainId);
     if (!resolved) return unavailable(chainId, "requires_rpc", "marketRef verification needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
     const client = resolved.client;
     const rpc = () => rpcProvenance(input.format, resolved);
+    // The manager that HOLDS the pool decides the wire the id is re-hashed on: an 8-field pool
+    // hashes eight words, a 10-field pool hashes its fees too — the same bytes through the wrong
+    // wire is a guaranteed marketid_mismatch that says nothing about the chain.
+    const pd = await getPoolDep(ctx, chainId, resolved, subj.poolId, { tool: "cork_track" });
+    if (pd.refusal) return pd.refusal;
+    const poolDep = pd.dep!;
+    const gen = pd.generation;
+    const pdWarn = pd.depWarn;
     try {
-      const s = await readPoolState(client, { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter }, subj.poolId, ctx.atBlock);
-      // stage 3: readPoolState reads the 8-field market() tuple, so the re-hash is pinned to the
-      // 8-field wire; the pool-scoped generation resolver (resolvePoolGeneration) will pick the
-      // manager AND its wire, and a 10-field manager's pool re-hashes with its fees.
-      const idMatches = computeMarketId(s.market, "8-field").toLowerCase() === subj.poolId.toLowerCase();
+      const s = await readPoolState(client, { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) }, subj.poolId, ctx.atBlock);
+      const recomputed = computeMarketId(s.market, s.wire);
+      const idMatches = recomputed.toLowerCase() === subj.poolId.toLowerCase();
       return envelope({
         state: idMatches ? "ok" : "conflict",
         data: {
           verified: idMatches,
           poolId: s.poolId,
-          marketIdRecomputed: computeMarketId(s.market, "8-field"),
+          ...generationData(gen),
+          wire: s.wire,
+          marketIdRecomputed: recomputed,
           swapRate: s.onChainSwapRate,
           market: s.market,
           // Same labels as the cork-pool read (audit R1.6): this result carries the same raw
           // WAD rates and constraint bounds, and a verifier reads them under the same collision.
           scales: {
             swapRate: "1e18 = 1.0 (WAD)",
-            market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
+            market:
+              s.wire === "10-field"
+                ? "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD); swapFeePercentage/unwindSwapFeePercentage INSIDE the struct (10-field wire — part of the pool id): 1e18 = 1% (PERCENTAGE)"
+                : "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
             unitsTopic: UNITS_TOPIC_REFERENCE,
           },
         },
         chainId,
         source: "chain",
         block: s.blockNumber,
-        warnings: idMatches ? [...rpcWarn(resolved), ...depWarn] : [{ code: "marketid_mismatch", message: "on-chain market params do not hash to the requested poolId" }, ...rpcWarn(resolved), ...depWarn],
+        warnings: idMatches
+          ? [...rpcWarn(resolved), ...pdWarn, ...feeDisagreementWarnings(s)]
+          : [{ code: "marketid_mismatch", message: `on-chain market params do not hash to the requested poolId (re-hashed on the ${s.wire} wire of ${gen ? `generation '${gen.label}'` : "the configured manager"})` }, ...rpcWarn(resolved), ...pdWarn, ...feeDisagreementWarnings(s)],
         ...rpc(),
+        ...(gen ? { generation: gen } : {}),
         ctx,
       });
     } catch (err) {
-      return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...depWarn], ctx, resolved);
+      return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...pdWarn], ctx, resolved);
     }
   }
 

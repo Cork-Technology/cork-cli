@@ -260,8 +260,12 @@ const throwingResolver = async () =>
       getBlockNumber: async () => {
         throw Object.assign(new Error("execution reverted\nlong viem detail"), { shortMessage: "The contract function \"swapRate\" reverted." });
       },
+      // The pool-scoped generation resolver reads shares(poolId) on every manager BEFORE the
+      // state read, so the first chain call is a readContract — the same revert-shaped error
+      // there keeps the path a chain_read_failed (every manager failed to answer), not a
+      // pool_not_found (every manager answered zero).
       readContract: async () => {
-        throw new Error("should not reach");
+        throw Object.assign(new Error("execution reverted\nlong viem detail"), { shortMessage: "The contract function \"shares\" reverted." });
       },
     },
     "default",

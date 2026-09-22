@@ -3,18 +3,18 @@
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { rankBookRows } from "../orders-rank.ts";
 import { bookWatermarkOf, decodeBookWatermark, diffBook, encodeBookWatermark, WatermarkError } from "../orders-watch.ts";
-import { type CorkAddresses, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
+import { type CorkAddresses, feeDisagreementWarnings, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
 import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
 import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPIC, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, getDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
-import { configuredPoolManagers, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
+import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
@@ -152,15 +152,18 @@ async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperS
 /** The MarketCreated scan over every configured Phoenix pool manager on the chain (primary
  *  deployment + named profiles) — shared by cork-pools, the event-derived trading-pairs view,
  *  and the fills join's pool discovery. */
-async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promise<{ spec: HsScanSpec } | { unknownDeployment: true }> {
-  const pms = await configuredPoolManagers(chainId);
-  if (pms.length === 0) return { unknownDeployment: true };
+async function marketCreatedSpec(chainId: ChainId, filters: QueryFilters): Promise<{ spec: HsScanSpec; emitters: MarketEmitter[] } | { unknownDeployment: true }> {
+  const emitters = await configuredPoolManagerRefs(chainId);
+  if (emitters.length === 0) return { unknownDeployment: true };
   return {
+    emitters,
     spec: {
       fromBlock: 0,
-      address: pms,
-      topics: [[MARKET_CREATED_TOPIC]],
-      decode: decodeMarketRows,
+      address: emitters.map((e) => e.poolManager as `0x${string}`),
+      // BOTH MarketCreated forms: a 10-field manager announces its pools under a different topic0
+      // (two fee args), and each log is decoded with the ABI of its EMITTER's declared wire.
+      topics: [[...MARKET_CREATED_TOPICS] as `0x${string}`[]],
+      decode: (logs) => decodeMarketRows(logs, emitters),
       postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
       key: (m) => `market:${String(m.poolId).toLowerCase()}`,
       cache: "markets",
@@ -220,7 +223,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
         // pool's cST on one side by construction, so each created pool IS one tradable pair.
         spec = {
           ...ms.spec,
-          decode: (logs) => decodeMarketRows(logs).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, blockNumber: m.blockNumber, txHash: m.txHash })),
+          decode: (logs) => decodeMarketRows(logs, ms.emitters).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, wire: m.wire, ...(m.generation !== undefined ? { generation: m.generation } : {}), blockNumber: m.blockNumber, txHash: m.txHash })),
           key: (row) => `pair:${String(row.poolId).toLowerCase()}`,
           cache: "pairs", // NOT "markets": same scan, different decode — a shared entry would serve unprojected rows
         };
@@ -791,10 +794,11 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     // fails honestly instead of falling into the poolId-gated chain-read path below.
     return unavailable(chainId, "needs_indexer", `cork_query('${input.resource}') requires an indexer/service backend not wired in this iteration`, ctx);
   }
-  if (!dep) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
-  if (input.resource === "pool-whitelist" && !dep.whitelistManager) {
-    return unavailable(chainId, "unknown_deployment", `whitelistManager address is not configured for chainId ${chainId} (partial deployment — read tools for market/account-state still work)`, ctx);
-  }
+  // The SELECTED generation only gates the no-deployment / no-RPC refusals here (today's
+  // behaviour for a caller who cannot reach the chain); which set the POOL lives on is resolved
+  // from the chain below, because every pool the venue serves lives on an OLDER manager than the
+  // primary and reading it through the primary's addresses answers for the wrong contract.
+  if (!dep && !refusal) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) {
     return unavailable(chainId, "requires_rpc", `cork_query('${input.resource}') needs an RPC endpoint for chainId ${chainId} (none resolved: offline, or a chain with no default/fallback — set CORK_RPC_URL)`, ctx);
@@ -802,12 +806,21 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (!filters.poolId) return unavailable(chainId, "missing_filter", `cork_query('${input.resource}') requires filters.poolId`, ctx);
 
   const client = resolved.client;
+  // Pool-scoped generation resolution: one batched shares(poolId) read across every configured
+  // manager (narrowed by `generation`); the miss names every manager asked.
+  const pd = await getPoolDep(ctx, chainId, resolved, filters.poolId, { tool: "cork_query" });
+  if (pd.refusal) return pd.refusal;
+  const poolDep = pd.dep!;
+  const gen = pd.generation;
+  if (input.resource === "pool-whitelist" && !poolDep.whitelistManager) {
+    return unavailable(chainId, "unknown_deployment", `whitelistManager address is not configured for ${gen ? `generation '${gen.label}' on ` : ""}chainId ${chainId} (partial deployment — read tools for market/account-state still work)`, ctx);
+  }
   // rpcWarn/rpcProvenance are deferred to ENVELOPE construction: the client fails over in-call
   // on a dead endpoint (mutating `resolved`), and the disclosure must describe the endpoint
   // that actually served the reads.
-  const w = [...depWarn];
+  const w = [...pd.depWarn];
   const rpc = () => rpcProvenance(input.format, resolved);
-  const addrs: CorkAddresses = { poolManager: dep.poolManager, constraintAdapter: dep.constraintAdapter };
+  const addrs: CorkAddresses = { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) };
 
   try {
     if (input.resource === "cork-pool") {
@@ -818,6 +831,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           resource: input.resource,
           chainId,
           poolId: s.poolId,
+          ...generationData(gen),
+          wire: s.wire,
           market: s.market,
           constraintState: s.constraintState,
           swapRate: s.onChainSwapRate,
@@ -839,7 +854,10 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             unwindSwapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD)",
             // One key per nested struct, matching the compute precedent (`constraint: …`) —
             // slash-composite keys are not addressable by a consumer doing scales[field].
-            market: "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
+            market:
+              s.wire === "10-field"
+                ? "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD); swapFeePercentage/unwindSwapFeePercentage INSIDE the struct (10-field wire — part of the pool id): 1e18 = 1% (PERCENTAGE)"
+                : "rateMin/rateMax/rateChangePerDayMax/rateChangeCapacityMax: ABSOLUTE rates, 1e18 = 1.0 (WAD)",
             constraintState: "lastAdjustedRate: 1e18 = 1.0 (WAD)",
             unitsTopic: UNITS_TOPIC_REFERENCE,
           },
@@ -847,15 +865,16 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         chainId,
         source: "chain",
         block: s.blockNumber,
-        warnings: [...rpcWarn(resolved), ...w],
+        warnings: [...rpcWarn(resolved), ...w, ...feeDisagreementWarnings(s)],
         ...rpc(),
+        ...(gen ? { generation: gen } : {}),
         ctx,
       });
     }
 
     if (input.resource === "account-state") {
       if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
-      const tokens = await resolvePoolTokens(client, dep.poolManager, filters.poolId, ctx.atBlock);
+      const tokens = await resolvePoolTokens(client, poolDep, filters.poolId, ctx.atBlock);
       const blockOpt = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
       const bal = (token: `0x${string}`) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });
@@ -871,7 +890,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // initiator→ADAPTER (erc20TransferFrom on the adapter), permit2 mode needs the token
       // approved to the canonical Permit2. Only readable where the adapter is configured.
       let allowances: FundingAllowances | undefined;
-      if (dep.corkAdapter) {
+      if (poolDep.corkAdapter) {
         const alw = (token: `0x${string}`, spender: `0x${string}`) =>
           client.readContract({ address: token, abi: erc20Abi, functionName: "allowance", args: [filters.account!, spender], ...blockOpt });
         const roles = [
@@ -889,10 +908,10 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         const entries = await Promise.all(
           roles.map(async ([role, token]) => {
             const [toAdapter, toPermit2, p2] = await Promise.all([
-              alw(token, dep.corkAdapter!),
+              alw(token, poolDep.corkAdapter!),
               alw(token, PERMIT2_ADDRESS),
               client
-                .readContract({ address: PERMIT2_ADDRESS, abi: permit2AllowanceAbi, functionName: "allowance", args: [filters.account!, token, dep.corkAdapter!], ...blockOpt })
+                .readContract({ address: PERMIT2_ADDRESS, abi: permit2AllowanceAbi, functionName: "allowance", args: [filters.account!, token, poolDep.corkAdapter!], ...blockOpt })
                 .catch(() => null),
             ]);
             const permit2Internal = Array.isArray(p2) && p2.length >= 2
@@ -909,31 +928,31 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           }),
         );
         allowances = {
-          spenders: { corkAdapter: dep.corkAdapter, permit2: PERMIT2_ADDRESS },
+          spenders: { corkAdapter: poolDep.corkAdapter, permit2: PERMIT2_ADDRESS },
           note: "permit2-mode funding requires BOTH the ERC-20 approval to Permit2 (permit2) AND an unexpired Permit2-internal allowance for spender=corkAdapter (permit2Internal)",
           byToken: Object.fromEntries(entries),
         };
       } else {
-        w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
+        w.push({ code: "unknown_deployment", message: `corkAdapter is not configured for ${gen ? `generation '${gen.label}' on ` : ""}chainId ${chainId} — allowances (funding pre-flight) omitted; balances are complete` });
       }
       const tokensOut = { collateral: tokens.collateral, reference: tokens.reference, corkSwapToken: tokens.cst, corkPrincipalToken: tokens.cpt, expiryTimestamp: tokens.expiryTimestamp };
       const decimals = { collateral: Number(collateralDecimals), reference: Number(referenceDecimals), corkSwapToken: 18, corkPrincipalToken: 18 };
       // Pointer key is `unitsTopic`, NOT `reference`: scales maps field names to labels, and
       // `reference` IS a field here (the token role) — the pointer must never look like a label.
       const scales = { balances: "native base units of each token — convert by decimals[role]", allowances: "native base units of each token per spender (uint256.max = unlimited standing approval)", unitsTopic: UNITS_TOPIC_REFERENCE };
-      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, decimals, tokens: tokensOut, ...(allowances ? { allowances } : {}), scales }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+      return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, ...generationData(gen), account: filters.account, balances: { collateral, reference, corkSwapToken, corkPrincipalToken }, decimals, tokens: tokensOut, ...(allowances ? { allowances } : {}), scales }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ...(gen ? { generation: gen } : {}), ctx });
     }
 
     // pool-whitelist (wlm presence checked above)
     if (!filters.account) return unavailable(chainId, "missing_filter", "pool-whitelist requires filters.account", ctx);
     const isWhitelisted = await client.readContract({
-      address: dep.whitelistManager!,
+      address: poolDep.whitelistManager!,
       abi: whitelistManagerAbi,
       functionName: "isWhitelisted",
       args: [filters.poolId, filters.account],
       ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
     });
-    return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ctx });
+    return envelope({ state: "ok", data: { resource: input.resource, chainId, poolId: filters.poolId, ...generationData(gen), account: filters.account, isWhitelisted }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...w], ...rpc(), ...(gen ? { generation: gen } : {}), ctx });
   } catch (err) {
     return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx, resolved);
   }

@@ -18,14 +18,14 @@
 // decision 2026-08-13), and a JIT order legitimately lists a pair whose pool does not exist
 // yet — chain existence rides as an `exists` annotation, not a liveness verdict.
 import { zeroAddress } from "viem";
-import { poolManagerAbi } from "../chain/abis.ts";
+import { marketAbiFor } from "../chain/abis.ts";
 import { classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { classifyRolloverSettler } from "../rollover.ts";
 import { parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { LOP_FILLED_TOPIC } from "../datasources/hypersync.ts";
 import { chainStatusName, knownVenueStatus, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { resolveConfig, resolveRollover } from "../config-remote.ts";
-import { generationsOf } from "../generations.ts";
+import { generationsOf, type PhoenixWire } from "../generations.ts";
 import { getRpc, type HandlerContext, nowSecondsOf } from "./shared.ts";
 import { authenticateBookRowSignature, type BookMakerSignature, extensionVerdict, recoverEoaSigner } from "./order-auth.ts";
 import { assessMakerReadiness, gatherMakerReadinessFacts, type MakerReadiness, type MakerReadinessFacts, type MakerReadinessInput, type MakerReadinessTarget, makerReadinessTargetOf } from "./maker-readiness.ts";
@@ -63,10 +63,24 @@ export interface HybridVerification {
  *  read-only sets included) — venue rows may live on ANY generation (the venue's existing
  *  markets are on the arbitrum-v1.1 PM), so existence is "any configured PM knows it". */
 export async function configuredPoolManagers(chainId: number): Promise<`0x${string}`[]> {
+  return (await configuredPoolManagerRefs(chainId)).map((r) => r.poolManager);
+}
+
+/** The same managers WITH the wire each speaks and its generation label — what a MarketCreated
+ *  scan needs to pick the decode ABI per emitter, and what an existence probe needs to pick the
+ *  `market()` ABI per manager. One address appears once (its first generation, resolution order). */
+export async function configuredPoolManagerRefs(chainId: number): Promise<Array<{ poolManager: `0x${string}`; wire: PhoenixWire; label: string }>> {
   const cfg = await resolveConfig();
-  const pms = new Set<`0x${string}`>();
-  for (const g of generationsOf(cfg.defaults, chainId)) if (g.phoenix) pms.add(g.phoenix.poolManager as `0x${string}`);
-  return [...pms];
+  const seen = new Set<string>();
+  const out: Array<{ poolManager: `0x${string}`; wire: PhoenixWire; label: string }> = [];
+  for (const g of generationsOf(cfg.defaults, chainId)) {
+    if (!g.phoenix) continue;
+    const pm = g.phoenix.poolManager as `0x${string}`;
+    if (seen.has(pm.toLowerCase())) continue;
+    seen.add(pm.toLowerCase());
+    out.push({ poolManager: pm, wire: g.phoenix.wire, label: g.label });
+  }
+  return out;
 }
 
 const label = (row: Row, verification: "confirmed" | "unverified"): Row => ({ ...row, verification });
@@ -355,15 +369,18 @@ export async function verifyVenueRows(a: {
       });
     }
   } else if (resource === "cork-pools" || resource === "trading-pairs") {
-    const pms = await configuredPoolManagers(chainId);
+    const pms = await configuredPoolManagerRefs(chainId);
     const poolIdOf = (row: Row) => str(row.poolId) ?? str((row as { pool_id?: unknown }).pool_id);
     // Per pool: probe the PM generations primary-first, SEQUENTIALLY (most pools live on the
-    // primary); across pools: concurrent, deduped on poolId.
+    // primary); across pools: concurrent, deduped on poolId. Each manager is read through the
+    // market() ABI of ITS wire — the 8-field ABI decodes a 10-field return silently (dropping the
+    // fee words), which happens to leave collateralAsset intact today, but an existence probe
+    // that only works by accident of word order is not a probe.
     const probeExists = async (poolId: `0x${string}`): Promise<boolean | null> => {
       let sawError = false;
       for (const pm of pms) {
         try {
-          const market = (await client.readContract({ address: pm, abi: poolManagerAbi, functionName: "market", args: [poolId] })) as { collateralAsset: `0x${string}` };
+          const market = (await client.readContract({ address: pm.poolManager, abi: marketAbiFor(pm.wire), functionName: "market", args: [poolId] })) as { collateralAsset: `0x${string}` };
           if (market.collateralAsset !== zeroAddress) return true;
         } catch {
           sawError = true;

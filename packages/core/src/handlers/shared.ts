@@ -6,7 +6,7 @@ import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcC
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, resolveMarketRegistry, type CorkMarketRegistry } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
-import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
+import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolvePoolGeneration } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
@@ -159,6 +159,98 @@ export async function getDep(
   return { dep: r.deployment, depWarn, ...(r.generation ? { generation: r.generation } : {}) };
 }
 
+/** The compact `{ label, status, distribution? }` every result carries — ONE projection so a
+ *  ref that grew a `wire` (getDep's) or a `primary` flag never leaks extra keys into data/provenance. */
+export function generationRefOf(g: GenerationRef): GenerationRef {
+  return { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}) };
+}
+
+/** The `data.generation` block of a pool-scoped result: the ref, or nothing when the call ran
+ *  under a ctx.deployment override (no generation model applies). */
+export function generationData(g: GenerationRef | undefined): { generation?: GenerationRef } {
+  return g ? { generation: generationRefOf(g) } : {};
+}
+
+export type PoolDepResolution = {
+  dep: CorkDeployment | undefined;
+  depWarn: Array<{ code: string; message: string }>;
+  /** The generation the pool LIVES on (plus its wire) — undefined under a ctx.deployment override. */
+  generation?: GenerationRef & { wire: PhoenixWire };
+  /** The pool's share tokens as the resolver read them (`shares(poolId)` on the winning manager). */
+  shares?: { corkPrincipalToken: `0x${string}`; corkSwapToken: `0x${string}` };
+  /** A finished envelope when the pool could not be placed: `pool_not_found` naming every manager
+   *  asked with its label, `generation_read_only` on a pre-expiry prepare against a read-only set,
+   *  `unknown_deployment` when no generation has a pool manager. `generation_unknown` THROWS
+   *  (ToolInputError — an invalid-input-class teaching, the label is the caller's own field). */
+  refusal?: Envelope;
+};
+
+/**
+ * Resolve the deployment for a POOL: which generation's pool manager knows `poolId` — ONE batched
+ * `shares(poolId)` read across every configured manager on the chain (generations.ts
+ * `resolvePoolGeneration`), narrowed to one set when the caller names `generation`. This is the
+ * pool-scoped twin of `getDep`: getDep answers "which set does a NEW thing target" (the primary,
+ * or the named set); this answers "which set does THIS pool live on" — a different question for
+ * every pool the venue serves today (the 176 arbitrum-v1.1 pools live on 0x4d0a…, not on the
+ * primary 10-field manager), and reading them through the primary's addresses builds bundles for
+ * the wrong adapter and re-hashes ids on the wrong wire.
+ *
+ * `purpose: "prepare"` refuses a read-only generation (`generation_read_only`); the caller passes
+ * `"read"` for reads AND for post-expiry settles (withdraw / withdraw-other / redeem), which the
+ * design keeps buildable on a read-only set — the pool's cPT is still someone's money.
+ * A ctx.deployment override short-circuits exactly like getDep (the SDK caller pinned addresses;
+ * no generation is reported). A no-RPC caller never reaches this — it keeps getDep's behaviour.
+ */
+export async function getPoolDep(
+  ctx: HandlerContext,
+  chainId: ChainId,
+  resolved: ResolvedRpc,
+  poolId: `0x${string}`,
+  opts: { purpose?: "read" | "prepare"; generation?: string; tool: string },
+): Promise<PoolDepResolution> {
+  if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
+  const { generations, warning } = await resolveGenerations(chainId);
+  const depWarn = warning ? [warning] : [];
+  const label = opts.generation ?? ctx.generation;
+  if (generations.length === 0) {
+    return { dep: undefined, depWarn, refusal: unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx) };
+  }
+  const client: PoolGenerationClient = resolved.client;
+  const r: PoolGenerationResolution = await resolvePoolGeneration(client, generations, poolId, label, ctx.atBlock);
+  if (!r.found) {
+    if (r.code === "generation_unknown") throw new ToolInputError(opts.tool, [{ path: ["generation"], message: r.message }]);
+    // "Every manager answered zero" is the pool's absence; "NO manager answered" is the chain
+    // failing to answer — the second keeps its chain_read_failed envelope (and its transport
+    // breaker feed, from the ORIGINAL error), never a pool_not_found the caller would act on.
+    if (r.code === "pool_not_found" && r.causes !== undefined && r.causes.length === r.asked.length) {
+      return { dep: undefined, depWarn, refusal: chainReadFailed(chainId, r.causes[0], [{ code: "pool_not_found", message: `no pool manager could be read for pool ${poolId}: ${r.message}` }, ...depWarn], ctx, resolved) };
+    }
+    return { dep: undefined, depWarn, refusal: unavailable(chainId, r.code, r.message, ctx) };
+  }
+  const g = r.generation;
+  const ref: GenerationRef & { wire: PhoenixWire } = { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}), wire: g.phoenix!.wire };
+  const shares = { corkPrincipalToken: r.corkPrincipalToken, corkSwapToken: r.corkSwapToken };
+  if (opts.purpose === "prepare" && g.status !== "active") {
+    const refusal = envelope({
+      state: "unavailable",
+      data: null,
+      chainId,
+      source: "config",
+      warnings: [
+        ...depWarn,
+        {
+          code: "generation_read_only",
+          message: `pool ${poolId} lives on generation '${g.label}', which is read-only: its contracts are kept for reads, decode and attribution, and only the post-expiry settles (withdraw, withdraw-other, redeem) still build against them — no new pre-expiry bytes. Enter a pool on an active generation instead (protocol-config lists them)`,
+        },
+      ],
+      generation: ref,
+      ctx,
+    });
+    return { dep: undefined, depWarn, generation: ref, shares, refusal };
+  }
+  return { dep: g.phoenix as CorkDeployment, depWarn, generation: ref, shares };
+}
+
 /**
  * Resolve the market-registry block a registry-bound path (JIT ladder, registry-* reads,
  * derive-cork-pool, create-pool, deploy-oracle) builds against: `ctx.generation` when the caller
@@ -300,6 +392,10 @@ export function envelope(args: {
   rpc?: { source: "explicit" | "default" | "chainlist"; host: string };
   /** Explicit data-mode override (e.g. HyperSync-served raw logs = full-decentralized). */
   mode?: "lite-decentralized" | "hybrid" | "full-decentralized";
+  /** The generation the result was read from / built against → `provenance.generation`. Handlers
+   *  that resolve a pool's generation from the chain pass the resolver's ref here (and mirror it in
+   *  `data.generation`), so a reader can tell WHICH manager answered without re-deriving it. */
+  generation?: GenerationRef;
   ctx: HandlerContext;
 }): Envelope {
   const data = jsonSafe(args.data);
@@ -327,6 +423,7 @@ export function envelope(args: {
       digest,
       ...(args.block !== undefined ? { block: args.block.toString() } : {}),
       ...(args.rpc !== undefined ? { rpc: args.rpc } : {}),
+      ...(args.generation !== undefined ? { generation: generationRefOf(args.generation) } : {}),
     },
     schemaVersion: SCHEMA_VERSION,
   };

@@ -217,6 +217,28 @@
                   "source",
                   "host"
                 ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ]
               }
             },
             "required": [
@@ -663,6 +685,28 @@
                   "source",
                   "host"
                 ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ]
               }
             },
             "required": [
@@ -873,6 +917,28 @@
                   "source",
                   "host"
                 ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ]
               }
             },
             "required": [
@@ -1022,6 +1088,28 @@
                 "required": [
                   "source",
                   "host"
+                ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
                 ]
               }
             },
@@ -1753,6 +1841,28 @@
                 "required": [
                   "source",
                   "host"
+                ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
                 ]
               }
             },
@@ -3518,6 +3628,28 @@
                   "source",
                   "host"
                 ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ]
               }
             },
             "required": [
@@ -3889,6 +4021,28 @@
                   "source",
                   "host"
                 ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ]
               }
             },
             "required": [
@@ -4187,6 +4341,28 @@
                 "required": [
                   "source",
                   "host"
+                ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
                 ]
               }
             },
@@ -5105,6 +5281,28 @@
                 "required": [
                   "source",
                   "host"
+                ]
+              },
+              "generation": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "read-only"
+                    ]
+                  },
+                  "distribution": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
                 ]
               }
             },

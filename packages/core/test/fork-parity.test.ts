@@ -26,6 +26,7 @@ const RPC = process.env.CORK_TEST_RPC;
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const ADDR = {
   poolManager: "0xccCCcCcCCccCfAE2Ee43F0E727A8c2969d74B9eC" as const,
+  wire: "8-field" as const,
   constraintAdapter: "0xCCcCcCcccCccEF378949D1a61ED2283C831AF03A" as const,
 };
 

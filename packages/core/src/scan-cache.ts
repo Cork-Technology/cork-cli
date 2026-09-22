@@ -53,12 +53,21 @@ function loadFile(): ScanCacheFile {
   return file;
 }
 
-/** Stable identity for one scan: the spec fields that define WHAT is being scanned. A changed
- *  address set / topic set / floor is a different scan and must not inherit another's rows. */
+/** The ROW-SHAPE version of every cached scan, part of every identity. Bump it whenever a
+ *  decoder's output changes for the same (address, topics) — the cache stores DECODED rows, so a
+ *  cursor written by an older decoder would otherwise serve rows in the old shape forever (the
+ *  identity below would still match) and the reorg overlap re-decodes only the tail.
+ *  2 (0.6, stage 2c): MarketCreated rows gained `wire` / `generation` / the 10-field fees and the
+ *  scan asks for both MarketCreated topics; every 0.5.x entry (schema 1, 7-arg only) is ignored. */
+export const SCAN_CACHE_SCHEMA = 2;
+
+/** Stable identity for one scan: the row-shape schema plus the spec fields that define WHAT is
+ *  being scanned. A changed address set / topic set / floor is a different scan and must not
+ *  inherit another's rows; a changed decoder (SCAN_CACHE_SCHEMA) is a different scan too. */
 export function scanCacheId(a: { chainId: number; name: string; fromBlock: number; address: readonly string[]; topics: ReadonlyArray<readonly string[] | null> }): string {
   const addr = [...a.address].map((x) => x.toLowerCase()).sort().join(",");
   const topics = a.topics.map((t) => (t === null ? "*" : [...t].map((x) => x.toLowerCase()).sort().join("|"))).join(";");
-  return `${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;
+  return `v${String(SCAN_CACHE_SCHEMA)}:${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;
 }
 
 export function readScanCache(id: string): ScanCacheEntry | undefined {
