@@ -319,7 +319,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
                 }
               }
               if (pred.status === "unavailable") {
-                warnings.push({ code: "share_prediction_unavailable", message: "could not predict the new pool's cST address (eth_simulateV1/state overrides unsupported or simulation failed) — VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; the ERC-2612 permit must also be signed over that cST" });
+                warnings.push({ code: "share_prediction_unavailable", message: `could not predict the new pool's cST address — ${pred.reason ?? "no reason recorded"}. VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; a REVERT named here is the revert the fill's creation leg would hit` });
               }
               if (cst) {
                 jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint (same clientRequestId): the constraint is part of the pool's identity, and a single oracle tick between the two prepares otherwise re-derives a different pool and cST than the permit was signed over (jit_side_mismatch)" };

@@ -32,7 +32,7 @@
 // Golden vectors for the nested wire were captured from the deployed contracts themselves
 // (adapter.encodeExtraData / decodeExtraData, pm.getId, registry.predictFixedRateOracle,
 // recipe.encodeExtraData; 42161, 2026-09-22) and are pinned in test/market-registry-nested.test.ts.
-import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex, zeroAddress } from "viem";
+import { concatHex, decodeAbiParameters, decodeErrorResult, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex, zeroAddress } from "viem";
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import { cachedContractConstantBytes32, refreshContractConstant } from "./chain/constants-cache.ts";
@@ -1061,6 +1061,47 @@ export interface PredictSharesResult {
   cpt?: `0x${string}` | undefined;
   exists: boolean;
   status: "read" | "simulated" | "unavailable";
+  /** Why `unavailable`: the creation leg's REVERT (decoded against the creator/pool-manager/
+   *  registry/recipe error sets when it matches one — `InvalidRate()`, `RecipeRejectedConstraint(…)`,
+   *  `ExpiryOutOfRange(…)`), a pre-leg's revert, a shares read that decoded to a zero cST, or the
+   *  transport ("eth_simulateV1 unsupported"). The 2026-09-22 nested fill rehearsal spent three runs
+   *  on a market the FILL rejected while this result said only "unsupported, or config missing" —
+   *  a simulated revert is a fact about the market, and the caller must see it. */
+  reason?: string | undefined;
+}
+
+/** The pool manager's creation-time refusals (phoenix IPoolManager, both wires) — the errors a
+ *  simulated createNewPool surfaces when the MARKET is the fault: a live rate outside the carried
+ *  window (`InvalidRate`), an expiry in the past, a fee at or over the 10-field cap, a paused
+ *  manager, or a creator/adapter without POOL_CREATOR_ROLE (the state override should prevent the
+ *  last one; seeing it means the override missed). Declared here for the decoder only. */
+const poolManagerRevertAbi = parseAbi([
+  "error InvalidRate()",
+  "error InvalidExpiry()",
+  "error InvalidFees()",
+  "error InvalidParams()",
+  "error EnforcedPause()",
+  "error AccessControlUnauthorizedAccount(address account, bytes32 neededRole)",
+]);
+
+/** Name a simulate leg's failure: the decoded custom error when the bytes match a known Cork error
+ *  set, else the raw selector — never a guess at what the contract meant. */
+function simulateLegFailure(leg: { status: string; error?: unknown; data?: `0x${string}` | undefined } | undefined, label: string): string {
+  if (!leg) return `${label}: no result returned by eth_simulateV1`;
+  const raw = leg.data;
+  if (raw && raw.length >= 10) {
+    for (const abi of [marketCreatorNestedAbi, marketCreatorAbi, recipeNestedAbi, recipeAbi, marketRegistryNestedAbi, marketRegistryAbi, controllerCreatePoolAbi, controllerCreatePool10Abi, poolManagerRevertAbi]) {
+      try {
+        const d = decodeErrorResult({ abi, data: raw });
+        return `${label} reverted ${d.errorName}(${(d.args ?? []).map((a) => String(a)).join(", ")})`;
+      } catch {
+        /* not this error set */
+      }
+    }
+    return `${label} reverted with selector ${raw.slice(0, 10)}`;
+  }
+  const err = leg.error;
+  return `${label} failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err ?? leg.status)}`;
 }
 
 export async function predictShares(
@@ -1139,20 +1180,33 @@ export async function predictShares(
     });
     const create = simulated.results[pre.length];
     const last = simulated.results[pre.length + 1];
+    // Legs run in ONE simulated block state and a failed leg does NOT stop the ones after it, so
+    // the pre-legs are judged FIRST: an oracle deploy that reverted leaves the creation leg
+    // running against an address with no code, and whatever it then returns describes nothing.
+    const failedPre = pre.findIndex((_c, i) => simulated.results[i]?.status !== "success");
+    if (failedPre >= 0) {
+      return { exists: false, status: "unavailable", reason: simulateLegFailure(simulated.results[failedPre], `pre-leg ${failedPre + 1} of ${pre.length} (${pre[failedPre]!.to})`) };
+    }
     // The creation leg must have SUCCEEDED and the shares read must decode to a non-zero cST —
-    // a zero address here means the pool was not actually created in-memory (e.g. a pre-leg
-    // failed), and serving it as a prediction would be an invention.
+    // a zero address here means the pool was not actually created in-memory, and serving it as a
+    // prediction would be an invention.
     if (create?.status === "success" && last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {
       const cpt = getAddress(`0x${last.data.slice(2 + 24, 2 + 64)}`);
       const cst = getAddress(`0x${last.data.slice(2 + 64 + 24, 2 + 128)}`);
       if (cst !== ZERO_ADDRESS) {
         return { cst, cpt: cpt === ZERO_ADDRESS ? undefined : cpt, exists: false, status: "simulated" };
       }
+      return { exists: false, status: "unavailable", reason: "the creation leg succeeded but shares(poolId) read a zero cST — the pool the controller created is not the pool id derived here (identity inputs disagree)" };
     }
-  } catch {
-    /* eth_simulateV1 / state overrides unsupported, or the simulation reverted */
+    // A revert here is a fact about the MARKET (the rate outside its window, the recipe rejecting
+    // the constraint, an expiry past the bound), not about the transport.
+    const reason = create?.status !== "success" ? simulateLegFailure(create, "controller.createNewPool") : simulateLegFailure(last, "poolManager.shares");
+    return { exists: false, status: "unavailable", reason };
+  } catch (err) {
+    // The TRANSPORT failed us: eth_simulateV1 or state overrides unsupported by this endpoint, or
+    // the request was refused before any leg ran.
+    return { exists: false, status: "unavailable", reason: `eth_simulateV1 with state overrides failed on this endpoint: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
   }
-  return { exists: false, status: "unavailable" };
 }
 
 // ── JIT + market lifecycle events (source-verified signatures) ─────────────────────────────

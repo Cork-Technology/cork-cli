@@ -79,6 +79,7 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
+  predictReason: "packages/core/test/predict-shares-reason.test.ts",
   attribution: "packages/core/test/event-attribution.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
   releaseTag: "packages/cli/test/release-tag.test.ts",
@@ -5292,6 +5293,32 @@ const CATALOG: Mutant[] = [
     find: "          const market = (await client.readContract({ address: pm.poolManager, abi: marketAbiFor(pm.wire), functionName: \"market\", args: [poolId] })) as { collateralAsset: `0x${string}` };",
     replace: "          const market = (await client.readContract({ address: pm.poolManager, abi: marketAbiFor(\"8-field\"), functionName: \"market\", args: [poolId] })) as { collateralAsset: `0x${string}` };",
     tests: [T.poolgen],
+  },
+  {
+    // predictShares names WHY: the decoded simulated revert must reach the caller. A constant
+    // "unsupported" text is the 2026-09-22 rehearsal's three wasted runs.
+    id: "predict-reason-revert-not-decoded",
+    file: "packages/core/src/market-registry.ts",
+    find: 'return `${label} reverted ${d.errorName}(${(d.args ?? []).map((a) => String(a)).join(", ")})`;',
+    replace: 'return `${label} reverted`;',
+    tests: [T.predictReason],
+  },
+  {
+    // Legs run in one simulated block and a failed pre-leg does not stop the later ones: judging
+    // the creation leg first reports "identity disagreement" for an oracle deploy that reverted.
+    id: "predict-reason-preleg-judged-after-create",
+    file: "packages/core/src/market-registry.ts",
+    find: "    const failedPre = pre.findIndex((_c, i) => simulated.results[i]?.status !== \"success\");\n    if (failedPre >= 0) {",
+    replace: "    const failedPre = -1 as number;\n    if (failedPre >= 0) {",
+    tests: [T.predictReason],
+  },
+  {
+    // The transport failure must carry the endpoint's own message, not a bare label.
+    id: "predict-reason-transport-message-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: 'reason: `eth_simulateV1 with state overrides failed on this endpoint: ${err instanceof Error ? err.message.split("\\n")[0] : String(err)}`',
+    replace: 'reason: "eth_simulateV1 with state overrides failed on this endpoint"',
+    tests: [T.predictReason],
   },
 ];
 

@@ -477,7 +477,7 @@ export async function buildTakerJitInteraction(args: {
         // The simulation runs AS the wire's role holder (the account the override grants).
         const pred = await predictShares(client, { adapter: codec.roleHolder === "creator" ? ladder.marketCreator! : ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId });
         if (pred.status === "unavailable") {
-          warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
+          warnings.push({ code: "share_prediction_unavailable", message: `could not predict the pool's cST — ${pred.reason ?? "no reason recorded"}. VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool; a REVERT named here means the fill's own creation leg would revert the same way` });
         }
         if (pred.cst) {
           jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — the LOP pulls the just-minted cST from the taker. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint: the resting order names one specific pool, and a re-derivation from a moved oracle rate would target a different one (OrderNotForPool)" };

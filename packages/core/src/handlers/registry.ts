@@ -800,7 +800,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
       shares = await predictShares(client, { adapter: simulatingAccount, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, preCalls, chainId });
     }
     const extra: Array<{ code: string; message: string }> = [];
-    if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the pool id, oracle, and constraint above are still valid" });
+    if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: `could not predict the pool's cST/cPT — ${shares.reason ?? "config missing"}. The pool id, oracle, and constraint above are still valid; a REVERT named here is a fact about the market (the fill would fail the same way), a transport failure is about the endpoint` });
     if (!shares.exists && !oracle.deployed) {
       extra.push({ code: "oracle_not_deployed", message: "the oracle is not deployed and does not need to be: the fill deploys it (permissionless, idempotent) at this PREDICTED address inside the same transaction, and the pool id's only oracle-derived input is that address. The identity above is stable unless the pair's registered sources change before the fill (a re-registration shifts the predicted address → OrderNotForPool)" });
     } else if (!shares.exists) {

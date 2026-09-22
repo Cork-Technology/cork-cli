@@ -340,7 +340,7 @@ async function handleCreatePool(
       shares = await predictShares(client, { adapter: creator, controller: boundController, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, preCalls, chainId });
     }
     if (shares.status === "unavailable") {
-      warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the calldata and pool id above are still exact; the tx itself returns (poolId, cst, cpt)" });
+      warnings.push({ code: "share_prediction_unavailable", message: `could not predict the pool's cST/cPT — ${shares.reason ?? "config missing"}. The calldata and pool id above are still exact; the tx itself returns (poolId, cst, cpt) — but a REVERT named here is what the tx would hit too` });
     }
     if (shares.exists) {
       warnings.push({ code: "pool_already_exists", message: `the pool ${derived.poolId} already exists — the tx is a safe idempotent no-op: it re-runs the recipe checks, skips creation, and returns the existing (poolId, cst, cpt)` });
