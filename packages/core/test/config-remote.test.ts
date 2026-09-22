@@ -2,6 +2,7 @@
 // (positive AND negative) → bundled fallback. Noise policy under test: 404 ("not published") is
 // silent; transient failures warn once per 10-min window. All I/O injected.
 import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { Address } from "@cork/schemas";
@@ -234,6 +235,17 @@ describe("old-binary safety: the FROZEN schema-1 file still parses under the v1 
     expect(parsed.deployments["42161"]?.poolManager).toBe("0x02803Bb52D2184f906F45B50C66AA969C2E37263");
     expect(parsed.marketRegistry?.["42161"]?.registry).toBe("0xa78d8137B01058dD23e545b6557209eBBc9611F1");
     expect(parsed.rollover?.["42161"]?.factory).toBe("0x697A6A2d5e09dc1CaBD0AA46678E053567275F82");
+  });
+
+  it("cork-defaults.json is BYTE-FROZEN at its v0.5.1 contents (sha256 pinned)", () => {
+    // Frozen means frozen: on 2026-09-22 a cherry-pick had added `rollover.*.activeGenerations`
+    // (the 0.2 settlers under a candidate label, with NO wire) to this file after v0.5.1 — a v1
+    // reader honouring it would hash rc.2 typehashes for 0.2 settlers, exactly the class the freeze
+    // exists to prevent (0.5.x binaries strip the key today, but the file is a published surface).
+    // The pin is the v0.5.1 tag's bytes; a deliberate change to the frozen file must re-pin here
+    // AND explain why an old binary is safe with it.
+    const bytes = readFileSync(new URL("../../../cork-defaults.json", import.meta.url));
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("9ae3a0eeb73f182008c2dae0fe73a6ce3623cfe51122991cfd518a1c2c3acf97");
   });
 
   it("the 0.6 parser refuses the frozen v1 file (the two lines never read each other's document)", () => {

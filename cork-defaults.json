@@ -1,7 +1,7 @@
 {
   "$comment": "Canonical Cork deployment addresses/config. Runtime behavior: the tool fetches the latest copy of THIS file from GitHub (raw.githubusercontent.com, main branch) with TTL caching; this committed copy ships with the distribution as the fallback when the fetch fails. Addresses are CREATE2-verifiable where an attestation exists (cork_capabilities topic:'verify'). Partial chains omit unknown contracts deliberately \u2014 handlers gate per capability.",
   "schemaVersion": 1,
-  "updated": "2026-09-11",
+  "updated": "2026-08-28",
   "$v13Comment": "42161 + 8453 defaults are phoenix v1.3.0-rc.1 (github.com/Cork-Technology/phoenix v1.3.0-rc.1, prerelease 2026-08-07): identical CREATE2 addresses on both chains via the Safe Singleton Factory; runtime hashes chain-verified, pool-manager impl slot + adapter CORK()/BUNDLER3() bindings re-verified on-chain 2026-08-07. bundler3 per chain comes from the deployed CorkAdapter's own BUNDLER3() immutable (Morpho infra, not in the release table). Adopted together with market-registry 0.3.2 (the contracts team's redeploy against this pool manager) \u2014 the generations are ALIGNED. The previous Arbitrum production stack (the venue's existing markets live there until the venue migrates) is preserved as deploymentProfiles['42161']['arbitrum-v1.1']; rollover redeployed 2026-08-13 as v0.1.0-rc.2 against the v1.3 pool manager (see $rolloverComment).",
   "deployments": {
     "1": {
@@ -115,7 +115,7 @@
       "controller": "0xdCC0388c68f85e65FA08dCb445B4d0927e9E6172"
     }
   },
-  "$rolloverComment": "Rollover ERC-7683 stack. PRIMARY generation (top-level fields): rollover v0.1.0-rc.2, deployed 2026-08-13; identical CREATE2 addresses on 42161+8453, chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts. rc.2 changed the OrderData/RolloverParams typehashes (jitMarketHash), so the July 2026 generation under legacyGenerations is RETIRED: the venue archives it, and rc.2-typed digests do not verify on the old settlers; legacyGenerations exists for event-history scans (full-decentralized fills/contracts) and retired-settler teaching. activeGenerations: OTHER generations the venue admits beside the primary one, wire-compatible with it (same CorkSettler/1.0.0 domain and type strings). The venue keeps every non-archived factory live and admits a settler through the factory that approves it (cork-api 0.4.2 resolveLiveFactories/pickAdmittingFactory); since 2026-09-11 the Distribution 0.4-rc.1 candidate set (label 0.4-rc.1-candidate) runs beside rc.2 on both chains: factory 0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65, ExactSettler 0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E, PartialSettler 0x5E19Be0743fE521d8BF85b5A558356675499bE9e, identical on 42161+8453; each factory approves ONLY its own two settlers (approvedSettlers read live 2026-09-11), so a mode-mismatch teaching names the same generation's partner. seededAtBlock per generation = its earliest deployment: 42161 exact 503918966 / partial 503918978 / factory 503918988 (first OwnershipTransferred logs; 2026-09-11T03:18:35Z), 8453 exact 51153216 / partial 51153218 / factory 51153220 (eth_getCode bisect + first logs; 2026-09-11T03:02:59Z). Every consumer reads the ONE flattened list rolloverGenerations() in packages/core/src/rollover.ts. Older binaries strip activeGenerations on validation and keep treating those settlers as unknown.",
+  "$rolloverComment": "Rollover ERC-7683 stack (rollover v0.1.0-rc.2, deployed 2026-08-13; identical CREATE2 addresses on 42161+8453, chain-verified 2026-08-19: ERC-5267 domains + DOMAIN_SEPARATOR() golden vectors in packages/core/test/rollover.test.ts). rc.2 changed the OrderData/RolloverParams typehashes (jitMarketHash), so the July 2026 generation below is RETIRED: the venue archives it and admits only rc.2 settlers; rc.2-typed digests do not verify on the old settlers. legacyGenerations exists for event-history scans (full-decentralized fills/contracts) and retired-settler teaching only.",
   "rollover": {
     "42161": {
       "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
@@ -127,16 +127,6 @@
       },
       "seededAtBlock": 494104750,
       "contractsVersion": "v0.1.0-rc.2",
-      "activeGenerations": [
-        {
-          "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
-          "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
-          "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
-          "seededAtBlock": 503918966,
-          "label": "0.4-rc.1-candidate",
-          "contractsVersion": "0.4-rc.1-candidate"
-        }
-      ],
       "legacyGenerations": [
         {
           "factory": "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A",
@@ -157,17 +147,7 @@
         "version": "1.0.0"
       },
       "seededAtBlock": 49917191,
-      "contractsVersion": "v0.1.0-rc.2",
-      "activeGenerations": [
-        {
-          "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
-          "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
-          "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
-          "seededAtBlock": 51153216,
-          "label": "0.4-rc.1-candidate",
-          "contractsVersion": "0.4-rc.1-candidate"
-        }
-      ]
+      "contractsVersion": "v0.1.0-rc.2"
     }
   },
   "$implementationsComment": "Approved implementations per interface role (2026-08-12; the same schema is proposed for the distribution repo \u2014 see github.com/Cork-Technology/distribution/issues/1): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups). Hashes are keccak256(eth_getCode) \u2014 equal to EXTCODEHASH for deployed code \u2014 captured live 2026-08-12. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Roles resolve against the address blocks that already own them (deployments / marketRegistry) \u2014 no address is duplicated here.",
