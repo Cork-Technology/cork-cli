@@ -21,7 +21,7 @@
 // explained by the getCode result, which the classifier consults first.
 import { erc20Abi, permit2AllowanceAbi } from "../chain/abis.ts";
 import { decodeExtensionFields, decodeMakerTraits, type LopOrder } from "../orders.ts";
-import { decodeJitExtension } from "../market-registry.ts";
+import { decodeJitExtensionAny } from "../market-registry.ts";
 import { PERMIT2_ADDRESS } from "../order-approvals.ts";
 import type { MakerCodeProbe } from "./order-auth.ts";
 
@@ -57,7 +57,7 @@ export function decodeMakerExtensionContext(extension: `0x${string}` | undefined
   if (extension === undefined || extension === "0x") return { jit: null, extensionPermitToken: null };
   let jit: MakerJitContext | null = null;
   try {
-    const dec = decodeJitExtension(extension);
+    const dec = decodeJitExtensionAny(extension);
     jit = {
       adapter: dec.adapter,
       collateralAsset: dec.params.collateralAsset,

@@ -43,7 +43,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "rollover-premium-floor", text: "rollover premium floor minimum guaranteed" },
     { variant: "impairment-floor", text: "impairment floor worst case horizon rate limited depeg loss" },
     { variant: "rfq-quote", text: "rfq request for quote market maker" },
-    { variant: "recipe-rate-constraint", text: "resolve recipe constraint four rate limits sign order staticcall anchor rate additionalData" },
+    { variant: "recipe-rate-constraint", text: "resolve recipe constraint four rate limits sign order staticcall anchor rate extraData additionalData recipe bytes" },
   ],
   cork_decode: [
     { variant: "calldata", text: "decode calldata bytes hex explain transaction bundler3 multicall legs what does this do" },
@@ -67,7 +67,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
   ],
   cork_prepare_orders: [
     { variant: "maker-order", text: "limit order maker sign typed data sell buy place resting" },
-    { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage" },
+    { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage extraData additionalData oracle salt oracleSalt nested generation" },
     { variant: "maker-ladder", text: "ladder rungs several orders at once one cancels the other oco revision ladder better price reserved then open split standing offer many takers capacity" },
     { variant: "answer-rfq", text: "answer an rfq quote firm offer underwriter reserved for requester premium notional tenor act 365 kernel amounts cite option quote ref re-rest one capacity many rfqs" },
     { variant: "refresh-order", text: "re-rest refresh renew extend expiry resting order same nonce same bit revision before expiry ttl window" },

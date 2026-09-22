@@ -3,7 +3,10 @@
 // This test is the drift gate on that fixture: the committed bytes must equal a fresh encoding of
 // the same params (regenerate deliberately with UPDATE_JIT_FIXTURE=1), and they must round-trip
 // through our own decoder — so the TS encoder, the TS decoder, and the EVM decoder are held to
-// one layout from two sides.
+// one layout from two sides. ONE fixture PER WIRE since 0.6: the flat (0.3.x) document is
+// byte-identical to what it always was (its `expected.additionalData` key is the flat wire's
+// own member name; the TS side calls the same bytes extraData), the nested (0.5.0) document is
+// the wrapper layout with oracleSalt, decoded by JitExtraDataDecoderNested.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +17,8 @@ import { decodeJitExtraData, diffJitExtraData, encodeJitExtraData, type JITMarke
 // forge, written by the same run whenever that directory exists; both must agree.
 const FIXTURE = resolve(import.meta.dirname, "./fixtures/jit-extra-data.json");
 const HARNESS_COPY = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data.json");
+const FIXTURE_NESTED = resolve(import.meta.dirname, "./fixtures/jit-extra-data-nested.json");
+const HARNESS_COPY_NESTED = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data-nested.json");
 
 /** Fixed, non-degenerate params: every field non-zero and distinct, so a swapped or dropped
  *  field cannot hide behind an equal neighbour. */
@@ -24,7 +29,7 @@ export const FIXTURE_PARAMS: JITMarketParams = {
   recipe: "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
   rateOverride: 7n,
   constraint: { rateMin: 1n, rateMax: 1_600_000_000_000_000_000n, rateChangePerDayMax: 800_000_000_000_000_000n, rateChangeCapacityMax: 2_400_000_000_000_000_000n },
-  additionalData: "0x000000000000000000000000000000000000000000000000000000000000002a",
+  extraData: "0x000000000000000000000000000000000000000000000000000000000000002a",
   swapFeePercentage: 3_000_000_000_000_000_000n,
   unwindSwapFeePercentage: 1_500_000_000_000_000_000n,
   enableJitMint: true,
@@ -33,17 +38,41 @@ export const FIXTURE_PERMITS: PermitParams[] = [
   { token: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", value: 1_000_000_000_000_000_000n, deadline: 1_800_003_600n, v: 28, r: `0x${"11".repeat(32)}`, s: `0x${"22".repeat(32)}` },
 ];
 
+/** The nested-wire fixture: the same non-degenerate values plus a distinct non-zero oracleSalt
+ *  (a dropped or shifted salt word cannot hide behind zeros) and the 0.5.0 recipe address. */
+export const FIXTURE_PARAMS_NESTED: JITMarketParams = {
+  ...FIXTURE_PARAMS,
+  recipe: "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9",
+  oracleSalt: `0x${"5a".repeat(32)}`,
+};
+
 const str = (v: bigint | number) => v.toString();
 function fixtureDocument(): Record<string, unknown> {
   const p = FIXTURE_PARAMS;
   const q = FIXTURE_PERMITS[0]!;
   return {
     note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol",
-    extraData: encodeJitExtraData(p, FIXTURE_PERMITS),
+    extraData: encodeJitExtraData("flat", p, FIXTURE_PERMITS),
     expected: {
       collateralAsset: p.collateralAsset, referenceAsset: p.referenceAsset, expiryTimestamp: str(p.expiryTimestamp), recipe: p.recipe, rateOverride: str(p.rateOverride),
       constraint: { rateMin: str(p.constraint.rateMin), rateMax: str(p.constraint.rateMax), rateChangePerDayMax: str(p.constraint.rateChangePerDayMax), rateChangeCapacityMax: str(p.constraint.rateChangeCapacityMax) },
-      additionalData: p.additionalData, swapFeePercentage: str(p.swapFeePercentage), unwindSwapFeePercentage: str(p.unwindSwapFeePercentage), enableJitMint: p.enableJitMint,
+      // The flat wire's own member name for the recipe bytes (the document is a wire fixture).
+      additionalData: p.extraData, swapFeePercentage: str(p.swapFeePercentage), unwindSwapFeePercentage: str(p.unwindSwapFeePercentage), enableJitMint: p.enableJitMint,
+      permitCount: str(FIXTURE_PERMITS.length),
+      permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), v: str(q.v), r: q.r, s: q.s },
+    },
+  };
+}
+function fixtureDocumentNested(): Record<string, unknown> {
+  const p = FIXTURE_PARAMS_NESTED;
+  const q = FIXTURE_PERMITS[0]!;
+  return {
+    note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol (JitExtraDataDecoderNested — the market-registry 0.5.0 CorkLimitOrderAdapter layout)",
+    extraData: encodeJitExtraData("nested", p, FIXTURE_PERMITS),
+    expected: {
+      collateralAsset: p.collateralAsset, referenceAsset: p.referenceAsset, expiryTimestamp: str(p.expiryTimestamp), recipe: p.recipe, rateOverride: str(p.rateOverride),
+      constraint: { rateMin: str(p.constraint.rateMin), rateMax: str(p.constraint.rateMax), rateChangePerDayMax: str(p.constraint.rateChangePerDayMax), rateChangeCapacityMax: str(p.constraint.rateChangeCapacityMax) },
+      extraData: p.extraData, oracleSalt: p.oracleSalt, swapFeePercentage: str(p.swapFeePercentage), unwindSwapFeePercentage: str(p.unwindSwapFeePercentage), enableJitMint: p.enableJitMint,
       permitCount: str(FIXTURE_PERMITS.length),
       permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), v: str(q.v), r: q.r, s: q.s },
     },
@@ -65,16 +94,45 @@ describe("JIT extraData fixture — one layout, held from the TS and the EVM sid
     if (existsSync(HARNESS_COPY)) expect(readFileSync(HARNESS_COPY, "utf8")).toBe(readFileSync(FIXTURE, "utf8"));
   });
 
+  it("the NESTED fixture equals a fresh nested encoding (same UPDATE_JIT_FIXTURE=1 regeneration) and round-trips", () => {
+    const fresh = fixtureDocumentNested();
+    const doc = `${JSON.stringify(fresh, null, 2)}\n`;
+    if (process.env["UPDATE_JIT_FIXTURE"] === "1" || !existsSync(FIXTURE_NESTED)) {
+      writeFileSync(FIXTURE_NESTED, doc);
+      if (existsSync(dirname(HARNESS_COPY_NESTED))) writeFileSync(HARNESS_COPY_NESTED, doc);
+    }
+    const committed = JSON.parse(readFileSync(FIXTURE_NESTED, "utf8")) as { extraData: `0x${string}`; expected: unknown };
+    expect(committed.extraData, "nested extraData bytes drifted from the encoder — regenerate on purpose and re-run the forge decoder test").toBe(fresh.extraData);
+    expect(committed.expected).toEqual(fresh.expected);
+    if (existsSync(HARNESS_COPY_NESTED)) expect(readFileSync(HARNESS_COPY_NESTED, "utf8")).toBe(readFileSync(FIXTURE_NESTED, "utf8"));
+    const back = decodeJitExtraData("nested", committed.extraData);
+    expect(diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS }, back)).toEqual([]);
+    expect(back.params.oracleSalt).toBe(FIXTURE_PARAMS_NESTED.oracleSalt);
+    // The two wires' bytes differ (nesting + salt): a flat decode of nested bytes must not read
+    // as the same params — it either throws or disagrees on a field.
+    let flatReading: string[] | "threw";
+    try {
+      flatReading = diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS }, decodeJitExtraData("flat", committed.extraData));
+    } catch {
+      flatReading = "threw";
+    }
+    expect(flatReading === "threw" || flatReading.length > 0).toBe(true);
+  });
+
   it("the bytes round-trip through our own decoder with no differing field", () => {
-    const bytes = encodeJitExtraData(FIXTURE_PARAMS, FIXTURE_PERMITS);
-    const back = decodeJitExtraData(bytes);
+    const bytes = encodeJitExtraData("flat", FIXTURE_PARAMS, FIXTURE_PERMITS);
+    const back = decodeJitExtraData("flat", bytes);
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, back)).toEqual([]);
     expect(back.params.enableJitMint).toBe(true);
     expect(back.permits[0]!.v).toBe(28);
   });
 
+  it("the flat wire refuses a non-zero oracleSalt — no field carries it, so it can never be dropped silently", () => {
+    expect(() => encodeJitExtraData("flat", FIXTURE_PARAMS_NESTED, FIXTURE_PERMITS)).toThrow(/oracleSalt/);
+  });
+
   it("diffJitExtraData names every field that disagrees, and only those", () => {
-    const back = decodeJitExtraData(encodeJitExtraData(FIXTURE_PARAMS, FIXTURE_PERMITS));
+    const back = decodeJitExtraData("flat", encodeJitExtraData("flat", FIXTURE_PARAMS, FIXTURE_PERMITS));
     const swapped = { params: { ...back.params, collateralAsset: back.params.referenceAsset, referenceAsset: back.params.collateralAsset }, permits: back.permits };
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, swapped)).toEqual(["collateralAsset", "referenceAsset"]);
     const fees = { params: { ...back.params, swapFeePercentage: back.params.unwindSwapFeePercentage, unwindSwapFeePercentage: back.params.swapFeePercentage }, permits: back.permits };

@@ -128,7 +128,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
         referenceAsset: p.referenceAsset,
         fixedRate: p.rate !== undefined ? BigInt(p.rate) : undefined,
         rateOracle: p.rateOracle,
-        additionalData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,
+        extraData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,
         wantConstraint: true,
       });
       warnings.push(...res.warnings);

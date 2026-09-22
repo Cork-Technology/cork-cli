@@ -177,7 +177,10 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // for the impairment one. So the payload is carried (the undeployed case is exactly when it
   // matters), and a deployed oracle's rate is compared with the anchor below and disclosed.
   const inlineData = inline ? inlineAdditionalData(inline) : undefined;
-  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? inlineData;
+  // `extraData` is the name; `additionalData` the deprecated alias (both present and different
+  // is refused by the maker path's resolver, which this order re-enters).
+  const explicitBytes = action.jitMarket?.extraData ?? action.jitMarket?.additionalData;
+  const extraData: `0x${string}` | undefined = explicitBytes ?? inlineData;
   // The impairment window is sized by duration_seconds — the requester's choice, which the recipe
   // never compares with the pool's life. A window sized for 7 days on a market that lives 30 can
   // hit its wall long before expiry; one sized for 30 on a 7-day market is looser cover than the
@@ -190,9 +193,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
       warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} impairment block sizes the rate window for duration_seconds ${inline.durationSeconds} while this answer's market lives ${tenor} s (expiry ${expiryTimestamp} − now ${nowSecs}) — ${inline.durationSeconds < tenor ? "the window can reach its wall before the market expires" : "the window is wider than the market's life needs"}; the recipe never checks the two agree. The requester chose it and the constraint (pool identity) is built from it, so the order builds as asked — price the cover on the window, not the tenor` });
     }
   }
-  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && action.jitMarket?.additionalData === undefined) {
+  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && explicitBytes === undefined) {
     const missing = (["anchorRate", "durationSeconds", "apySpreadPercentage"] as const).filter((k) => inline![k as keyof typeof inline] === undefined);
-    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT additionalData and the recipe will refuse to resolve. Pass jitMarket.additionalData (encodeImpairmentArgs) or ask the requester for a complete block` });
+    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT extraData and the recipe will refuse to resolve. Pass jitMarket.extraData (encodeImpairmentArgs) or ask the requester for a complete block` });
   }
 
   // ── reach: the declared FILL SENDER, or open when nobody declared one ──
@@ -214,8 +217,13 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   }
 
   // ── the pool the cover creates on fill: derive-cork-pool (recipe → constraint → id → cST) ──
+  // The fees and the oracle salt ride into the derivation too: on a 10-field generation the two
+  // fee percentages are PART OF THE POOL ID, so the order's JIT block and this derivation must
+  // carry the same values or the answer would name a pool the fill never creates.
+  const swapFeePercentage = action.jitMarket?.swapFeePercentage ?? inline?.swapFeeWad ?? "0";
+  const unwindSwapFeePercentage = action.jitMarket?.unwindSwapFeePercentage ?? inline?.unwindSwapFeeWad ?? "0";
   const derive = await handleQuery(
-    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, ...(additionalData !== undefined ? { args: additionalData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
+    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(action.jitMarket?.oracleSalt !== undefined ? { oracleSalt: action.jitMarket.oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
   );
   // A gated derive keeps its reason FIRST (the envelope contract) — but the warnings gathered
@@ -232,7 +240,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // and this pool agree only when the live rate equals the anchor at signing.
   const liveRate = typeof dd.oracle.rate === "bigint" ? dd.oracle.rate : typeof dd.oracle.rate === "string" && /^\d+$/.test(dd.oracle.rate) ? BigInt(dd.oracle.rate) : undefined;
   if (inline?.anchorRate !== undefined && dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {
-    warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in additionalData for the undeployed-oracle case` });
+    warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in extraData for the undeployed-oracle case` });
   }
   // The derived constraint is PINNED into the order explicitly: the maker path then verifies
   // the carried numbers (recipe.verify) instead of resolving a second time — one derivation,
@@ -263,13 +271,13 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // The caller's explicit jitMarket fields win; absent ones come from the requester's inline
   // block (fees, anchor), else the defaults. `undefined` values are dropped so a spread never
   // erases an inline value.
-  const { recipe: _r, ...jitRest } = action.jitMarket ?? {};
+  const { recipe: _r, additionalData: _legacyBytes, ...jitRest } = action.jitMarket ?? {};
   const jitExplicit = Object.fromEntries(Object.entries(jitRest).filter(([, v]) => v !== undefined));
   const jitFromInline = {
-    ...(additionalData !== undefined ? { additionalData } : {}),
+    ...(extraData !== undefined ? { extraData } : {}),
     ...(pinnedConstraint !== undefined ? { constraint: pinnedConstraint } : {}),
-    swapFeePercentage: inline?.swapFeeWad ?? "0",
-    unwindSwapFeePercentage: inline?.unwindSwapFeeWad ?? "0",
+    swapFeePercentage,
+    unwindSwapFeePercentage,
   };
   const makerAction: MakerOrderAction = {
     type: "maker-order",
@@ -326,9 +334,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
               swapFeeWad: inline.swapFeeWad ?? null,
               unwindSwapFeeWad: inline.unwindSwapFeeWad ?? null,
               ...(inline.schema === INLINE_IMPAIRMENT_SCHEMA ? { durationSeconds: inline.durationSeconds?.toString() ?? null, apySpreadPercentage: inline.apySpreadPercentage?.toString() ?? null, complete: inlineData !== undefined } : {}),
-              additionalData: additionalData ?? null,
+              extraData: extraData ?? null,
               anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed,
-              note: "the recipe reads the anchor word of additionalData only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ",
+              note: "the recipe reads the anchor word of extraData only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ",
             }
           : null,
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },

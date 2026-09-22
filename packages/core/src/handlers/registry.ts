@@ -3,21 +3,23 @@
 import { type ChainId, Envelope, QueryInput } from "@cork/schemas";
 import { type ResolvedRpc } from "../chain/rpc.ts";
 import { rateOracleAbi } from "../chain/abis.ts";
-import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, buildDeployOracleCall, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, erc20MetadataAbi, jitAdapterAbi, marketRegistryAbi, ORACLE_MODE, type OracleModeName, predictShares, type PredictSharesResult, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, type RecipeSourceName, type ResolvedConstraint, SOURCE_INTERFACE, SOURCE_TYPE } from "../market-registry.ts";
+import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, erc20MetadataAbi, jitAdapterAbi, jitAdapterNestedAbi, marketCreatorNestedAbi, marketRegistryAbi, marketRegistryNestedAbi, ORACLE_MODE, type OracleModeName, predictShares, type PredictSharesResult, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, recipeNestedAbi, type RecipeSourceName, type ResolvedConstraint, SOURCE_INTERFACE, SOURCE_TYPE, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveGenerations } from "../config-remote.ts";
-import { marketRegistryForWire } from "../generations.ts";
+import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
 import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
 
 
-/** Resolve the MarketRegistry stack + an RPC for registry-backed calls, or an honest gate. */
+/** Resolve the MarketRegistry stack + an RPC for registry-backed calls, or an honest gate. The
+ *  result names the generation's registry WIRE (the codec every read below dispatches on) and
+ *  its phoenix wire (the pool-id width derive-cork-pool hashes on). */
 export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promise<
   | { gate: Envelope }
-  | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>; generation?: { label: string }; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
+  | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>; wire: MarketRegistryWire; phoenixWire: PhoenixWire; generation?: { label: string }; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
 > {
-  const { mr, mrWarn, generation, refusal } = await getMarketRegistry(ctx, chainId);
+  const { mr, mrWarn, generation, phoenixWire, refusal } = await getMarketRegistry(ctx, chainId);
   if (refusal) return { gate: unavailable(chainId, refusal.code, refusal.message, ctx) };
   if (!mr) {
     return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx) };
@@ -29,34 +31,43 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
   // CONFIG warnings only — rpcWarn is deliberately NOT baked in here: the client fails over
   // in-call (mutating `resolved`), so consumers prepend rpcWarn(resolved) at ENVELOPE
   // construction, after their reads have run.
-  return { mr, ...(generation ? { generation: { label: generation.label } } : {}), resolved, warnings: mrWarn };
+  return { mr, wire: mr.wire, phoenixWire: phoenixWire ?? (mr.wire === "nested" ? "10-field" : "8-field"), ...(generation ? { generation: { label: generation.label } } : {}), resolved, warnings: mrWarn };
 }
 
-/** Best-effort 2.1.0 generation guard, cached per (chainId, adapter) for the process: the ONE
- *  check that rules out the previous-generation hazard (an old registry ANSWERS 2.1.0-shaped
- *  calls with misdecoded garbage) is the adapter's MARKET_REGISTRY() immutable matching the
- *  configured registry (INTEGRATOR.md). Returns a conflict warning on mismatch; silence when
- *  the adapter is unconfigured or the read fails (the prepare paths re-check hard). */
+/** Best-effort generation guard, cached per (chainId, adapter, registry) for the process: the
+ *  ONE check that rules out the previous-generation hazard (an old registry ANSWERS newer-shaped
+ *  calls with misdecoded garbage) is the binding chain closing on the configured registry —
+ *  flat: adapter.MARKET_REGISTRY(); nested: adapter.MARKET_CREATOR() → creator.MARKET_REGISTRY()
+ *  (the nested adapter has no registry immutable of its own). Returns a conflict warning on
+ *  mismatch; silence when the adapter is unconfigured or a read fails (the prepare paths
+ *  re-check hard). */
 const bindingGuardCache = new Map<string, boolean>();
 /** Test hook: clear the per-process binding-guard memo (mirrors resetConfigMemo). */
 export function resetRegistryBindingGuardCache(): void {
   bindingGuardCache.clear();
 }
-async function registryBindingMismatch(client: ResolvedRpc["client"], chainId: ChainId, mr: { registry: `0x${string}`; adapter?: `0x${string}` | undefined }): Promise<{ code: string; message: string } | undefined> {
+async function registryBindingMismatch(client: ResolvedRpc["client"], chainId: ChainId, mr: { registry: `0x${string}`; adapter?: `0x${string}` | undefined; marketCreator?: `0x${string}` | undefined; wire: MarketRegistryWire }): Promise<{ code: string; message: string } | undefined> {
   if (!mr.adapter) return undefined;
-  const key = `${chainId}:${mr.adapter.toLowerCase()}:${mr.registry.toLowerCase()}`;
+  const key = `${chainId}:${mr.wire}:${mr.adapter.toLowerCase()}:${mr.registry.toLowerCase()}`;
   const cached = bindingGuardCache.get(key);
   if (cached === true) return undefined;
   if (cached === undefined) {
     try {
-      const bound = (await client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" })) as `0x${string}`;
-      bindingGuardCache.set(key, bound.toLowerCase() === mr.registry.toLowerCase());
+      if (mr.wire === "nested") {
+        const creator = (await client.readContract({ address: mr.adapter, abi: jitAdapterNestedAbi, functionName: "MARKET_CREATOR" })) as `0x${string}`;
+        const creatorOk = mr.marketCreator === undefined || creator.toLowerCase() === mr.marketCreator.toLowerCase();
+        const bound = (await client.readContract({ address: creator, abi: marketCreatorNestedAbi, functionName: "MARKET_REGISTRY" })) as `0x${string}`;
+        bindingGuardCache.set(key, creatorOk && bound.toLowerCase() === mr.registry.toLowerCase());
+      } else {
+        const bound = (await client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" })) as `0x${string}`;
+        bindingGuardCache.set(key, bound.toLowerCase() === mr.registry.toLowerCase());
+      }
     } catch {
       return undefined; // disclosed-by-omission: reads proceed; prepares re-check hard
     }
   }
   if (bindingGuardCache.get(key) === false) {
-    return { code: "adapter_binding_mismatch", message: `the configured adapter's on-chain MARKET_REGISTRY() does not match the configured registry ${mr.registry} — one of them is a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage). Refresh cork-defaults.json; do not trust these reads` }; // conflict-grade
+    return { code: "adapter_binding_mismatch", message: `the configured adapter's on-chain binding chain (${mr.wire === "nested" ? "MARKET_CREATOR() → creator.MARKET_REGISTRY()" : "MARKET_REGISTRY()"}) does not end at the configured registry ${mr.registry} — one of them is a stale/cross-generation address (an old registry answers newer-shaped calls with misdecoded garbage). Refresh cork-defaults.v2.json; do not trust these reads` }; // conflict-grade
   }
   return undefined;
 }
@@ -72,6 +83,8 @@ interface AssetSourceShape {
 
 /** Shape an on-chain AssetSource into the API-parity object (absent slot ⇒ null). */
 function shapeAssetSource(s: { addr: `0x${string}`; sourceType: number; sourceInterface: number; denomination: string }): AssetSourceShape | null {
+  // The flat registry keys denominations by LABEL (a string), the nested one by UNIT ADDRESS —
+  // both ride through as the string the chain gave; the denominations resource says which.
   if (s.addr === ZERO_ADDR) return null;
   return { address: s.addr, sourceType: SOURCE_TYPE[s.sourceType] ?? s.sourceType, sourceInterface: SOURCE_INTERFACE[s.sourceInterface] ?? s.sourceInterface, denomination: s.denomination };
 }
@@ -123,19 +136,24 @@ export async function probeFixedOracle(client: RegistryClient, registry: `0x${st
  *  re-derivation would duplicate the registry's nav-fallback rules and could drift from what a
  *  fill actually does); a reverting simulation is diagnosed to the exact failure. Same three
  *  surfaces as probeFixedOracle. A lookupWrapper transport failure THROWS (an indeterminate
- *  read, not a deployability verdict) — only the simulation's revert becomes `reason`. */
+ *  read, not a deployability verdict) — only the simulation's revert becomes `reason`. On the
+ *  nested wire the simulation carries `oracleSalt` (the pair's FIRST wrapper is salted by it;
+ *  lookupWrapper takes none — an existing wrapper is returned whatever salt rides along). */
 export async function probePairWrapper(
   client: RegistryClient,
   registry: `0x${string}`,
   collateralAsset: `0x${string}`,
   referenceAsset: `0x${string}`,
   modeName: OracleModeName,
+  opts: { wire?: MarketRegistryWire | undefined; oracleSalt?: `0x${string}` | undefined } = {},
 ): Promise<{ address: `0x${string}`; deployed: boolean; reason?: undefined } | { address: null; deployed: false; reason: string }> {
   const reg = { address: registry, abi: marketRegistryAbi } as const;
   const wrapper = (await client.readContract({ ...reg, functionName: "lookupWrapper", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName]] })) as `0x${string}`;
   if (wrapper !== ZERO_ADDR) return { address: wrapper, deployed: true };
   try {
-    const sim = await client.simulateContract({ ...reg, functionName: "deploy", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName]] });
+    const sim = opts.wire === "nested"
+      ? await client.simulateContract({ address: registry, abi: marketRegistryNestedAbi, functionName: "deploy", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName], opts.oracleSalt ?? ZERO_ORACLE_SALT] })
+      : await client.simulateContract({ ...reg, functionName: "deploy", args: [collateralAsset, referenceAsset, ORACLE_MODE[modeName]] });
     return { address: sim.result as `0x${string}`, deployed: false };
   } catch (err) {
     return { address: null, deployed: false, reason: await diagnoseOracleDeployFailure(client, registry, collateralAsset, referenceAsset, modeName, err) };
@@ -207,11 +225,13 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
   if (filters.legacy) return handleQueryRegistryLegacy(input, filters, chainId, ctx);
   const r = await getRegistry(ctx, chainId);
   if (r.gate) return r.gate;
-  const { mr, resolved, warnings } = r;
+  const { mr, resolved, warnings, wire } = r;
   const client = resolved.client;
   const rpc = () => rpcProvenance(input.format, resolved);
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
-  const version = mr.contractsVersion ? { contractsVersion: mr.contractsVersion } : {};
+  const regN = { address: mr.registry, abi: marketRegistryNestedAbi } as const;
+  const nested = wire === "nested";
+  const version = { ...(mr.contractsVersion ? { contractsVersion: mr.contractsVersion } : {}), wire, ...(r.generation ? { generation: r.generation.label } : {}) };
   try {
     const bindingWarn = await registryBindingMismatch(client, chainId, mr);
     if (bindingWarn) {
@@ -220,17 +240,17 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     if (input.resource === "registry-assets") {
       // filters.address → single lookup by natural key (an address keys exactly one asset per chain).
       if (filters.address) {
-        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address] });
+        const [found, entry] = nested ? await client.readContract({ ...regN, functionName: "lookupAssetByAddress", args: [filters.address] }) : await client.readContract({ ...reg, functionName: "lookupAssetByAddress", args: [filters.address] });
         if (!found) return unavailable(chainId, "asset_not_found", `address ${filters.address} is not a registry-approved asset on chainId ${chainId} — list them with cork_query resource:"registry-assets" (no filters)`, ctx);
         const item = { address: entry.addr, name: entry.name, kind: ASSET_KIND[entry.kind] ?? entry.kind, priceSource: shapeAssetSource(entry.priceSource), navSource: shapeAssetSource(entry.navSource), token: await tokenMeta(client, entry.addr) };
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
-      const [page, total] = await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
+      const [page, total] = nested ? await client.readContract({ ...regN, functionName: "getAssets", args: [0n, 500n] }) : await client.readContract({ ...reg, functionName: "getAssets", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} assets but this read returns the first ${page.length} — items are partial evidence` });
       }
       const items = await Promise.all(
-        page.map(async (a) => ({ address: a.addr, name: a.name, kind: ASSET_KIND[a.kind] ?? a.kind, priceSource: shapeAssetSource(a.priceSource), navSource: shapeAssetSource(a.navSource), token: await tokenMeta(client, a.addr) })),
+        (page as ReadonlyArray<(typeof page)[number]>).map(async (a) => ({ address: a.addr, name: a.name, kind: ASSET_KIND[a.kind] ?? a.kind, priceSource: shapeAssetSource(a.priceSource), navSource: shapeAssetSource(a.navSource), token: await tokenMeta(client, a.addr) })),
       );
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
@@ -258,6 +278,35 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, scale: "constants ending _PERCENTAGE are 1e18 = 1%; RATE_MIN-style constants are ABSOLUTE rates, 1e18 = 1.0; read each value's own name", count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     if (input.resource === "registry-denominations") {
+      if (nested) {
+        // The 0.5.0 registry keys denominations by UNIT ADDRESS (isDenomination(address),
+        // getDenominations → address[]): there is no label and no lookupDenomination. Display
+        // text is best-effort self-description (symbol/name), the fiat/native pseudo-units from
+        // the fixed table; the address is the identity.
+        if (filters.label !== undefined) {
+          return unavailable(chainId, "missing_filter", `filters.label keys the FLAT (0.3.x) registry's label→unit denominations; generation '${r.generation?.label ?? "?"}' speaks the nested wire, whose denominations are plain unit ADDRESSES (no labels exist) — pass filters.address (the unit) for a single lookup, or omit filters to list them. To read a flat-wire registry, name its generation`, ctx);
+        }
+        const describe = async (unit: `0x${string}`) => {
+          const pseudo = DENOMINATION_PSEUDO_UNITS[unit.toLowerCase()];
+          if (pseudo) return { unit, symbol: pseudo, name: null, labelSource: "pseudo-unit table" };
+          const meta = await tokenMeta(client, unit);
+          return { unit, symbol: meta?.symbol ?? null, name: meta?.name ?? null, labelSource: meta ? "unit symbol()/name() — display only; the address is the identity" : null };
+        };
+        if (filters.address !== undefined) {
+          const isUnit = await client.readContract({ ...regN, functionName: "isDenomination", args: [filters.address] });
+          if (!isUnit) return unavailable(chainId, "denomination_not_found", `unit ${filters.address} is not a registered denomination on chainId ${chainId} — list them with cork_query resource:"registry-denominations"`, ctx);
+          return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, keyedBy: "unit address", count: 1, items: [await describe(filters.address)] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+        }
+        const [page, total] = await client.readContract({ ...regN, functionName: "getDenominations", args: [0n, 500n] });
+        if (total > BigInt(page.length)) {
+          warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} denominations but this read returns the first ${page.length}` });
+        }
+        const items = await Promise.all(page.map((unit) => describe(unit)));
+        return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, keyedBy: "unit address", count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
+      }
+      if (filters.address !== undefined) {
+        return unavailable(chainId, "missing_filter", `filters.address keys the NESTED (0.5.x) registry's address denominations; generation '${r.generation?.label ?? "?"}' speaks the flat wire, whose denominations are label→unit records — pass filters.label (EXACT BYTES, case-sensitive) for a single lookup`, ctx);
+      }
       // The registry stores the label HASH; display text comes from the unit's own symbol()
       // (fiat/native pseudo-units from a fixed table). labelHash is the identity, label display.
       if (filters.label !== undefined) {
@@ -294,18 +343,22 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
           return null;
         }
       };
+      // feedDecimals is a FLAT-wire record field; the 0.5.0 ConversionFeed dropped it (the live
+      // aggregator's decimals() is the only decimals fact there, under `live`).
+      type FeedRow = { base: `0x${string}`; quote: `0x${string}`; aggregatorAddress: `0x${string}`; feedDecimals?: number };
+      const shapeFeed = async (f: FeedRow) => ({ base: f.base, quote: f.quote, aggregator: f.aggregatorAddress, ...(nested ? {} : { feedDecimals: f.feedDecimals }), live: await readLive(f.aggregatorAddress) });
       if (filters.base || filters.quote) {
         if (!filters.base || !filters.quote) return unavailable(chainId, "missing_filter", "a single-feed lookup needs BOTH filters.base and filters.quote (direction matters: base→quote and quote→base are different feeds)", ctx);
-        const [found, entry] = await client.readContract({ ...reg, functionName: "lookupConversionFeed", args: [filters.base, filters.quote] });
+        const [found, entry] = nested ? await client.readContract({ ...regN, functionName: "lookupConversionFeed", args: [filters.base, filters.quote] }) : await client.readContract({ ...reg, functionName: "lookupConversionFeed", args: [filters.base, filters.quote] });
         if (!found) return unavailable(chainId, "feed_not_found", `no conversion feed registered for ${filters.base} → ${filters.quote} on chainId ${chainId} (direction matters); list them with cork_query resource:"registry-feeds"`, ctx);
-        const item = { base: entry.base, quote: entry.quote, aggregator: entry.aggregatorAddress, feedDecimals: entry.feedDecimals, live: await readLive(entry.aggregatorAddress) };
+        const item = await shapeFeed(entry as FeedRow);
         return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: 1, items: [item] }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
       }
-      const [page, total] = await client.readContract({ ...reg, functionName: "getConversionFeeds", args: [0n, 500n] });
+      const [page, total] = nested ? await client.readContract({ ...regN, functionName: "getConversionFeeds", args: [0n, 500n] }) : await client.readContract({ ...reg, functionName: "getConversionFeeds", args: [0n, 500n] });
       if (total > BigInt(page.length)) {
         warnings.push({ code: "pagination_incomplete", message: `registry reports ${total} conversion feeds but this read returns the first ${page.length}` });
       }
-      const items = await Promise.all(page.map(async (f) => ({ base: f.base, quote: f.quote, aggregator: f.aggregatorAddress, feedDecimals: f.feedDecimals, live: await readLive(f.aggregatorAddress) })));
+      const items = await Promise.all((page as readonly FeedRow[]).map((f) => shapeFeed(f)));
       return envelope({ state: "ok", data: { resource: input.resource, chainId, registry: mr.registry, ...version, count: items.length, total, items }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings], ...rpc(), ctx });
     }
     // registry-oracle — two keying families, one resource:
@@ -339,8 +392,11 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     // The applied default is disclosed in DATA (not a warning: no caller field was ignored —
     // reserved_field_ignored means something else) so the echoed mode is never mistaken for a
     // caller choice.
-    const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
-    const probe = await probePairWrapper(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName);
+    if (filters.oracleSalt !== undefined && !nested && !/^0x0*$/i.test(filters.oracleSalt)) {
+      return unavailable(chainId, "missing_filter", `filters.oracleSalt ${filters.oracleSalt} is non-zero, but generation '${r.generation?.label ?? "?"}' speaks the flat registry wire, whose deploy(ca, ref, mode) carries no salt — omit it, or name a nested-wire generation`, ctx);
+    }
+    const pairEcho = { collateralAsset: filters.collateralAsset, referenceAsset: filters.referenceAsset, mode: modeName, ...(nested ? { oracleSalt: filters.oracleSalt ?? ZERO_ORACLE_SALT, oracleSaltNote: "mixed into the CREATE2 salt of the pair's FIRST wrapper only — an existing wrapper is returned whatever salt is passed" } : {}), ...(filters.mode === undefined ? { modeNote: "no filters.mode given — defaulted to 'price'; one pair can hold a price AND a nav wrapper at different addresses, pass mode explicitly when you mean nav" } : {}) };
+    const probe = await probePairWrapper(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName, { wire, oracleSalt: filters.oracleSalt });
     if (probe.address !== null && probe.deployed) {
       const read = await readOracleRate(client, probe.address);
       // rateScale rides INSIDE the shared oracle shape (audit R1.5): the fixed-rate family
@@ -559,10 +615,16 @@ export async function resolveRecipeOracleConstraint(args: {
   referenceAsset: `0x${string}`;
   fixedRate?: bigint | undefined;
   rateOracle?: `0x${string}` | undefined;
-  additionalData?: `0x${string}` | undefined;
+  /** The recipe bytes (the 0.5.0 word; the 0.3.x wire calls the same member additionalData). */
+  extraData?: `0x${string}` | undefined;
+  /** Nested wire: the salt of the pair's FIRST wrapper (the simulated deploy carries it). */
+  oracleSalt?: `0x${string}` | undefined;
+  /** The registry wire of `mr` (defaults to its declared wire; flat when the block has none). */
+  wire?: MarketRegistryWire | undefined;
   wantConstraint: boolean;
 }): Promise<RecipeResolution> {
   const { client, ctx, chainId, mr } = args;
+  const wire: MarketRegistryWire = args.wire ?? (mr as { wire?: MarketRegistryWire }).wire ?? "flat";
   const warnings: Array<{ code: string; message: string }> = [];
   const bad = (g: Envelope): RecipeResolution => ({ gate: g, recipe: ZERO_ADDR, source: "price", oracle: { address: null, deployed: false, deployable: false, mode: null, rate: null }, warnings });
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;
@@ -600,7 +662,7 @@ export async function resolveRecipeOracleConstraint(args: {
     }
   } else {
     const modeName: OracleModeName = source;
-    const probe = await probePairWrapper(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName);
+    const probe = await probePairWrapper(client, mr.registry, args.collateralAsset, args.referenceAsset, modeName, { wire, oracleSalt: args.oracleSalt });
     if (probe.address !== null && probe.deployed) {
       const read = await readOracleRate(client, probe.address);
       oracle = { address: probe.address, deployed: true, deployable: true, mode: modeName, ...read };
@@ -613,7 +675,7 @@ export async function resolveRecipeOracleConstraint(args: {
   const base: RecipeResolution = { recipe, source, oracle, warnings };
   // 5: the constraint — recipe.resolve with the API's exact oracle-passing semantics.
   if (args.wantConstraint) {
-    const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: args.collateralAsset, referenceAsset: args.referenceAsset, oracle, additionalData: args.additionalData });
+    const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: args.collateralAsset, referenceAsset: args.referenceAsset, oracle, extraData: args.extraData, wire });
     if ("gate" in c) return { ...base, gate: c.gate };
     base.constraint = c.constraint;
   }
@@ -627,11 +689,15 @@ export async function staticResolveConstraint(
   client: RegistryClient,
   ctx: HandlerContext,
   chainId: ChainId,
-  args: { recipe: `0x${string}`; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; oracle: RecipeResolution["oracle"]; additionalData?: `0x${string}` | undefined },
+  args: { recipe: `0x${string}`; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; oracle: RecipeResolution["oracle"]; extraData?: `0x${string}` | undefined; wire?: MarketRegistryWire | undefined },
 ): Promise<{ constraint: ResolvedConstraint } | { gate: Envelope }> {
   const oracleForCall = args.oracle.deployed && args.oracle.address ? args.oracle.address : ZERO_ADDR;
+  // resolve(ca, ref, oracle, bytes) has the SAME shape on both wires; the wire picks the ABI only
+  // so a revert decodes to that generation's typed error names (MalformedExtraData vs
+  // MalformedAdditionalData, UnexpectedExtraData, …) in recipe_refused.
+  const abi = args.wire === "nested" ? recipeNestedAbi : recipeAbi;
   try {
-    const c = (await client.readContract({ address: args.recipe, abi: recipeAbi, functionName: "resolve", args: [args.collateralAsset, args.referenceAsset, oracleForCall, args.additionalData ?? "0x"] })) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+    const c = (await client.readContract({ address: args.recipe, abi, functionName: "resolve", args: [args.collateralAsset, args.referenceAsset, oracleForCall, args.extraData ?? "0x"] })) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
     return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
   } catch (err) {
     const o = args.oracle;
@@ -648,8 +714,8 @@ export async function staticResolveConstraint(
       return { gate: unavailable(chainId, "oracle_rate_unreadable", oracleRateUnreadableMessage(o.address, o.rateError, `The recipe's resolve read that oracle and failed the same way (${revertReason(err)}); so would recipe.verify, a JIT fill, and CorkMarketCreator.createNewPool.`), ctx) };
     }
     const cause = o.deployed && o.rate !== null
-      ? `The pair's oracle ${o.address} is deployed and answers rate() = ${o.rate}, so this is the recipe's own refusal — check additionalData against the recipe's declared args shape (cork_query registry-recipes; the fixed-rate recipe rejects any payload)`
-      : "Typical causes: the liquidity recipe needs additionalData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it); the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any additionalData";
+      ? `The pair's oracle ${o.address} is deployed and answers rate() = ${o.rate}, so this is the recipe's own refusal — check extraData against the recipe's declared args shape (cork_query registry-recipes; the fixed-rate recipe rejects any payload)`
+      : "Typical causes: the liquidity recipe needs extraData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it); the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any extraData";
     return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. ${cause}`, ctx) };
   }
 }
@@ -664,7 +730,7 @@ export async function staticResolveConstraint(
  *  the identity would be an invention. */
 export async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || (filters.recipe === undefined && filters.mode === undefined)) {
-    return unavailable(chainId, "missing_filter", "derive-cork-pool requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe additionalData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle)", ctx);
+    return unavailable(chainId, "missing_filter", "derive-cork-pool requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe extraData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle), filters.swapFeePercentage + filters.unwindSwapFeePercentage (1e18 = 1%, default 0 — part of the id on a 10-field generation), filters.oracleSalt (nested wire only)", ctx);
   }
   if (filters.collateralAsset.toLowerCase() === filters.referenceAsset.toLowerCase()) {
     // Well-formed inputs that violate a domain rule → envelope (exit 3), not a throw — same class
@@ -673,17 +739,26 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
   }
   const r = await getRegistry(ctx, chainId);
   if (r.gate) return r.gate;
-  const { mr, resolved, warnings } = r;
+  const { mr, resolved, warnings, wire, phoenixWire } = r;
   const client = resolved.client;
   const rpc = () => rpcProvenance(input.format, resolved);
   const ca = filters.collateralAsset, ref = filters.referenceAsset, expiry = filters.expiry;
-  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, ...(filters.recipe ? { recipe: filters.recipe } : {}), ...(filters.mode ? { mode: filters.mode } : {}) };
+  // The 10-field identity takes the two fee percentages (defaults 0); the nested deploy takes the
+  // oracle salt (default zero). A non-zero salt on a flat/legacy generation is refused — its
+  // deploy carries no field for it, so the derived oracle address could only be wrong.
+  const swapFee = filters.swapFeePercentage ?? 0n;
+  const unwindFee = filters.unwindSwapFeePercentage ?? 0n;
+  const oracleSalt = filters.oracleSalt ?? ZERO_ORACLE_SALT;
+  if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
+    return unavailable(chainId, "missing_filter", `filters.oracleSalt ${oracleSalt} is non-zero, but generation '${r.generation?.label ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) carries no salt — omit it, or name a nested-wire generation (the phoenix/v0.4-rc.1 primary)`, ctx);
+  }
+  const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, ...(filters.recipe ? { recipe: filters.recipe } : {}), ...(filters.mode ? { mode: filters.mode } : {}), swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, ...(wire === "nested" ? { oracleSalt } : {}), wire, phoenixWire, ...(r.generation ? { generation: r.generation.label } : {}) };
   try {
     const bindingWarn = await registryBindingMismatch(client, chainId, mr);
     if (bindingWarn) {
       return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, bindingWarn], ...rpc(), ctx });
     }
-    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, additionalData: filters.args, wantConstraint: true });
+    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, extraData: filters.args, oracleSalt, wire, wantConstraint: true });
     warnings.push(...res.warnings);
     if (res.gate) return res.gate;
     const { recipe, source, oracle, constraint } = res;
@@ -703,7 +778,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     if (!constraint) return unavailable(chainId, "recipe_refused", "the recipe did not resolve a constraint — the market identity cannot be derived", ctx);
     let derived: ReturnType<typeof deriveJitMarket>;
     try {
-      derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address });
+      derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee });
     } catch (err) {
       return localComputeFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx);
     }
@@ -713,12 +788,16 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     // The pool manager of the SAME generation as the registry (dep and mr are one set).
     const { dep } = await getDep(ctx, chainId, { ...(r.generation ? { generation: r.generation.label } : {}) });
     let shares: PredictSharesResult = { exists: false, status: "unavailable" };
-    if (dep?.poolManager && mr.controller && mr.adapter) {
+    const codec = wireCodec(wire);
+    // The simulation runs AS the wire's role holder: the adapter (flat) or the market creator
+    // (nested — the account the controller granted POOL_CREATOR to).
+    const simulatingAccount = codec.roleHolder === "creator" ? mr.marketCreator : mr.adapter;
+    if (dep?.poolManager && mr.controller && simulatingAccount) {
       const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
       if (!oracle.deployed) {
-        preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });
+        preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : codec.deployCall(ca, ref, oracle.mode ?? "price", oracleSalt) });
       }
-      shares = await predictShares(client, { adapter: mr.adapter, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, preCalls, chainId });
+      shares = await predictShares(client, { adapter: simulatingAccount, controller: mr.controller, poolManager: dep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, preCalls, chainId });
     }
     const extra: Array<{ code: string; message: string }> = [];
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST/cPT (eth_simulateV1/state overrides unsupported, or config missing) — the pool id, oracle, and constraint above are still valid" });
@@ -744,7 +823,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
         recipe,
         source,
         oracle: oracleEcho,
-        pool: { poolId: derived.poolId, exists: shares.exists, scale: "the constraint is ABSOLUTE rates, 1e18 = 1.0", constraint },
+        pool: { poolId: derived.poolId, exists: shares.exists, wire: phoenixWire, scale: `the constraint is ABSOLUTE rates, 1e18 = 1.0${phoenixWire === "10-field" ? "; the two fee percentages (1e18 = 1%) are part of this 10-field pool id" : ""}`, constraint, ...(phoenixWire === "10-field" ? { swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee } : {}) },
         shares: shares.cst || shares.cpt ? { corkSwapToken: shares.cst ?? null, corkPrincipalToken: shares.cpt ?? null, source: shares.status } : null,
       },
       chainId,

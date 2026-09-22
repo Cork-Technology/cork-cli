@@ -112,6 +112,7 @@ const T = {
   impairment: "packages/core/test/impairment-recipe.test.ts",
   generations: "packages/core/test/generations.test.ts",
   configRemote: "packages/core/test/config-remote.test.ts",
+  nested: "packages/core/test/market-registry-nested.test.ts",
 };
 
 const CATALOG: Mutant[] = [
@@ -720,8 +721,8 @@ const CATALOG: Mutant[] = [
     // reads it); dropping the encode leaves the recipe with no anchor on a fresh pair.
     id: "answer-inline-anchor-not-encoded",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData ?? inlineData;",
-    replace: "  const additionalData: `0x${string}` | undefined = action.jitMarket?.additionalData;",
+    find: "  const extraData: `0x${string}` | undefined = explicitBytes ?? inlineData;",
+    replace: "  const extraData: `0x${string}` | undefined = explicitBytes;",
     tests: [T.answer],
   },
   {
@@ -755,8 +756,8 @@ const CATALOG: Mutant[] = [
     // the requester's ask.
     id: "answer-inline-fees-ignored",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: 'swapFeePercentage: inline?.swapFeeWad ?? "0",',
-    replace: 'swapFeePercentage: "0",',
+    find: '  const swapFeePercentage = action.jitMarket?.swapFeePercentage ?? inline?.swapFeeWad ?? "0";',
+    replace: '  const swapFeePercentage = action.jitMarket?.swapFeePercentage ?? "0";',
     tests: [T.answer],
   },
   // ── watch: the client-side watermark and verify-before-announce ──
@@ -879,14 +880,14 @@ const CATALOG: Mutant[] = [
   {
     id: "taker-interaction-concat-order",
     file: "packages/core/src/handlers/jit.ts",
-    find: "const interaction = `0x${ladder.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;",
-    replace: "const interaction = `0x${extraData.slice(2)}${ladder.adapter.slice(2)}` as `0x${string}`;",
+    find: "const interaction = `0x${ladder.adapter.slice(2)}${hookBytes.slice(2)}` as `0x${string}`;",
+    replace: "const interaction = `0x${hookBytes.slice(2)}${ladder.adapter.slice(2)}` as `0x${string}`;",
     tests: [T.venue],
   },
   {
     id: "predict-precalls-dropped",
     file: "packages/core/src/handlers/registry.ts",
-    find: 'preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : buildDeployOracleCall(ca, ref, oracle.mode ?? "price") });',
+    find: 'preCalls.push({ to: mr.registry, data: source === "fixed" && filters.rate !== undefined ? buildDeployFixedRateOracleCall(filters.rate) : codec.deployCall(ca, ref, oracle.mode ?? "price", oracleSalt) });',
     replace: "void 0;",
     tests: [T.mr],
   },
@@ -959,14 +960,14 @@ const CATALOG: Mutant[] = [
     // that equalizes the indentation will surface here as pattern rot — re-aim, don't delete.
     id: "makerjit-precalls-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: '\n              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    find: '\n              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });',
     replace: "\n              void 0;",
     tests: [T.mr],
   },
   {
     id: "takerjit-precalls-dropped",
     file: "packages/core/src/handlers/jit.ts",
-    find: '\n        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });',
+    find: '\n        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });',
     replace: "\n        void 0;",
     tests: [T.venue],
   },
@@ -1010,11 +1011,11 @@ const CATALOG: Mutant[] = [
   // (The first version of these probes had the labels swapped; the survivors exposed it.)
   {
     id: "takerjit-roles-warn-dropped",
-    // Anchored WITH the readAdapterRoles line: the ladder's call (chainId-only options — the
-    // constants-cache opt-in) is what disambiguates it from prepareJitLegacy's role-override call.
+    // Anchored WITH the readRoleHolder line: the ladder's call (the wire's ROLE HOLDER, the
+    // chainId + phoenixWire options) is what disambiguates it from prepareJitLegacy's call.
     file: "packages/core/src/handlers/jit.ts",
-    find: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });\n    if (!adapterRoles.granted) {",
-    replace: "const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });\n    if (false) {",
+    find: "const holderRoles = await readRoleHolder(client, boundController, roleHolder, { chainId, phoenixWire });\n    if (!holderRoles.granted) {",
+    replace: "const holderRoles = await readRoleHolder(client, boundController, roleHolder, { chainId, phoenixWire });\n    if (false) {",
     tests: [T.venue],
   },
   {
@@ -1115,8 +1116,8 @@ const CATALOG: Mutant[] = [
     // guard hides the JIT commitment on exactly the rows where a taker most needs it.
     id: "decode-order-labels-exclusive-again",
     file: "packages/core/src/handlers/decode.ts",
-    find: '  let jit: JitLabel | undefined;\n  try {\n    const d = decodeJitExtension(extension);',
-    replace: '  let jit: JitLabel | undefined;\n  try {\n    if (fusion !== undefined) throw new Error("mutant: labels exclusive");\n    const d = decodeJitExtension(extension);',
+    find: '  let jit: JitLabel | undefined;\n  try {\n    const { adapter, extraData } = jitExtensionTarget(extension);',
+    replace: '  let jit: JitLabel | undefined;\n  try {\n    if (fusion !== undefined) throw new Error("mutant: labels exclusive");\n    const { adapter, extraData } = jitExtensionTarget(extension);',
     tests: [T.fusion],
   },
   // ── type-sweep behavior gates (2026-08-09): runtime narrowing that replaced casts ─────────
@@ -1725,13 +1726,15 @@ const CATALOG: Mutant[] = [
   {
     // Registry-bound paths bind the first generation on an IMPLEMENTED wire (flat today, stage
     // 2 adds nested); binding the primary instead emits flat bytes at the nested adapter — the
-    // exact silent class the generation model exists to prevent. Killed by the binding-guard
-    // conflicts in the registry suites (the stubs mirror the flat generation's addresses).
+    // exact silent class the generation model exists to prevent. Since stage 2a BOTH wires are
+    // implemented and the default binds the PRIMARY; a binding that quietly preferred the flat
+    // set would emit flat bytes for a caller who asked for the primary's nested adapter. Killed
+    // by the nested suite (the primary's adapter, wire and generation are asserted).
     id: "registry-binding-implemented-wire-dropped",
     file: "packages/core/src/handlers/shared.ts",
-    find: "  const label = ctx.generation ?? IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generations, w)?.label).find((l) => l !== undefined);",
-    replace: "  const label = ctx.generation;",
-    tests: [T.mr, T.gate, T.marketCreator],
+    find: "  const label = ctx.generation;\n  const r = await resolveMarketRegistry(chainId, undefined, label);",
+    replace: '  const label = ctx.generation ?? generations.find((g) => g.marketRegistry?.wire === "flat")?.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);',
+    tests: [T.nested],
   },
   {
     // A named generation whose wire this build does not encode must REFUSE (phase_gated) —
@@ -2188,9 +2191,9 @@ const CATALOG: Mutant[] = [
   {
     id: "jitparams-constraint-order",
     file: "packages/core/src/market-registry.ts",
-    find: '{ name: "rateMin", type: "uint256" },\n          { name: "rateMax", type: "uint256" },',
-    replace: '{ name: "rateMax", type: "uint256" },\n          { name: "rateMin", type: "uint256" },',
-    tests: [T.mr],
+    find: '  { name: "rateMin", type: "uint256" },\n  { name: "rateMax", type: "uint256" },',
+    replace: '  { name: "rateMax", type: "uint256" },\n  { name: "rateMin", type: "uint256" },',
+    tests: [T.mr, T.nested],
   },
   {
     id: "oracle-mode-inverted",
@@ -3180,9 +3183,9 @@ const CATALOG: Mutant[] = [
     // decode before signing sees a 100x lie about the fee the fill would set.
     id: "units-decode-jit-fee-label-swapped",
     file: "packages/core/src/handlers/decode.ts",
-    find: 'swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)"',
-    replace: 'swapFeePercentage: "1e18 = 1.0 (WAD)"',
-    tests: [T.decodeJit],
+    find: '  swapFeePercentage: wire === "nested" ? "1e18 = 1% (PERCENTAGE — not WAD; strictly below 100e18 on the 10-field pool manager, and PART OF THE POOL ID there)" : "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)",',
+    replace: '  swapFeePercentage: "1e18 = 1.0 (WAD)",',
+    tests: [T.decodeJit, T.nested],
   },
   {
     // track marketRef labels the market bounds as the percent family — the verifier surface
@@ -3239,8 +3242,8 @@ const CATALOG: Mutant[] = [
     // consistency assertion (every emission must equal the expected value) is what sees it.
     id: "units-xunits-value-drifted",
     file: "packages/schemas/src/tools.ts",
-    find: 'const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.pct18 });',
-    replace: 'const JitSwapFeeWire = UintStr.default("0").describe("PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool").meta({ "x-units": X_UNITS.wad });',
+    find: 'const JitSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });',
+    replace: 'const JitSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.wad });',
     tests: [T.docTopics],
   },
   {
@@ -4061,10 +4064,12 @@ const CATALOG: Mutant[] = [
   },
   {
     // The JIT hook's adapter comparator flips: a maker-chosen adapter reads as Cork's.
+    // The classification lookup: a comparator flip makes every FOREIGN adapter "known" (trusted,
+    // decoded on some generation's wire) and the genuine ones unknown.
     id: "decode-jit-adapter-comparator-inverted",
     file: "packages/core/src/handlers/decode.ts",
-    find: 'if (adapter.toLowerCase() === expected.toLowerCase()) return { verification: "trusted" };',
-    replace: 'if (adapter.toLowerCase() !== expected.toLowerCase()) return { verification: "trusted" };',
+    find: "const known = jitTrust.adapters?.find((a) => a.address.toLowerCase() === adapter.toLowerCase());",
+    replace: "const known = jitTrust.adapters?.find((a) => a.address.toLowerCase() !== adapter.toLowerCase());",
     tests: [T.decodeTrust],
   },
   {
@@ -4161,8 +4166,8 @@ const CATALOG: Mutant[] = [
     // The value gate's verdict is dropped: past expiries and over-cap fees build anyway.
     id: "creator-value-gate-dropped",
     file: "packages/core/src/handlers/prepare-market.ts",
-    find: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator", ctx) });\n  if (valueGate) return valueGate;',
-    replace: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, capWei: await resolveFeeCap(chainId, "creator", ctx) });\n  void valueGate;',
+    find: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, feeRule: await resolveFeeRule(chainId, "creator", ctx) });\n  if (valueGate) return valueGate;',
+    replace: 'const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { site: CREATOR_VALUE_SITE, feeRule: await resolveFeeRule(chainId, "creator", ctx) });\n  void valueGate;',
     tests: [T.marketCreator],
   },
   {
@@ -4217,16 +4222,16 @@ const CATALOG: Mutant[] = [
     // silently rules again — the exact replicated-constant drift this module retires.
     id: "valuegate-live-cap-ignored",
     file: "packages/core/src/handlers/jit.ts",
-    find: "  const cap = opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;",
+    find: "  const cap = opts.feeRule?.maxAllowed ?? opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;",
     replace: "  const cap = MAX_FEE_PERCENTAGE_FALLBACK;",
-    tests: [T.constCache],
+    tests: [T.constCache, T.nested],
   },
   {
     // resolveFeeCap loses its fallback: a cold cache answers 0 and every fee refuses.
     id: "feecap-fallback-dropped",
     file: "packages/core/src/handlers/jit.ts",
-    find: '  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? MAX_FEE_PERCENTAGE_FALLBACK;',
-    replace: '  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? 0n;',
+    find: '  const cap = (address && mr?.wire === "flat" ? cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") : undefined) ?? MAX_FEE_PERCENTAGE_FALLBACK;',
+    replace: '  const cap = (address && mr?.wire === "flat" ? cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") : undefined) ?? 0n;',
     tests: [T.constCache, T.mr],
   },
   // ── output-scales gate (audit A2 structural remediation): unlabeled money outputs fail CI ──
@@ -4725,8 +4730,8 @@ const CATALOG: Mutant[] = [
     // fallback (absent) rides instead — the parameter-ignored green no-op.
     id: "compute-args-uints-ignored",
     file: "packages/core/src/handlers/compute.ts",
-    find: "        additionalData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,",
-    replace: "        additionalData: p.args,",
+    find: "        extraData: p.argsUints !== undefined ? encodeUintWords(p.argsUints.map(BigInt)) : p.args,",
+    replace: "        extraData: p.args,",
     tests: [T.impairment],
   },
   {
@@ -4779,7 +4784,7 @@ const CATALOG: Mutant[] = [
     // additionalData and nobody is told which word is missing.
     id: "answer-impairment-incomplete-silent",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && action.jitMarket?.additionalData === undefined) {",
+    find: "  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && explicitBytes === undefined) {",
     replace: "  if (false) {",
     tests: [T.answer],
   },
@@ -4865,6 +4870,257 @@ const CATALOG: Mutant[] = [
     find: '  if (input.probeBudget !== undefined && input.resource !== "offers") {',
     replace: '  if (false) {',
     tests: [T.offers],
+  },
+  // ── rollover 0.2 wire (stage 2b): the JIT commitment is hashed on the SETTLER generation's
+  // layout — every mutant below produces a plausible 32-byte word the deployed BaseFiller of
+  // that generation recomputes DIFFERENTLY (BaseFiller__JitMarketHashMismatch at the fill) ────
+  {
+    // The salt word sits between the additionalData hash and the fees on 0.2; swapping the two
+    // bytes32 words keeps every value and changes the chain-captured golden.
+    id: "rollover02-salt-word-position",
+    file: "packages/core/src/rollover.ts",
+    find: "          keccak256(p.additionalData),\n          p.oracleSalt,",
+    replace: "          p.oracleSalt,\n          keccak256(p.additionalData),",
+    tests: [T.rollover],
+  },
+  {
+    // The 0.2 typehash computed from the rc.2 preimage: the encoding is otherwise right, only
+    // the first word lies — exactly the class a per-wire table exists to name.
+    id: "rollover02-typehash-per-wire-swapped",
+    file: "packages/core/src/rollover.ts",
+    find: '  "0.2": keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING_02)),',
+    replace: '  "0.2": keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING_RC2)),',
+    tests: [T.rollover],
+  },
+  {
+    // rc.2 silently dropping a non-zero salt signs an instruction the rc.2 BaseFiller can never
+    // reproduce (it has no member to carry the salt) — the refusal must stay.
+    id: "rollover02-rc2-accepts-salt",
+    file: "packages/core/src/rollover.ts",
+    find: "  if (p.oracleSalt !== undefined && p.oracleSalt.toLowerCase() !== zeroHash) {",
+    replace: "  if (false as boolean) {",
+    tests: [T.rollover],
+  },
+  {
+    // 0.2 without a salt must refuse (REQUIRED), not hash an undefined word into a viem error
+    // — or, worse in a future refactor, a zero the caller never chose for a signed commitment.
+    id: "rollover02-02-salt-required-gate-dropped",
+    file: "packages/core/src/rollover.ts",
+    find: "    if (p.oracleSalt === undefined) {",
+    replace: "    if (false as boolean) {",
+    tests: [T.rollover],
+  },
+  {
+    // The wire comes from the SETTLER's generation: taking the chain primary's (0.2) hashes an
+    // rc.2 settler's order on the wrong layout — the order signs, rests, and never fills.
+    id: "rollover02-wire-from-primary",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const settlerGeneration = cls.status === \"active\" ? cls.generation : rolloverGenerations(rollover).find((g) => g.primary);",
+    replace: "const settlerGeneration = rolloverGenerations(rollover).find((g) => g.primary);",
+    tests: [T.rollover],
+  },
+  {
+    // The zero-salt default under 0.2 is what lets an unsalted instruction hash at all; dropping
+    // it turns every 0.2 rollover-intent with a jitMarket into a refusal.
+    id: "rollover02-default-salt-omitted",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'jmx.oracleSalt ?? (jitWire === "0.2" ? zeroHash : undefined);',
+    replace: "jmx.oracleSalt ?? undefined;",
+    tests: [T.rollover],
+  },
+  {
+    // 10-field identity: the fees ARE the pool id on the v1.4 pool manager; hashing the 8-field
+    // shape under 0.2 names a pool the 0.2 BaseFiller never creates (BaseFiller__JitPoolMismatch).
+    id: "rollover02-10field-identity-dropped",
+    file: "packages/core/src/rollover.ts",
+    find: 'return { market: market10, poolId: computeMarketId(market10, "10-field") };',
+    replace: 'return { market: market10, poolId: computeMarketId(market8, "8-field") };',
+    tests: [T.rollover],
+  },
+  {
+    // The fallback binding of each BaseFiller to its pool manager width (0.2 → 10-field).
+    id: "rollover02-phoenix-wire-fallback-flattened",
+    file: "packages/core/src/rollover.ts",
+    find: 'return wire === "0.2" ? "10-field" : "8-field";',
+    replace: 'return "8-field";',
+    tests: [T.rollover],
+  },
+
+
+  // ── the NESTED registry wire (market-registry 0.5.0, stage 2a): the salt's word, the wrapper
+  //    nesting, the verify arg order, the per-wire fee rule, the role holder, address-keyed
+  //    denominations, the binding chain, the alias precedence, the salt refusal on flat, the
+  //    generation threading, and decode dispatch by classification. Killed by
+  //    test/market-registry-nested.test.ts (chain-captured golden bytes) unless noted. ──────────
+  {
+    // oracleSalt is MarketParams index 7, between the bytes and the fees; swapping it with the
+    // bytes moves every trailing word — the adapter's own encodeExtraData bytes disagree.
+    id: "nested-salt-word-position",
+    file: "packages/core/src/market-registry.ts",
+    find: '  { name: "extraData", type: "bytes" },\n  { name: "oracleSalt", type: "bytes32" },',
+    replace: '  { name: "oracleSalt", type: "bytes32" },\n  { name: "extraData", type: "bytes" },',
+    tests: [T.nested, T.extraData],
+  },
+  {
+    // The mint flag is the WRAPPER's second member around the creator's MarketParams; putting it
+    // first is the flat wire's instinct and a different byte layout.
+    id: "nested-wrapper-nesting-swapped",
+    file: "packages/core/src/market-registry.ts",
+    find: '      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: "enableJitMint", type: "bool" },',
+    replace: '      { name: "enableJitMint", type: "bool" },\n      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },',
+    tests: [T.nested, T.extraData],
+  },
+  {
+    // A dropped salt default writes the ZERO salt whatever the caller asked — the pair's first
+    // wrapper lands at another address and the id follows it.
+    id: "nested-creator-salt-default-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: "    oracleSalt: p.oracleSalt ?? ZERO_ORACLE_SALT,",
+    replace: "    oracleSalt: ZERO_ORACLE_SALT,",
+    tests: [T.nested],
+  },
+  {
+    // verify(ca, ref, oracle, expiryTimestamp, creating, constraint, extraData): expiry and the
+    // creating flag are positions 3 and 4 — the staticcall the fill runs.
+    id: "nested-verify-arg-order",
+    file: "packages/core/src/market-registry.ts",
+    find: 'return client.readContract({ address: a.recipe, abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.expiryTimestamp, a.creating, { ...a.constraint }, a.extraData] });',
+    replace: 'return client.readContract({ address: a.recipe, abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.creating, a.expiryTimestamp, { ...a.constraint }, a.extraData] });',
+    tests: [T.nested],
+  },
+  {
+    id: "nested-verify-call-arg-order",
+    file: "packages/core/src/market-registry.ts",
+    find: 'return encodeFunctionData({ abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.expiryTimestamp, a.creating, { ...a.constraint }, a.extraData] });',
+    replace: 'return encodeFunctionData({ abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.creating, a.expiryTimestamp, { ...a.constraint }, a.extraData] });',
+    tests: [T.nested],
+  },
+  {
+    // `creating` is what the creator passes when THIS call creates the pool (an unknown pool —
+    // zero cST); inverted, every fresh pool previews the not-creating rules.
+    id: "nested-creating-flag-inverted",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '        creating = cst.toLowerCase() === "0x0000000000000000000000000000000000000000";',
+    replace: '        creating = cst.toLowerCase() !== "0x0000000000000000000000000000000000000000";',
+    tests: [T.nested],
+  },
+  {
+    // The 10-field fee rule (InvalidFees at or above 100e18, no cap view) — dropped, the primary
+    // is gated at the flat 5e18 and a legal 99e18 fee is refused.
+    id: "nested-fee-rule-10field-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '  if (phoenixWire === "10-field") {\n    return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE - 1n,',
+    replace: '  if (false) {\n    return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE - 1n,',
+    tests: [T.nested, T.constCache],
+  },
+  {
+    // The 10-field bound is EXCLUSIVE: 100e18 itself reverts InvalidFees.
+    id: "nested-fee-limit-inclusive",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "    return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE - 1n, phoenixWire,",
+    replace: "    return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE, phoenixWire,",
+    tests: [T.nested, T.constCache],
+  },
+  {
+    // The controller role is held by the CREATOR on the nested wire (live 2026-09-22: creator
+    // true, adapter false) — reading it on the adapter accuses a fully-granted stack.
+    id: "nested-role-holder-adapter",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "      boundController = creatorController;\n      roleHolder = creator;",
+    replace: "      boundController = creatorController;\n      roleHolder = mr.adapter;",
+    tests: [T.nested],
+  },
+  {
+    // A 10-field controller has no fee authority: probing FEE_MANAGER/CONFIGURATOR there demands
+    // a role nobody needs and nobody holds.
+    id: "nested-roles-second-role-probed",
+    file: "packages/core/src/market-registry.ts",
+    find: '  if (roles.phoenixWire === "10-field") {\n    // No fee authority exists on this controller generation',
+    replace: '  if (false) {\n    // No fee authority exists on this controller generation',
+    tests: [T.nested],
+  },
+  {
+    // Denominations are unit ADDRESSES on the nested registry; the flat label→unit path would read
+    // getDenominations' address[] as records.
+    id: "nested-denominations-flat-path",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "      if (nested) {\n        // The 0.5.0 registry keys denominations by UNIT ADDRESS",
+    replace: "      if (false) {\n        // The 0.5.0 registry keys denominations by UNIT ADDRESS",
+    tests: [T.nested],
+  },
+  {
+    // The binding chain must close through the creator: creator.MARKET_REGISTRY == config.
+    id: "nested-binding-creator-registry-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "if (lc(boundLop) !== lc(lop) || lc(boundCreator) !== lc(creator) || lc(creatorRegistry) !== lc(mr.registry) || pmMismatch) {",
+    replace: "if (lc(boundLop) !== lc(lop) || lc(boundCreator) !== lc(creator) || pmMismatch) {",
+    tests: [T.nested],
+  },
+  {
+    id: "nested-binding-market-creator-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "if (lc(boundLop) !== lc(lop) || lc(boundCreator) !== lc(creator) || lc(creatorRegistry) !== lc(mr.registry) || pmMismatch) {",
+    replace: "if (lc(boundLop) !== lc(lop) || lc(creatorRegistry) !== lc(mr.registry) || pmMismatch) {",
+    tests: [T.nested],
+  },
+  {
+    // extraData + a DIFFERENT additionalData is two payloads — accepted, one of them is silently
+    // the one signed.
+    id: "nested-extradata-alias-precedence",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if (jm.extraData !== undefined && jm.additionalData !== undefined && jm.extraData.toLowerCase() !== jm.additionalData.toLowerCase()) {",
+    replace: "  if (false) {",
+    tests: [T.nested],
+  },
+  {
+    // A non-zero oracleSalt on a flat/legacy generation has no field to ride in — it must refuse
+    // as typed invalid input, never fall through to the codec's throw or a silent drop.
+    id: "nested-oraclesalt-flat-accepted",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '  if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {',
+    replace: "  if (false) {",
+    tests: [T.nested],
+  },
+  {
+    // The input's `generation` must reach ctx — every handler reads it there.
+    id: "nested-generation-not-threaded",
+    file: "packages/core/src/handlers.ts",
+    find: "  if (generation !== undefined) ctx = { ...ctx, generation };",
+    replace: "  void generation;",
+    tests: [T.nested],
+  },
+  {
+    // Decode dispatches by the adapter's CLASSIFICATION; trial-decoding lets nested bytes at the
+    // flat adapter read as a plausible market and forgets the trusted verdict.
+    id: "nested-decode-dispatch-trial",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "    if (known) {\n      // Classified: ONE codec",
+    replace: "    if (false) {\n      // Classified: ONE codec",
+    tests: [T.nested, T.decodeTrust],
+  },
+  {
+    // derive-cork-pool on a 10-field generation: the fees are the id.
+    id: "nested-derive-fees-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee });",
+    replace: "derived = deriveJitMarket({ collateralAsset: ca, referenceAsset: ref, expiryTimestamp: expiry, constraint, oracle: oracle.address, wire: phoenixWire });",
+    tests: [T.nested],
+  },
+  {
+    // deploy(ca, ref, mode, oracleSalt): the salt is word 3, whatever the caller passed.
+    id: "nested-deploy-salt-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: '  return encodeFunctionData({ abi: marketRegistryNestedAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode], oracleSalt ?? ZERO_ORACLE_SALT] });',
+    replace: '  return encodeFunctionData({ abi: marketRegistryNestedAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode], ZERO_ORACLE_SALT] });',
+    tests: [T.nested],
+  },
+  {
+    // The 10-field controller call: the whitelist flag is the word after the ten Market words.
+    id: "nested-10field-controller-whitelist-flag",
+    file: "packages/core/src/market-registry.ts",
+    find: '    return encodeFunctionData({ abi: controllerCreatePool10Abi, functionName: "createNewPool", args: [{ pool: { ...market }, isWhitelistEnabled: false }] });',
+    replace: '    return encodeFunctionData({ abi: controllerCreatePool10Abi, functionName: "createNewPool", args: [{ pool: { ...market }, isWhitelistEnabled: true }] });',
+    tests: [T.nested],
   },
 ];
 

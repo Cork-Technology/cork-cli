@@ -37,6 +37,9 @@ export interface QueryFilters {
   base?: `0x${string}`;
   quote?: `0x${string}`;
   legacy?: boolean;
+  oracleSalt?: `0x${string}`;
+  swapFeePercentage?: bigint;
+  unwindSwapFeePercentage?: bigint;
 }
 
 /** Every filter key parseQueryFilters understands — unknown keys are a teachable error, as advertised.
@@ -73,12 +76,15 @@ export const KNOWN_FILTER_KEYS = [
   "base",
   "quote",
   "legacy",
+  "oracleSalt",
+  "swapFeePercentage",
+  "unwindSwapFeePercentage",
 ] as const;
 
-/** The digits-only (bigint-valued) filter keys — `rate` and `expiry` below parse via BigInt.
- *  Exported for the CLI, whose amount sugar (`--rate 1e18`) must cover exactly these keys;
- *  importing the list keeps the sugar and the parser from drifting apart. */
-export const DIGIT_FILTER_KEYS = ["rate", "expiry"] as const;
+/** The digits-only (bigint-valued) filter keys — `rate`, `expiry` and the two fee percentages
+ *  below parse via BigInt. Exported for the CLI, whose amount sugar (`--rate 1e18`) must cover
+ *  exactly these keys; importing the list keeps the sugar and the parser from drifting apart. */
+export const DIGIT_FILTER_KEYS = ["rate", "expiry", "swapFeePercentage", "unwindSwapFeePercentage"] as const;
 
 type FilterKey = (typeof KNOWN_FILTER_KEYS)[number];
 
@@ -102,11 +108,11 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "account-state": ["poolId", "account"],
   "protocol-config": [],
   "registry-assets": ["address", "legacy"],
-  "registry-oracle": ["collateralAsset", "referenceAsset", "mode", "rate", "legacy"],
+  "registry-oracle": ["collateralAsset", "referenceAsset", "mode", "rate", "oracleSalt", "legacy"],
   "registry-recipes": ["recipe", "mode", "legacy"],
-  "registry-denominations": ["label", "legacy"],
+  "registry-denominations": ["label", "address", "legacy"],
   "registry-feeds": ["base", "quote", "legacy"],
-  "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle"],
+  "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle", "oracleSalt", "swapFeePercentage", "unwindSwapFeePercentage"],
   "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix", "underwriter"],
   "offers": ["poolId", "side", "account", "rfqId"],
 };
@@ -276,6 +282,26 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     }
   }
   if (raw?.label !== undefined) out.label = String(raw.label);
+  // Nested-wire (0.5.x) identity inputs: the oracle salt of a pair's FIRST wrapper (bytes32,
+  // default zero) and the two fee percentages that are PART OF a 10-field pool id (1e18 = 1%,
+  // default 0) — same unsafe-number guard as `rate`, for the same reason (a wrong fee is a wrong
+  // pool id, silently).
+  if (raw?.oracleSalt !== undefined) {
+    const v = String(raw.oracleSalt);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(v)) fail("oracleSalt", "expected a 32-byte hex salt (0x + 64 hex chars; the zero salt is the pair's default wrapper)");
+    else out.oracleSalt = v as `0x${string}`;
+  }
+  for (const key of ["swapFeePercentage", "unwindSwapFeePercentage"] as const) {
+    if (raw?.[key] !== undefined) {
+      if (typeof raw[key] === "number" && !Number.isSafeInteger(raw[key])) {
+        fail(key, "arrived as a JSON number outside JavaScript's safe-integer range — its low digits were ALREADY rounded away during JSON parsing; resend it as a decimal STRING (1e18 = 1%)");
+      } else {
+        const v = String(raw[key]);
+        if (!/^[0-9]+$/.test(v)) fail(key, "expected a fee percentage as a decimal integer string (1e18 = 1%)");
+        else out[key] = BigInt(v);
+      }
+    }
+  }
   if (raw?.legacy !== undefined) {
     if (typeof raw.legacy === "boolean") out.legacy = raw.legacy;
     else if (raw.legacy === "true" || raw.legacy === "false") out.legacy = raw.legacy === "true";

@@ -6,7 +6,7 @@ import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcC
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, resolveMarketRegistry, type CorkMarketRegistry } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
-import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
+import { type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
@@ -162,20 +162,24 @@ export async function getDep(
 /**
  * Resolve the market-registry block a registry-bound path (JIT ladder, registry-* reads,
  * derive-cork-pool, create-pool, deploy-oracle) builds against: `ctx.generation` when the caller
- * named one, else the first generation whose block speaks an IMPLEMENTED wire (the flat 0.3.x
- * set today), else the primary. A named generation whose wire this build does not implement is
- * refused `phase_gated` — a typed refusal, never bytes the deployed adapter cannot decode. The
- * `generation` reference rides along so the caller's `getDep(ctx, chainId, { generation })` and
- * its implementation-guard scope address the SAME set.
+ * named one, else the chain's PRIMARY — whose declared wire selects the codec (market-registry.ts
+ * `wireCodec`). A generation whose wire this build does not implement is refused `phase_gated`
+ * — a typed refusal, never bytes the deployed adapter cannot decode; the primary's wire is
+ * implemented by construction (flat and nested both are), and a primary declaring a wire this
+ * build has never heard of is a config newer than the binary — the same refusal names the
+ * implemented set. `generation` rides along so the caller's `getDep(ctx, chainId, { generation })`
+ * and its implementation-guard scope address the SAME set; `phoenixWire` is that generation's
+ * pool-manager width — the pool-id derivation and the fee rule follow it, not the registry wire.
  */
 export async function getMarketRegistry(
   ctx: HandlerContext,
   chainId: number,
-): Promise<{ mr: CorkMarketRegistry | undefined; mrWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: MarketRegistryWire }; refusal?: GenerationRefusal | { code: "phase_gated"; message: string } }> {
+): Promise<{ mr: CorkMarketRegistry | undefined; mrWarn: Array<{ code: string; message: string }>; generation?: GenerationRef & { wire?: MarketRegistryWire }; phoenixWire?: PhoenixWire; refusal?: GenerationRefusal | { code: "phase_gated"; message: string } }> {
   const { generations, warning } = await resolveGenerations(chainId);
   const mrWarn = warning ? [warning] : [];
-  const label = ctx.generation ?? IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generations, w)?.label).find((l) => l !== undefined);
+  const label = ctx.generation;
   const r = await resolveMarketRegistry(chainId, undefined, label);
+  const phoenixWire = r.generation ? generations.find((g) => g.label === r.generation!.label)?.phoenix?.wire : undefined;
   if (r.refusal) return { mr: undefined, mrWarn: [...mrWarn, r.refusal], refusal: r.refusal };
   if (r.marketRegistry && !IMPLEMENTED_MARKET_REGISTRY_WIRES.includes(r.marketRegistry.wire)) {
     const refusal = {
@@ -186,7 +190,7 @@ export async function getMarketRegistry(
     };
     return { mr: undefined, mrWarn: [...mrWarn, refusal], refusal, ...(r.generation ? { generation: r.generation } : {}) };
   }
-  return { mr: r.marketRegistry, mrWarn, ...(r.generation ? { generation: r.generation } : {}) };
+  return { mr: r.marketRegistry, mrWarn, ...(r.generation ? { generation: r.generation } : {}), ...(phoenixWire ? { phoenixWire } : {}) };
 }
 
 /** Transparency warning when chain reads fell back to a community RPC (not the configured default). */

@@ -13,6 +13,19 @@
 // (zero = the order does not authorize just-in-time market creation), changing BOTH typehashes
 // and the static OrderData ABI length (832 → 864 bytes). Digests computed under the previous
 // generation's types no longer verify on the deployed settlers and are rejected by the venue.
+//
+// 0.2 wire (rollover 0.2.0, Distribution phoenix/v0.4-rc.1, live 2026-09-11 on 42161 + 8453):
+// OrderData, RolloverParams and the CorkSettler/1.0.0 domain are UNCHANGED (ERC-5267 read back
+// live on the new settlers), so every order digest below is wire-independent. What moved is the
+// JIT commitment alone: `BaseFiller.JITMarketParams` gained `bytes32 oracleSalt` between
+// `additionalData` and `swapFeePercentage` (the salt the nested MarketRegistry.deploy(ca, ref,
+// mode, salt) takes), so its typehash preimage and its abi.encode word list both changed.
+// `hashJitMarketParams` is therefore WIRE-DISPATCHED on the settler's generation: an rc.2 hash
+// signed into an order bound to a 0.2 settler reverts BaseFiller__JitMarketHashMismatch at the
+// fill, and the two layouts are plausible-looking 32-byte words either way — only the chain-
+// captured golden vector (BaseFiller.hashJITMarketParams @ 0x3D16…1224, 2026-09-22) tells them
+// apart. The contract keeps the member name `additionalData` (the registry side renamed its twin
+// to `extraData`); this module keeps the contract's name on the struct.
 import {
   concatHex,
   encodeAbiParameters,
@@ -23,7 +36,9 @@ import {
   zeroAddress,
   zeroHash,
 } from "viem";
-import type { RolloverWire } from "./generations.ts";
+import type { PhoenixWire, RolloverWire } from "./generations.ts";
+import { computeMarketId } from "./marketid.ts";
+import type { Market10, Market8 } from "./types.ts";
 
 type Address = `0x${string}`;
 type Hex = `0x${string}`;
@@ -33,8 +48,14 @@ const ORDER_DATA_TYPE_STRING =
   "OrderData(address user,address settler,address fillerHint,address exclusiveFiller,address srcCstToken,address dstCstToken,address premiumToken,address rolloverContract,uint64 originChainId,uint64 destinationChainId,uint64 openDeadline,uint64 fillDeadline,uint64 orderSalt,uint256 orderSize,uint256 minPremiumPerShare,bool allowPartialFills,bool allowUnderfill,uint8 premiumPaymentMode,bytes32 rolloverIntentHash,RolloverParams rolloverParams)RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";
 const ROLLOVER_PARAMS_TYPE_STRING =
   "RolloverParams(address srcCstToken,address dstCstToken,uint256 minCaReceived,uint256 minSharesOut,bytes32 srcPoolId,bytes32 dstPoolId,address settler,bytes32 jitMarketHash)";
-const JIT_MARKET_PARAMS_TYPE_STRING =
+// The JITMarketParams preimage per rollover wire that HAS one (rc.1 predates jitMarketHash).
+// `rc.2` verbatim from Typehashes.sol @ v0.1.0-rc.2; `0.2` verbatim from Typehashes.sol @ 0.2.0
+// (`bytes32 oracleSalt` after `bytes additionalData`). Keyed by wire so a caller cannot reach a
+// preimage without saying which generation it is hashing for.
+const JIT_MARKET_PARAMS_TYPE_STRING_RC2 =
   "JITMarketParams(address collateralAsset,address referenceAsset,uint256 expiryTimestamp,address recipe,uint256 rateOverride,uint256 rateMin,uint256 rateMax,uint256 rateChangePerDayMax,uint256 rateChangeCapacityMax,bytes additionalData,uint256 swapFeePercentage,uint256 unwindSwapFeePercentage)";
+const JIT_MARKET_PARAMS_TYPE_STRING_02 =
+  "JITMarketParams(address collateralAsset,address referenceAsset,uint256 expiryTimestamp,address recipe,uint256 rateOverride,uint256 rateMin,uint256 rateMax,uint256 rateChangePerDayMax,uint256 rateChangeCapacityMax,bytes additionalData,bytes32 oracleSalt,uint256 swapFeePercentage,uint256 unwindSwapFeePercentage)";
 const ROLLOVER_INTENT_TYPE_STRING =
   "RolloverIntent(address rolloverContract,bytes32 orderDigest,uint64 deadline,uint64 nonce,Call[] preRolloverHooks,Call[] midRolloverHooks,Call[] postRolloverHooks,Call[] premiumHooks)Call(address target,uint256 value,bytes callData,bool allowFailure,bool isDelegateCall)";
 const CALL_TYPE_STRING =
@@ -44,7 +65,41 @@ export const ORDER_DATA_TYPEHASH: Hex = keccak256(stringToHex(ORDER_DATA_TYPE_ST
 export const ROLLOVER_PARAMS_TYPEHASH: Hex = keccak256(stringToHex(ROLLOVER_PARAMS_TYPE_STRING));
 export const ROLLOVER_INTENT_TYPEHASH: Hex = keccak256(stringToHex(ROLLOVER_INTENT_TYPE_STRING));
 export const CALL_TYPEHASH: Hex = keccak256(stringToHex(CALL_TYPE_STRING));
-export const JIT_MARKET_PARAMS_TYPEHASH: Hex = keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING));
+
+/** The rollover wires that carry a JIT commitment. `rc.1` is deliberately absent: that
+ *  generation's RolloverParams has no jitMarketHash, so there is nothing to hash for it — asking
+ *  is a caller error, refused (never a silent fallback to a layout the contract does not know). */
+export type JitMarketParamsWire = Exclude<RolloverWire, "rc.1">;
+export const JIT_MARKET_PARAMS_TYPE_STRINGS: Readonly<Record<JitMarketParamsWire, string>> = {
+  "rc.2": JIT_MARKET_PARAMS_TYPE_STRING_RC2,
+  "0.2": JIT_MARKET_PARAMS_TYPE_STRING_02,
+};
+export const JIT_MARKET_PARAMS_TYPEHASHES: Readonly<Record<JitMarketParamsWire, Hex>> = {
+  "rc.2": keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING_RC2)),
+  "0.2": keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRING_02)),
+};
+/** The rc.2 typehash under its historical name (pre-0.6 SDK surface); new code keys by wire. */
+export const JIT_MARKET_PARAMS_TYPEHASH: Hex = JIT_MARKET_PARAMS_TYPEHASHES["rc.2"];
+
+/** The JIT-commitment wire of a rollover generation, or a typed refusal for the one generation
+ *  that never spoke one. Thrown, not returned: every caller sits behind the settler
+ *  classification (a retired rc.1 settler is refused `settler_retired` before any hashing), so
+ *  reaching this on rc.1 means a wire was named without a settler — a programming error. */
+export function jitMarketParamsWireOf(wire: RolloverWire): JitMarketParamsWire {
+  if (wire === "rc.1") {
+    throw new RolloverJitWireError("rollover wire rc.1 carries no JIT market commitment (RolloverParams had no jitMarketHash before rc.2) — nothing can be hashed for that generation; bind the order to an rc.2 or 0.2 settler");
+  }
+  return wire;
+}
+
+/** A wire/struct disagreement in the JIT commitment: the caller asked for a layout the named
+ *  generation's BaseFiller does not compute. Handlers map it to `invalid_order_terms`. */
+export class RolloverJitWireError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RolloverJitWireError";
+  }
+}
 
 /** `RolloverParams.jitMarketHash` value meaning "this order does not authorize just-in-time
  *  market creation" (rollover v0.1.0-rc.2 Typehashes.sol). Orders built without a JIT market
@@ -362,10 +417,14 @@ export function encodeOrderData(o: OrderDataStruct): Hex {
 }
 
 /** Just-in-time market instruction a rollover order commits to when the destination pool may not
- *  exist yet (BaseFiller.JITMarketParams @ v0.1.0-rc.2). The order separately signs
+ *  exist yet (BaseFiller.JITMarketParams @ v0.1.0-rc.2 / 0.2.0). The order separately signs
  *  `rolloverParams.dstPoolId` (the Phoenix Market commitment) and `rolloverParams.jitMarketHash`
  *  (this struct's commitment, negotiated fees included). Scales: the four constraint rates and
- *  rateOverride are ABSOLUTE 1e18 = 1.0; the two fee fields are PERCENTAGES 1e18 = 1%. */
+ *  rateOverride are ABSOLUTE 1e18 = 1.0; the two fee fields are PERCENTAGES 1e18 = 1%.
+ *  `oracleSalt` exists only on the 0.2 wire (the CREATE2 salt the nested registry's
+ *  deploy(ca, ref, mode, salt) takes; the zero salt is the default oracle): REQUIRED when hashing
+ *  for 0.2, REFUSED non-zero when hashing for rc.2 — that contract has no member to commit it to,
+ *  and dropping it silently would sign an instruction the filler cannot reproduce. */
 export interface JitMarketParamsStruct {
   collateralAsset: Address;
   referenceAsset: Address;
@@ -376,48 +435,118 @@ export interface JitMarketParamsStruct {
   rateMax: bigint;
   rateChangePerDayMax: bigint;
   rateChangeCapacityMax: bigint;
+  /** The contract's own member name (the registry side's `extraData` twin). */
   additionalData: Hex;
+  oracleSalt?: Hex | undefined;
   swapFeePercentage: bigint;
   unwindSwapFeePercentage: bigint;
 }
 
-/** Commitment hash embedded in `RolloverParams.jitMarketHash`
- *  (BaseFiller.hashJITMarketParams — `additionalData` rides as its keccak256, EIP-712-style). */
-export function hashJitMarketParams(p: JitMarketParamsStruct): Hex {
+/** The nine words every JIT commitment starts with — shared by both wires so the two encodings
+ *  can only differ where the contracts differ (the salt word). */
+const JIT_MARKET_PARAMS_HEAD_TYPES = [
+  { type: "bytes32" },
+  { type: "address" },
+  { type: "address" },
+  { type: "uint256" },
+  { type: "address" },
+  { type: "uint256" },
+  { type: "uint256" },
+  { type: "uint256" },
+  { type: "uint256" },
+  { type: "uint256" },
+] as const;
+
+function jitMarketParamsHead(typehash: Hex, p: JitMarketParamsStruct) {
+  return [typehash, p.collateralAsset, p.referenceAsset, p.expiryTimestamp, p.recipe, p.rateOverride, p.rateMin, p.rateMax, p.rateChangePerDayMax, p.rateChangeCapacityMax] as const;
+}
+
+/** Commitment hash embedded in `RolloverParams.jitMarketHash` (BaseFiller.hashJITMarketParams —
+ *  `additionalData` rides as its keccak256, EIP-712-style), computed for the SETTLER's wire:
+ *  `rc.2` is the v0.1.0-rc.2 layout (forge golden vector, unchanged), `0.2` inserts the
+ *  `oracleSalt` word after the additionalData hash (chain-captured golden vector, 2026-09-22).
+ *  The wire is explicit and comes from `classifyRolloverSettler(dep, settler).generation.wire`
+ *  — never from the chain's primary generation: an order bound to an rc.2 settler is filled by the
+ *  rc.2 BaseFiller, whatever the primary is. */
+export function hashJitMarketParams(p: JitMarketParamsStruct, wire: RolloverWire): Hex {
+  const w = jitMarketParamsWireOf(wire);
+  if (w === "0.2") {
+    if (p.oracleSalt === undefined) {
+      throw new RolloverJitWireError("oracleSalt is REQUIRED on the 0.2 rollover wire — BaseFiller.JITMarketParams commits it between additionalData and swapFeePercentage (the zero salt names the pair's default oracle; pass it explicitly rather than have a default chosen for a signed commitment)");
+    }
+    return keccak256(
+      encodeAbiParameters(
+        [...JIT_MARKET_PARAMS_HEAD_TYPES, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "uint256" }],
+        [
+          ...jitMarketParamsHead(JIT_MARKET_PARAMS_TYPEHASHES["0.2"], p),
+          keccak256(p.additionalData),
+          p.oracleSalt,
+          p.swapFeePercentage,
+          p.unwindSwapFeePercentage,
+        ],
+      ),
+    );
+  }
+  // rc.2 — the v0.1.0-rc.2 layout, byte-identical to the pre-0.6 encoder (forge golden vector).
+  if (p.oracleSalt !== undefined && p.oracleSalt.toLowerCase() !== zeroHash) {
+    throw new RolloverJitWireError(`oracleSalt ${p.oracleSalt} cannot be committed on the rc.2 rollover wire — the v0.1.0-rc.2 BaseFiller.JITMarketParams has no oracleSalt member, so the filler could never reproduce this commitment; omit the salt (the pair's default oracle) or bind the order to a 0.2 settler, whose JITMarketParams carries it`);
+  }
   return keccak256(
     encodeAbiParameters(
+      [...JIT_MARKET_PARAMS_HEAD_TYPES, { type: "bytes32" }, { type: "uint256" }, { type: "uint256" }],
       [
-        { type: "bytes32" },
-        { type: "address" },
-        { type: "address" },
-        { type: "uint256" },
-        { type: "address" },
-        { type: "uint256" },
-        { type: "uint256" },
-        { type: "uint256" },
-        { type: "uint256" },
-        { type: "uint256" },
-        { type: "bytes32" },
-        { type: "uint256" },
-        { type: "uint256" },
-      ],
-      [
-        JIT_MARKET_PARAMS_TYPEHASH,
-        p.collateralAsset,
-        p.referenceAsset,
-        p.expiryTimestamp,
-        p.recipe,
-        p.rateOverride,
-        p.rateMin,
-        p.rateMax,
-        p.rateChangePerDayMax,
-        p.rateChangeCapacityMax,
+        ...jitMarketParamsHead(JIT_MARKET_PARAMS_TYPEHASHES["rc.2"], p),
         keccak256(p.additionalData),
         p.swapFeePercentage,
         p.unwindSwapFeePercentage,
       ],
     ),
   );
+}
+
+/** The DESTINATION pool a rollover JIT instruction derives, on the pool manager's wire: the
+ *  BaseFiller builds the Market from the instruction's fields (field order load-bearing for the
+ *  id — BaseFiller.sol `_execute…` "Field order is load-bearing") and asks the pool manager for
+ *  its id. An 8-field pool manager (≤ v1.3, the rc.2 generation) ignores the fees; a 10-field one
+ *  (v1.4.0-rc.1, the 0.2 generation) hashes them INTO the id — so a dstPoolId derived without the
+ *  fees under a 0.2 settler names a pool that will never exist (BaseFiller__JitPoolMismatch).
+ *  `computeMarketId` refuses a shape/wire disagreement, never widens or narrows silently. */
+export function deriveRolloverJitPool(args: {
+  collateralAsset: Address;
+  referenceAsset: Address;
+  expiryTimestamp: bigint;
+  rateMin: bigint;
+  rateMax: bigint;
+  rateChangePerDayMax: bigint;
+  rateChangeCapacityMax: bigint;
+  oracle: Address;
+  swapFeePercentage: bigint;
+  unwindSwapFeePercentage: bigint;
+  phoenixWire: PhoenixWire;
+}): { market: Market8 | Market10; poolId: Hex } {
+  const market8: Market8 = {
+    collateralAsset: args.collateralAsset,
+    referenceAsset: args.referenceAsset,
+    expiryTimestamp: args.expiryTimestamp,
+    rateMin: args.rateMin,
+    rateMax: args.rateMax,
+    rateChangePerDayMax: args.rateChangePerDayMax,
+    rateChangeCapacityMax: args.rateChangeCapacityMax,
+    rateOracle: args.oracle,
+  };
+  if (args.phoenixWire === "10-field") {
+    const market10: Market10 = { ...market8, swapFeePercentage: args.swapFeePercentage, unwindSwapFeePercentage: args.unwindSwapFeePercentage };
+    return { market: market10, poolId: computeMarketId(market10, "10-field") };
+  }
+  return { market: market8, poolId: computeMarketId(market8, "8-field") };
+}
+
+/** The pool-manager wire a rollover generation's BaseFiller creates pools on, when the chain
+ *  generation's phoenix block is not at hand: the 0.2 BaseFiller binds the v1.4.0-rc.1 (10-field)
+ *  pool manager, rc.2 the v1.3 (8-field) one — the Distribution facts of 2026-09-22. Callers with
+ *  the resolved generation pass its `phoenix.wire` instead; this is the fallback, not the source. */
+export function phoenixWireOfRolloverWire(wire: RolloverWire): PhoenixWire {
+  return wire === "0.2" ? "10-field" : "8-field";
 }
 
 const U64 = (1n << 64n) - 1n;

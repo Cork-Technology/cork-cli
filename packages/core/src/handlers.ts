@@ -30,6 +30,11 @@ export async function runTool(name: string, rawInput: unknown, ctx: HandlerConte
   const parsed = def.input.safeParse(rawInput);
   if (!parsed.success) throw new ToolInputError(name, parsed.error.issues, buildTeaching(name as ToolName, parsed.error.issues, rawInput));
   const chainIdOf = (x: unknown): ChainId => (x as { chainId?: ChainId }).chainId ?? 1;
+  // The input's `generation` label (every chain-backed tool takes one) selects the contract set
+  // for THIS call and rides in ctx, where every handler already reads it: a caller's explicit
+  // per-call choice wins over an SDK-wide ctx.generation; an input without one keeps the ctx's.
+  const generation = (parsed.data as { generation?: string }).generation;
+  if (generation !== undefined) ctx = { ...ctx, generation };
 
   switch (name) {
     case "cork_capabilities":

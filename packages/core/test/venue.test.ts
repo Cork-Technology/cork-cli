@@ -1421,7 +1421,8 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: (row["orderHash"] as string) ?? buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
-        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub(over, code) },
+        // The stub mirrors the FLAT (0.3.3) JIT stack — name its generation (the primary is nested).
+        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, generation: "phoenix/v0.3-rc.1", resolveRpc: rpcStub(over, code) },
       );
 
     it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
@@ -1500,7 +1501,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
 
     it("a resting order carrying its OWN jit extension pins the market: mismatched taker params → conflict marketid_mismatch", async () => {
       // The maker signed for a DIFFERENT expiry; the taker's params derive a different pool id.
-      const makerExt = buildJitExtension(ADAPTER, encodeJitExtraData({ collateralAsset: jm.collateralAsset as `0x${string}`, referenceAsset: jm.referenceAsset as `0x${string}`, expiryTimestamp: 1_796_000_000n, recipe: LIQ, rateOverride: 0n, constraint: { rateMin: 1n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: 3n * WAD }, additionalData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n, enableJitMint: false }));
+      const makerExt = buildJitExtension(ADAPTER, encodeJitExtraData("flat", { collateralAsset: jm.collateralAsset as `0x${string}`, referenceAsset: jm.referenceAsset as `0x${string}`, expiryTimestamp: 1_796_000_000n, recipe: LIQ, rateOverride: 0n, constraint: { rateMin: 1n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: 3n * WAD }, extraData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n, enableJitMint: false }));
       // The resting order must have been SIGNED with that extension (HAS_EXTENSION flag, salt
       // bound) — an extension merely attached beside an unflagged order is refused at the
       // authentication gate (UnexpectedOrderExtension), never reaching the market check.

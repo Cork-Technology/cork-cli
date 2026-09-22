@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool } from "@cork/core";
 import { CONSTANT_TTL_MS, cachedContractConstant, cachedContractConstantBytes32, refreshContractConstant, resetConstantsCacheForTests } from "../src/chain/constants-cache.ts";
-import { jitValueGate, maxExpiryBoundWarning, resolveFeeCap } from "../src/handlers/jit.ts";
+import { jitValueGate, maxExpiryBoundWarning, resolveFeeCap, resolveFeeRule } from "../src/handlers/jit.ts";
 
 const ADDR = "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C" as const;
 const WAD = 10n ** 18n;
@@ -129,18 +129,27 @@ describe("consumers read the chain's value through the cache, with the compiled 
     expect(gate?.warnings[0]?.message).toContain("capped at 3e18 (3%)");
   });
 
-  it("resolveFeeCap: cold cache → the compiled 5e18; warm cache → the chain's own value", async () => {
-    expect(await resolveFeeCap(42161, "adapter")).toBe(5n * WAD);
-    // Warm the adapter's entry (config resolves the adapter address for 42161).
-    // stage 2: resolveFeeCap reads the cap of the adapter the JIT paths BIND — the flat-wire
-    // generation's (handlers/shared.ts getMarketRegistry), not the primary's.
+  it("resolveFeeCap on an 8-field generation: cold cache → the compiled 5e18; warm cache → the chain's own value; on the 10-field primary the rule is < 100e18 and nothing is cached", async () => {
+    const flat = { generation: "phoenix/v0.3-rc.1" };
+    expect(await resolveFeeCap(42161, "adapter", flat)).toBe(5n * WAD);
+    // Warm the adapter's entry (config resolves the flat generation's adapter address for 42161).
     const { marketRegistryForWire, resolveGenerations } = await import("@cork/core");
     const mr = marketRegistryForWire((await resolveGenerations(42161)).generations, "flat")!.marketRegistry;
     seed({ [`42161:${mr!.adapter!.toLowerCase()}:MAX_FEE_PERCENTAGE`]: { v: (3n * WAD).toString(), ts: Date.now() } });
     resetConstantsCacheForTests();
-    expect(await resolveFeeCap(42161, "adapter")).toBe(3n * WAD);
+    expect(await resolveFeeCap(42161, "adapter", flat)).toBe(3n * WAD);
     // The creator's cap is keyed on the CREATOR address — the adapter's entry must not answer it.
-    expect(await resolveFeeCap(42161, "creator")).toBe(5n * WAD);
+    expect(await resolveFeeCap(42161, "creator", flat)).toBe(5n * WAD);
+    // The PRIMARY (phoenix/v0.4-rc.1) creates on a 10-field pool manager: Phoenix reverts
+    // InvalidFees at or above 100e18 and no contract exposes a cap view — the largest allowed
+    // fee is 100e18 − 1, whatever any adapter entry in the cache says.
+    const primaryMr = (await resolveGenerations(42161)).primary!.marketRegistry!;
+    seed({ [`42161:${primaryMr.adapter!.toLowerCase()}:MAX_FEE_PERCENTAGE`]: { v: (3n * WAD).toString(), ts: Date.now() } });
+    resetConstantsCacheForTests();
+    expect(await resolveFeeCap(42161, "adapter")).toBe(100n * WAD - 1n);
+    const rule = await resolveFeeRule(42161, "creator");
+    expect(rule).toMatchObject({ phoenixWire: "10-field", maxAllowed: 100n * WAD - 1n });
+    expect(rule.text).toContain("InvalidFees");
   });
 
   it("a warm cache lets maxExpiryBoundWarning warn even when the chain read fails", async () => {
@@ -154,8 +163,8 @@ describe("consumers read the chain's value through the cache, with the compiled 
   });
 
   it("end-to-end: a maker-order jitMarket fee legal under 5e18 refuses once the ADAPTER's cached live cap says 3e18", async () => {
-    // stage 2: resolveFeeCap reads the cap of the adapter the JIT paths BIND — the flat-wire
-    // generation's (handlers/shared.ts getMarketRegistry), not the primary's.
+    // The live cap is a FLAT-wire (8-field) fact: the test names that generation, so the value
+    // gate reads the cached MAX_FEE_PERCENTAGE of the adapter it binds.
     const { marketRegistryForWire, resolveGenerations } = await import("@cork/core");
     const mr = marketRegistryForWire((await resolveGenerations(42161)).generations, "flat")!.marketRegistry;
     seed({ [`42161:${mr!.adapter!.toLowerCase()}:MAX_FEE_PERCENTAGE`]: { v: (3n * WAD).toString(), ts: Date.now() } });
@@ -163,6 +172,7 @@ describe("consumers read the chain's value through the cache, with the compiled 
       "cork_prepare_orders",
       {
         chainId: 42161,
+        generation: "phoenix/v0.3-rc.1",
         account: "0xc0ffee0000000000000000000000000000000001",
         clientRequestId: "const-cache-e2e-01",
         action: {

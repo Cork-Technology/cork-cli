@@ -20,6 +20,8 @@ const BUNDLER3_1 = MAINNET.bundler3! as `0x${string}`;
 // stage 3: the JIT decode trusts the FLAT-wire generation's adapter (the layout the decoder
 // implements), not the primary's nested-wire adapter.
 const JIT_ADAPTER_42161 = marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, 42161), "flat")!.marketRegistry!.adapter as `0x${string}`;
+// The PRIMARY (nested-wire) generation's adapter — the one a mismatch verdict names as "Cork's".
+const PRIMARY_JIT_ADAPTER_42161 = primaryOf(generationsOf(BUNDLED_DEFAULTS, 42161))!.marketRegistry!.adapter as `0x${string}`;
 const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
 const FAKE = "0x00000000000000000000000000000000000000ee" as const;
 const POOL = `0x${"11".repeat(32)}` as const;
@@ -129,14 +131,14 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
   const extensionAt = (adapter: `0x${string}`) =>
     buildJitExtension(
       adapter,
-      encodeJitExtraData({
+      encodeJitExtraData("flat", {
         collateralAsset: USDC,
         referenceAsset: USER,
         expiryTimestamp: 1_790_000_000n,
         recipe: FAKE,
         rateOverride: 0n,
         constraint: { rateMin: 1n, rateMax: 2n * 10n ** 18n, rateChangePerDayMax: 10n ** 18n, rateChangeCapacityMax: 3n * 10n ** 18n },
-        additionalData: "0x",
+        extraData: "0x",
         swapFeePercentage: 0n,
         unwindSwapFeePercentage: 0n,
         enableJitMint: true,
@@ -154,7 +156,7 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
     const jit = (env.data as { jit: { verification: string; expectedAdapter: string; adapter: string } }).jit;
     expect(jit.verification).toBe("mismatch");
     expect(jit.adapter.toLowerCase()).toBe(FAKE);
-    expect(jit.expectedAdapter.toLowerCase()).toBe(JIT_ADAPTER_42161.toLowerCase());
+    expect(jit.expectedAdapter.toLowerCase()).toBe(PRIMARY_JIT_ADAPTER_42161.toLowerCase());
     expect(codes(env)).toEqual(["target_mismatch"]);
     expect(env.warnings[0]!.message).toContain("Do not fill");
   });
@@ -162,7 +164,9 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
   it("the configured adapter is trusted and silent; a chain with no JIT generation configured is unverified, not a conflict", async () => {
     const good = await runTool("cork_decode", { kind: "order", chainId: 42161, data: orderWith(extensionAt(JIT_ADAPTER_42161)) }, ctx);
     expect(good.state).toBe("ok");
-    expect((good.data as { jit: { verification: string } }).jit.verification).toBe("trusted");
+    // The flat-wire generation's adapter is a configured Cork adapter (not the primary, but
+    // Cork's): trusted, classified to its generation, decoded on ITS wire.
+    expect((good.data as { jit: { verification: string; generation: string; wire: string } }).jit).toMatchObject({ verification: "trusted", generation: "phoenix/v0.3-rc.1", wire: "flat" });
     expect(codes(good)).toEqual([]);
     // Mainnet has no MarketRegistry stack, so there is nothing to compare the adapter against.
     const elsewhere = await runTool("cork_decode", { kind: "order", chainId: 1, data: orderWith(extensionAt(FAKE)) }, ctx);

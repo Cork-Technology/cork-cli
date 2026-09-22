@@ -6,19 +6,22 @@
 // offline gate: every configured recipe hint must have a catalog entry, so a future redeploy that
 // updates the JSON without the catalog fails HERE, not in a live run someone happens to start.
 import { describe, expect, it } from "vitest";
-import { RECIPE_CATALOG } from "@cork/core";
-import corkDefaults from "../../../cork-defaults.json" with { type: "json" };
+import { BUNDLED_DEFAULTS, generationsOf, RECIPE_CATALOG } from "@cork/core";
 
-describe("RECIPE_CATALOG ↔ cork-defaults.json parity (offline drift gate)", () => {
-  const configured = new Map<string, string>(); // lowercased address → "chain/mode" provenance
-  for (const [chain, mr] of Object.entries((corkDefaults as { marketRegistry: Record<string, { recipes?: Record<string, string> }> }).marketRegistry)) {
-    for (const [mode, addr] of Object.entries(mr.recipes ?? {})) configured.set(addr.toLowerCase(), `${chain}/${mode}`);
+describe("RECIPE_CATALOG ↔ cork-defaults.v2.json parity (offline drift gate)", () => {
+  // Every GENERATION's recipe hints on every chain (the v2 document; the v1 file is frozen and
+  // not read by this build) — the flat 0.3.3 set and the nested 0.5.0 set both catalog.
+  const configured = new Map<string, string>(); // lowercased address → "chain/generation/mode" provenance
+  for (const chain of Object.keys(BUNDLED_DEFAULTS.generations)) {
+    for (const g of generationsOf(BUNDLED_DEFAULTS, Number(chain))) {
+      for (const [mode, addr] of Object.entries(g.marketRegistry?.recipes ?? {})) configured.set(addr.toLowerCase(), `${chain}/${g.label}/${mode}`);
+    }
   }
 
   it("every configured recipe address has a catalog entry (the 0.3.3 hand-edit direction)", () => {
     expect(configured.size).toBeGreaterThan(0);
     for (const [addr, where] of configured) {
-      expect(RECIPE_CATALOG[addr], `recipe ${addr} (${where}) is in cork-defaults.json but missing from RECIPE_CATALOG — the redeploy updated the config without the teaching catalog`).toBeDefined();
+      expect(RECIPE_CATALOG[addr], `recipe ${addr} (${where}) is in cork-defaults.v2.json but missing from RECIPE_CATALOG — the redeploy updated the config without the teaching catalog`).toBeDefined();
     }
   });
 

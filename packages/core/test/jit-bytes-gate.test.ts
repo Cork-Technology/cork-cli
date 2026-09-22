@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
-import { buildMakerOrder, implementationRefusals, LOP_ADDRESSES, marketRegistryForWire, resolveGenerations, runTool, unapprovedCodeAllowed, type HandlerContext, type ImplementationCheck } from "@cork/core";
+import { buildMakerOrder, implementationRefusals, LOP_ADDRESSES, resolveGenerations, runTool, unapprovedCodeAllowed, type HandlerContext, type ImplementationCheck } from "@cork/core";
 import { JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
 
 const CHAIN = 42161 as const;
@@ -25,8 +25,8 @@ function wrapped(patch: (client: Client, adapter: `0x${string}`) => Partial<Clie
     resolveRpc: async (chainId, url) => {
       const r = await base.resolveRpc!(chainId, url);
       if (!r) return r;
-      // stage 2: the JIT ladder binds the FLAT-wire generation's adapter, not the primary's.
-      const adapter = marketRegistryForWire((await resolveGenerations(chainId)).generations, "flat")!.marketRegistry!.adapter!;
+      // The JIT ladder binds the PRIMARY generation's adapter (the nested 0.5.0 one on 42161).
+      const adapter = (await resolveGenerations(chainId)).primary!.marketRegistry!.adapter!;
       const client = r.client as unknown as Client;
       return { ...r, client: { ...client, ...patch(client, adapter) } as never };
     },
@@ -108,8 +108,9 @@ describe("the round-trip: the adapter's own decodeExtraData is the layout oracle
       readContract: async (a) => {
         const out = await client.readContract(a);
         if (a.functionName !== "decodeExtraData") return out;
-        const [p, permits] = out as [Record<string, unknown>, unknown[]];
-        return [{ ...p, collateralAsset: p.referenceAsset, referenceAsset: p.collateralAsset }, permits];
+        // The primary's adapter answers the NESTED wrapper: the market fields live under `market`.
+        const [p, permits] = out as [{ market: Record<string, unknown>; enableJitMint: boolean }, unknown[]];
+        return [{ ...p, market: { ...p.market, collateralAsset: p.market.referenceAsset, referenceAsset: p.market.collateralAsset } }, permits];
       },
     }));
     const env = await makerJit(ctx, "gate-0004");
@@ -127,8 +128,8 @@ describe("the round-trip: the adapter's own decodeExtraData is the layout oracle
       readContract: async (a) => {
         const out = await client.readContract(a);
         if (a.functionName !== "decodeExtraData") return out;
-        const [p, permits] = out as [Record<string, unknown>, unknown[]];
-        return [{ ...p, swapFeePercentage: 1n, unwindSwapFeePercentage: 2n }, permits];
+        const [p, permits] = out as [{ market: Record<string, unknown>; enableJitMint: boolean }, unknown[]];
+        return [{ ...p, market: { ...p.market, swapFeePercentage: 1n, unwindSwapFeePercentage: 2n } }, permits];
       },
     }));
     const env = await makerJit(ctx, "gate-0005");

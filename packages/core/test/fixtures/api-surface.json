@@ -129,6 +129,10 @@
       "kind": "value"
     },
     {
+      "name": "CREATOR_MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
       "name": "Call",
       "kind": "type"
     },
@@ -505,6 +509,10 @@
       "kind": "type"
     },
     {
+      "name": "ImplementedMarketRegistryWire",
+      "kind": "type"
+    },
+    {
       "name": "InlineImpairmentParams",
       "kind": "type"
     },
@@ -545,11 +553,23 @@
       "kind": "value"
     },
     {
+      "name": "JIT_MARKET_PARAMS_TYPEHASHES",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_PARAMS_TYPE_STRINGS",
+      "kind": "value"
+    },
+    {
       "name": "JIT_MINTED_TOPIC",
       "kind": "value"
     },
     {
       "name": "JitMarketParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "JitMarketParamsWire",
       "kind": "type"
     },
     {
@@ -746,6 +766,10 @@
     },
     {
       "name": "POOL_CREATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "POOL_MANAGER_MARKET_CREATED_10_TOPIC",
       "kind": "value"
     },
     {
@@ -979,6 +1003,10 @@
     {
       "name": "RolloverIntentStruct",
       "kind": "type"
+    },
+    {
+      "name": "RolloverJitWireError",
+      "kind": "value+type"
     },
     {
       "name": "RolloverOrderTermsInput",
@@ -1265,6 +1293,10 @@
       "kind": "value"
     },
     {
+      "name": "WIRES",
+      "kind": "value"
+    },
+    {
       "name": "WatchBest",
       "kind": "type"
     },
@@ -1281,6 +1313,10 @@
       "kind": "type"
     },
     {
+      "name": "WireCodec",
+      "kind": "type"
+    },
+    {
       "name": "YEAR_SECONDS",
       "kind": "value"
     },
@@ -1290,6 +1326,10 @@
     },
     {
       "name": "ZERO_JIT_MARKET_HASH",
+      "kind": "value"
+    },
+    {
+      "name": "ZERO_ORACLE_SALT",
       "kind": "value"
     },
     {
@@ -1394,6 +1434,10 @@
     },
     {
       "name": "buildPoolForSelfCall",
+      "kind": "value"
+    },
+    {
+      "name": "buildRecipeVerifyCall",
       "kind": "value"
     },
     {
@@ -1549,6 +1593,10 @@
       "kind": "value"
     },
     {
+      "name": "controllerCreatePool10Abi",
+      "kind": "value"
+    },
+    {
       "name": "controllerCreatePoolAbi",
       "kind": "value"
     },
@@ -1613,6 +1661,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeJitExtensionAny",
+      "kind": "value"
+    },
+    {
       "name": "decodeJitExtraData",
       "kind": "value"
     },
@@ -1674,6 +1726,10 @@
     },
     {
       "name": "deriveJitMarket",
+      "kind": "value"
+    },
+    {
+      "name": "deriveRolloverJitPool",
       "kind": "value"
     },
     {
@@ -1766,6 +1822,10 @@
     },
     {
       "name": "fixedToTokenNativeDecimalsCeil",
+      "kind": "value"
+    },
+    {
+      "name": "flattenNestedJitParams",
       "kind": "value"
     },
     {
@@ -1953,6 +2013,18 @@
       "kind": "value"
     },
     {
+      "name": "jitAdapterNestedAbi",
+      "kind": "value"
+    },
+    {
+      "name": "jitExtensionTarget",
+      "kind": "value"
+    },
+    {
+      "name": "jitMarketParamsWireOf",
+      "kind": "value"
+    },
+    {
       "name": "jsonSafe",
       "kind": "value"
     },
@@ -2001,6 +2073,10 @@
       "kind": "value"
     },
     {
+      "name": "marketCreatorNestedAbi",
+      "kind": "value"
+    },
+    {
       "name": "marketRegistryAbi",
       "kind": "value"
     },
@@ -2010,6 +2086,10 @@
     },
     {
       "name": "marketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryNestedAbi",
       "kind": "value"
     },
     {
@@ -2082,6 +2162,10 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "phoenixWireOfRolloverWire",
       "kind": "value"
     },
     {
@@ -2181,10 +2265,6 @@
       "kind": "value"
     },
     {
-      "name": "readAdapterRoles",
-      "kind": "value"
-    },
-    {
       "name": "readForeignSharePool",
       "kind": "value"
     },
@@ -2197,6 +2277,10 @@
       "kind": "value"
     },
     {
+      "name": "readRoleHolder",
+      "kind": "value"
+    },
+    {
       "name": "realConfigDeps",
       "kind": "value"
     },
@@ -2206,6 +2290,14 @@
     },
     {
       "name": "recipeAbi",
+      "kind": "value"
+    },
+    {
+      "name": "recipeNestedAbi",
+      "kind": "value"
+    },
+    {
+      "name": "recipeVerify",
       "kind": "value"
     },
     {
@@ -2294,6 +2386,10 @@
     },
     {
       "name": "retiredSettlerTeaching",
+      "kind": "value"
+    },
+    {
+      "name": "roleHolderOf",
       "kind": "value"
     },
     {
@@ -2406,6 +2502,10 @@
     },
     {
       "name": "windowedRpcSource",
+      "kind": "value"
+    },
+    {
+      "name": "wireCodec",
       "kind": "value"
     }
   ],
@@ -3805,7 +3905,19 @@
       "kind": "value"
     },
     {
+      "name": "JIT_MARKET_PARAMS_TYPEHASHES",
+      "kind": "value"
+    },
+    {
+      "name": "JIT_MARKET_PARAMS_TYPE_STRINGS",
+      "kind": "value"
+    },
+    {
       "name": "JitMarketParamsStruct",
+      "kind": "type"
+    },
+    {
+      "name": "JitMarketParamsWire",
       "kind": "type"
     },
     {
@@ -3975,6 +4087,10 @@
     {
       "name": "RolloverIntentStruct",
       "kind": "type"
+    },
+    {
+      "name": "RolloverJitWireError",
+      "kind": "value+type"
     },
     {
       "name": "RolloverOrderTermsInput",
@@ -4197,6 +4313,10 @@
       "kind": "value"
     },
     {
+      "name": "deriveRolloverJitPool",
+      "kind": "value"
+    },
+    {
       "name": "diffBook",
       "kind": "value"
     },
@@ -4309,6 +4429,10 @@
       "kind": "value"
     },
     {
+      "name": "jitMarketParamsWireOf",
+      "kind": "value"
+    },
+    {
       "name": "knownVenueStatus",
       "kind": "value"
     },
@@ -4362,6 +4486,10 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "phoenixWireOfRolloverWire",
       "kind": "value"
     },
     {
@@ -4443,12 +4571,20 @@
       "kind": "value"
     },
     {
+      "name": "CREATOR_MARKET_CREATED_TOPIC",
+      "kind": "value"
+    },
+    {
       "name": "CreatorMarketParams",
       "kind": "type"
     },
     {
       "name": "DENOMINATION_PSEUDO_UNITS",
       "kind": "value"
+    },
+    {
+      "name": "ImplementedMarketRegistryWire",
+      "kind": "type"
     },
     {
       "name": "JITMarketParams",
@@ -4484,6 +4620,10 @@
     },
     {
       "name": "POOL_CREATOR_ROLE",
+      "kind": "value"
+    },
+    {
+      "name": "POOL_MANAGER_MARKET_CREATED_10_TOPIC",
       "kind": "value"
     },
     {
@@ -4527,6 +4667,18 @@
       "kind": "value"
     },
     {
+      "name": "WIRES",
+      "kind": "value"
+    },
+    {
+      "name": "WireCodec",
+      "kind": "type"
+    },
+    {
+      "name": "ZERO_ORACLE_SALT",
+      "kind": "value"
+    },
+    {
       "name": "accessControlAbi",
       "kind": "value"
     },
@@ -4555,11 +4707,19 @@
       "kind": "value"
     },
     {
+      "name": "buildRecipeVerifyCall",
+      "kind": "value"
+    },
+    {
       "name": "buildSharesCall",
       "kind": "value"
     },
     {
       "name": "constantGetterAbi",
+      "kind": "value"
+    },
+    {
+      "name": "controllerCreatePool10Abi",
       "kind": "value"
     },
     {
@@ -4572,6 +4732,10 @@
     },
     {
       "name": "decodeJitExtension",
+      "kind": "value"
+    },
+    {
+      "name": "decodeJitExtensionAny",
       "kind": "value"
     },
     {
@@ -4611,11 +4775,27 @@
       "kind": "value"
     },
     {
+      "name": "flattenNestedJitParams",
+      "kind": "value"
+    },
+    {
       "name": "jitAdapterAbi",
       "kind": "value"
     },
     {
+      "name": "jitAdapterNestedAbi",
+      "kind": "value"
+    },
+    {
+      "name": "jitExtensionTarget",
+      "kind": "value"
+    },
+    {
       "name": "marketCreatorAbi",
+      "kind": "value"
+    },
+    {
+      "name": "marketCreatorNestedAbi",
       "kind": "value"
     },
     {
@@ -4624,6 +4804,10 @@
     },
     {
       "name": "marketRegistryLegacy",
+      "kind": "value"
+    },
+    {
+      "name": "marketRegistryNestedAbi",
       "kind": "value"
     },
     {
@@ -4639,15 +4823,27 @@
       "kind": "value"
     },
     {
-      "name": "readAdapterRoles",
-      "kind": "value"
-    },
-    {
       "name": "readForeignSharePool",
       "kind": "value"
     },
     {
+      "name": "readRoleHolder",
+      "kind": "value"
+    },
+    {
       "name": "recipeAbi",
+      "kind": "value"
+    },
+    {
+      "name": "recipeNestedAbi",
+      "kind": "value"
+    },
+    {
+      "name": "recipeVerify",
+      "kind": "value"
+    },
+    {
+      "name": "roleHolderOf",
       "kind": "value"
     },
     {
@@ -4656,6 +4852,10 @@
     },
     {
       "name": "sharePoolIdAbi",
+      "kind": "value"
+    },
+    {
+      "name": "wireCodec",
       "kind": "value"
     }
   ],

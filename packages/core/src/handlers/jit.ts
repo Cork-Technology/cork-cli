@@ -3,12 +3,13 @@
 import { type ChainId, Envelope } from "@cork/schemas";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, encodeJitExtraData, jitAdapterAbi, type JITMarketParams, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readAdapterRoles, readForeignSharePool, recipeAbi, type ResolvedConstraint } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, type JITMarketParams, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveGenerations } from "../config-remote.ts";
-import { marketRegistryForWire } from "../generations.ts";
+import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
+import { poolManagerAbi } from "../chain/abis.ts";
 import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
 import { oracleRateUnreadableMessage, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
@@ -24,30 +25,49 @@ export interface ValueGateSite {
 }
 const JIT_VALUE_SITE: ValueGateSite = { fees: "JIT fee percentages", expiryField: "jitMarket.expiryTimestamp", revertActor: "a fill" };
 
-/** The site's deployed fee ceiling, from the long-TTL constants cache (both the JIT adapter
- *  and the CorkMarketCreator expose MAX_FEE_PERCENTAGE(), verified live 2026-08-28) — the
- *  compiled 5e18 answers only while the cache is cold or offline. Config-only resolution, so
- *  the value gates keep running FIRST and offline; the ladder/create-pool refresh the cache
- *  once a client exists, converging one call after any redeploy that moves the cap. */
-export async function resolveFeeCap(chainId: ChainId, capSource: "adapter" | "creator", ctx: HandlerContext = {}): Promise<bigint> {
-  const { mr } = await getMarketRegistry(ctx, chainId);
+/** The fee rule of a phoenix wire, stated as the LARGEST ALLOWED value plus the rule in words.
+ *  8-field: the registry stack's MAX_FEE_PERCENTAGE (5e18 = 5%, INCLUSIVE) — read live through
+ *  the long-TTL constants cache where the adapter/creator expose the view, the compiled 5e18
+ *  otherwise. 10-field: Phoenix v1.4.0-rc.1 reverts InvalidFees() at OR ABOVE 100e18 (100%),
+ *  and NO contract of that generation exposes a cap view (facts D4) — so the largest allowed
+ *  fee is 100e18 − 1 and nothing is ever refreshed for it. */
+export interface FeeRule {
+  maxAllowed: bigint;
+  phoenixWire: PhoenixWire;
+  /** The rule as the gate's teaching states it. */
+  text: string;
+}
+export const TEN_FIELD_FEE_LIMIT_EXCLUSIVE = 100n * 10n ** 18n;
+
+export async function resolveFeeRule(chainId: ChainId, capSource: "adapter" | "creator", ctx: HandlerContext = {}): Promise<FeeRule> {
+  const { mr, phoenixWire } = await getMarketRegistry(ctx, chainId);
+  if (phoenixWire === "10-field") {
+    return { maxAllowed: TEN_FIELD_FEE_LIMIT_EXCLUSIVE - 1n, phoenixWire, text: "strictly below 100e18 (100%) — Phoenix v1.4.0-rc.1 reverts InvalidFees() at or above it; this generation exposes no MAX_FEE_PERCENTAGE view" };
+  }
   const address = capSource === "creator" ? mr?.marketCreator : mr?.adapter;
-  if (!address) return MAX_FEE_PERCENTAGE_FALLBACK;
-  return cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") ?? MAX_FEE_PERCENTAGE_FALLBACK;
+  const cap = (address && mr?.wire === "flat" ? cachedContractConstant(chainId, address, "MAX_FEE_PERCENTAGE") : undefined) ?? MAX_FEE_PERCENTAGE_FALLBACK;
+  return { maxAllowed: cap, phoenixWire: "8-field", text: `capped at ${capText(cap)} INCLUSIVE — the ${capSource}'s MAX_FEE_PERCENTAGE on this 8-field generation` };
+}
+
+/** The site's largest allowed fee as a plain number — resolveFeeRule's `maxAllowed` (kept for
+ *  the call sites that only need the bound; the gate's wording comes from the rule). */
+export async function resolveFeeCap(chainId: ChainId, capSource: "adapter" | "creator", ctx: HandlerContext = {}): Promise<bigint> {
+  return (await resolveFeeRule(chainId, capSource, ctx)).maxAllowed;
 }
 
 const capText = (cap: bigint): string => (cap % 10n ** 18n === 0n ? `${cap / 10n ** 18n}e18 (${cap / 10n ** 18n}%)` : `${cap} (1e18 = 1%)`);
 
 /** Value-domain gate shared by BOTH JIT builders (maker extension + taker interaction) AND the
- *  create-pool prepare: the protocol's fee cap and strictly-future expiry, in one place so a
+ *  create-pool prepare: the protocol's fee rule and strictly-future expiry, in one place so a
  *  boundary rule can never drift between the paths. Returns the gate envelope, or undefined
- *  when the values pass. `capWei` comes from resolveFeeCap (the deployed contract's own value
- *  through the cache); the default is the compiled fallback. */
-export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint, opts: { site?: ValueGateSite; capWei?: bigint } = {}): Envelope | undefined {
+ *  when the values pass. `feeRule` comes from resolveFeeRule (per phoenix wire); `capWei` is the
+ *  bound alone (an inclusive cap, the pre-0.6 form); the default is the compiled fallback. */
+export function jitValueGate(chainId: ChainId, ctx: HandlerContext, swapFee: bigint, unwindFee: bigint, expiryTimestamp: bigint, nowSecs: bigint, opts: { site?: ValueGateSite; capWei?: bigint; feeRule?: FeeRule } = {}): Envelope | undefined {
   const site = opts.site ?? JIT_VALUE_SITE;
-  const cap = opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;
+  const cap = opts.feeRule?.maxAllowed ?? opts.capWei ?? MAX_FEE_PERCENTAGE_FALLBACK;
   if (swapFee > cap || unwindFee > cap) {
-    return unavailable(chainId, "invalid_order_terms", `${site.fees} are 1e18 = 1% and capped at ${capText(cap)} — this value would revert at pool creation`, ctx);
+    const rule = opts.feeRule?.text ?? `capped at ${capText(cap)}`;
+    return unavailable(chainId, "invalid_order_terms", `${site.fees} are 1e18 = 1% and ${rule} — this value would revert at pool creation`, ctx);
   }
   if (expiryTimestamp <= nowSecs) {
     return unavailable(chainId, "invalid_order_terms", `${site.expiryField} ${expiryTimestamp} is not in the future (now ${nowSecs}) — pool creation requires expiryTimestamp > block.timestamp, so ${site.revertActor} would revert. Note this field is ABSOLUTE unix seconds, not a relative duration`, ctx);
@@ -66,6 +86,34 @@ export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint)
   return { code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and pool CREATION is bounded by the registry's maxExpiryDuration, so a fill that must create this pool reverts ExpiryOutOfRange until that window reaches the expiry; double-check this is intended` };
 }
 
+/** The recipe-bytes + oracle-salt inputs of a JIT/create-pool block, resolved ONCE for every
+ *  site: `extraData` is the name (the 0.5.0 contracts' word); `additionalData` is accepted as a
+ *  deprecated alias — both present and DIFFERENT is two payloads and refuses (invalid input
+ *  naming both), both equal is fine, the alias alone is accepted with an info
+ *  deprecation_notice. `oracleSalt` defaults to the zero salt (the pair's default wrapper); a
+ *  NON-ZERO salt on a flat/legacy generation refuses with teaching — that wire has no field for
+ *  it, so the bytes could only drop it silently. */
+export function resolveJitBytesInput(
+  jm: { extraData?: `0x${string}` | undefined; additionalData?: `0x${string}` | undefined; oracleSalt?: `0x${string}` | undefined },
+  wire: MarketRegistryWire,
+  generationLabel: string | undefined,
+  site: { tool: string; path: string[] },
+  warnings: Array<{ code: string; message: string }>,
+): { extraData: `0x${string}`; oracleSalt: `0x${string}` } {
+  if (jm.extraData !== undefined && jm.additionalData !== undefined && jm.extraData.toLowerCase() !== jm.additionalData.toLowerCase()) {
+    throw new ToolInputError(site.tool, [{ path: [...site.path, "extraData"], message: `extraData (${jm.extraData}) and additionalData (${jm.additionalData}) are two spellings of the SAME recipe bytes and they differ — pass one (extraData is the name; additionalData is the deprecated alias)` }]);
+  }
+  if (jm.extraData === undefined && jm.additionalData !== undefined) {
+    warnings.push({ code: "deprecation_notice", message: `${site.path.join(".")}.additionalData is the deprecated spelling of extraData (the market-registry 0.5.0 contracts renamed the recipe-bytes member; the 0.3.x wire still writes it as additionalData) — accepted, pass extraData in new calls` });
+  }
+  const extraData = (jm.extraData ?? jm.additionalData ?? "0x") as `0x${string}`;
+  const oracleSalt = (jm.oracleSalt ?? ZERO_ORACLE_SALT) as `0x${string}`;
+  if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
+    throw new ToolInputError(site.tool, [{ path: [...site.path, "oracleSalt"], message: `oracleSalt ${oracleSalt} is non-zero, but generation '${generationLabel ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) / MarketParams carry NO oracle salt — the value would be dropped, not honoured. Omit it (or pass the zero salt), or target a nested-wire generation (the phoenix/v0.4-rc.1 primary)` }]);
+  }
+  return { extraData, oracleSalt };
+}
+
 /** Best-effort maxExpiryDuration bound check (the creator/adapter/BaseFiller creation rule:
  *  expiry <= now + registry.maxExpiryDuration(), INCLUSIVE). The bound is a registry constant,
  *  so it rides the long-TTL constants cache: a fresh cached value costs no read, a stale one
@@ -73,7 +121,7 @@ export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint)
  *  creatable; silent when no value is obtainable or the bound passes. The bound applies only
  *  to a call that CREATES the pool — callers gate on existence where they know it. */
 export async function maxExpiryBoundWarning(
-  client: Parameters<typeof readAdapterRoles>[0],
+  client: Parameters<typeof readRoleHolder>[0],
   chainId: ChainId,
   registry: `0x${string}`,
   expiryTimestamp: bigint,
@@ -122,11 +170,18 @@ export type JitLadderResult =
       gate?: undefined;
       adapter: `0x${string}`;
       registry: `0x${string}`;
+      /** The market creator (nested wire: the role holder and the contract the adapter delegates
+       *  creation to; flat: the periphery creator, unused by the fill). */
+      marketCreator?: `0x${string}` | undefined;
+      /** The registry wire the bytes are encoded for, and the pool-manager width the id follows. */
+      wire: MarketRegistryWire;
+      phoenixWire: PhoenixWire;
       /** The generation the adapter/registry pair came from (dep, guard scope and shares follow it). */
       generation?: { label: string };
       recipe: `0x${string}`;
       rateOverride: bigint;
-      additionalData: `0x${string}`;
+      extraData: `0x${string}`;
+      oracleSalt: `0x${string}`;
       /** Always defined on success: explicit, statically resolved, or the run was gated. */
       constraint: ResolvedConstraint;
       warnings: Array<{ code: string; message: string }>;
@@ -173,7 +228,9 @@ export async function runJitPreflightLadder(args: {
     recipe?: `0x${string}` | undefined;
     mode?: string | undefined;
     rateOverride: string;
+    extraData?: `0x${string}` | undefined;
     additionalData?: `0x${string}` | undefined;
+    oracleSalt?: `0x${string}` | undefined;
     constraint?: { rateMin: string; rateMax: string; rateChangePerDayMax: string; rateChangeCapacityMax: string } | undefined;
     swapFeePercentage: string;
     unwindSwapFeePercentage: string;
@@ -186,12 +243,24 @@ export async function runJitPreflightLadder(args: {
   const words = LADDER_SIDE[side];
   const warnings: Array<{ code: string; message: string }> = [];
   const expiryTimestamp = BigInt(jm.expiryTimestamp);
-  const { mr, mrWarn, generation: mrGeneration, refusal: mrRefusal } = await getMarketRegistry(ctx, chainId);
+  const swapFee = BigInt(jm.swapFeePercentage);
+  const unwindFee = BigInt(jm.unwindSwapFeePercentage);
+  const { mr, mrWarn, generation: mrGeneration, phoenixWire: phoenixWireResolved, refusal: mrRefusal } = await getMarketRegistry(ctx, chainId);
   if (mrRefusal) return { gate: unavailable(chainId, mrRefusal.code, mrRefusal.message, ctx) };
   if (!mr?.adapter) {
     return { gate: unavailable(chainId, "unknown_deployment", `no JIT CorkLimitOrderAdapter configured for chainId ${chainId} — ${words.live} are live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
   warnings.push(...mrWarn);
+  // The codec follows the generation's DECLARED registry wire; the pool-id width follows its
+  // phoenix wire (nested registries create on 10-field managers, but the two are separate
+  // declarations and a config may pair them otherwise — the id must follow the manager).
+  const codec = wireCodec(mr.wire);
+  const wire = codec.wire;
+  const phoenixWire: PhoenixWire = phoenixWireResolved ?? (wire === "nested" ? "10-field" : "8-field");
+  const { extraData, oracleSalt } = resolveJitBytesInput(jm, wire, mrGeneration?.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"] }, warnings);
+  if (wire === "nested" && !mr.marketCreator) {
+    return { gate: unavailable(chainId, "unknown_deployment", `generation '${mrGeneration?.label}' speaks the nested registry wire but configures no CorkMarketCreator — on that wire the adapter delegates pool creation to the creator (and the creator holds the controller role), so no ${words.artifact} can be pre-flighted; refresh cork-defaults.v2.json`, ctx) };
+  }
   // Recipe: explicit address, or DEPRECATED mode sugar over the config hints (config-only,
   // so the sugar also works offline).
   let recipe = jm.recipe;
@@ -204,11 +273,10 @@ export async function runJitPreflightLadder(args: {
     recipe = sugar.recipe;
   }
   const rateOverride = BigInt(jm.rateOverride ?? "0");
-  const additionalData = (jm.additionalData ?? "0x") as `0x${string}`;
   let constraint: ResolvedConstraint | undefined = jm.constraint
     ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
     : undefined;
-  const base = { adapter: mr.adapter, registry: mr.registry, ...(mrGeneration ? { generation: { label: mrGeneration.label } } : {}), recipe, rateOverride, additionalData, warnings } as const;
+  const base = { adapter: mr.adapter, registry: mr.registry, marketCreator: mr.marketCreator, wire, phoenixWire, ...(mrGeneration ? { generation: { label: mrGeneration.label } } : {}), recipe, rateOverride, extraData, oracleSalt, warnings } as const;
 
   // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
   const resolved = await getRpc(ctx, chainId);
@@ -230,22 +298,55 @@ export async function runJitPreflightLadder(args: {
     warnings.push(...gate.warnings);
   }
   try {
-    const [boundLop, boundRegistry, boundController] = await Promise.all([
-      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
-      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
-      client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
-    ]);
-    if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-      return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
+    // The binding chain per wire. Flat: the adapter itself binds LOP / registry / controller.
+    // Nested: the adapter binds LOP / pool manager / MARKET CREATOR, and the creator binds the
+    // registry / controller / pool manager — every link is read and compared, because a
+    // creator from another generation would put the recipe checks on one registry and the
+    // creation on another pool manager (the cross-generation class the guard exists for).
+    const { dep: jitDep } = await getDep(ctx, chainId, { ...(mrGeneration ? { generation: mrGeneration.label } : {}) });
+    let boundController: `0x${string}`;
+    let roleHolder: `0x${string}`;
+    if (wire === "flat") {
+      const [boundLop, boundRegistry, controller] = await Promise.all([
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "MARKET_REGISTRY" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
+      ]);
+      if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
+        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
+      }
+      boundController = controller;
+      roleHolder = mr.adapter;
+      // Opportunistic cache refresh for the fee cap the value gate consumed earlier this call
+      // (and will consume next call): a contract constant, one read per TTL — flat wire only,
+      // the nested stack exposes no such view (facts D4).
+      await refreshContractConstant(client, chainId, mr.adapter, "MAX_FEE_PERCENTAGE");
+    } else {
+      const creator = mr.marketCreator!;
+      const [boundLop, adapterPm, boundCreator, creatorRegistry, creatorController, creatorPm] = await Promise.all([
+        client.readContract({ address: mr.adapter, abi: jitAdapterNestedAbi, functionName: "LIMIT_ORDER_PROTOCOL" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterNestedAbi, functionName: "POOL_MANAGER" }),
+        client.readContract({ address: mr.adapter, abi: jitAdapterNestedAbi, functionName: "MARKET_CREATOR" }),
+        client.readContract({ address: creator, abi: marketCreatorNestedAbi, functionName: "MARKET_REGISTRY" }),
+        client.readContract({ address: creator, abi: marketCreatorNestedAbi, functionName: "CONTROLLER" }),
+        client.readContract({ address: creator, abi: marketCreatorNestedAbi, functionName: "POOL_MANAGER" }),
+      ]);
+      const lc = (a: string) => a.toLowerCase();
+      const pmMismatch = lc(adapterPm) !== lc(creatorPm) || (jitDep?.poolManager !== undefined && lc(creatorPm) !== lc(jitDep.poolManager));
+      if (lc(boundLop) !== lc(lop) || lc(boundCreator) !== lc(creator) || lc(creatorRegistry) !== lc(mr.registry) || pmMismatch) {
+        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, marketCreator: creator, expected: { lop, marketCreator: creator, registry: mr.registry, ...(jitDep?.poolManager ? { poolManager: jitDep.poolManager } : {}) }, onChain: { lop: boundLop, marketCreator: boundCreator, registry: creatorRegistry, adapterPoolManager: adapterPm, creatorPoolManager: creatorPm, controller: creatorController } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured nested-wire JIT adapter's binding chain does not close: adapter.LIMIT_ORDER_PROTOCOL / adapter.MARKET_CREATOR / creator.MARKET_REGISTRY / the pool manager both bind must equal this tool's config for generation '${mrGeneration?.label}' — a stale or cross-generation address; refresh cork-defaults.v2.json before ${words.act} anything` }], ctx }) };
+      }
+      boundController = creatorController;
+      roleHolder = creator;
     }
-    // Opportunistic cache refresh for the fee cap the value gate consumed earlier this call
-    // (and will consume next call): a contract constant, one read per TTL.
-    await refreshContractConstant(client, chainId, mr.adapter, "MAX_FEE_PERCENTAGE");
-    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { chainId });
-    if (!adapterRoles.granted) {
-      warnings.push({ code: "roles_not_granted", message: `the adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert until both are granted (a governance action, not a code change)${words.rolesTail}` });
+    // The controller role is held by the wire's ROLE HOLDER: the adapter (flat) or the creator
+    // (nested — the adapter holds none; verified live 2026-09-22). A 10-field controller has no
+    // fee authority, so POOL_CREATOR alone is the requirement there.
+    const holderRoles = await readRoleHolder(client, boundController, roleHolder, { chainId, phoenixWire });
+    if (!holderRoles.granted) {
+      warnings.push({ code: "roles_not_granted", message: `the ${codec.roleHolder === "creator" ? "market creator (the contract the adapter delegates pool creation to)" : "adapter"} is missing controller roles (POOL_CREATOR: ${holderRoles.hasCreator}${phoenixWire === "10-field" ? "" : `, ${holderRoles.secondRole}: ${holderRoles.hasSecond}`}) — a fill through it will revert until granted (a governance action, not a code change)${words.rolesTail}` });
     }
-    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, additionalData, wantConstraint: false });
+    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, fixedRate: rateOverride > 0n ? rateOverride : undefined, extraData, oracleSalt, wantConstraint: false });
     warnings.push(...res.warnings);
     if (res.gate) return { gate: res.gate };
     const { source, oracle } = res;
@@ -263,18 +364,32 @@ export async function runJitPreflightLadder(args: {
       return { gate: unavailable(chainId, "invalid_order_terms", `recipe ${recipe} reads a ${source} oracle: rateOverride must be 0 — a non-zero value is REJECTED by the fill (UnexpectedRateOverride), not ignored`, ctx) };
     }
     if (!constraint) {
-      const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, additionalData });
+      const c = await staticResolveConstraint(client, ctx, chainId, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle, extraData, wire });
       if ("gate" in c) return { gate: c.gate };
       constraint = c.constraint;
     }
     if (oracle.address === null) {
       return { gate: unavailable(chainId, "oracle_not_deployable", `the recipe's oracle cannot be resolved (${oracle.reason ?? "pair not deployable as-registered"}) — a fill would revert; check cork_query registry-assets / registry-oracle`, ctx) };
     }
-    // Verify pre-flight — the exact staticcall the fill runs (step 4). Only meaningful
-    // against a DEPLOYED oracle: the liquidity recipe checks the LIVE rate sits inside the
-    // window, so a predicted oracle can't answer yet (the fill deploys it first).
+    // Identity first: the nested verify takes `creating` — whether THIS fill creates the pool —
+    // which needs the derived id and an existence read (shares(poolId) on the generation's pool
+    // manager does not revert for an unknown pool; a non-zero cST means it exists).
+    const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address, wire: phoenixWire, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee });
+    let creating = true;
+    if (jitDep?.poolManager) {
+      try {
+        const [, cst] = await client.readContract({ address: jitDep.poolManager, abi: poolManagerAbi, functionName: "shares", args: [derived.poolId] });
+        creating = cst.toLowerCase() === "0x0000000000000000000000000000000000000000";
+      } catch {
+        /* unknown existence → the creating-case rules are the stricter preview */
+      }
+    }
+    // Verify pre-flight — the exact staticcall the fill runs (step 4), on the wire's arg order
+    // (nested: expiry + creating before the constraint). Only meaningful against a DEPLOYED
+    // oracle: the liquidity recipe checks the LIVE rate sits inside the window, so a predicted
+    // oracle can't answer yet (the fill deploys it first).
     if (oracle.deployed) {
-      const ok = await client.readContract({ address: recipe, abi: recipeAbi, functionName: "verify", args: [jm.collateralAsset, jm.referenceAsset, oracle.address, { ...constraint }, additionalData] }).catch(() => null);
+      const ok = await codec.verify(client, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle: oracle.address, expiryTimestamp, creating, constraint, extraData }).catch(() => null);
       if (ok === false) {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
       } else if (ok === null) {
@@ -282,9 +397,8 @@ export async function runJitPreflightLadder(args: {
         else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
       }
     } else {
-      warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
+      warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically${wire === "nested" ? ` (with oracleSalt ${oracleSalt})` : ""}, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
     }
-    const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, constraint, oracle: oracle.address });
     // Creation-bound pre-flight (best-effort): the adapter enforces the registry's
     // maxExpiryDuration when the fill must CREATE the pool — a bound the >5y advisory alone
     // cannot see (2.1.0 reads it at 30 days). An existing pool skips the bound on-chain; the
@@ -325,8 +439,9 @@ export async function buildTakerJitInteraction(args: {
   if (valueGate) return { gate: valueGate };
   const ladder = await runJitPreflightLadder({ ctx, chainId, lop, jm, side: "taker" });
   if (ladder.gate) return { gate: ladder.gate };
-  const { recipe, rateOverride, additionalData, constraint, warnings } = ladder;
-  let jit: TakerJitReport = { adapter: ladder.adapter, hook: "takerInteraction (taker-side — always mints)", recipe };
+  const { recipe, rateOverride, extraData, oracleSalt, constraint, warnings, wire, phoenixWire } = ladder;
+  const codec = wireCodec(wire);
+  let jit: TakerJitReport = { adapter: ladder.adapter, hook: "takerInteraction (taker-side — always mints)", recipe, wire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
 
   if (ladder.verified) {
     const { client, boundController, source, oracle, derived } = ladder.verified;
@@ -334,10 +449,13 @@ export async function buildTakerJitInteraction(args: {
     try {
       // Consistency with the MAKER's signed intent: a resting order carrying its own JIT
       // extension pins the market the maker signed for — the taker's params must re-derive it.
+      // Decoded on the LADDER's wire, and only when the extension targets the same adapter: a
+      // hook at another generation's adapter is a different codec (and a different fight).
       if (args.orderExtension && args.orderExtension !== "0x") {
         try {
-          const makerJit = decodeJitExtension(args.orderExtension);
-          const makerDerived = deriveJitMarket({ collateralAsset: makerJit.params.collateralAsset, referenceAsset: makerJit.params.referenceAsset, expiryTimestamp: makerJit.params.expiryTimestamp, constraint: makerJit.params.constraint, oracle: oracle.address });
+          const makerJit = decodeJitExtension(wire, args.orderExtension);
+          if (makerJit.adapter.toLowerCase() !== ladder.adapter.toLowerCase()) throw new Error("the resting order's JIT hook targets another adapter");
+          const makerDerived = deriveJitMarket({ collateralAsset: makerJit.params.collateralAsset, referenceAsset: makerJit.params.referenceAsset, expiryTimestamp: makerJit.params.expiryTimestamp, constraint: makerJit.params.constraint, oracle: oracle.address, wire: phoenixWire, swapFeePercentage: makerJit.params.swapFeePercentage, unwindSwapFeePercentage: makerJit.params.unwindSwapFeePercentage });
           if (makerDerived.poolId !== derived.poolId) {
             return { gate: envelope({ state: "conflict", data: { takerDerivedPoolId: derived.poolId, makerDerivedPoolId: makerDerived.poolId }, chainId, source: "chain", warnings: [{ code: "marketid_mismatch", message: "the taker's jitMarket params derive a DIFFERENT pool id than the resting order's own JIT extension — the two hooks would target different markets and the fill would revert OrderNotForPool. Copy the params from `ch decode order` (jit label) of the resting order" }], ctx }) };
           }
@@ -349,14 +467,15 @@ export async function buildTakerJitInteraction(args: {
       const { dep: jitDep } = await getDep(ctx, chainId, { ...(ladder.generation ? { generation: ladder.generation.label } : {}) });
       const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
       if (!oracle.deployed) {
-        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+        preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
       }
       // A missing/partial deployment config is NOT a chain read failure [C11] — guard, don't `!`
       // (the legacy path below and registry.ts already degrade this way).
       if (jitDep?.poolManager === undefined) {
         warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
       } else {
-        const pred = await predictShares(client, { adapter: ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId });
+        // The simulation runs AS the wire's role holder (the account the override grants).
+        const pred = await predictShares(client, { adapter: codec.roleHolder === "creator" ? ladder.marketCreator! : ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId });
         if (pred.status === "unavailable") {
           warnings.push({ code: "share_prediction_unavailable", message: "could not predict the pool's cST (eth_simulateV1/state overrides unsupported) — VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool" });
         }
@@ -375,14 +494,14 @@ export async function buildTakerJitInteraction(args: {
     }
   }
   const permits = parsePermitWires(jm.permits);
-  const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
-  const extraData = encodeJitExtraData(jitParams, permits);
+  const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
+  const hookBytes = codec.encodeExtraData(jitParams, permits);
   if (ladder.verified) {
-    const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, extraData, params: jitParams, permits, chainId, ctx, artifact: "interaction" });
+    const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, extraData: hookBytes, params: jitParams, permits, chainId, ctx, artifact: "interaction" });
     if ("gate" in layout) return { gate: layout.gate };
     jit.extraDataLayout = layout.status;
   }
-  const interaction = `0x${ladder.adapter.slice(2)}${extraData.slice(2)}` as `0x${string}`;
+  const interaction = `0x${ladder.adapter.slice(2)}${hookBytes.slice(2)}` as `0x${string}`;
   return { interaction, jit, warnings };
 }
 
@@ -394,6 +513,9 @@ export type TakerJitReport = {
   adapter: `0x${string}`;
   hook: string;
   recipe: `0x${string}`;
+  /** The registry wire the interaction bytes are encoded for + the generation it targets. */
+  wire?: MarketRegistryWire;
+  generation?: string;
   /** Decode round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
   extraDataLayout?: string;
   source?: Awaited<ReturnType<typeof resolveRecipeOracleConstraint>>["source"];
@@ -486,7 +608,7 @@ export async function prepareJitLegacy(args: {
     if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
       return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.json before signing anything" }], ctx }) };
     }
-    const adapterRoles = await readAdapterRoles(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, second: legacyRegistry.CONFIGURATOR_ROLE, secondLabel: "CONFIGURATOR" });
+    const adapterRoles = await readRoleHolder(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, second: legacyRegistry.CONFIGURATOR_ROLE, secondLabel: "CONFIGURATOR" });
     if (!adapterRoles.granted) {
       warnings.push({ code: "roles_not_granted", message: `the legacy adapter is missing controller roles (POOL_CREATOR: ${adapterRoles.hasCreator}, ${adapterRoles.secondRole}: ${adapterRoles.hasSecond}) — a fill through it will revert; the generation has likely been retired. Use the 2.1.0 flow` });
     }
@@ -573,10 +695,14 @@ export function bytesDecoderGate(a: {
  *  compare what it read back, field for field, with what we meant. Verified = the deployed
  *  decoder agrees on every field; unchecked = the adapter exposes no helper (pre-0.4.0) or the
  *  read failed, said in words, never guessed; a disagreement is a conflict with no bytes — the
- *  exact failure class the finding describes, caught before anyone signs. */
+ *  exact failure class the finding describes, caught before anyone signs. The helper's RETURN
+ *  layout differs per wire under one selector (flat: the 10-member flat struct with the bytes
+ *  named additionalData; nested: the (MarketParams, enableJitMint) wrapper) — read with the
+ *  wire's ABI and normalized through the codec's own unwrapper, never by shape-guessing. */
 export async function verifyExtraDataLayout(a: {
-  client: { readContract: (args: { address: `0x${string}`; abi: typeof jitAdapterAbi; functionName: "decodeExtraData"; args: [`0x${string}`] }) => Promise<unknown> };
+  client: { readContract: (args: { address: `0x${string}`; abi: typeof jitAdapterAbi | typeof jitAdapterNestedAbi; functionName: "decodeExtraData"; args: [`0x${string}`] }) => Promise<unknown> };
   adapter: `0x${string}`;
+  wire: MarketRegistryWire;
   extraData: `0x${string}`;
   params: JITMarketParams;
   permits: readonly PermitParams[];
@@ -586,8 +712,14 @@ export async function verifyExtraDataLayout(a: {
 }): Promise<{ status: string } | { gate: Envelope }> {
   let decoded: { params: JITMarketParams; permits: PermitParams[] };
   try {
-    const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams, readonly PermitParams[]];
-    decoded = { params: { ...out[0], constraint: { ...out[0].constraint } }, permits: out[1].map((p) => ({ ...p })) };
+    if (a.wire === "nested") {
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedAbi, functionName: "decodeExtraData", args: [a.extraData] })) as Parameters<typeof flattenNestedJitParams>[0];
+      decoded = flattenNestedJitParams(out);
+    } else {
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams & { additionalData: `0x${string}` }, readonly PermitParams[]];
+      const { additionalData, ...rest } = out[0];
+      decoded = { params: { ...rest, extraData: additionalData, constraint: { ...out[0].constraint } }, permits: out[1].map((p) => ({ ...p })) };
+    }
   } catch (err) {
     return { status: `unchecked: the adapter exposes no decodeExtraData helper (pre-0.4.0 generation) or the read failed (${revertReason(err)}) — the bytes follow the layout this build knows` };
   }

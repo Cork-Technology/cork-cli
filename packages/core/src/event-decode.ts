@@ -14,6 +14,12 @@ type Hex = `0x${string}`;
 export const KNOWN_EVENTS_ABI = parseAbi([
   // phoenix: pool lifecycle + whitelist (IPoolManager / IWhitelistManager)
   "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
+  // phoenix v1.4.0-rc.1 (10-field wire): the same seven plus the two fee percentages (1e18 = 1%)
+  // — a different topic0, so scanners keyed on the 8-field form see nothing on the new manager.
+  "event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)",
+  // market-registry 0.5.0 CorkMarketCreator: the nested-wire adapter emits NO JITMarketCreated —
+  // creation is announced by the CREATOR, with the direct caller (the adapter on a fill) indexed.
+  "event MarketCreated(bytes32 indexed poolId, address indexed rateOracle, address collateralAsset, address referenceAsset, uint256 expiryTimestamp, address recipe, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage, address indexed caller)",
   "event GlobalWhitelistAdded(address indexed account)",
   "event GlobalWhitelistRemoved(address indexed account)",
   "event MarketWhitelistAdded(bytes32 indexed poolId, address account)",

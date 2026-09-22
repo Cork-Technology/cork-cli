@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, computeMarketId, generationsOf, type HandlerContext, hashLopOrder, IMPLEMENTED_MARKET_REGISTRY_WIRES, LOP_ADDRESSES, type LopOrder, marketRegistryForWire, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeJitExtraData } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
@@ -21,12 +21,20 @@ const NOW = 1_790_000_000n;
 // 0.3.3 redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found
 // 2026-08-10 only because the eval log made the misses identifiable). Same for the recipe hints.
 // The block is the one the registry-bound handlers BIND to (handlers/shared.ts
-// getMarketRegistry): the first generation on an implemented wire — the flat 0.3.x set until the
-// nested codec lands (stage 2), then the primary. The stub mirrors a flat-wire adapter, so it
-// must answer that generation's addresses, not whichever set is primary.
+// getMarketRegistry): the PRIMARY generation — the nested-wire phoenix/v0.4-rc.1 set on
+// 42161/8453 since stage 2a. The stub answers EVERY generation's getters address-aware (the
+// contract asked decides which set's addresses come back), so a test that names a flat-wire
+// generation sees a coherent flat stack and the default sees the nested one.
 const GENERATIONS_42161 = generationsOf(BUNDLED_DEFAULTS, 42161);
-const REGISTRY_GENERATION = (chainId: number) => IMPLEMENTED_MARKET_REGISTRY_WIRES.map((w) => marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, chainId), w)).find((g) => g !== undefined) ?? primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId));
+const REGISTRY_GENERATION = (chainId: number) => primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId));
 const MR_42161 = REGISTRY_GENERATION(42161)!.marketRegistry!;
+/** The generation a contract address belongs to (adapter / creator / registry / recipe), so a
+ *  binding getter answers ITS set — never the primary's for a flat-wire adapter under test. */
+const generationOfAddress = (chainId: number, address: string) => {
+  const list = generationsOf(BUNDLED_DEFAULTS, chainId);
+  const hit = classifyAddress(list, address)[0];
+  return hit ? list.find((g) => g.label === hit.label) : undefined;
+};
 // Every address the approved-implementations guard may fingerprint — every GENERATION's — from
 // the same config the guard resolves them from, so a redeploy cannot leave this set pointing at
 // a stale literal.
@@ -51,11 +59,14 @@ const REGISTRY_210 = MR_42161.registry;
 export const LIQUIDITY_RECIPE = MR_42161.recipes!.liquidity!;
 export const IMPAIRMENT_RECIPE = MR_42161.recipes!.impairment!;
 export const FIXED_RECIPE = MR_42161.recipes!.fixed!;
-/** The registry-bound generation's blocks per chain — the addresses the stub answers as the
- *  creator/adapter bindings (POOL_MANAGER, CONTROLLER); the phoenix paths use the primary. */
+/** The generation blocks per chain — the addresses the stub answers as the creator/adapter
+ *  bindings (POOL_MANAGER, CONTROLLER, MARKET_CREATOR, MARKET_REGISTRY), resolved from the
+ *  contract ASKED; the phoenix paths use the primary. */
 const primaryPhoenix = (chainId: number) => primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId))?.phoenix;
-const registryPhoenix = (chainId: number) => REGISTRY_GENERATION(chainId)?.phoenix;
-const registryBlock = (chainId: number) => REGISTRY_GENERATION(chainId)?.marketRegistry;
+const registryPhoenixOf = (chainId: number, address: string) => (generationOfAddress(chainId, address) ?? REGISTRY_GENERATION(chainId))?.phoenix;
+const registryBlockOf = (chainId: number, address: string) => (generationOfAddress(chainId, address) ?? REGISTRY_GENERATION(chainId))?.marketRegistry;
+/** The two pseudo-unit denominations the live 0.5.0 registry lists (USD 0x…0348, ETH 0xeeee…). */
+const NESTED_DENOMINATIONS = ["0x0000000000000000000000000000000000000348", "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"] as const;
 const WAD = 10n ** 18n;
 
 const MARKET = {
@@ -119,16 +130,18 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     case "isGlobalWhitelisted":
     case "isMarketWhitelisted":
       return true; // matches the seeded whitelist events below — verification leg agrees
-    // ── MarketRegistry 2.1.0 surface (recipes as contracts; constraint via recipe.resolve) ──
+    // ── MarketRegistry surface (recipes as contracts; constraint via recipe.resolve). Every
+    //    binding getter answers the set the ASKED contract belongs to — a pinned literal here
+    //    rots on every redeploy (the 0.3.2 lesson at the top of this file), and a primary-only
+    //    answer would break the binding chain of a flat-wire generation under test. ──
     case "MARKET_REGISTRY":
-      return REGISTRY_210; // adapter/creator immutable — keeps the binding guard green
-    // ── CorkMarketCreator bindings + controller roles (the create-pool pre-flights): answer
-    //    the CONFIGURED addresses per chain, like MARKET_REGISTRY above — a pinned literal
-    //    here rots on every redeploy (the 0.3.2 lesson at the top of this file). ──
+      return registryBlockOf(chainId, args.address)?.registry ?? REGISTRY_210; // adapter (flat) / creator (nested) immutable — keeps the binding guard green
+    case "MARKET_CREATOR":
+      return registryBlockOf(chainId, args.address)?.marketCreator ?? "0x0000000000000000000000000000000000000000"; // the nested adapter's creation delegate
     case "POOL_MANAGER":
-      return registryPhoenix(chainId)?.poolManager ?? "0x0000000000000000000000000000000000000000";
+      return registryPhoenixOf(chainId, args.address)?.poolManager ?? "0x0000000000000000000000000000000000000000";
     case "CONTROLLER":
-      return registryBlock(chainId)?.controller ?? "0x0000000000000000000000000000000000000000";
+      return registryBlockOf(chainId, args.address)?.controller ?? "0x0000000000000000000000000000000000000000";
     case "FEE_MANAGER_ROLE":
       return `0x${"6c".repeat(32)}`; // any stable hash — the pre-flight uses the probed value itself
     case "hasRole":
@@ -141,6 +154,14 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     }
     case "getRecipes":
       return [[LIQUIDITY_RECIPE, FIXED_RECIPE, IMPAIRMENT_RECIPE], 3n];
+    // Denominations: the nested registry lists plain unit ADDRESSES (the live 0.5.0 answer:
+    // the USD and ETH pseudo-units); a flat registry lists {labelHash, unit} records.
+    case "getDenominations":
+      return registryBlockOf(chainId, args.address)?.wire === "nested"
+        ? [[...NESTED_DENOMINATIONS], 2n]
+        : [[{ labelHash: `0x${"a1".repeat(32)}`, unit: NESTED_DENOMINATIONS[0] }, { labelHash: `0x${"a2".repeat(32)}`, unit: NESTED_DENOMINATIONS[1] }], 2n];
+    case "isDenomination":
+      return NESTED_DENOMINATIONS.some((u) => u.toLowerCase() === String(args.args?.[0] ?? "").toLowerCase());
     case "source":
       // RecipeSource: NAV=0, PRICE=1, FIXED=2 (the deliberately inverted upstream ordering).
       return args.address.toLowerCase() === FIXED_RECIPE.toLowerCase() ? 2 : args.address.toLowerCase() === IMPAIRMENT_RECIPE.toLowerCase() ? 0 : 1;
@@ -153,6 +174,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return 31_536_000n;
     case "CAPACITY_DAYS":
       return 7n;
+    case "EXTRA_DATA_LENGTH":
+      return 96n;
+    case "MAX_APY_SPREAD_PERCENTAGE":
+      return 100n * WAD;
+    case "MAX_BAND_PERCENTAGE":
+      return 50n * WAD;
     case "REGISTRY":
       return REGISTRY_210;
     case "RATE_MIN":
@@ -176,11 +203,21 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       return BUNDLED_DEFAULTS.lopAddresses["1"]!;
     // The JIT adapter's own LOP binding (the maker-order pre-flight ladder checks it against the
     // chain's configured LOP): the real adapter answers its chain's 1inch deployment.
-    // The adapter's pure decode helper reads the bytes back with the hook's own
-    // decoder. The stub answers as a FAITHFUL 0.4.0 adapter would; tests wrap it to lie.
+    // The adapter's pure decode helper reads the bytes back with the hook's own decoder — on the
+    // WIRE of the adapter asked (the same selector returns the flat struct on a 0.3.x adapter and
+    // the (MarketParams, enableJitMint) wrapper on a 0.5.0 one). The stub answers as a FAITHFUL
+    // adapter of that generation would; tests wrap it to lie.
     case "decodeExtraData": {
-      const d = decodeJitExtraData((args.args as [`0x${string}`])[0]);
-      return [d.params, d.permits];
+      const wire = registryBlockOf(chainId, args.address)?.wire ?? "nested";
+      const bytes = (args.args as [`0x${string}`])[0];
+      if (wire === "nested") {
+        const d = decodeJitExtraData("nested", bytes);
+        const { enableJitMint, oracleSalt, ...market } = d.params;
+        return [{ market: { ...market, oracleSalt: oracleSalt ?? `0x${"00".repeat(32)}` }, enableJitMint }, d.permits];
+      }
+      const d = decodeJitExtraData("flat", bytes);
+      const { extraData, oracleSalt: _noSalt, ...rest } = d.params;
+      return [{ ...rest, additionalData: extraData }, d.permits];
     }
     case "LIMIT_ORDER_PROTOCOL":
       return BUNDLED_DEFAULTS.lopAddresses[String(chainId)] ?? BUNDLED_DEFAULTS.lopAddresses["1"]!;
@@ -330,7 +367,10 @@ export const DERIVED_JIT_POOL = computeMarketId(
     rateChangeCapacityMax: BigInt(JIT_TASK_CONSTRAINT.rateChangeCapacityMax),
     rateOracle: ORACLE,
   },
-  // stage 2: the flat-wire JIT derivation the stub mirrors lands on an 8-field pool manager.
+  // The JIT ROLLOVER task binds its market to the rc.2 settler's generation (phoenix/v0.3-rc.1,
+  // an 8-field pool manager) — the commitment's pool id follows the SETTLER's set, not the
+  // chain primary's, so this stays the 8-field id (the 0.2 wire's 10-field twin is a stage-2b
+  // fixture of its own).
   "8-field",
 );
 

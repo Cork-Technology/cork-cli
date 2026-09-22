@@ -303,14 +303,15 @@ export function classifyAddress(list: readonly ResolvedGeneration[], address: st
 }
 
 /** The market-registry wires this build's codecs IMPLEMENT (the config declares wires; this is
- *  the code's half of that contract). stage 2: the nested (0.5.x) codec — (MarketParams,
- *  enableJitMint) + permits, extraData + oracleSalt, verify(7), deploy(4), the 10-field
- *  derivation — lands there and joins this list; until then every registry-bound path (JIT
- *  ladder, registry-* reads, derive-cork-pool, create-pool, deploy-oracle) binds to the FLAT-wire
- *  generation rather than the primary, because emitting flat bytes at a nested adapter is exactly
- *  the silent class the generation model exists to prevent. The legacy wire is served by its own
- *  deprecated lane (`legacy:true`), never listed here. */
-export const IMPLEMENTED_MARKET_REGISTRY_WIRES: readonly MarketRegistryWire[] = ["flat"];
+ *  the code's half of that contract): `flat` (0.3.x) and, since stage 2a, `nested` (0.5.x —
+ *  (MarketParams, enableJitMint) + permits, extraData + oracleSalt, verify(7), deploy(4), the
+ *  10-field derivation; market-registry.ts `WIRES`). With both implemented, every registry-bound
+ *  path (JIT ladder, registry-* reads, derive-cork-pool, create-pool, deploy-oracle) binds the
+ *  PRIMARY generation again and the codec follows that generation's declared wire; a named
+ *  generation on a wire outside this list refuses phase_gated rather than emitting bytes its
+ *  adapter would misread. The legacy wire is served by its own deprecated lane (`legacy:true`),
+ *  never listed here. */
+export const IMPLEMENTED_MARKET_REGISTRY_WIRES: readonly MarketRegistryWire[] = ["flat", "nested"];
 
 /** The first generation (resolution order) whose marketRegistry block speaks `wire`. The
  *  deprecation-gated legacy lane is "the generation whose marketRegistry.wire is legacy" — there

@@ -18,7 +18,9 @@ describe("cork_decode order — JIT extension labeling", () => {
     const d = env.data as { jit: Record<string, unknown>; claimedHashVerified: boolean; saltBoundToExtension: boolean };
     expect(d.saltBoundToExtension).toBe(true);
     expect(d.claimedHashVerified).toBe(true);
-    expect(d.jit["generation"]).toContain("legacy");
+    expect(d.jit["generation"]).toBe("arbitrum-v1.1"); // the chain generation's label
+    expect(d.jit["wire"]).toBe("legacy");
+    expect(d.jit["verification"]).toBe("trusted");
     expect(String(d.jit["adapter"]).toLowerCase()).toBe("0xea15bf1e5565181ed8678ccff39d797272858505");
     expect(d.jit["mode"]).toBe("liquidity");
     expect(String(d.jit["note"])).toContain("LEGACY");
@@ -26,10 +28,11 @@ describe("cork_decode order — JIT extension labeling", () => {
     expect((d.jit["scales"] as Record<string, string>).swapFeePercentage).toContain("1e18 = 1%");
   });
 
-  it("a 2.1.0 extension decodes with recipe + carried constraint + permit count", async () => {
+  it("a flat-wire (0.3.x) extension decodes with recipe + carried constraint + permit count", async () => {
     const extension = buildJitExtension(
       ADAPTER_210,
       encodeJitExtraData(
+        "flat",
         {
           collateralAsset: CA,
           referenceAsset: REF,
@@ -37,7 +40,7 @@ describe("cork_decode order — JIT extension labeling", () => {
           recipe: LIQ,
           rateOverride: 0n,
           constraint: { rateMin: 1n, rateMax: 2n * 10n ** 18n, rateChangePerDayMax: 10n ** 18n, rateChangeCapacityMax: 3n * 10n ** 18n },
-          additionalData: "0x",
+          extraData: "0x",
           swapFeePercentage: 0n,
           unwindSwapFeePercentage: 0n,
           enableJitMint: true,
@@ -55,7 +58,8 @@ describe("cork_decode order — JIT extension labeling", () => {
     );
     expect(env.state).toBe("ok");
     const jit = (env.data as { jit: Record<string, unknown> }).jit;
-    expect(jit["generation"]).toBe("2.1.0");
+    expect(jit["generation"]).toBe("phoenix/v0.3-rc.1"); // the flat-wire generation's label
+    expect(jit["wire"]).toBe("flat");
     expect(String(jit["adapter"]).toLowerCase()).toBe(ADAPTER_210.toLowerCase());
     expect(String(jit["recipe"]).toLowerCase()).toBe(LIQ.toLowerCase());
     expect((jit["constraint"] as Record<string, string>)["rateMax"]).toBe((2n * 10n ** 18n).toString());

@@ -225,14 +225,14 @@ describe("runTool: cork_query", () => {
     );
     expect(v03.state).toBe("ok");
     expect((v03.data as { corkAdapter: string }).corkAdapter).toBe("0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD");
-    // stage 2: the nested-wire registry is declared by the primary generation but not encoded
-    // by this build — naming it on a registry path is a typed refusal, never flat bytes at a
-    // nested adapter. Omitting `generation` binds the flat-wire set (the 0.3.3 stack).
+    // The nested-wire registry (the primary's) BINDS since stage 2a: naming it — or omitting
+    // `generation` — reaches the chain (this stub knows no registry views, so the read fails
+    // honestly downstream, never as a wire refusal). Only the legacy wire stays phase_gated.
     const nested = await runTool("cork_query", { resource: "registry-recipes", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "phoenix/v0.4-rc.1" });
-    expect(nested.state).toBe("unavailable");
-    expect(nested.warnings[0]?.code).toBe("phase_gated");
-    expect(nested.warnings[0]?.message).toContain("'nested'-wire MarketRegistry (0.5.0)");
-    expect(nested.warnings[0]?.message).toContain("phoenix/v0.3-rc.1");
+    expect(nested.warnings[0]?.code).not.toBe("phase_gated");
+    expect(nested.warnings[0]?.code).toBe("chain_read_failed");
+    const primary = await runTool("cork_query", { resource: "registry-recipes", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: poolTokensRpc() });
+    expect(primary.warnings[0]?.code).toBe("chain_read_failed");
     const legacy = await runTool("cork_query", { resource: "registry-recipes", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc: poolTokensRpc(), generation: "arbitrum-v1.1" });
     expect(legacy.state).toBe("unavailable");
     expect(legacy.warnings[0]?.code).toBe("phase_gated");

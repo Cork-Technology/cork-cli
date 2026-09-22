@@ -26,6 +26,11 @@ import {
 import { stubRpc, type StubCall } from "./helpers.ts";
 import { revertReason } from "../src/handlers/shared.ts";
 
+/** Every stub in this file mirrors the FLAT (0.3.3) stack — its addresses, its 8-field pool
+ *  manager, its deploy(3)/verify(5) shapes — so every call names that generation; the primary on
+ *  42161/8453 is the nested phoenix/v0.4-rc.1 set since stage 2a (test/market-registry-nested.test.ts). */
+const FLAT = "phoenix/v0.3-rc.1";
+
 const WAD = 10n ** 18n;
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)
 const REF = "0x7F6501d3B98eE91f9b9535E4b0ac710Fb0f9e0bc"; // waArbUSDCn (the captured ground-truth pair)
@@ -51,14 +56,14 @@ describe("JIT extension bytes (2.1.0 JITMarketParams: recipe + carried constrain
     recipe: LIQ,
     rateOverride: 0n,
     constraint: CONSTRAINT,
-    additionalData: "0x" as const,
+    extraData: "0x" as const,
     swapFeePercentage: 0n,
     unwindSwapFeePercentage: 0n,
     enableJitMint: true,
   } as const;
 
   it("round-trips through the ExtensionLib offset table (preInteraction = field 6)", () => {
-    const back = decodeJitExtension(buildJitExtension(ADAPTER, encodeJitExtraData(params, [])));
+    const back = decodeJitExtension("flat", buildJitExtension(ADAPTER, encodeJitExtraData("flat", params, [])));
     expect(back.adapter).toBe(ADAPTER);
     expect(back.params).toEqual(params);
     expect(back.permits).toEqual([]);
@@ -66,12 +71,12 @@ describe("JIT extension bytes (2.1.0 JITMarketParams: recipe + carried constrain
 
   it("carries permits and preserves their fields exactly", () => {
     const permit = { token: CA, value: 42n, deadline: 1795000000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` } as const;
-    const back = decodeJitExtension(buildJitExtension(ADAPTER, encodeJitExtraData(params, [permit])));
+    const back = decodeJitExtension("flat", buildJitExtension(ADAPTER, encodeJitExtraData("flat", params, [permit])));
     expect(back.permits).toEqual([permit]);
   });
 
   it("the extraData tail is exactly abi.encode(JITMarketParams, PermitParams[]) in the adapter's field ORDER", () => {
-    const extra = encodeJitExtraData(params, []);
+    const extra = encodeJitExtraData("flat", params, []);
     // Decode with an independently-authored parameter list — guards the tuple field ORDER
     // (collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint,
     // additionalData, swapFee, unwindFee, enableJitMint), matching CorkLimitOrderAdapter.sol.
@@ -184,7 +189,7 @@ const recipeMetaStub = (c: StubCall): unknown => {
 };
 
 describe("cork_query registry-* (2.1.0 chain views)", () => {
-  const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(withBinding(handler), opts) });
+  const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: stubRpc(withBinding(handler), opts) });
 
   it("registry-recipes lists recipe CONTRACTS with live self-description + catalogued constants", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes" }, ctx((c) => {
@@ -266,7 +271,7 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
   });
 
   it("a wrong adapter binding → CONFLICT adapter_binding_mismatch (the old-generation hazard guard)", async () => {
-    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-assets" }, { nowSeconds: 1n, resolveRpc: stubRpc((c) => {
+    const env = await runTool("cork_query", { chainId: 42161, resource: "registry-assets" }, { nowSeconds: 1n, generation: FLAT, resolveRpc: stubRpc((c) => {
       if (c.functionName === "MARKET_REGISTRY") return "0xF674488bf4643e205ccd826951e8b0d29f77600A"; // the OLD registry
       throw new Error(`unexpected ${c.functionName}`);
     }) });
@@ -431,7 +436,7 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
 });
 
 describe("cork_query derive-cork-pool (2.1.0: recipe contract + off-chain constraint)", () => {
-  const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, resolveRpc: stubRpc(withBinding(handler), opts) });
+  const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: stubRpc(withBinding(handler), opts) });
   // Live-captured ground truth: the identical Market struct hash across generations.
   const GT = {
     oracle: "0x2ba2103a37c4cff9dbb96e6f74513923d960d757",
@@ -602,7 +607,7 @@ describe("cork_query derive-cork-pool (2.1.0: recipe contract + off-chain constr
 });
 
 describe("cork_compute recipe-rate-constraint (2.1.0: the recipe resolves its own constraint)", () => {
-  const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1n, resolveRpc: stubRpc(withBinding(handler)) });
+  const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1n, generation: FLAT, resolveRpc: stubRpc(withBinding(handler)) });
 
   it("resolves against the LIVE oracle and returns the four raw values an order carries", async () => {
     const env = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF } }, ctx((c) => {
@@ -648,6 +653,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
   it("deploy-oracle defaults to PRICE mode (ordinal 0 in the calldata, disclosed) and flags an existing wrapper", async () => {
     const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0001", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF } }, {
       nowSeconds: 1n,
+      generation: FLAT,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "lookupWrapper") {
           expect(c.args).toEqual([CA, REF, 0]);
@@ -658,7 +664,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
     });
     expect(env.state).toBe("ok");
     const d = env.data as { calldata: string; mode: string; modeNote?: string; oracle: { deployed: boolean } };
-    expect(d.calldata).toBe(buildDeployOracleCall(CA, REF, "price"));
+    expect(d.calldata).toBe(buildDeployOracleCall("flat", CA, REF, "price"));
     expect(d.calldata).toBe(encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [CA, REF, 0] }));
     expect(d.mode).toBe("price");
     expect(d.modeNote).toContain("defaulted"); // disclosed in data, not a warning
@@ -667,7 +673,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
   });
 
   it("deploy-oracle mode 'nav' encodes ordinal 1; offline still builds with the gap disclosed", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0002", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, { nowSeconds: 1n, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0002", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, { nowSeconds: 1n, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     expect((env.data as { calldata: string }).calldata).toBe(encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [CA, REF, 1] }));
     expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
@@ -683,7 +689,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
     const env = await runTool(
       "cork_prepare_market",
       { chainId: 42161, clientRequestId: "reg-mkt-fo01", action: { type: "deploy-fixed-oracle", rate: "1000000000000000000" } },
-      { nowSeconds: 1n, resolveRpc: async () => resolved },
+      { nowSeconds: 1n, generation: FLAT, resolveRpc: async () => resolved },
     );
     expect(env.state).toBe("ok");
     const w = env.warnings.find((x) => x.code === "rpc_fallback");
@@ -697,6 +703,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
     const PREDICTED = "0xB3bFce4cC9319F1E311e0367E7A9f57022dFA732";
     const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0003", action: { type: "deploy-fixed-oracle", rate: WAD.toString() } }, {
       nowSeconds: 1n,
+      generation: FLAT,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "predictFixedRateOracle") return PREDICTED;
         throw new Error("unexpected");
@@ -710,7 +717,7 @@ describe("cork_prepare_market (unsigned oracle-infrastructure txs)", () => {
   });
 
   it("deploy-fixed-oracle with rate 0 → invalid_order_terms (the constructor reverts)", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0004", action: { type: "deploy-fixed-oracle", rate: "0" } }, { nowSeconds: 1n, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "reg-mkt-0004", action: { type: "deploy-fixed-oracle", rate: "0" } }, { nowSeconds: 1n, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
   });
@@ -730,10 +737,10 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   const base = { chainId: 42161 as const, account: ACCT, clientRequestId: "reg-jit-0001" };
 
   it("offline WITH an explicit constraint: extension builds against the 2.1.0 adapter; skipped pre-flights disclosed", async () => {
-    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     const d = env.data as { extension: `0x${string}`; jit: { adapter: string; hook: string; recipe: string } };
-    const decoded = decodeJitExtension(d.extension);
+    const decoded = decodeJitExtension("flat", d.extension);
     expect(decoded.adapter.toLowerCase()).toBe(ADAPTER.toLowerCase());
     expect(decoded.params.recipe.toLowerCase()).toBe(LIQ.toLowerCase());
     expect(decoded.params.constraint).toEqual(CONSTRAINT);
@@ -743,7 +750,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   });
 
   it("offline WITHOUT a constraint → requires_rpc teaching where the constraint comes from", async () => {
-    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
     expect(env.warnings[0]?.message).toContain("resolve");
@@ -752,6 +759,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("online auto-resolve: constraint from recipe.resolve, verify pre-flight, PINNED identity, cST side-check", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: stubRpc(
         (c) => {
           if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
@@ -774,7 +782,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     });
     expect(env.state).toBe("ok");
     const d = env.data as { extension: `0x${string}`; jit: { derivedPoolId: string; identity: string; predictedCorkSwapToken: string; constraint: { rateMax: string } } };
-    const decoded = decodeJitExtension(d.extension);
+    const decoded = decodeJitExtension("flat", d.extension);
     expect(decoded.params.constraint).toEqual(CONSTRAINT); // the RESOLVED constraint rode into the bytes
     expect(d.jit.identity).toContain("PINNED");
     expect(d.jit.predictedCorkSwapToken.toLowerCase()).toBe("0x5d16b802b397dffced2468f63b936a835dc8bf10");
@@ -813,7 +821,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     );
 
   it("BOTH roles granted → no roles_not_granted warning (the live path since 2026-08-04)", async () => {
-    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: rolesStub(() => true) });
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: rolesStub(() => true) });
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "roles_not_granted")).toBe(false);
     // side-mismatch fires (sides are deliberately CA/REF) but neither side has code, so the
@@ -829,6 +837,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     const FOREIGN_POOL = `0x${"deadbeef".repeat(8)}` as const;
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: rolesStub(() => true, { code: { [REF.toLowerCase()]: "0x6080" }, poolIdOf: () => FOREIGN_POOL }),
     });
     expect(env.state).toBe("ok");
@@ -843,7 +852,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     // hasRole keyed on the ROLE HASH: creator granted, configurator missing — the state a
     // half-executed governance action produces. An &&→|| mutant reports granted; a swapped
     // role-constant mutant flips the per-role truth in the message. Both die here.
-    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, resolveRpc: rolesStub((c) => c.args?.[0] === POOL_CREATOR_ROLE) });
+    const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: rolesStub((c) => c.args?.[0] === POOL_CREATOR_ROLE) });
     expect(env.state).toBe("ok");
     const w = env.warnings.find((x) => x.code === "roles_not_granted");
     expect(w).toBeDefined();
@@ -865,6 +874,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
     // A probe-dropped mutant would check CONFIGURATOR instead and misreport which grant is owed.
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: feeGenStub((c) => c.args?.[0] === POOL_CREATOR_ROLE),
     });
     expect(env.state).toBe("ok");
@@ -878,6 +888,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("0.3.2 controller with BOTH roles granted → silent (the post-signature state)", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: feeGenStub((c) => c.args?.[0] === POOL_CREATOR_ROLE || c.args?.[0] === FEE_MANAGER_ROLE),
     });
     expect(env.state).toBe("ok");
@@ -887,6 +898,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("online auto-resolve with an UNDEPLOYED oracle: the share simulation prepends the fill's own deploy (mutation killer for the preCalls branch)", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, additionalData: `0x${WAD.toString(16).padStart(64, "0")}` }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: stubRpc(
         (c) => {
           if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
@@ -919,6 +931,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("a stale explicit constraint failing recipe.verify → would_revert naming RecipeRejectedConstraint", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
         if (c.functionName === "MARKET_REGISTRY") return REG;
@@ -940,6 +953,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("FIXED recipe with rateOverride 0 → invalid_order_terms (before any resolve attempt)", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
         if (c.functionName === "MARKET_REGISTRY") return REG;
@@ -958,6 +972,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
   it("price recipe with a non-zero rateOverride → invalid_order_terms (rejected, not ignored)", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, rateOverride: WAD.toString() }) }, {
       nowSeconds: 1_790_000_000n,
+      generation: FLAT,
       resolveRpc: stubRpc((c) => {
         if (c.functionName === "LIMIT_ORDER_PROTOCOL") return "0x111111125421cA6dc452d289314280a0f8842A65";
         if (c.functionName === "MARKET_REGISTRY") return REG;
@@ -977,24 +992,24 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
 
   it("rejects jitMarket + raw extension together (mutually exclusive)", async () => {
     const env = jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE });
-    await expect(runTool("cork_prepare_orders", { ...base, action: { ...env, extension: "0xdeadbeef" } }, { nowSeconds: 1n })).rejects.toThrow(/invalid input/);
+    await expect(runTool("cork_prepare_orders", { ...base, action: { ...env, extension: "0xdeadbeef" } }, { nowSeconds: 1n, generation: FLAT })).rejects.toThrow(/invalid input/);
   });
 
   it("fee above 5e18 (5%) is a domain-rule envelope (invalid_order_terms), not a throw", async () => {
-    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, swapFeePercentage: "6000000000000000000" }) }, { nowSeconds: 1n });
+    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, swapFeePercentage: "6000000000000000000" }) }, { nowSeconds: 1n, generation: FLAT });
     expect(envlp.state).toBe("unavailable");
     expect(envlp.warnings[0]?.code).toBe("invalid_order_terms");
   });
 
   it("fee of EXACTLY 5e18 (the cap) is accepted — the chain rule is <= 5%, not < 5% (boundary killer)", async () => {
-    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, swapFeePercentage: "5000000000000000000", unwindSwapFeePercentage: "5000000000000000000" }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, swapFeePercentage: "5000000000000000000", unwindSwapFeePercentage: "5000000000000000000" }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: async () => null });
     expect(envlp.state).toBe("ok");
-    const decoded = decodeJitExtension((envlp.data as { extension: `0x${string}` }).extension);
+    const decoded = decodeJitExtension("flat", (envlp.data as { extension: `0x${string}` }).extension);
     expect(decoded.params.swapFeePercentage).toBe(5n * 10n ** 18n);
   });
 
   it("expiry EXACTLY equal to now is rejected — pool creation requires strictly-future expiry (boundary killer)", async () => {
-    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, expiryTimestamp: "1790000000" }) }, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    const envlp = await runTool("cork_prepare_orders", { ...base, action: jitAction({ recipe: LIQ, constraint: CONSTRAINT_WIRE, expiryTimestamp: "1790000000" }) }, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: async () => null });
     expect(envlp.state).toBe("unavailable");
     expect(envlp.warnings[0]?.code).toBe("invalid_order_terms");
     expect(envlp.warnings[0]?.message).toContain("not in the future");
@@ -1008,7 +1023,7 @@ describe("cork_prepare_orders maker-order + jitMarket (2.1.0)", () => {
 
   it("plain maker order (no jitMarket) is byte-identical to before — the opt-out path", async () => {
     const plain = { ...base, action: { type: "maker-order", poolId: `0x${"11".repeat(32)}`, side: "SELL", makerAsset: CA, takerAsset: REF, makingAmount: "1", takingAmount: "1" } };
-    const env = await runTool("cork_prepare_orders", plain, { nowSeconds: 1_790_000_000n, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_orders", plain, { nowSeconds: 1_790_000_000n, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     expect((env.data as { extension: string }).extension).toBe("0x");
     expect((env.data as { jit?: unknown }).jit).toBeUndefined();

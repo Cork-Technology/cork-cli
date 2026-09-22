@@ -23,6 +23,9 @@ import { stubRpc, type StubCall } from "./helpers.ts";
 import { farFutureExpiryWarning, maxExpiryBoundWarning } from "../src/handlers/jit.ts";
 
 const WAD = 10n ** 18n;
+/** This file pins the FLAT (cork-periphery 0.1.0) creator — every call names its generation; the
+ *  primary is the nested 0.5.0 creator since stage 2a (test/market-registry-nested.test.ts). */
+const FLAT = "phoenix/v0.3-rc.1";
 // The live parity fixture (Base, 2026-08-28): eth_call against the DEPLOYED creator returned
 // exactly the (poolId, cst, cpt) this tool predicted for these params.
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2";
@@ -38,7 +41,7 @@ const FM_ROLE = "0x6c0757dc3e6b28b2580c03fd9e96c274acf4f99d91fbec9b418fa1d70604f
 
 const CONSTRAINT: ResolvedConstraint = { rateMin: 900000000000000000n, rateMax: 1100000000000000000n, rateChangePerDayMax: 10000000000000000n, rateChangeCapacityMax: 100000000000000000n };
 const CONSTRAINT_WIRE = { rateMin: "900000000000000000", rateMax: "1100000000000000000", rateChangePerDayMax: "10000000000000000", rateChangeCapacityMax: "100000000000000000" };
-const PARAMS = { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, recipe: LIQ, rateOverride: 0n, constraint: CONSTRAINT, additionalData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n } as const;
+const PARAMS = { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, recipe: LIQ, rateOverride: 0n, constraint: CONSTRAINT, extraData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n } as const;
 
 // Golden vector, generated with `cast calldata "createNewPool((address,address,uint256,address,
 // uint256,(uint256,uint256,uint256,uint256),bytes,uint256,uint256))" …` — an independent
@@ -49,7 +52,7 @@ const GOLDEN =
 
 describe("buildCreatorCreatePoolCall (MarketParams wire format)", () => {
   it("matches the cast-generated golden vector byte for byte", () => {
-    expect(buildCreatorCreatePoolCall(PARAMS)).toBe(GOLDEN);
+    expect(buildCreatorCreatePoolCall("flat", PARAMS)).toBe(GOLDEN);
   });
 
   it("encodes the nine fields in the contract's declared ORDER (independently-authored components)", () => {
@@ -74,13 +77,13 @@ describe("buildCreatorCreatePoolCall (MarketParams wire format)", () => {
           ],
         },
       ],
-      [{ ...PARAMS, constraint: { ...CONSTRAINT } }],
+      [{ ...PARAMS, additionalData: PARAMS.extraData, constraint: { ...CONSTRAINT } }],
     );
-    expect(buildCreatorCreatePoolCall(PARAMS)).toBe(`${selector}${body.slice(2)}`);
+    expect(buildCreatorCreatePoolCall("flat", PARAMS)).toBe(`${selector}${body.slice(2)}`);
   });
 
   it("keeps swapFee BEFORE unwindFee with DISTINCT values (the golden's 0/0 fees cannot see a swap)", () => {
-    const withFees = buildCreatorCreatePoolCall({ ...PARAMS, swapFeePercentage: 1n, unwindSwapFeePercentage: 2n });
+    const withFees = buildCreatorCreatePoolCall("flat", { ...PARAMS, swapFeePercentage: 1n, unwindSwapFeePercentage: 2n });
     // The last two static words of the head are the two fees, in declaration order.
     // Word layout after the selector: [0] outer tuple offset, [1..5] ca/ref/expiry/recipe/
     // rateOverride, [6..9] constraint, [10] additionalData offset, [11] swapFee, [12] unwindFee.
@@ -154,11 +157,11 @@ const creatorStub = (over: Partial<Record<string, unknown>> = {}) => (c: StubCal
     default: throw new Error(`unexpected ${c.functionName}`);
   }
 };
-const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: NOW, resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" }, ...opts }) });
+const ctx = (handler: (c: StubCall) => unknown, opts?: Parameters<typeof stubRpc>[1]): HandlerContext => ({ nowSeconds: NOW, generation: FLAT, resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" }, ...opts }) });
 
 describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewPool tx)", () => {
   it("offline WITH an explicit constraint: exact calldata to the configured creator; skipped pre-flights disclosed", async () => {
-    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("ok");
     const d = env.data as { kind: string; to: string; calldata: string; note: string; scales: Record<string, string>; execution: { kind: string } };
     expect(d.kind).toBe("create-pool");
@@ -171,14 +174,14 @@ describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewP
   });
 
   it("offline WITHOUT a constraint → requires_rpc (the constraint is part of the calldata)", async () => {
-    const env = await runTool("cork_prepare_market", { ...base, action: ACTION }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { ...base, action: ACTION }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("requires_rpc");
     expect(env.warnings[0]?.message).toContain("recipe-rate-constraint");
   });
 
   it("value gates are the SHARED jitValueGate, creator-worded: past expiry names `expiryTimestamp` (not jitMarket) and 'sending this tx'", async () => {
-    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, expiryTimestamp: "1", constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, expiryTimestamp: "1", constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
     expect(env.warnings[0]?.message).toContain("expiryTimestamp 1 is not in the future");
@@ -187,20 +190,20 @@ describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewP
   });
 
   it("fee above the 5e18 cap → invalid_order_terms (the creator restates the adapter's bound)", async () => {
-    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, swapFeePercentage: (6n * WAD).toString(), constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, swapFeePercentage: (6n * WAD).toString(), constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
     expect(env.warnings[0]?.message).toContain("capped at 5e18");
   });
 
   it("equal pair → invalid_pair (domain rule, exit-3 envelope, never a throw)", async () => {
-    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, referenceAsset: CA, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, resolveRpc: async () => null });
+    const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, referenceAsset: CA, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null });
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_pair");
   });
 
   it("no recipe and no mode → teaching input error", async () => {
-    await expect(runTool("cork_prepare_market", { ...base, action: { ...ACTION, recipe: undefined, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, resolveRpc: async () => null })).rejects.toThrow(/invalid input/);
+    await expect(runTool("cork_prepare_market", { ...base, action: { ...ACTION, recipe: undefined, constraint: CONSTRAINT_WIRE } }, { nowSeconds: NOW, generation: FLAT, resolveRpc: async () => null })).rejects.toThrow(/invalid input/);
   });
 
   it("online happy path: bindings verified, roles read, constraint AUTO-RESOLVED via recipe.resolve, pool id derived, teaching notices attached", async () => {
@@ -340,7 +343,7 @@ describe("cork_decode recognizes market-infrastructure calls (validate-before-br
   it("registry oracle deploys label role 'marketRegistry' — this tool's own deploy-oracle bytes are no longer UNREADABLE", () => {
     const data = encodeFunctionData({ abi: marketCreatorAbi, functionName: "createNewPool", args: [{ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1n, recipe: LIQ, rateOverride: 0n, constraint: { rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 3n, rateChangeCapacityMax: 4n }, additionalData: "0x", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n }] });
     expect(leg(CREATOR, data, { marketCreator: CREATOR }).kind).toBe("market");
-    const dep = leg(REG, buildDeployOracleCall(CA, REF, "nav"), { marketRegistry: REG });
+    const dep = leg(REG, buildDeployOracleCall("flat", CA, REF, "nav"), { marketRegistry: REG });
     expect(dep).toEqual(expect.objectContaining({ kind: "market", role: "marketRegistry", action: "deploy", verification: "trusted" }));
     const fix = leg(REG, buildDeployFixedRateOracleCall(WAD), { marketRegistry: REG });
     expect(fix).toEqual(expect.objectContaining({ kind: "market", action: "deployFixedRateOracle", verification: "trusted" }));
@@ -352,7 +355,7 @@ describe("cork_decode recognizes market-infrastructure calls (validate-before-br
     expect(lines[0]).toContain("1790000000");
     expect(lines[0]).toContain("idempotent");
     expect(lines[0]).not.toContain("UNREADABLE");
-    const navLine = summarizeBundle([leg(REG, buildDeployOracleCall(CA, REF, "nav"), { marketRegistry: REG })]);
+    const navLine = summarizeBundle([leg(REG, buildDeployOracleCall("flat", CA, REF, "nav"), { marketRegistry: REG })]);
     expect(navLine[0]).toContain("nav rate oracle");
   });
 });

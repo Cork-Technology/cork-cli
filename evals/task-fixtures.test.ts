@@ -181,7 +181,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     expect(d.pool?.exists).toBe(false);
     expect(d.shares?.corkSwapToken).toBe(CST); // the stub's shares simulation, same as derive-cork-pool
     expect(d.note).toContain("cst.approve"); // the answer regex's ground truth (/approv/i)
-    expect(d.calldata?.startsWith("0xb6747077")).toBe(true); // createNewPool selector
+    expect(d.calldata?.startsWith("0x59c8eb4c")).toBe(true); // the 0.5.0 creator's createNewPool(MarketParams) selector — the primary generation
     // Inside the 30-day creation bound the stub serves — no would_revert.
     expect(env.warnings.map((w) => w.code)).not.toContain("would_revert");
   });

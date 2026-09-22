@@ -198,10 +198,10 @@ describe("role scoping: each artifact path fingerprints only the contracts its b
       { nowSeconds: 1n, rpcUrl: "https://stub.example/rpc", resolveRpc: chainRpc({}, reads) },
     );
     expect(env.state).toBe("ok");
-    // stage 2: the registry-bound paths fingerprint the generation they BIND — the flat-wire
-    // set — not the primary's nested-wire registry (handlers/shared.ts getMarketRegistry).
-    const registry = implementationRoleAddress("marketRegistry", marketRegistryForWire(ARBITRUM, "flat"))!;
-    expect(registry.toLowerCase()).not.toBe(implementationRoleAddress("marketRegistry", primaryOf(ARBITRUM))!.toLowerCase());
+    // The registry-bound paths bind the PRIMARY (nested-wire) generation since stage 2a; the
+    // flat set's registry is a different address and is NOT read by a default prepare.
+    const registry = implementationRoleAddress("marketRegistry", primaryOf(ARBITRUM))!;
+    expect(registry.toLowerCase()).not.toBe(implementationRoleAddress("marketRegistry", marketRegistryForWire(ARBITRUM, "flat"))!.toLowerCase());
     expect(reads.code).toEqual([registry.toLowerCase()]);
     expect(reads.storage).toEqual([]);
     expect(env.warnings.filter((w) => w.code === "implementation_not_approved").map((w) => w.message)).toEqual([expect.stringContaining("marketRegistry")]);

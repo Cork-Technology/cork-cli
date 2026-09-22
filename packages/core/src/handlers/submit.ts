@@ -210,7 +210,13 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         });
         if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — NOT relayed (the venue rejects it with the same complaint)`, ctx);
         if (o.rolloverParams.jitMarketHash.toLowerCase() !== ZERO_JIT_MARKET_HASH) {
-          settlerWarnings.push({ code: "jit_market_notice", message: "this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash) — the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED, with no jitMarketHash bypass: expect a venue 400 until the dst pool exists on-chain; the signed order itself stays contract-valid and can be handed to a filler venue-free" });
+          // The commitment is opaque here (a hash the wallet signed); what CAN be said is which
+          // JITMarketParams layout the settler's BaseFiller will recompute it with — a hash
+          // produced on the other wire fills as BaseFiller__JitMarketHashMismatch, not as a
+          // venue refusal, so the relay would rest an order no filler can settle.
+          const wire = rollover ? (() => { const c = classifyRolloverSettler(rollover, o.settler); return c.status === "unknown" ? undefined : c.generation.wire; })() : undefined;
+          const layout = wire === undefined ? "" : ` (settler generation rollover wire ${wire}: ${wire === "0.2" ? "JITMarketParams WITH oracleSalt — a hash computed on the rc.2 layout will not match" : wire === "rc.2" ? "JITMarketParams WITHOUT oracleSalt — a hash computed on the 0.2 layout will not match" : "no JIT commitment on this wire"})`;
+          settlerWarnings.push({ code: "jit_market_notice", message: `this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash)${layout} — the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED, with no jitMarketHash bypass: expect a venue 400 until the dst pool exists on-chain; the signed order itself stays contract-valid and can be handed to a filler venue-free` });
         }
       }
       if (o.rolloverParams.settler.toLowerCase() !== o.settler.toLowerCase() || o.rolloverParams.srcCstToken.toLowerCase() !== o.srcCstToken.toLowerCase() || o.rolloverParams.dstCstToken.toLowerCase() !== o.dstCstToken.toLowerCase()) {

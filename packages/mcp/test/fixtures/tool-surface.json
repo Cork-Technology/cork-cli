@@ -51,6 +51,10 @@
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
           },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
+          },
           "mode": {
             "type": "string",
             "enum": [
@@ -66,7 +70,7 @@
               "type": "string"
             },
             "additionalProperties": {},
-            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/pool-whitelist/flows/rfqs — pool-whitelist REQUIRES it beside poolId; rfqs maps it to the requester; orderbook — the FILL SENDER each row's exclusivity is classified against: the taker account on a raw fill, the ForSelf adapter on a wrapper fill), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), settler (flows: orders by settler on the venue; kind=fills scopes the event scan to that settler’s generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's additionalData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup — EXACT BYTES, case-sensitive), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter), excludeRequestPrefix (rfqs list: drop RFQs whose request_id starts with this LITERAL prefix server-side, 1–64 chars — 'healthcheck-' skips status-page heartbeats), underwriter (rfqs list: only RFQs this underwriter has ANSWERED — at least one stored answer row by that address, server-side; the answering side's mirror of account/requester, so an underwriter polls its own book in one call). Unknown keys are a teachable error, and keys are validated PER RESOURCE: a known key the named resource does not consume is refused with teaching that lists the resource's own keys (it would otherwise be silently unapplied)"
+            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/pool-whitelist/flows/rfqs — pool-whitelist REQUIRES it beside poolId; rfqs maps it to the requester; orderbook — the FILL SENDER each row's exclusivity is classified against: the taker account on a raw fill, the ForSelf adapter on a wrapper fill), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), settler (flows: orders by settler on the venue; kind=fills scopes the event scan to that settler’s generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's extraData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), oracleSalt (registry-oracle / derive-cork-pool on a nested-wire generation — the bytes32 salt of the pair's FIRST oracle wrapper, default zero; refused non-zero on flat), swapFeePercentage + unwindSwapFeePercentage (derive-cork-pool — 1e18 = 1%, default 0; PART OF THE POOL ID on a 10-field generation), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup on a FLAT-wire generation — EXACT BYTES, case-sensitive; a nested-wire registry keys denominations by unit ADDRESS: use address there), address (also registry-denominations on a nested-wire generation — the unit address), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter), excludeRequestPrefix (rfqs list: drop RFQs whose request_id starts with this LITERAL prefix server-side, 1–64 chars — 'healthcheck-' skips status-page heartbeats), underwriter (rfqs list: only RFQs this underwriter has ANSWERED — at least one stored answer row by that address, server-side; the answering side's mirror of account/requester, so an underwriter polls its own book in one call). Unknown keys are a teachable error, and keys are validated PER RESOURCE: a known key the named resource does not consume is refused with teaching that lists the resource's own keys (it would otherwise be silently unapplied)"
           },
           "since": {
             "type": "string",
@@ -442,7 +446,7 @@
                     "$ref": "#/$defs/Address"
                   },
                   "args": {
-                    "description": "the recipe's additionalData, raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)",
+                    "description": "the recipe's extraData (the 0.3.x wire's additionalData), raw hex passed verbatim into resolve (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe when no oracle is live; the fixed-rate recipe rejects any payload)",
                     "$ref": "#/$defs/Hex"
                   },
                   "argsUints": {
@@ -452,7 +456,7 @@
                     "items": {
                       "$ref": "#/$defs/UintStr"
                     },
-                    "description": "the recipe's additionalData as DECIMAL uint256 words, ABI-encoded for you in order (each becomes one 32-byte word — no hand-built hex). The liquidity recipe takes one word (anchorRate, 1e18 = 1.0); the impairment recipe takes three (anchorRate 1e18 = 1.0, durationSeconds, apySpreadPercentage 1e18 = 1% — a 10%/year spread is 10000000000000000000). Each recipe's own shape: cork_query resource:'registry-recipes'. Mutually exclusive with `args`"
+                    "description": "the recipe's extraData as DECIMAL uint256 words, ABI-encoded for you in order (each becomes one 32-byte word — no hand-built hex). The liquidity recipe takes one word (anchorRate, 1e18 = 1.0); the impairment recipe takes three (anchorRate 1e18 = 1.0, durationSeconds, apySpreadPercentage 1e18 = 1% — a 10%/year spread is 10000000000000000000). Each recipe's own shape: cork_query resource:'registry-recipes'. Mutually exclusive with `args`"
                   },
                   "rate": {
                     "description": "FIXED recipes (new path): the rate keying the FixedRateOracle (1e18 = 1.0). LEGACY path (legacy:true): the explicit rate to resolve percentage bands against",
@@ -472,7 +476,7 @@
                   "kind"
                 ],
                 "additionalProperties": false,
-                "description": "ask a recipe CONTRACT what four rate limits it would impose on a pair — a staticcall to recipe.resolve, THE step that produces the constraint a JIT order carries and signs (fill the order's recipe/constraint/additionalData from ONE call so they agree). Constraint values are ABSOLUTE rates, 1e18 = 1.0"
+                "description": "ask a recipe CONTRACT what four rate limits it would impose on a pair — a staticcall to recipe.resolve, THE step that produces the constraint a JIT order carries and signs (fill the order's recipe/constraint/extraData from ONE call so they agree). Constraint values are ABSOLUTE rates, 1e18 = 1.0"
               }
             ]
           },
@@ -486,6 +490,10 @@
               49222
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
           },
           "at": {
             "type": "object",
@@ -1069,6 +1077,10 @@
               49222
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
           },
           "account": {
             "description": "the initiating account. Funding legs pull from Bundler3's initiator at execution time, but this is ALSO the recipient of the sweep-back legs: for actions funded from a slippage CAP (any max* input), the bundle ends by returning the unspent remainder here, so it is not left on the adapter where anyone can take it. Set it to the address that actually funds the bundle",
@@ -1797,6 +1809,10 @@
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
           },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
+          },
           "account": {
             "$ref": "#/$defs/Address"
           },
@@ -1952,9 +1968,17 @@
                         "x-units": "D18{1}",
                         "$ref": "#/$defs/UintStr"
                       },
-                      "additionalData": {
-                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias",
                         "$ref": "#/$defs/Hex"
+                      },
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
                         "type": "object",
@@ -1995,17 +2019,17 @@
                           "rateChangeCapacityMax"
                         ],
                         "additionalProperties": false,
-                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/extraData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -2065,7 +2089,7 @@
                       "expiryTimestamp"
                     ],
                     "additionalProperties": false,
-                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool"
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
                   }
                 },
                 "required": [
@@ -2380,9 +2404,17 @@
                         "x-units": "D18{1}",
                         "$ref": "#/$defs/UintStr"
                       },
-                      "additionalData": {
-                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against. Defaults to 0x",
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias",
                         "$ref": "#/$defs/Hex"
+                      },
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
                         "type": "object",
@@ -2427,13 +2459,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -2678,18 +2710,26 @@
                         "description": "the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"
                       },
                       "additionalData": {
-                        "description": "recipe-specific bytes the constraint was derived from — committed as keccak256(additionalData)",
+                        "description": "recipe-specific bytes the constraint was derived from — committed as keccak256(additionalData). The BaseFiller struct keeps this name; `extraData` is accepted as the registry-side spelling of the same bytes (both present and different is refused)",
                         "$ref": "#/$defs/Hex"
+                      },
+                      "extraData": {
+                        "description": "the registry-side spelling of `additionalData` (the same recipe bytes; the 0.5.0 registry contracts renamed the member) — either name; both present and different is refused as invalid_order_terms",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "rollover 0.2-wire settlers only: the salt of the destination pair's FIRST oracle wrapper, part of the JITMarketParams commitment (defaults to the zero salt there); refused non-zero for an rc.2 settler, whose struct has no salt member",
+                        "$ref": "#/$defs/Bytes32"
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       }
@@ -2845,9 +2885,17 @@
                         "x-units": "D18{1}",
                         "$ref": "#/$defs/UintStr"
                       },
-                      "additionalData": {
-                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias",
                         "$ref": "#/$defs/Hex"
+                      },
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
                         "type": "object",
@@ -2888,17 +2936,17 @@
                           "rateChangeCapacityMax"
                         ],
                         "additionalProperties": false,
-                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/extraData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -2958,7 +3006,7 @@
                       "expiryTimestamp"
                     ],
                     "additionalProperties": false,
-                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. Omit entirely for a plain order on an existing pool"
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
                   },
                   "rungs": {
                     "minItems": 2,
@@ -3141,9 +3189,17 @@
                         "x-units": "D18{1}",
                         "$ref": "#/$defs/UintStr"
                       },
-                      "additionalData": {
-                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias",
                         "$ref": "#/$defs/Hex"
+                      },
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
                         "type": "object",
@@ -3184,17 +3240,17 @@
                           "rateChangeCapacityMax"
                         ],
                         "additionalProperties": false,
-                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                        "description": "the four rate limits the order carries (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY, pinned at signing. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/extraData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this fill creates the pool",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -3245,7 +3301,7 @@
                       }
                     },
                     "additionalProperties": false,
-                    "description": "the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; additionalData is likewise DERIVED from that template's oracle_params when omitted (cork-inline-liquidity/1 → the anchor word, cork-inline-impairment/1 → its three words, so an RFQ carrying a complete block needs NO jitMarket at all) and passes through as an override when given, as do rateOverride/constraint/fees/enableJitMint/permits"
+                    "description": "the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; extraData is likewise DERIVED from that template's oracle_params when omitted (cork-inline-liquidity/1 → the anchor word, cork-inline-impairment/1 → its three words, so an RFQ carrying a complete block needs NO jitMarket at all) and passes through as an override when given, as do rateOverride/constraint/fees/oracleSalt/enableJitMint/permits"
                   },
                   "usePermit2": {
                     "type": "boolean",
@@ -3517,6 +3573,10 @@
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
           },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
+          },
           "clientRequestId": {
             "type": "string",
             "minLength": 8,
@@ -3545,6 +3605,10 @@
                       "nav"
                     ],
                     "description": "which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"
+                  },
+                  "oracleSalt": {
+                    "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                    "$ref": "#/$defs/Bytes32"
                   }
                 },
                 "required": [
@@ -3553,7 +3617,7 @@
                   "referenceAsset"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned MarketRegistry.deploy(ca, ref, mode) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). Pair order matters: collateral first"
+                "description": "unsigned MarketRegistry.deploy(ca, ref, mode[, oracleSalt]) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). The nested-wire registry (0.5.0, the phoenix/v0.4-rc.1 primary) takes the salt; the flat one does not. Pair order matters: collateral first"
               },
               {
                 "type": "object",
@@ -3609,9 +3673,17 @@
                     "x-units": "D18{1}",
                     "$ref": "#/$defs/UintStr"
                   },
-                  "additionalData": {
-                    "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; the fixed-rate recipe rejects any payload). Defaults to 0x",
+                  "extraData": {
+                    "description": "the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias",
                     "$ref": "#/$defs/Hex"
+                  },
+                  "additionalData": {
+                    "description": "DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "oracleSalt": {
+                    "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                    "$ref": "#/$defs/Bytes32"
                   },
                   "constraint": {
                     "type": "object",
@@ -3652,17 +3724,17 @@
                       "rateChangeCapacityMax"
                     ],
                     "additionalProperties": false,
-                    "description": "the four rate limits the pool is created with (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/additionalData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
+                    "description": "the four rate limits the pool is created with (ABSOLUTE, 1e18 = 1.0) — PART OF POOL IDENTITY. Omit to auto-resolve via recipe.resolve at prepare time (needs an RPC), guaranteeing recipe/constraint/extraData agree; pass explicitly (from cork_compute recipe-rate-constraint) for offline byte-building"
                   },
                   "swapFeePercentage": {
                     "default": "0",
-                    "description": "PERCENTAGE, 1e18 = 1% (max 5e18 = 5%) — consumed only if this call creates the pool",
+                    "description": "PERCENTAGE, 1e18 = 1% — consumed only if this call creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                     "x-units": "D18{%}",
                     "$ref": "#/$defs/UintStr"
                   },
                   "unwindSwapFeePercentage": {
                     "default": "0",
-                    "description": "PERCENTAGE, 1e18 = 1% (max 5e18) — creation only",
+                    "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                     "x-units": "D18{%}",
                     "$ref": "#/$defs/UintStr"
                   }
@@ -3674,7 +3746,7 @@
                   "expiryTimestamp"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"
+                "description": "unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"
               }
             ]
           },
@@ -3698,6 +3770,10 @@
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]{40}$",
             "description": "EVM address"
+          },
+          "Bytes32": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
           },
           "UintStr": {
             "type": "string",
@@ -3985,6 +4061,10 @@
               49222
             ],
             "description": "1=mainnet,42161=arbitrum,8453=base,11155111=sepolia,49222=cork-virtual-staging"
+          },
+          "generation": {
+            "type": "string",
+            "description": "target a specific contract GENERATION by its label (cork_query protocol-config lists the chain's generations; e.g. 'phoenix/v0.4-rc.1', 'phoenix/v0.3-rc.1') — omitted = the chain's PRIMARY (the newest Distribution set). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry). An unknown label refuses generation_unknown with the list; a read-only set refuses a PREPARE with generation_read_only"
           },
           "format": {
             "default": "concise",

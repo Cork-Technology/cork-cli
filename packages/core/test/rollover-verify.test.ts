@@ -160,6 +160,21 @@ describe("status leg (settler orderStatus view)", () => {
     expect(env.provenance.source).toBe("indexer");
     expect(env.warnings.some((w) => w.code === "venue_reported")).toBe(true);
   });
+
+  it("a venue row naming the 0.2 ExactSettler (phoenix/v0.4-rc.1, the primary) gets its orderStatus read on THAT settler and is attributed to its generation", async () => {
+    // The 0.2 settlers are configured generations like any other: the provenance gate admits
+    // them, the read goes to the address the row named (not the primary's partner, not rc.2),
+    // and the result carries the generation label — the same leg the rc.2 rows get.
+    const settler02 = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E";
+    const asked: string[] = [];
+    const env = await track(stubCtx({ venueStatus: "SETTLED", chainStatus: 2, settler: settler02, onOrderStatus: (a) => asked.push(a) }));
+    expect(env.state).toBe("ok");
+    expect(env.provenance.source).toBe("chain");
+    expect(asked).toEqual([settler02.toLowerCase()]);
+    const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
+    expect(v).toMatchObject({ chainStatus: "Settled", consistent: true, settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
+    expect(String(v.settler).toLowerCase()).toBe(settler02.toLowerCase());
+  });
 });
 
 describe("event-history leg (HyperRPC-shaped logs endpoint)", () => {

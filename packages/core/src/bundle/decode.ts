@@ -18,7 +18,7 @@ import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
 import { bundlerLegAbi } from "./legs.ts";
 import { forSelfAbi } from "../forself.ts";
-import { marketCreatorAbi, marketRegistryAbi } from "../market-registry.ts";
+import { marketCreatorAbi, marketCreatorNestedAbi, marketRegistryAbi, marketRegistryNestedAbi } from "../market-registry.ts";
 import { decodeLopCall, lopCallName, type DecodedLopCall } from "../orders.ts";
 import type { LopLegLabel } from "../handlers/decode.ts";
 import { decodeMulticall, isBundlerMulticall, ZERO_CALLBACK_HASH, type Call } from "./bundler3.ts";
@@ -98,12 +98,27 @@ const ADAPTER_LEG_FUNCTIONS = new Set(["erc20TransferFrom", "permit2TransferFrom
 // caller passes it (the ForSelf prepare does, after verifying its bindings).
 const FORSELF_SELECTORS = selectorMap(forSelfAbi);
 // Market-infrastructure calls this tool's own cork_prepare_market emits: the registry's two
-// oracle deploys and the creator's createNewPool. Built from the SAME ABIs the builders encode
-// with, filtered to the state-changing entrypoints — one declaration site, no drift. (The
-// controller's createNewPool(PoolCreationParams) has a different selector and stays
-// unrecognized: nothing this tool prepares calls the controller directly.)
+// oracle deploys and the creator's createNewPool, on BOTH implemented wires (flat: deploy(3) +
+// the periphery creator's 9-field params; nested: deploy(4) with the oracle salt + the 0.5.0
+// creator's 10-field params, selector 0x59c8eb4c). Built from the SAME ABIs the builders encode
+// with, filtered to the state-changing entrypoints and de-duplicated by selector (the fixed-rate
+// deploy is byte-identical across wires) — one declaration site, no drift. viem picks the
+// overload by selector, so one merged ABI labels either wire's bytes. (The controller's
+// createNewPool(PoolCreationParams) has a different selector and stays unrecognized: nothing
+// this tool prepares calls the controller directly.)
 const MARKET_FUNCTION_NAMES = new Set(["deploy", "deployFixedRateOracle", "createNewPool"]);
-const MARKET_ABI: readonly AbiFunction[] = ([...marketRegistryAbi, ...marketCreatorAbi] as readonly unknown[]).filter((f): f is AbiFunction => (f as { type?: string }).type === "function" && MARKET_FUNCTION_NAMES.has((f as AbiFunction).name));
+const MARKET_ABI: readonly AbiFunction[] = (() => {
+  const seen = new Set<string>();
+  const out: AbiFunction[] = [];
+  for (const f of [...marketRegistryAbi, ...marketCreatorAbi, ...marketRegistryNestedAbi, ...marketCreatorNestedAbi] as readonly unknown[]) {
+    if ((f as { type?: string }).type !== "function" || !MARKET_FUNCTION_NAMES.has((f as AbiFunction).name)) continue;
+    const sel = toFunctionSelector(f as AbiFunction);
+    if (seen.has(sel)) continue;
+    seen.add(sel);
+    out.push(f as AbiFunction);
+  }
+  return out;
+})();
 const MARKET_SELECTORS = selectorMap(MARKET_ABI);
 const CREATOR_FUNCTIONS = new Set(["createNewPool"]);
 

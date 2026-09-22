@@ -260,7 +260,7 @@ describe("decodeMakerExtensionContext — from the signed bytes, never throwing"
     recipe: "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
     rateOverride: 0n,
     constraint: { rateMin: 1n, rateMax: 2n * 10n ** 18n, rateChangePerDayMax: 10n ** 18n, rateChangeCapacityMax: 3n * 10n ** 18n },
-    additionalData: "0x",
+    extraData: "0x",
     swapFeePercentage: 0n,
     unwindSwapFeePercentage: 0n,
     enableJitMint: true,
@@ -273,13 +273,13 @@ describe("decodeMakerExtensionContext — from the signed bytes, never throwing"
   });
 
   it("a JIT extension with a permit: adapter, collateral, mint flag, and the permit-derived cST prediction", () => {
-    const ext = buildJitExtension(ADAPTER, encodeJitExtraData(jitParams, [permit]));
+    const ext = buildJitExtension(ADAPTER, encodeJitExtraData("flat", jitParams, [permit]));
     const ctx = decodeMakerExtensionContext(ext);
     expect(ctx.jit).toMatchObject({ adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: true, predictedCorkSwapToken: ASSET, permitTokens: [ASSET] });
   });
 
   it("a JIT extension WITHOUT permits: the created token is unknowable from the bytes (null prediction)", () => {
-    const ctx = decodeMakerExtensionContext(buildJitExtension(ADAPTER, encodeJitExtraData(jitParams, [])));
+    const ctx = decodeMakerExtensionContext(buildJitExtension(ADAPTER, encodeJitExtraData("flat", jitParams, [])));
     expect(ctx.jit).toMatchObject({ predictedCorkSwapToken: null, permitTokens: [] });
   });
 

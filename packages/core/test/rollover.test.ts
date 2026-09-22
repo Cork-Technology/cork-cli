@@ -6,7 +6,7 @@
 // conventions, and the runTool integration surface (settler classification incl. the retired
 // July generation, the venue-admission battery, determinism, gating).
 import { describe, expect, it } from "vitest";
-import { concatHex, keccak256, zeroHash } from "viem";
+import { concatHex, hashDomain, keccak256, stringToHex, zeroHash } from "viem";
 import {
   buildRolloverIntent,
   computeOrderDigest,
@@ -17,7 +17,14 @@ import {
   CALL_TYPEHASH,
   encodeOrderData,
   hashJitMarketParams,
+  deriveRolloverJitPool,
+  jitMarketParamsWireOf,
+  phoenixWireOfRolloverWire,
+  rolloverGenerations,
+  RolloverJitWireError,
   JIT_MARKET_PARAMS_TYPEHASH,
+  JIT_MARKET_PARAMS_TYPEHASHES,
+  JIT_MARKET_PARAMS_TYPE_STRINGS,
   ORDER_DATA_ABI_LENGTH,
   ORDER_DATA_TYPEHASH,
   ROLLOVER_INTENT_TYPEHASH,
@@ -480,7 +487,7 @@ describe("jitMarketHash semantics (rc.2: the field is signed either way)", () =>
   });
 });
 
-describe("hashJitMarketParams (BaseFiller.hashJITMarketParams @ v0.1.0-rc.2)", () => {
+describe("hashJitMarketParams (BaseFiller.hashJITMarketParams @ v0.1.0-rc.2 — the rc.2 wire)", () => {
   const params = {
     collateralAsset: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" as const,
     referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610" as const,
@@ -497,16 +504,327 @@ describe("hashJitMarketParams (BaseFiller.hashJITMarketParams @ v0.1.0-rc.2)", (
   };
 
   it("matches the forge-generated golden vector", () => {
-    expect(hashJitMarketParams(params)).toBe("0xa0ad01ccd8fb743078f541f703bd84b28e14c673a11af2ba25af5be90eae1d19");
+    expect(hashJitMarketParams(params, "rc.2")).toBe("0xa0ad01ccd8fb743078f541f703bd84b28e14c673a11af2ba25af5be90eae1d19");
   });
 
   it("additionalData is committed via keccak256, and every field is commitment-bearing", () => {
-    const base = hashJitMarketParams(params);
-    expect(hashJitMarketParams({ ...params, additionalData: "0x" })).not.toBe(base);
+    const base = hashJitMarketParams(params, "rc.2");
+    expect(hashJitMarketParams({ ...params, additionalData: "0x" }, "rc.2")).not.toBe(base);
     // rateMin/rateMax swapped keeps every VALUE but must change the hash (field-order mutant)
-    expect(hashJitMarketParams({ ...params, rateMin: params.rateMax, rateMax: params.rateMin })).not.toBe(base);
-    expect(hashJitMarketParams({ ...params, swapFeePercentage: params.unwindSwapFeePercentage, unwindSwapFeePercentage: params.swapFeePercentage })).not.toBe(base);
-    expect(hashJitMarketParams({ ...params, rateOverride: 1n })).not.toBe(base);
+    expect(hashJitMarketParams({ ...params, rateMin: params.rateMax, rateMax: params.rateMin }, "rc.2")).not.toBe(base);
+    expect(hashJitMarketParams({ ...params, swapFeePercentage: params.unwindSwapFeePercentage, unwindSwapFeePercentage: params.swapFeePercentage }, "rc.2")).not.toBe(base);
+    expect(hashJitMarketParams({ ...params, rateOverride: 1n }, "rc.2")).not.toBe(base);
+  });
+
+  it("an explicit ZERO oracleSalt on rc.2 is the same commitment as none (the member does not exist there); a NON-ZERO salt is refused", () => {
+    expect(hashJitMarketParams({ ...params, oracleSalt: zeroHash }, "rc.2")).toBe(hashJitMarketParams(params, "rc.2"));
+    expect(() => hashJitMarketParams({ ...params, oracleSalt: `0x${"11".repeat(32)}` }, "rc.2")).toThrow(RolloverJitWireError);
+    expect(() => hashJitMarketParams({ ...params, oracleSalt: `0x${"11".repeat(32)}` }, "rc.2")).toThrow(/no oracleSalt member/);
+  });
+});
+
+// ── 0.2 wire (rollover 0.2.0, Distribution phoenix/v0.4-rc.1) ─────────────────────────────────
+// The SAMPLE below is the one `BaseFiller.hashJITMarketParams` was called with on the LIVE
+// Arbitrum BaseFiller 0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224 (2026-09-22, live-vectors
+// capture): the golden hash is what the deployed contract returned, not a local derivation.
+const SAMPLE_02 = {
+  collateralAsset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const, // USDC
+  referenceAsset: "0x9c6864105AEC23388C89600046213a44C384c831" as const,
+  expiryTimestamp: 1_800_000_000n,
+  recipe: "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9" as const, // ApySpreadImpairmentRecipe 0.5.0
+  rateOverride: 0n,
+  rateMin: 10n ** 18n,
+  rateMax: 2n * 10n ** 18n,
+  rateChangePerDayMax: 10n ** 16n,
+  rateChangeCapacityMax: 5n * 10n ** 16n,
+  additionalData: "0xaabbcc" as const,
+  oracleSalt: `0x${"11".repeat(32)}` as const,
+  swapFeePercentage: 10n ** 18n,
+  unwindSwapFeePercentage: 2n * 10n ** 18n,
+};
+const GOLDEN_02 = "0xcaaaf1699c5fc16efd91581a4d24d24976eb9a29be5dac39b9a507a010761c62";
+
+describe("JITMarketParams typehash per wire (Typehashes.sol @ v0.1.0-rc.2 and @ 0.2.0)", () => {
+  it("the two preimages differ by exactly the `bytes32 oracleSalt` member after `bytes additionalData`", () => {
+    const rc2 = JIT_MARKET_PARAMS_TYPE_STRINGS["rc.2"];
+    const v02 = JIT_MARKET_PARAMS_TYPE_STRINGS["0.2"];
+    expect(rc2).not.toContain("oracleSalt");
+    expect(v02.replace("bytes additionalData,bytes32 oracleSalt,", "bytes additionalData,")).toBe(rc2);
+    expect(v02).toBe(
+      "JITMarketParams(address collateralAsset,address referenceAsset,uint256 expiryTimestamp,address recipe,uint256 rateOverride,uint256 rateMin,uint256 rateMax,uint256 rateChangePerDayMax,uint256 rateChangeCapacityMax,bytes additionalData,bytes32 oracleSalt,uint256 swapFeePercentage,uint256 unwindSwapFeePercentage)",
+    );
+  });
+  it("each typehash is keccak256 of ITS wire's preimage; the historical constant is the rc.2 one", () => {
+    expect(JIT_MARKET_PARAMS_TYPEHASHES["rc.2"]).toBe(keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRINGS["rc.2"])));
+    expect(JIT_MARKET_PARAMS_TYPEHASHES["0.2"]).toBe(keccak256(stringToHex(JIT_MARKET_PARAMS_TYPE_STRINGS["0.2"])));
+    expect(JIT_MARKET_PARAMS_TYPEHASHES["0.2"]).toBe("0xa968732d6553ee65628eeb5c4711e46564468369219d46b8eed82b2b04b4baf7");
+    expect(JIT_MARKET_PARAMS_TYPEHASHES["rc.2"]).toBe(JIT_MARKET_PARAMS_TYPEHASH);
+    expect(JIT_MARKET_PARAMS_TYPEHASHES["rc.2"]).not.toBe(JIT_MARKET_PARAMS_TYPEHASHES["0.2"]);
+  });
+  it("rc.1 has no JIT commitment wire — refused, never defaulted to a layout it never spoke", () => {
+    expect(() => jitMarketParamsWireOf("rc.1")).toThrow(RolloverJitWireError);
+    expect(jitMarketParamsWireOf("rc.2")).toBe("rc.2");
+    expect(jitMarketParamsWireOf("0.2")).toBe("0.2");
+    expect(() => hashJitMarketParams(SAMPLE_02, "rc.1")).toThrow(/rc\.1/);
+  });
+});
+
+describe("hashJitMarketParams — 0.2 wire (BaseFiller.hashJITMarketParams @ 0.2.0, chain-captured golden)", () => {
+  it("matches the hash the LIVE 0.2 BaseFiller returned for the sample (42161, 2026-09-22)", () => {
+    expect(hashJitMarketParams(SAMPLE_02, "0.2")).toBe(GOLDEN_02);
+  });
+  it("the same instruction hashed on the rc.2 layout is a DIFFERENT commitment (the mismatch class BaseFiller__JitMarketHashMismatch guards)", () => {
+    const { oracleSalt: _salt, ...unsalted } = SAMPLE_02;
+    expect(hashJitMarketParams(unsalted, "rc.2")).not.toBe(GOLDEN_02);
+    // …and the zero salt on 0.2 is not the rc.2 hash either: the typehash word differs too.
+    expect(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2")).not.toBe(hashJitMarketParams(unsalted, "rc.2"));
+  });
+  it("oracleSalt is REQUIRED on 0.2 and commitment-bearing in ITS slot (a salt moved into the additionalData word is a different hash)", () => {
+    const { oracleSalt: _salt, ...unsalted } = SAMPLE_02;
+    expect(() => hashJitMarketParams(unsalted, "0.2")).toThrow(RolloverJitWireError);
+    expect(() => hashJitMarketParams(unsalted, "0.2")).toThrow(/REQUIRED/);
+    expect(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2")).not.toBe(GOLDEN_02);
+    // Position: salt and additionalData-hash words swapped keeps every value, changes the hash.
+    expect(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: keccak256(SAMPLE_02.additionalData), additionalData: "0x" }, "0.2")).not.toBe(GOLDEN_02);
+    // Every other field still bears on the commitment.
+    expect(hashJitMarketParams({ ...SAMPLE_02, swapFeePercentage: SAMPLE_02.unwindSwapFeePercentage, unwindSwapFeePercentage: SAMPLE_02.swapFeePercentage }, "0.2")).not.toBe(GOLDEN_02);
+    expect(hashJitMarketParams({ ...SAMPLE_02, rateMin: SAMPLE_02.rateMax, rateMax: SAMPLE_02.rateMin }, "0.2")).not.toBe(GOLDEN_02);
+    expect(hashJitMarketParams({ ...SAMPLE_02, additionalData: "0x" }, "0.2")).not.toBe(GOLDEN_02);
+  });
+  it("the chain-captured commitment lands in rolloverParams.jitMarketHash byte-exact (builder path)", () => {
+    const built = buildRolloverIntent({
+      chainId: 42161,
+      user: CLONE,
+      settler: CANDIDATE_EXACT,
+      rolloverContract: CLONE,
+      srcCstToken: SRC_CST,
+      dstCstToken: DST_CST,
+      premiumToken: PREMIUM,
+      srcPoolId: SRC_POOL,
+      dstPoolId: DST_POOL,
+      orderSize: 250n * 10n ** 18n,
+      minPremiumPerShare: 12n * 10n ** 15n,
+      openDeadline: NOW + 3_600n,
+      fillDeadline: NOW + 86_400n,
+      jitMarketHash: hashJitMarketParams(SAMPLE_02, "0.2"),
+      clientRequestId: "test-roll-02-golden",
+    });
+    expect(built.order.rolloverParams.jitMarketHash).toBe(GOLDEN_02);
+    expect(built.venuePost.order.rolloverParams.jitMarketHash).toBe(GOLDEN_02);
+    // OrderData is wire-independent: the same order digests identically under a 0.2 settler.
+    expect(built.orderDigest).toBe(computeOrderDigest(42161, built.order));
+  });
+});
+
+describe("the 0.2 settlers (phoenix/v0.4-rc.1) — config pins + ERC-5267 domain (live read 2026-09-22: CorkSettler/1.0.0, salt 0, on both chains)", () => {
+  it("both chains configure the 0.2 generation as the PRIMARY rollover, wire 0.2, at the identical CREATE2 addresses", async () => {
+    for (const chainId of [42161, 8453] as const) {
+      const dep = (await resolveRollover(chainId)).rollover!;
+      const g = rolloverGenerations(dep).find((x) => x.exactSettler.toLowerCase() === CANDIDATE_EXACT.toLowerCase());
+      expect(g).toMatchObject({ label: "phoenix/v0.4-rc.1", wire: "0.2", status: "active", primary: true, partialSettler: CANDIDATE_PARTIAL, factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", settlerDomain: { name: "CorkSettler", version: "1.0.0" } });
+      expect(g!.seededAtBlock).toBe(chainId === 42161 ? 503918966 : 51153216);
+    }
+  });
+  it("corkSettlerDomainSeparator for the new settlers equals the ERC-5267 domain they report (independent hashDomain)", () => {
+    for (const chainId of [42161, 8453] as const) {
+      for (const settler of [CANDIDATE_EXACT, CANDIDATE_PARTIAL]) {
+        const expected = hashDomain({
+          domain: { name: "CorkSettler", version: "1.0.0", chainId: BigInt(chainId), verifyingContract: settler },
+          types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }] },
+        });
+        expect(corkSettlerDomainSeparator(chainId, settler)).toBe(expected);
+      }
+    }
+    // Chain-distinct, settler-distinct: no two of the four collide.
+    const all = ([42161, 8453] as const).flatMap((c) => [CANDIDATE_EXACT, CANDIDATE_PARTIAL].map((s) => corkSettlerDomainSeparator(c, s)));
+    expect(new Set(all).size).toBe(4);
+  });
+});
+
+describe("deriveRolloverJitPool — the destination pool id on the pool manager's wire", () => {
+  const base = {
+    collateralAsset: SAMPLE_02.collateralAsset,
+    referenceAsset: SAMPLE_02.referenceAsset,
+    expiryTimestamp: SAMPLE_02.expiryTimestamp,
+    rateMin: SAMPLE_02.rateMin,
+    rateMax: SAMPLE_02.rateMax,
+    rateChangePerDayMax: SAMPLE_02.rateChangePerDayMax,
+    rateChangeCapacityMax: SAMPLE_02.rateChangeCapacityMax,
+    oracle: "0x2ba2103a37c4cff9dbb96e6f74513923d960d757" as const,
+    swapFeePercentage: SAMPLE_02.swapFeePercentage,
+    unwindSwapFeePercentage: SAMPLE_02.unwindSwapFeePercentage,
+  };
+  it("10-field hashes the fees INTO the id (equals the independently golden-tested computeMarketId); 8-field ignores them", () => {
+    const ten = deriveRolloverJitPool({ ...base, phoenixWire: "10-field" });
+    const eight = deriveRolloverJitPool({ ...base, phoenixWire: "8-field" });
+    expect(ten.poolId).toBe(computeMarketId({ ...base, rateOracle: base.oracle, swapFeePercentage: base.swapFeePercentage, unwindSwapFeePercentage: base.unwindSwapFeePercentage } as never, "10-field"));
+    const { oracle: _o, swapFeePercentage: _s, unwindSwapFeePercentage: _u, ...eightFields } = base;
+    expect(eight.poolId).toBe(computeMarketId({ ...eightFields, rateOracle: base.oracle }, "8-field"));
+    expect(ten.poolId).not.toBe(eight.poolId);
+    expect("swapFeePercentage" in ten.market).toBe(true);
+    expect("swapFeePercentage" in eight.market).toBe(false);
+    // Fees swapped = another 10-field pool; on 8-field the fees are not identity at all.
+    expect(deriveRolloverJitPool({ ...base, phoenixWire: "10-field", swapFeePercentage: base.unwindSwapFeePercentage, unwindSwapFeePercentage: base.swapFeePercentage }).poolId).not.toBe(ten.poolId);
+    expect(deriveRolloverJitPool({ ...base, phoenixWire: "8-field", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n }).poolId).toBe(eight.poolId);
+  });
+  it("the rollover-wire fallback maps 0.2 → 10-field, rc.2/rc.1 → 8-field (the Distribution binding of each BaseFiller)", () => {
+    expect(phoenixWireOfRolloverWire("0.2")).toBe("10-field");
+    expect(phoenixWireOfRolloverWire("rc.2")).toBe("8-field");
+    expect(phoenixWireOfRolloverWire("rc.1")).toBe("8-field");
+  });
+});
+
+describe("runTool rollover-intent — the JIT commitment wire follows the SETTLER's generation, not the chain primary", () => {
+  const jitMarket = {
+    collateralAsset: SAMPLE_02.collateralAsset,
+    referenceAsset: SAMPLE_02.referenceAsset,
+    expiryTimestamp: String(SAMPLE_02.expiryTimestamp),
+    recipe: SAMPLE_02.recipe,
+    constraint: {
+      rateMin: String(SAMPLE_02.rateMin),
+      rateMax: String(SAMPLE_02.rateMax),
+      rateChangePerDayMax: String(SAMPLE_02.rateChangePerDayMax),
+      rateChangeCapacityMax: String(SAMPLE_02.rateChangeCapacityMax),
+    },
+    additionalData: SAMPLE_02.additionalData,
+    swapFeePercentage: String(SAMPLE_02.swapFeePercentage),
+    unwindSwapFeePercentage: String(SAMPLE_02.unwindSwapFeePercentage),
+  };
+  const base = {
+    chainId: 42161,
+    account: CLONE,
+    clientRequestId: "test-roll-02-wire",
+    action: {
+      type: "rollover-intent",
+      settler: CANDIDATE_EXACT,
+      rolloverContract: CLONE,
+      srcPoolId: SRC_POOL,
+      dstPoolId: DST_POOL,
+      srcCstToken: SRC_CST,
+      dstCstToken: DST_CST,
+      premiumToken: PREMIUM,
+      orderSize: "250000000000000000000",
+      minPremiumPerShare: "12000000000000000",
+      openDeadline: String(NOW + 3_600n),
+      fillDeadline: String(NOW + 86_400n),
+      jitMarket,
+    },
+  };
+  const hashOf = (env: { data: unknown }) => ((env.data as Record<string, unknown>).venuePost as { order: { rolloverParams: { jitMarketHash: string } } }).order.rolloverParams.jitMarketHash;
+  const { oracleSalt: _salt, ...unsalted } = SAMPLE_02;
+
+  it("a 0.2 settler (the primary) commits on the 0.2 layout with the ZERO default salt, echoes jitMarketWire, and the notice names the layout", async () => {
+    const env = await runTool("cork_prepare_orders", base, ctx);
+    expect(env.state).toBe("ok");
+    expect(env.data).toMatchObject({ settlerGeneration: "phoenix/v0.4-rc.1", settlerKind: "EXACT", jitMarketWire: "0.2" });
+    expect(hashOf(env)).toBe(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2"));
+    expect(hashOf(env)).not.toBe(hashJitMarketParams(unsalted, "rc.2"));
+    // The schema types no oracleSalt yet, so the chain-captured salted golden is reachable only
+    // through the builder (tested above); the handler's default salt is the zero word.
+    expect(hashOf(env)).not.toBe(GOLDEN_02);
+    const notice = env.warnings.find((w) => w.code === "jit_market_notice");
+    expect(notice?.message).toContain("0.2 JITMarketParams layout");
+    expect(notice?.message).toContain("oracleSalt committed");
+  });
+
+  it("an rc.2 settler (NOT the primary) commits on the rc.2 layout — the same instruction, a different hash", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: EXACT } }, ctx);
+    expect(env.state).toBe("ok");
+    expect(env.data).toMatchObject({ settlerGeneration: "phoenix/v0.3-rc.1", jitMarketWire: "rc.2" });
+    expect(hashOf(env)).toBe(hashJitMarketParams(unsalted, "rc.2"));
+    expect(hashOf(env)).not.toBe(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2"));
+    expect(env.warnings.find((w) => w.code === "jit_market_notice")?.message).toContain("no oracleSalt member");
+  });
+
+  it("a 0.2 settler + the live-vectors oracleSalt (0x11…11) commits to the CHAIN-CAPTURED hash — BaseFiller.hashJITMarketParams on 42161, through runTool", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(hashOf(env)).toBe(GOLDEN_02);
+    expect(GOLDEN_02).toBe("0xcaaaf1699c5fc16efd91581a4d24d24976eb9a29be5dac39b9a507a010761c62");
+    // `extraData` is the registry-side spelling of the same bytes: equal to additionalData it is
+    // accepted; different, the two are two instructions and refuse.
+    const alias = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: jitMarket.additionalData, oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
+    expect(hashOf(alias)).toBe(GOLDEN_02);
+    const twoPayloads = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
+    expect(twoPayloads.state).toBe("unavailable");
+    expect(twoPayloads.warnings[0]?.code).toBe("invalid_order_terms");
+  });
+
+  it("the 0.2 PartialSettler (allowPartialFills) takes the 0.2 wire too; the wire rides on a plain order as well (no jitMarket)", async () => {
+    const partial = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: CANDIDATE_PARTIAL, allowPartialFills: true } }, ctx);
+    expect(partial.state).toBe("ok");
+    expect(partial.data).toMatchObject({ settlerKind: "PARTIAL", jitMarketWire: "0.2" });
+    const { jitMarket: _jm, ...plain } = base.action;
+    const env = await runTool("cork_prepare_orders", { ...base, action: plain }, ctx);
+    expect(env.state).toBe("ok");
+    expect(env.data).toMatchObject({ jitMarketWire: "0.2" });
+    expect(hashOf(env)).toBe(ZERO_JIT_MARKET_HASH);
+    expect(env.warnings.some((w) => w.code === "jit_market_notice")).toBe(false);
+  });
+
+  it("a pre-computed jitMarketHash is signed verbatim, and the notice says which layout it must have been produced on", async () => {
+    const { jitMarket: _jm, ...plain } = base.action;
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...plain, jitMarketHash: GOLDEN_02 } }, ctx);
+    expect(env.state).toBe("ok");
+    expect(hashOf(env)).toBe(GOLDEN_02);
+    expect(env.warnings.find((w) => w.code === "jit_market_notice")?.message).toContain("BaseFiller__JitMarketHashMismatch");
+  });
+
+  it("a RETIRED rc.1 settler with a jitMarket is refused settler_retired BEFORE any hashing (rc.1 has no commitment wire)", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: RETIRED_EXACT } }, ctx);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("settler_retired");
+    expect(env.warnings[0]?.message).toContain(CANDIDATE_EXACT);
+  });
+
+  it("an UNRECOGNIZED settler falls back to the PRIMARY generation's wire (0.2) and says the address is unvouched", async () => {
+    const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: "0x00000000000000000000000000000000DeaDBeef" } }, ctx);
+    expect(env.state).toBe("ok");
+    expect(env.data).toMatchObject({ jitMarketWire: "0.2" });
+    expect(env.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
+    expect(hashOf(env)).toBe(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2"));
+  });
+
+  it("Base (8453) mirrors Arbitrum: the same 0.2 settler address, the same wire, a chain-distinct digest", async () => {
+    const arb = await runTool("cork_prepare_orders", base, ctx);
+    const bas = await runTool("cork_prepare_orders", { ...base, chainId: 8453 }, ctx);
+    expect(bas.state).toBe("ok");
+    expect(bas.data).toMatchObject({ settlerGeneration: "phoenix/v0.4-rc.1", jitMarketWire: "0.2" });
+    expect(hashOf(bas)).toBe(hashOf(arb)); // the commitment has no chain in it
+    expect((bas.data as Record<string, unknown>).orderDigest).not.toBe((arb.data as Record<string, unknown>).orderDigest); // the domain does
+  });
+
+  it("the pool-identity cross-check runs against the SETTLER generation's registry: a 0.2 settler derives the 10-field pool through the nested 0.4 registry (fees in the id), an rc.2 settler the 8-field pool through the flat 0.3.3 registry", async () => {
+    // The registry the branch binds is the settler's generation's (never the chain primary's):
+    // a 0.2 settler lives in phoenix/v0.4-rc.1 (nested wire, 10-field manager), an rc.2 settler in
+    // phoenix/v0.3-rc.1 (flat wire, 8-field manager). Each derives its own pool id; a dstPoolId
+    // from the other width warns.
+    const ORACLE_02 = "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
+    const registryStub = (c: { functionName: string }) => {
+      if (c.functionName === "isRecipe") return true;
+      if (c.functionName === "source") return 1;
+      if (c.functionName === "lookupWrapper") return ORACLE_02;
+      if (c.functionName === "rate") return 10n ** 18n;
+      return undefined;
+    };
+    const rpcCtx: HandlerContext = { nowSeconds: NOW, resolveRpc: stubRpc(registryStub) };
+    const legs = { collateralAsset: SAMPLE_02.collateralAsset, referenceAsset: SAMPLE_02.referenceAsset, expiryTimestamp: SAMPLE_02.expiryTimestamp, rateMin: SAMPLE_02.rateMin, rateMax: SAMPLE_02.rateMax, rateChangePerDayMax: SAMPLE_02.rateChangePerDayMax, rateChangeCapacityMax: SAMPLE_02.rateChangeCapacityMax, oracle: ORACLE_02 as `0x${string}`, swapFeePercentage: SAMPLE_02.swapFeePercentage, unwindSwapFeePercentage: SAMPLE_02.unwindSwapFeePercentage };
+    const tenField = deriveRolloverJitPool({ ...legs, phoenixWire: "10-field" }).poolId;
+    const eightField = deriveRolloverJitPool({ ...legs, phoenixWire: "8-field" }).poolId;
+    expect(tenField).not.toBe(eightField);
+    // 0.2 settler + the 10-field id: no warning; the 8-field id: the mismatch names the 10-field width.
+    const ok02 = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, dstPoolId: tenField } }, rpcCtx);
+    expect(ok02.state).toBe("ok");
+    expect(ok02.data).toMatchObject({ jitMarketWire: "0.2" });
+    expect(ok02.warnings.some((w) => w.code === "jit_pool_mismatch")).toBe(false);
+    const bad02 = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, dstPoolId: eightField } }, rpcCtx);
+    expect(bad02.warnings.find((w) => w.code === "jit_pool_mismatch")?.message).toContain("10-field Market");
+    // The rc.2 settler's set is the flat registry's set: its cross-check derives the 8-field pool.
+    const rc2 = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: EXACT, dstPoolId: tenField } }, rpcCtx);
+    expect(rc2.state).toBe("ok");
+    expect(rc2.warnings.find((w) => w.code === "jit_pool_mismatch")?.message).toContain("8-field Market");
+    const rc2ok = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: EXACT, dstPoolId: eightField } }, rpcCtx);
+    expect(rc2ok.warnings.some((w) => w.code === "jit_pool_mismatch")).toBe(false);
   });
 });
 

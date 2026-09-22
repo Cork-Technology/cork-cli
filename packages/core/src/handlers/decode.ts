@@ -3,7 +3,7 @@
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type DecodedMakerTraits, type LopOrder } from "../orders.ts";
-import { decodeJitExtension, type ResolvedConstraint } from "../market-registry.ts";
+import { decodeJitExtraData, jitExtensionTarget, type ResolvedConstraint } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
@@ -11,7 +11,7 @@ import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTar
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveGenerations, resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
-import { marketRegistryForWire } from "../generations.ts";
+import type { MarketRegistryWire } from "../generations.ts";
 import { rolloverGenerations } from "../rollover.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
@@ -23,33 +23,32 @@ type FusionLabel =
   /** A getter this build will not price: the shape is reported, no auction is inferred. */
   | { settlement: `0x${string}`; classification: "legacy" | "unknown"; note: string };
 
-/** Which JIT adapter each generation's hook is expected to call — from the same config the
- *  prepare paths build against. Absent = nothing to compare (chain without that generation). */
+/** The JIT address book a decode labels against: every configured JIT adapter on the chain with
+ *  the generation it belongs to and the registry wire that generation declares — the SAME config
+ *  the prepare paths build against, read through classifyAddress. The extension's hook target
+ *  is looked up here FIRST and the codec follows the classification; an adapter nobody
+ *  configured is labeled by a best-effort shape read and reported `unverified`. */
 export interface JitTrustTargets {
-  currentAdapter?: `0x${string}` | undefined;
-  legacyAdapter?: `0x${string}` | undefined;
+  adapters?: ReadonlyArray<{ address: `0x${string}`; label: string; status: "active" | "read-only"; wire: MarketRegistryWire }> | undefined;
 }
 
-/** The hook target's verdict: the extension's adapter IS the configured one for that
- *  generation (trusted), is a DIFFERENT address while one is configured (mismatch — the bytes
- *  claim Cork semantics at a contract that is not Cork's), or nothing is configured to
- *  compare against (unverified). A shape is decoded either way [K3]; the verdict says how far
- *  to believe its meaning. */
+/** The hook target's verdict: the extension's adapter IS a configured Cork JIT adapter
+ *  (trusted — the generation label and wire ride along), or nothing is configured under that
+ *  address (unverified). A shape is decoded either way [K3]; the verdict says how far to
+ *  believe its meaning. `mismatch` is reserved for a hook at an address that is configured in
+ *  ANOTHER role — bytes claiming JIT semantics at a contract that is Cork's but not an adapter. */
 type JitVerification =
   | { verification: "trusted" }
   | { verification: "mismatch"; expectedAdapter: `0x${string}` }
   | { verification: "unverified" };
 
-function verifyJitAdapter(adapter: `0x${string}`, expected: `0x${string}` | undefined): JitVerification {
-  if (expected === undefined) return { verification: "unverified" };
-  if (adapter.toLowerCase() === expected.toLowerCase()) return { verification: "trusted" };
-  return { verification: "mismatch", expectedAdapter: expected };
-}
-
-/** Best-effort JIT label on decoded orders, discriminated on the adapter generation. */
+/** Best-effort JIT label on decoded orders, discriminated on the adapter generation's WIRE.
+ *  `generation` is the chain generation's label ("phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1",
+ *  "arbitrum-v1.1"), or `unconfigured` for a hook at an address no generation names. */
 type JitLabel = JitVerification & (
   | {
-      generation: "2.1.0";
+      generation: string;
+      wire: "flat" | "nested";
       adapter: `0x${string}`;
       collateralAsset: `0x${string}`;
       referenceAsset: `0x${string}`;
@@ -57,7 +56,9 @@ type JitLabel = JitVerification & (
       recipe: `0x${string}`;
       rateOverride: bigint;
       constraint: ResolvedConstraint & { scale: string };
-      additionalData: `0x${string}`;
+      extraData: `0x${string}`;
+      /** Nested wire only: the salt of the pair's first oracle wrapper. */
+      oracleSalt?: `0x${string}`;
       swapFeePercentage: bigint;
       unwindSwapFeePercentage: bigint;
       enableJitMint: boolean;
@@ -66,7 +67,8 @@ type JitLabel = JitVerification & (
       note: string;
     }
   | {
-      generation: "legacy (pre-2.1.0)";
+      generation: string;
+      wire: "legacy";
       adapter: `0x${string}`;
       collateralAsset: `0x${string}`;
       referenceAsset: `0x${string}`;
@@ -84,10 +86,10 @@ type JitLabel = JitVerification & (
 /** The fee/override labels a decoded JIT payload carries (audit R1.3): the same C1 collision as
  *  everywhere else — a carried fee at 1e18 = 1% is byte-identical to a WAD rate, and a signer
  *  reading the decode must not have to guess which family a raw value is in. */
-const JIT_FEE_SCALES = {
-  swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)",
-  unwindSwapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD)",
-} as const;
+const JIT_FEE_SCALES = (wire: "flat" | "nested") => ({
+  swapFeePercentage: wire === "nested" ? "1e18 = 1% (PERCENTAGE — not WAD; strictly below 100e18 on the 10-field pool manager, and PART OF THE POOL ID there)" : "1e18 = 1% (PERCENTAGE — not WAD; max 5e18 = 5%)",
+  unwindSwapFeePercentage: wire === "nested" ? "1e18 = 1% (PERCENTAGE — not WAD; part of the 10-field pool id)" : "1e18 = 1% (PERCENTAGE — not WAD)",
+}) as const;
 
 /** Parse a caller-supplied order RECORD (e.g. a typedData.message round-trip) into a LopOrder.
  *  Field-by-field validation with teachable paths; extra keys are ignored (we reconstruct from
@@ -158,50 +160,88 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
     }
   }
   // JIT: when the extension's preInteraction field carries a Cork JIT payload, unpack it so a
-  // taker can see which adapter it calls, which recipe/constraint (2.1.0) or mode (legacy) it
-  // commits to, and whether permits ride along. Tried 2.1.0-first; the legacy shape is labeled.
+  // taker can see which adapter it calls, which recipe/constraint (flat/nested) or mode (legacy)
+  // it commits to, and whether permits ride along. The hook TARGET is classified FIRST against
+  // the chain's generations and the codec follows its declared wire — a flat payload trial-
+  // decoded as nested (or the reverse) reads as a plausible market that is not the one signed.
+  // Only an adapter NO generation configures gets a best-effort shape read, labeled unverified.
   let jit: JitLabel | undefined;
   try {
-    const d = decodeJitExtension(extension);
-    jit = {
-      ...verifyJitAdapter(d.adapter, jitTrust.currentAdapter),
-      generation: "2.1.0",
-      adapter: d.adapter,
+    const { adapter, extraData } = jitExtensionTarget(extension);
+    const known = jitTrust.adapters?.find((a) => a.address.toLowerCase() === adapter.toLowerCase());
+    const shape = (wire: "flat" | "nested", d: ReturnType<typeof decodeJitExtraData>, verification: JitVerification, generation: string): JitLabel => ({
+      ...verification,
+      generation,
+      wire,
+      adapter,
       collateralAsset: d.params.collateralAsset,
       referenceAsset: d.params.referenceAsset,
       expiryTimestamp: d.params.expiryTimestamp,
       recipe: d.params.recipe,
       rateOverride: d.params.rateOverride,
       constraint: { ...d.params.constraint, scale: "ABSOLUTE rates, 1e18 = 1.0" },
-      additionalData: d.params.additionalData,
+      extraData: d.params.extraData,
+      ...(wire === "nested" ? { oracleSalt: d.params.oracleSalt ?? `0x${"00".repeat(32)}` } : {}),
       swapFeePercentage: d.params.swapFeePercentage,
       unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
       enableJitMint: d.params.enableJitMint,
       permits: d.permits.length,
-      scales: { ...JIT_FEE_SCALES, rateOverride: "ABSOLUTE, 1e18 = 1.0 (FIXED recipes only; 0 = none)" },
-      note: "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
-    };
-  } catch {
-    try {
-      const d = legacyRegistry.decodeJitExtension(extension);
-      jit = {
-        ...verifyJitAdapter(d.adapter, jitTrust.legacyAdapter),
-        generation: "legacy (pre-2.1.0)",
-        adapter: d.adapter,
-        collateralAsset: d.params.collateralAsset,
-        referenceAsset: d.params.referenceAsset,
-        expiryTimestamp: d.params.expiryTimestamp,
-        mode: d.params.mode,
-        swapFeePercentage: d.params.swapFeePercentage,
-        unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
-        enableJitMint: d.params.enableJitMint,
-        permits: d.permits.length,
-        scales: { ...JIT_FEE_SCALES },
-        note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
-      };
-    } catch {
-      /* not a JIT extension either — no label */
+      scales: { ...JIT_FEE_SCALES(wire), rateOverride: "ABSOLUTE, 1e18 = 1.0 (FIXED recipes only; 0 = none)" },
+      note: wire === "nested"
+        ? "a fill calls the JIT adapter's preInteraction: it hands the carried MarketParams to CorkMarketCreator.createNewPool (which deploys the oracle if needed — salted by oracleSalt on a pair's first wrapper — re-checks the constraint with recipe.verify, and creates the pool if missing), then mints per enableJitMint — one order side must be the derived pool's cST; the two fee percentages are part of the 10-field pool id"
+        : "a fill calls the JIT adapter's preInteraction: it deploys the oracle if needed, re-checks the carried constraint with recipe.verify, creates the pool if missing, and mints per enableJitMint — one order side must be the derived pool's cST",
+    });
+    const legacyShape = (d: ReturnType<typeof legacyRegistry.decodeJitExtension>, verification: JitVerification, generation: string): JitLabel => ({
+      ...verification,
+      generation,
+      wire: "legacy",
+      adapter: d.adapter,
+      collateralAsset: d.params.collateralAsset,
+      referenceAsset: d.params.referenceAsset,
+      expiryTimestamp: d.params.expiryTimestamp,
+      mode: d.params.mode,
+      swapFeePercentage: d.params.swapFeePercentage,
+      unwindSwapFeePercentage: d.params.unwindSwapFeePercentage,
+      enableJitMint: d.params.enableJitMint,
+      permits: d.permits.length,
+      scales: { ...JIT_FEE_SCALES("flat") },
+      note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
+    });
+    if (known) {
+      // Classified: ONE codec, the generation's declared wire. A payload that does not decode on
+      // it is not a JIT payload for THIS adapter (malformed, or bytes for another generation
+      // pasted at the wrong target) — no label, never a guess from another wire.
+      jit = known.wire === "legacy"
+        ? legacyShape(legacyRegistry.decodeJitExtension(extension), { verification: "trusted" }, known.label)
+        : shape(known.wire, decodeJitExtraData(known.wire, extraData), { verification: "trusted" }, known.label);
+    } else {
+      // Unconfigured target: shape-only, tried nested → flat → legacy. The verdict: on a chain
+      // that configures JIT adapters, a hook at some OTHER address is bytes claiming Cork
+      // semantics at a contract that is not Cork's — `mismatch`, naming the primary's adapter
+      // (the one a genuine order would call); on a chain with no JIT generation at all there is
+      // nothing to compare against — `unverified`.
+      const primaryAdapter = jitTrust.adapters?.[0]?.address;
+      const verdict: JitVerification = primaryAdapter !== undefined ? { verification: "mismatch", expectedAdapter: primaryAdapter } : { verification: "unverified" };
+      let labeled: JitLabel | undefined;
+      for (const wire of ["nested", "flat"] as const) {
+        try {
+          labeled = shape(wire, decodeJitExtraData(wire, extraData), verdict, "unconfigured");
+          break;
+        } catch {
+          /* next wire */
+        }
+      }
+      if (!labeled) {
+        try {
+          labeled = legacyShape(legacyRegistry.decodeJitExtension(extension), verdict, "unconfigured");
+        } catch {
+          /* not a JIT extension on any wire — no label */
+        }
+      }
+      jit = labeled;
     }
+  } catch {
+    /* not a JIT extension — no label */
   }
   return { ...(fusion ? { fusion } : {}), ...(jit ? { jit } : {}) };
 }
@@ -252,16 +292,14 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   marketRegistry: Awaited<ReturnType<typeof resolveMarketRegistry>>["marketRegistry"];
 }> {
   const [{ dep, depWarn }, { marketRegistry: mr }, { generations }] = await Promise.all([getDep(ctx, chainId), resolveMarketRegistry(chainId, undefined, ctx.generation), resolveGenerations(chainId)]);
-  // stage 3: the JIT trust book still has ONE "current" slot, and the decoder implements the
-  // FLAT extraData layout only — so the adapter it vouches for is the flat-wire generation's,
-  // not the primary's (a nested-wire adapter's bytes cannot be decoded here yet; labeling them
-  // `mismatch` against a flat decode would accuse a genuine Cork adapter). The legacy slot is the
-  // generation whose block declares `wire: "legacy"`. Stage 3 replaces both with a per-wire book.
-  const flatMr = marketRegistryForWire(generations, "flat")?.marketRegistry;
-  const legacyMr = marketRegistryForWire(generations, "legacy")?.marketRegistry;
+  // The JIT book is PER WIRE: every generation's adapter with its label and declared registry
+  // wire, so the label dispatches its codec by classification (a nested payload at the nested
+  // adapter, a flat one at the flat adapter, a mode-string one at the legacy adapter) instead of
+  // trial-decoding — and a genuine Cork adapter of any generation is trusted, never accused.
+  const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {
     targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
-    jitTrust: { currentAdapter: flatMr?.adapter, legacyAdapter: legacyMr?.adapter },
+    jitTrust: { adapters },
     dep,
     depWarn,
     marketRegistry: mr,
@@ -296,8 +334,8 @@ function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: strin
       if (leg.kind === "bundle") walkJit(leg.legs);
       const j = leg.kind === "lop" ? leg.label?.jit : undefined;
       if (!j) continue;
-      if (j.verification === "mismatch") jitMismatch.push(`the ${j.generation} JIT preInteraction targets adapter ${j.adapter}, but the configured ${j.generation} JIT adapter is ${j.expectedAdapter}`);
-      else if (j.verification === "unverified") jitUnverified.push(`${j.generation} JIT preInteraction adapter ${j.adapter} (no ${j.generation} JIT adapter is configured on this chain)`);
+      if (j.verification === "mismatch") jitMismatch.push(`the JIT preInteraction targets adapter ${j.adapter}, but no generation on this chain configures that adapter (the primary's is ${j.expectedAdapter})`);
+      else if (j.verification === "unverified") jitUnverified.push(`JIT preInteraction adapter ${j.adapter} (${j.wire}-wire shape; no generation on this chain configures that adapter)`);
     }
   };
   walkJit(legs);
@@ -354,9 +392,9 @@ export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ct
   const { jitTrust } = await resolveDecodeTrust(ctx, chainId);
   const { fusion, jit } = labelOrderExtension(order, extension, chainId, jitTrust);
   if (jit?.verification === "mismatch") {
-    warnings.push({ code: "target_mismatch", message: `the ${jit.generation} JIT preInteraction targets adapter ${jit.adapter}, but the configured ${jit.generation} JIT adapter is ${jit.expectedAdapter} — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not fill` });
+    warnings.push({ code: "target_mismatch", message: `the JIT preInteraction targets adapter ${jit.adapter}, but no generation on this chain configures that adapter (the primary's is ${jit.expectedAdapter}) — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not fill` });
   } else if (jit?.verification === "unverified") {
-    warnings.push({ code: "target_unverified", message: `the ${jit.generation} JIT preInteraction adapter ${jit.adapter} could not be checked: no ${jit.generation} JIT adapter is configured on chainId ${chainId}. The label describes the payload's SHAPE only` });
+    warnings.push({ code: "target_unverified", message: `the JIT preInteraction adapter ${jit.adapter} could not be checked: no generation on chainId ${chainId} configures that adapter (the label read the payload as a ${jit.wire}-wire shape). The label describes the payload's SHAPE only` });
   }
   const base = {
     kind: "order" as const,

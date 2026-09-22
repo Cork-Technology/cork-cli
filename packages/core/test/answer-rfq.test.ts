@@ -142,9 +142,13 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     const d = mine.data as Answered;
     expect(d.answer.quoteRef).toEqual({ rfqId: RFQ_OPEN_ID, answerId: FIRM_ANSWER_ID, optionId: "opt1" });
     // The option's terms (premium 0.05, expiry 1900000000), not the caller's — and that expiry is
-    // the JIT task fixture's, so the pool is DERIVED_JIT_POOL.
+    // the JIT task fixture's, so the pool is the fixture pair's derivation at that expiry (the
+    // 10-field id of the nested primary, zero fees — DERIVED_JIT_POOL is its 8-field twin, the
+    // rollover task's).
     expect(BigInt(d.answer.takingAmount)).toBe(premiumAmount("0.05", 1000n * 10n ** 18n, 1_900_000_000n - NOW));
-    expect(d.answer.pool.poolId.toLowerCase()).toBe(DERIVED_JIT_POOL.toLowerCase());
+    const derivedCited = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry: JIT_TASK_EXPIRY.toString(), recipe: LIQUIDITY_RECIPE } }, ctx);
+    expect(d.answer.pool.poolId.toLowerCase()).toBe((derivedCited.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
+    expect(d.answer.pool.poolId.toLowerCase()).not.toBe(DERIVED_JIT_POOL.toLowerCase());
   });
 
   it("shape refusals are teaching errors: half a citation, a citation plus a premium, an uncited answer without a premium, a bad fraction, a missing recipe", async () => {
@@ -170,7 +174,7 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
   const NOW = 1_790_000_000n;
   const ctx = stubContext();
   const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-inline-0001" };
-  type Inline = { schema: string; source: string; anchorRate: string | null; expiry: string | null; swapFeeWad: string | null; unwindSwapFeeWad: string | null; additionalData: string | null; anchorHonored: boolean | null; note: string };
+  type Inline = { schema: string; source: string; anchorRate: string | null; expiry: string | null; swapFeeWad: string | null; unwindSwapFeeWad: string | null; extraData: string | null; anchorHonored: boolean | null; note: string };
   type AnsweredInline = { jit?: { constraint?: Record<string, string>; derivedPoolId: string }; answer: { pool: { poolId: string; oracleDeployed: boolean; oracleRate?: string }; inline: Inline | null } };
   const expiry = JIT_TASK_EXPIRY.toString();
 
@@ -199,7 +203,7 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     expect(inline.expiry).toBe(expiry);
     expect(inline.swapFeeWad).toBe("1000000000000000000");
     expect(inline.unwindSwapFeeWad).toBe("0");
-    expect(inline.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
+    expect(inline.extraData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
     // The stub's oracle is deployed at 0.8e18: the recipe anchors on THAT, so the carried 0.7e18 is not honored.
     expect(d.answer.pool.oracleDeployed).toBe(true);
     expect(d.answer.pool.oracleRate).toBe(RFQ_INLINE_OPTION_ANCHOR);
@@ -212,7 +216,8 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     // The pinned constraint is the derivation's own (the stub resolves the 0.8e18 shape), and the
     // pool is the one derive-cork-pool answers for the same legs + args.
     expect(d.jit?.constraint).toEqual(JIT_TASK_CONSTRAINT);
-    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: LIQUIDITY_RECIPE, args: inline.additionalData } }, ctx);
+    // …with the template's fees: on the 10-field primary they are part of the pool id.
+    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: LIQUIDITY_RECIPE, args: inline.extraData, swapFeePercentage: "1000000000000000000", unwindSwapFeePercentage: "0" } }, ctx);
     expect(d.answer.pool.poolId.toLowerCase()).toBe((derived.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
     // The RFQ's expiry and this answer's agree: no inline-expiry warning.
     expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("oracle_params.expiry"))).toBe(false);
@@ -223,10 +228,10 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     const built = env.data as { typedData: { message: Record<string, string> }; extension: string };
     const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: built.extension } }, ctx);
     expect(decoded.state, JSON.stringify(decoded.warnings)).toBe("ok");
-    const jit = (decoded.data as { jit: { swapFeePercentage: string; unwindSwapFeePercentage: string; additionalData: string; constraint: Record<string, string> } }).jit;
+    const jit = (decoded.data as { jit: { swapFeePercentage: string; unwindSwapFeePercentage: string; extraData: string; constraint: Record<string, string> } }).jit;
     expect(jit.swapFeePercentage).toBe("1000000000000000000");
     expect(jit.unwindSwapFeePercentage).toBe("0");
-    expect(jit.additionalData).toBe(inline.additionalData);
+    expect(jit.extraData).toBe(inline.extraData);
     expect(jit.constraint).toMatchObject(JIT_TASK_CONSTRAINT);
   });
 
@@ -246,7 +251,7 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-inline-0003", action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry, jitMarket: { recipe: LIQUIDITY_RECIPE, additionalData: args, swapFeePercentage: "0" } } }, ctx);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as AnsweredInline;
-    expect(d.answer.inline!.additionalData).toBe(args);
+    expect(d.answer.inline!.extraData).toBe(args);
     expect(d.answer.inline!.anchorRate).toBe(RFQ_INLINE_ANCHOR); // the RFQ's block is still echoed
     // The drift notice compares the RFQ's anchor with the live rate, and they differ here too.
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(true);
@@ -259,10 +264,13 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     const d = env.data as AnsweredInline;
     expect(d.answer.inline!.source).toBe("cited option");
     expect(d.answer.inline!.anchorRate).toBe(RFQ_INLINE_OPTION_ANCHOR);
-    expect(d.answer.inline!.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_OPTION_ANCHOR)));
+    expect(d.answer.inline!.extraData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_OPTION_ANCHOR)));
     expect(d.answer.inline!.anchorHonored).toBe(false); // deployed oracle: the live rate rules, whatever the anchor says
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
-    expect(d.answer.pool.poolId.toLowerCase()).toBe(DERIVED_JIT_POOL.toLowerCase());
+    // The option's block carries a 1% swap fee: on the 10-field primary that fee is part of the
+    // pool id, so the pool is the fixture derivation WITH that fee (not the zero-fee twin).
+    const derivedFee = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry: JIT_TASK_EXPIRY.toString(), recipe: LIQUIDITY_RECIPE, swapFeePercentage: "1000000000000000000" } }, ctx);
+    expect(d.answer.pool.poolId.toLowerCase()).toBe((derivedFee.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
   });
 
   it("a pair whose oracle is NOT deployed: the anchor reaches recipe.resolve as additionalData, is honoured, and no drift notice fires (the fresh-pair path the RFQ contract was written for)", async () => {
@@ -297,7 +305,7 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     expect(d.answer.pool.oracleDeployed).toBe(false);
     expect(d.answer.pool.oracleRate).toBeUndefined();
     expect(d.answer.inline!.anchorHonored).toBe(true);
-    expect(d.answer.inline!.additionalData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
+    expect(d.answer.inline!.extraData).toBe(encodeAnchorArgs(BigInt(RFQ_INLINE_ANCHOR)));
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
     expect(env.warnings.some((w) => w.code === "oracle_not_deployed")).toBe(true);
     // The anchor reached the recipe: every resolve staticcall carried abi.encode(anchorRate) as
@@ -394,7 +402,7 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
   const ctx = stubContext();
   const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-impair-0001" };
   const expiry = RFQ_IMPAIRMENT_EXPIRY; // the RFQ's own: creatable, and coherent with its duration
-  type Inline = { schema: string; anchorRate: string | null; durationSeconds?: string | null; apySpreadPercentage?: string | null; complete?: boolean; additionalData: string | null };
+  type Inline = { schema: string; anchorRate: string | null; durationSeconds?: string | null; apySpreadPercentage?: string | null; complete?: boolean; extraData: string | null };
   type Answered = { jit?: { constraint?: Record<string, string>; derivedPoolId: string }; answer: { pool: { poolId: string; oracleDeployed: boolean }; inline: Inline | null } };
 
   it("inlineParamsOfTemplate reads the two extra words under the impairment schema; inlineAdditionalData encodes all three or refuses", () => {
@@ -422,7 +430,7 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     expect(inline.apySpreadPercentage).toBe(RFQ_IMPAIRMENT_SPREAD);
     expect(inline.complete).toBe(true);
     const expected = encodeImpairmentArgs({ anchorRate: BigInt(RFQ_INLINE_ANCHOR), durationSeconds: BigInt(RFQ_IMPAIRMENT_DURATION), apySpreadPercentage: BigInt(RFQ_IMPAIRMENT_SPREAD) });
-    expect(inline.additionalData).toBe(expected);
+    expect(inline.extraData).toBe(expected);
     // No "incomplete block" warning on a complete one.
     expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
     // The stub oracle is DEPLOYED at 0.8e18 vs the carried 0.7e18: the impairment recipe anchors
@@ -438,13 +446,13 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     // The stub's impairment resolve COMPUTES the band math on the live 0.8e18 anchor: the pinned
     // constraint is that derivation, and the pool id matches a direct derive with the same bytes.
     expect(d.jit?.constraint).toEqual({ rateMin: "798465753424657535", rateMax: "801534246575342465", rateChangePerDayMax: "219178082191780", rateChangeCapacityMax: "1534246575342465" });
-    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: IMPAIRMENT_RECIPE, args: expected } }, ctx);
+    const derived = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { ...JIT_TASK_PAIR, expiry, recipe: IMPAIRMENT_RECIPE, args: expected, swapFeePercentage: "1000000000000000000" } }, ctx);
     expect(derived.state, JSON.stringify(derived.warnings)).toBe("ok");
     expect(d.answer.pool.poolId.toLowerCase()).toBe((derived.data as { pool: { poolId: string } }).pool.poolId.toLowerCase());
     // The signed bytes carry exactly those 96 bytes.
     const built = env.data as { typedData: { message: Record<string, string> }; extension: string };
     const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: built.extension } }, ctx);
-    expect((decoded.data as { jit: { additionalData: string; recipe: string } }).jit.additionalData).toBe(expected);
+    expect((decoded.data as { jit: { extraData: string; recipe: string } }).jit.extraData).toBe(expected);
     expect((decoded.data as { jit: { recipe: string } }).jit.recipe.toLowerCase()).toBe(IMPAIRMENT_RECIPE.toLowerCase());
   });
 
@@ -478,7 +486,7 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     expect(fixed.state, JSON.stringify(fixed.warnings)).toBe("ok");
     const inline = (fixed.data as Answered).answer.inline!;
     expect(inline.complete).toBe(false);
-    expect(inline.additionalData).toBe(explicit);
+    expect(inline.extraData).toBe(explicit);
     expect(fixed.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
   });
 });

@@ -65,8 +65,9 @@ describe("wire vocabularies are code enums the config is validated against", () 
     expect(PHOENIX_WIRES).toEqual(["8-field", "10-field"]);
     expect(MARKET_REGISTRY_WIRES).toEqual(["legacy", "flat", "nested"]);
     expect(ROLLOVER_WIRES).toEqual(["rc.1", "rc.2", "0.2"]);
-    // stage 2 widens this to include "nested"; until then every registry-bound path binds flat.
-    expect(IMPLEMENTED_MARKET_REGISTRY_WIRES).toEqual(["flat"]);
+    // Both non-legacy wires are implemented (market-registry.ts WIRES); the legacy wire is the
+    // deprecated lane and is never listed here.
+    expect(IMPLEMENTED_MARKET_REGISTRY_WIRES).toEqual(["flat", "nested"]);
     expect(GENERATION_ROLES).toContain("recipe");
     expect(GENERATION_ROLES).not.toContain("bundler3");
   });

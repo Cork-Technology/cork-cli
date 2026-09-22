@@ -9,12 +9,12 @@
 // `other` — because a decoder that drops what it cannot name hides exactly what a reader most
 // needs to see. Neither of those two collections is lifecycle evidence.
 import { resolveGenerations, resolveRollover } from "./config-remote.ts";
-import { JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC } from "./market-registry.ts";
+import { CREATOR_MARKET_CREATED_TOPIC, JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC, POOL_MANAGER_MARKET_CREATED_10_TOPIC } from "./market-registry.ts";
 import { SETTLER_EVENTS } from "./rollover-verify.ts";
 import { rolloverGenerations } from "./rollover.ts";
 
 /** Who is allowed to emit a given protocol event. */
-export type EmitterRole = "exactSettler" | "partialSettler" | "jitAdapter" | "legacyJitAdapter";
+export type EmitterRole = "exactSettler" | "partialSettler" | "jitAdapter" | "legacyJitAdapter" | "marketCreator" | "poolManager";
 
 /** One configured emitter: the contract, its role, and which generation it belongs to. */
 export interface ProtocolEmitter {
@@ -34,6 +34,10 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
   [JIT_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "JITMarketCreated", roles: ["jitAdapter"] },
   [JIT_MINTED_TOPIC.toLowerCase()]: { event: "JITMinted", roles: ["jitAdapter"] },
   [JIT_MARKET_CREATED_LEGACY_TOPIC.toLowerCase()]: { event: "JITMarketCreated (legacy pre-2.1.0)", roles: ["legacyJitAdapter"] },
+  // The nested wire's creation evidence: the adapter emits no JITMarketCreated; the CREATOR does
+  // (its own MarketCreated), and the 10-field pool manager announces the pool with its fees.
+  [CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] },
+  [POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase()]: { event: "MarketCreated (pool manager, 10-field)", roles: ["poolManager"] },
 };
 
 /** Every contract this build recognizes as a protocol emitter on `chainId`, from the same
@@ -53,10 +57,21 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
     }
   }
   for (const g of generations) {
+    const standing = g.status === "active" ? "active" : "retired";
     const adapter = g.marketRegistry?.adapter as `0x${string}` | undefined;
-    if (!adapter) continue;
-    if (g.marketRegistry!.wire === "legacy") out.push({ address: adapter, role: "legacyJitAdapter", generation: "retired", label: g.label });
-    else out.push({ address: adapter, role: "jitAdapter", generation: g.status === "active" ? "active" : "retired", label: g.label });
+    if (adapter) {
+      if (g.marketRegistry!.wire === "legacy") out.push({ address: adapter, role: "legacyJitAdapter", generation: "retired", label: g.label });
+      else out.push({ address: adapter, role: "jitAdapter", generation: standing, label: g.label });
+    }
+    // The nested wire's creation evidence: the 0.5.0 CREATOR emits MarketCreated (the adapter
+    // emits no JITMarketCreated there) and the 10-field pool manager announces the pool with its
+    // fees. Only the generations whose wires SPEAK those topics are listed for them — a periphery
+    // creator or an 8-field manager never emits them, and an emitter table that named them would
+    // be a claim about bytes those contracts never produce.
+    const creator = g.marketRegistry?.marketCreator as `0x${string}` | undefined;
+    if (creator && g.marketRegistry!.wire === "nested") out.push({ address: creator, role: "marketCreator", generation: standing, label: g.label });
+    const poolManager = g.phoenix?.poolManager as `0x${string}` | undefined;
+    if (poolManager && g.phoenix!.wire === "10-field") out.push({ address: poolManager, role: "poolManager", generation: standing, label: g.label });
   }
   return out;
 }

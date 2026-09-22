@@ -7,7 +7,7 @@
 // same config resolution production reads, not a hand-built emitter table.
 import { toEventSelector } from "viem";
 import { describe, expect, it } from "vitest";
-import { type HandlerContext, runTool } from "@cork/core";
+import { BUNDLED_DEFAULTS, CREATOR_MARKET_CREATED_TOPIC, generationsOf, type HandlerContext, POOL_MANAGER_MARKET_CREATED_10_TOPIC, runTool } from "@cork/core";
 import { attributeLogs, PROTOCOL_EVENTS, protocolEmittersFor } from "../src/event-attribution.ts";
 import { stubResolved } from "./helpers.ts";
 
@@ -33,6 +33,7 @@ const JIT_CREATED = toEventSelector("JITMarketCreated(bytes32,address,address,ad
 const JIT_CREATED_LEGACY = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,string)");
 const JIT_MINTED = toEventSelector("JITMinted(bytes32,address,uint256,uint256)");
 const UNKNOWN_TOPIC = `0x${"ef".repeat(32)}` as const;
+const ARBITRUM = generationsOf(BUNDLED_DEFAULTS, 42161);
 
 type Hex = `0x${string}`;
 const receiptLog = (address: Hex, topic0: Hex, data: Hex = "0x") => ({ address, topics: [topic0, DIGEST] as [Hex, ...Hex[]], data });
@@ -50,16 +51,26 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     expect(byAddress[JIT_ADAPTER.toLowerCase()]).toEqual({ address: JIT_ADAPTER, role: "jitAdapter", generation: "active", label: "phoenix/v0.3-rc.1" });
     expect(byAddress[NESTED_JIT_ADAPTER.toLowerCase()]).toEqual({ address: NESTED_JIT_ADAPTER, role: "jitAdapter", generation: "active", label: "phoenix/v0.4-rc.1" });
     expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toEqual({ address: LEGACY_JIT_ADAPTER, role: "legacyJitAdapter", generation: "retired", label: "arbitrum-v1.1" });
-    // 3 rollover generations × 2 settlers + the three registry generations' JIT adapters.
-    expect(emitters).toHaveLength(9);
+    // The nested wire's creation emitters: the 0.5.0 creator and the 10-field pool manager of
+    // phoenix/v0.4-rc.1 — and ONLY that generation's (a periphery creator / 8-field manager never
+    // emits those topics).
+    const nested = ARBITRUM.find((g) => g.label === "phoenix/v0.4-rc.1")!;
+    expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: "active", label: "phoenix/v0.4-rc.1" });
+    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: "active", label: "phoenix/v0.4-rc.1" });
+    expect(emitters.filter((e) => e.role === "marketCreator" || e.role === "poolManager")).toHaveLength(2);
+    // 3 rollover generations × 2 settlers + the three registry generations' JIT adapters + the
+    // nested generation's creator and pool manager.
+    expect(emitters).toHaveLength(11);
     // Primary first: the order is the config's flattening, not an address sort.
     expect(emitters.slice(0, 2).map((e) => e.address)).toEqual([CANDIDATE_EXACT, CANDIDATE_PARTIAL]);
   });
   it("mainnet has no rollover or registry deployment — no emitter, so nothing can be attributed there", async () => {
     expect(await protocolEmittersFor(1)).toEqual([]);
   });
-  it("the event registry covers every settler event plus the three JIT topics, keyed lowercase", () => {
-    expect(Object.keys(PROTOCOL_EVENTS)).toHaveLength(13);
+  it("the event registry covers every settler event plus the three JIT topics and the two nested-wire MarketCreated topics, keyed lowercase", () => {
+    expect(Object.keys(PROTOCOL_EVENTS)).toHaveLength(15);
+    expect(PROTOCOL_EVENTS[CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]).toEqual({ event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] });
+    expect(PROTOCOL_EVENTS[POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase()]).toEqual({ event: "MarketCreated (pool manager, 10-field)", roles: ["poolManager"] });
     for (const topic of Object.keys(PROTOCOL_EVENTS)) expect(topic).toBe(topic.toLowerCase());
     expect(PROTOCOL_EVENTS[ORDER_SETTLED.toLowerCase()]).toEqual({ event: "OrderSettled", roles: ["exactSettler", "partialSettler"] });
     expect(PROTOCOL_EVENTS[JIT_MINTED.toLowerCase()]).toEqual({ event: "JITMinted", roles: ["jitAdapter"] });

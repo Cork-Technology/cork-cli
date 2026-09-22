@@ -15,13 +15,36 @@
 //    addresses), and fixed-rate oracles are keyed on the RATE, not a pair.
 //  - ENUM TRAP: RecipeSource is NAV=0,PRICE=1,FIXED=2 while OracleMode/SourceType are
 //    PRICE=0,NAV=1 — inverted. Never pass one where the other is expected.
+//
+// Two IMPLEMENTED registry wires live here since 0.6 (stage 2a), keyed by `MarketRegistryWire`
+// (generations.ts): `flat` — the 0.3.x set above, byte-identical to what it always emitted — and
+// `nested` — market-registry 0.5.0 (Distribution phoenix/v0.4-rc.1, deployed 2026-09-22 on
+// Arbitrum One + Base at identical addresses): the adapter's JITMarketParams became a WRAPPER
+// `(MarketParams market, bool enableJitMint)` around the creator's own 10-field MarketParams
+// (`bytes extraData` — renamed from additionalData — then `bytes32 oracleSalt`, then the two
+// fees), `verify` takes the pool expiry and a `creating` flag, `deploy` takes the salt, the
+// creator moved into the registry package and HOLDS the pool-creator role (the adapter delegates
+// creation to it and holds none), denominations are plain address units, and the pool manager it
+// creates on is the 10-field phoenix (fees inside the Market AND its id). The `legacy` wire stays
+// in market-registry-legacy.ts behind the deprecation gate. Every encoder/decoder/call builder
+// below takes the wire EXPLICITLY — a flat payload handed to a nested adapter decodes into a
+// plausible market that is not the one meant, which is exactly why no default wire exists.
+// Golden vectors for the nested wire were captured from the deployed contracts themselves
+// (adapter.encodeExtraData / decodeExtraData, pm.getId, registry.predictFixedRateOracle,
+// recipe.encodeExtraData; 42161, 2026-09-22) and are pinned in test/market-registry-nested.test.ts.
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, size, sliceHex, toEventSelector, toHex, zeroAddress } from "viem";
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import { cachedContractConstantBytes32, refreshContractConstant } from "./chain/constants-cache.ts";
-import type { Market8 } from "./types.ts";
+import type { MarketRegistryWire, PhoenixWire } from "./generations.ts";
+import type { Market, Market10, Market8 } from "./types.ts";
 
 const ZERO_ADDRESS = zeroAddress;
+/** The zero oracle salt: the pair's DEFAULT wrapper on the nested wire. `registry.deploy` mixes the
+ *  salt into the CREATE2 salt of a pair's FIRST wrapper only — an existing (ca, ref, mode) wrapper
+ *  is returned whatever salt rides along (MarketRegistry 0.5.0 `deploy`: lookup first, salt only
+ *  on the factory call). */
+export const ZERO_ORACLE_SALT = `0x${"00".repeat(32)}` as const;
 
 // ── Enums (numeric values from IMarketRegistry.sol / IMarketRecipe.sol, tag 2.1.0) ──────────
 export const ASSET_KIND = ["ERC20", "ERC4626"] as const;
@@ -114,6 +137,131 @@ export const recipeAbi = parseAbi([
   "error RateOracleNotDeployed(address ca, address ref)",
 ]);
 
+// ── Nested-wire ABIs (market-registry 0.5.0; selectors + struct orders verified against the
+// Distribution component records 2026-09-22: deploy 0x5475abdc, wrapperKey 0xc8346949,
+// createNewPool 0x59c8eb4c, verify 0x15bb9583, decodeExtraData 0x5ef271c6 — the LAST is the same
+// selector the flat adapter answers, with a DIFFERENT return layout, which is why the decode
+// round-trip must be dispatched by wire and never by trial). ─────────────────────────────────
+export const marketRegistryNestedAbi = parseAbi([
+  // AssetSource.denomination is an ADDRESS unit (the label/labelHash denomination is gone);
+  // ConversionFeed lost feedDecimals.
+  "struct AssetSourceN { address addr; uint8 sourceType; uint8 sourceInterface; address denomination; }",
+  "struct AssetN { address addr; string name; uint8 kind; AssetSourceN priceSource; AssetSourceN navSource; }",
+  "struct ConversionFeedN { address base; address quote; address aggregatorAddress; }",
+  "function WRAPPER_FACTORY() view returns (address)",
+  "function FIXED_RATE_ORACLE_FACTORY() view returns (address)",
+  "function owner() view returns (address)",
+  "function version() pure returns (string)",
+  "function isAsset(address addr) view returns (bool)",
+  "function isRecipe(address recipe) view returns (bool)",
+  "function isDenomination(address unit) view returns (bool)",
+  "function lookupAssetByAddress(address addr) view returns (bool found, AssetN entry)",
+  "function lookupAssetByName(string name) view returns (bool found, AssetN entry)",
+  "function lookupConversionFeed(address base, address quote) view returns (bool found, ConversionFeedN entry)",
+  "function lookupWrapper(address ca, address ref, uint8 mode) view returns (address wrapper)",
+  "function wrapperKey(address ca, address ref, uint8 mode) view returns (bytes32)",
+  "function predictFixedRateOracle(uint256 rate) view returns (address oracle)",
+  "function getAssets(uint256 offset, uint256 limit) view returns (AssetN[] page, uint256 total)",
+  "function getConversionFeeds(uint256 offset, uint256 limit) view returns (ConversionFeedN[] page, uint256 total)",
+  "function getDenominations(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+  "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+  "function deploy(address ca, address ref, uint8 mode, bytes32 oracleSalt) returns (address wrapper)",
+  "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
+  "function maxExpiryDuration() view returns (uint256)",
+  "function DEFAULT_MAX_EXPIRY_DURATION() view returns (uint256)",
+  "event EntryAdded(uint8 indexed namespace, bytes32 indexed keyHash, bytes entry)",
+  "event EntryRemoved(uint8 indexed namespace, bytes32 indexed keyHash, bytes key)",
+  "event MarketOracleDeployed(address indexed ca, address indexed ref, address indexed wrapper, uint8 mode, address caSource, address refSource, address caller)",
+  "event FixedRateOracleDeployed(uint256 indexed rate, address indexed oracle, address caller)",
+  "error EntryAlreadyExists()",
+  "error EntryNotFound()",
+  "error ArrayLengthMismatch()",
+  "error ZeroAddress()",
+  "error EmptyName()",
+  "error UnregisteredDenomination(address unit)",
+  "error NoConversionPathToUsd(address fromUnit, uint256 maxHops)",
+  "error MissingSource(address asset, uint8 mode)",
+  "error NavModeWithoutNavSource(address ca, address ref)",
+  "error SourceTypeMismatch(uint8 expected, uint8 provided)",
+  "error RecipeNotRegistered(address recipe)",
+  "error RecipeNotContract(address recipe)",
+  "error ZeroBound()",
+]);
+
+/** IMarketRecipe on the nested wire: `verify` gained the pool expiry and a `creating` flag BEFORE
+ *  the constraint (positions 3 and 4), `resolve` kept its shape; the bytes member is `extraData`.
+ *  Both current recipes' typed errors ride here (selectors are recipe-specific). */
+export const recipeNestedAbi = parseAbi([
+  "function source() view returns (uint8)",
+  "function description() view returns (string)",
+  "function version() pure returns (string)",
+  "function REGISTRY() view returns (address)",
+  "function resolve(address ca, address ref, address rateOracle, bytes extraData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
+  "function verify(address ca, address ref, address rateOracle, uint256 expiryTimestamp, bool creating, (uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint, bytes extraData) view returns (bool ok)",
+  "error BandOutOfRange(uint256 percentage)",
+  "error BandTooWide(uint256 bandPercentage, uint256 maxBandPercentage)",
+  "error DurationTooLong(uint256 durationSeconds, uint256 maxDuration)",
+  "error MalformedExtraData(uint256 length)",
+  "error RateOracleNotDeployed(address ca, address ref)",
+  "error SpreadTooHigh(uint256 apySpreadPercentage, uint256 maxSpreadPercentage)",
+  "error UnexpectedExtraData()",
+  "error WindowCollapsed(uint256 rateMin, uint256 rateMax)",
+  "error ZeroAnchorRate()",
+  "error ZeroDuration()",
+  "error ZeroRegistry()",
+]);
+
+/** CorkLimitOrderAdapter 0.4.0 (nested wire): binds the LOP, the POOL MANAGER and the MARKET
+ *  CREATOR — no CONTROLLER()/MARKET_REGISTRY() (creation is delegated to the creator, which holds
+ *  them), no MAX_FEE_PERCENTAGE(). decodeExtraData returns the WRAPPER shape. */
+export const jitAdapterNestedAbi = parseAbi([
+  "function LIMIT_ORDER_PROTOCOL() view returns (address)",
+  "function POOL_MANAGER() view returns (address)",
+  "function MARKET_CREATOR() view returns (address)",
+  "function version() pure returns (string)",
+  "struct RateConstraintN { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+  "struct MarketParamsN { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; RateConstraintN constraint; bytes extraData; bytes32 oracleSalt; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+  "struct JITMarketParamsN { MarketParamsN market; bool enableJitMint; }",
+  "struct PermitParamsN { address token; uint256 value; uint256 deadline; uint8 v; bytes32 r; bytes32 s; }",
+  "function encodeExtraData(JITMarketParamsN market, PermitParamsN[] permits) pure returns (bytes)",
+  "function decodeExtraData(bytes extraData) pure returns (JITMarketParamsN market, PermitParamsN[] permits)",
+  "error MintAmountDrift()",
+  "error MintUnavailable()",
+  "error OnlyLimitOrderProtocol()",
+  "error OrderNotForPool()",
+  "error ZeroAddress()",
+]);
+
+/** CorkMarketCreator 0.1.0 shipped by market-registry 0.5.0 (nested wire): createNewPool over the
+ *  10-field MarketParams (selector 0x59c8eb4c), getters CONTROLLER/MARKET_REGISTRY/POOL_MANAGER,
+ *  and the typed reverts of the creation sequence. */
+export const marketCreatorNestedAbi = parseAbi([
+  "struct CreatorRateConstraintN { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+  "struct CreatorMarketParamsN { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; CreatorRateConstraintN constraint; bytes extraData; bytes32 oracleSalt; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+  "function CONTROLLER() view returns (address)",
+  "function MARKET_REGISTRY() view returns (address)",
+  "function POOL_MANAGER() view returns (address)",
+  "function version() pure returns (string)",
+  "function createNewPool(CreatorMarketParamsN params) returns (bytes32 poolId, address cst, address cpt)",
+  "event MarketCreated(bytes32 indexed poolId, address indexed rateOracle, address collateralAsset, address referenceAsset, uint256 expiryTimestamp, address recipe, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage, address indexed caller)",
+  "error EntryNotFound()",
+  "error ExpiryOutOfRange(uint256 expiryTimestamp, uint256 maxExpiryTimestamp)",
+  "error RateUnavailable()",
+  "error RecipeNotRegistered(address recipe)",
+  "error RecipeRejectedConstraint(address recipe)",
+  "error UnexpectedRateOverride(address recipe)",
+  "error ZeroAddress()",
+]);
+
+/** DefaultCorkController.createNewPool on the 10-field phoenix (v1.4.0-rc.1, selector
+ *  0xa0e0024d): `PoolCreationParams { Market pool; bool isWhitelistEnabled }` — the two fees moved
+ *  INTO the Market (swap THEN unwind, the reverse of the 8-field params' unwind-then-swap). */
+export const controllerCreatePool10Abi = parseAbi([
+  "struct Market10_ { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; address rateOracle; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+  "struct PoolCreationParams10 { Market10_ pool; bool isWhitelistEnabled; }",
+  "function createNewPool(PoolCreationParams10 params)",
+]);
+
 /** Token self-description for asset/denomination display (best-effort — a token that will not
  *  name itself degrades to nulls, never a failed read). */
 export const erc20MetadataAbi = parseAbi([
@@ -186,18 +334,20 @@ export const CONFIGURATOR_ROLE = "0x3b49a237fe2d18fa4d9642b8a0e065923cceb71b7977
  *  that moves the cap cannot leave this literal silently authoritative. */
 export const MAX_FEE_PERCENTAGE_FALLBACK = 5n * 10n ** 18n;
 
-/** Controller-role pre-flight shared by every JIT prepare site (maker, taker-fill, legacy).
- *  The granted/missing decision lives in exactly this one comparator so a single mutation
+/** Controller-role pre-flight shared by every JIT prepare site (maker, taker-fill, create-pool,
+ *  legacy). The granted/missing decision lives in exactly this one comparator so a single mutation
  *  probe covers every call site — duplicated identical conditionals defeat first-occurrence
- *  probes. Role hashes are identical across registry generations; pass overrides if that
- *  ever diverges. */
-export async function readAdapterRoles(
+ *  probes. `holder` is the account that must hold the roles: the JIT ADAPTER on the flat wire
+ *  (it calls the controller itself), the MARKET CREATOR on the nested wire (the adapter delegates
+ *  creation to it and holds nothing — verified live 2026-09-22: creator true, adapter false) —
+ *  `roleHolderOf(wire)` names it. Role hashes are identical across generations. */
+export async function readRoleHolder(
   client: PublicClient,
   controller: `0x${string}`,
-  adapter: `0x${string}`,
-  roles: { creator?: `0x${string}`; second?: `0x${string}`; secondLabel?: string; chainId?: number } = {},
+  holder: `0x${string}`,
+  roles: { creator?: `0x${string}`; second?: `0x${string}`; secondLabel?: string; chainId?: number; /** The phoenix wire the controller belongs to: a 10-field controller has NO fee authority (no FEE_MANAGER_ROLE, no fee setters — the fees ride inside the Market), so POOL_CREATOR alone is the whole requirement. */ phoenixWire?: PhoenixWire } = {},
 ): Promise<{ hasCreator: boolean; hasSecond: boolean; secondRole: string; granted: boolean }> {
-  // The controller's own surface decides which SECOND role the adapter needs (chain outranks
+  // The controller's own surface decides which SECOND role the holder needs (chain outranks
   // config): the 0.3.2-generation controller splits fee authority into FEE_MANAGER_ROLE — a
   // public constant view that answers, and the role the rollout grants alongside POOL_CREATOR
   // — while earlier controllers gate fees behind CONFIGURATOR_ROLE. The probed value is used
@@ -219,6 +369,13 @@ export async function readAdapterRoles(
       return undefined;
     }
   };
+  const creator = roles.creator ?? (await probe("POOL_CREATOR_ROLE")) ?? POOL_CREATOR_ROLE;
+  if (roles.phoenixWire === "10-field") {
+    // No fee authority exists on this controller generation: probing FEE_MANAGER_ROLE would fall
+    // through to CONFIGURATOR and accuse a fully-granted creator of a missing role it never needs.
+    const hasCreator = await client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [creator, holder] });
+    return { hasCreator, hasSecond: true, secondRole: "none (10-field: fees ride inside the Market, no fee-authority role)", granted: hasCreator };
+  }
   let second = roles.second;
   let secondRole = roles.secondLabel ?? "CONFIGURATOR";
   if (second === undefined) {
@@ -230,32 +387,34 @@ export async function readAdapterRoles(
       second = CONFIGURATOR_ROLE;
     }
   }
-  const creator = roles.creator ?? (await probe("POOL_CREATOR_ROLE")) ?? POOL_CREATOR_ROLE;
   const [hasCreator, hasSecond] = await Promise.all([
-    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [creator, adapter] }),
-    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [second, adapter] }),
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [creator, holder] }),
+    client.readContract({ address: controller, abi: accessControlAbi, functionName: "hasRole", args: [second, holder] }),
   ]);
   return { hasCreator, hasSecond, secondRole, granted: hasCreator && hasSecond };
 }
 
 // ── Recipe constants catalog (mirrors the read API's hand-maintained annotation layer) ──────
 // Keyed by lowercased recipe address (CREATE2 ⇒ chain-stable). Supplies only the constant getter
-// NAMES + the additionalData arg annotation; every VALUE is read live off the recipe. Catalog
+// NAMES + the extraData arg annotation; every VALUE is read live off the recipe. Catalog
 // absence is NOT a gate — isRecipe on chain is the only membership check; an uncatalogued recipe
 // still lists, still self-describes, it just arrives with argsKnown:false.
 export interface RecipeCatalogEntry {
   constants: readonly string[];
   args: { type: string; display: string } | null;
 }
+const LIQUIDITY_RECIPE_CONSTANTS = ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"] as const;
+const IMPAIRMENT_ARGS_DISPLAY =
+  "abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage) — exactly 96 bytes (encodeImpairmentArgs builds it). anchorRate is on the RATE scale (1e18 = 1.0) and is honoured only while the pair's oracle is undeployed; durationSeconds is plain seconds, must not exceed the registry's maxExpiryDuration, and is the AUTHOR'S choice independent of the pool's expiry (usually expiry minus now); apySpreadPercentage is on the PERCENTAGE scale (1e18 = 1%, so a 10%/year spread is 10e18 — NOT the rate scale). Window = anchor ± spread×duration/365d, per-day = one day of the spread, capacity = seven";
 export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
   // 0.3.3 recipes (identical addresses on 42161 + 8453; constant getters re-probed live on the
   // deployed contracts 2026-08-10 — same constant set as 0.3.2, both liquidity flavors alike).
   "0xb881db48ad6da84a8f0d1ce4150caf7ae016dc55": {
-    constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
+    constants: LIQUIDITY_RECIPE_CONSTANTS,
     args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
   },
   "0xaed3d0e3c86a994d88741c285657c3e78550f66d": {
-    constants: ["RATE_MIN", "RATE_MIN_PERCENTAGE", "RATE_MAX_PERCENTAGE", "RATE_CHANGE_PER_DAY_MAX_PERCENTAGE", "RATE_CHANGE_CAPACITY_MAX_PERCENTAGE"],
+    constants: LIQUIDITY_RECIPE_CONSTANTS,
     args: { type: "(uint256)", display: "abi.encode(uint256 anchorRate)" },
   },
   "0x133ac0fa9e3d44a34b8ce4e4b8d468758fd165c1": {
@@ -263,21 +422,38 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
     args: { type: "()", display: "no payload — the fixed-rate recipe rejects any additionalData" },
   },
   // ApySpreadImpairmentRecipe (market-registry 0.4.0, deployed 2026-08-31; identical address on
-  // 42161 + 8453; approved on the CURRENT 0.3.3-generation registry — isRecipe read live on both
-  // chains 2026-09-21). The 0.4.0 release moved NO registry/adapter address (owner statement
+  // 42161 + 8453; approved on the 0.3.3-generation registry — isRecipe read live on both chains
+  // 2026-09-21). The 0.4.0 release moved NO registry/adapter address (owner statement
   // 2026-09-03), so this entry deliberately adopts the recipe alone, not the later 0.4-rc.1
   // shadow deployment set.
   "0x7340bfbedf3657a7bbce0dd2b4ab205754cc9eca": {
     constants: ["SECONDS_PER_YEAR", "CAPACITY_DAYS"],
-    args: {
-      type: "(uint256,uint256,uint256)",
-      display:
-        "abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage) — exactly 96 bytes (encodeImpairmentArgs builds it). anchorRate is on the RATE scale (1e18 = 1.0) and is honoured only while the pair's oracle is undeployed; durationSeconds is plain seconds, must not exceed the registry's maxExpiryDuration, and is the AUTHOR'S choice independent of the pool's expiry (usually expiry minus now); apySpreadPercentage is on the PERCENTAGE scale (1e18 = 1%, so a 10%/year spread is 10e18 — NOT the rate scale). Window = anchor ± spread×duration/365d, per-day = one day of the spread, capacity = seven",
-    },
+    args: { type: "(uint256,uint256,uint256)", display: IMPAIRMENT_ARGS_DISPLAY },
+  },
+  // market-registry 0.5.0 recipes (the nested-wire generation phoenix/v0.4-rc.1; identical
+  // addresses on 42161 + 8453; constant getters + encode/decodeExtraData read live 2026-09-22:
+  // liquidity price/nav answer the five RATE_* views, the impairment recipe its five constants
+  // incl. EXTRA_DATA_LENGTH = 96 and MAX_BAND_PERCENTAGE = 50e18, the fixed recipe WINDOW_WIDTH).
+  // The bytes member is `extraData` on this generation — same layouts, new name.
+  "0x679cbd016587c423f342e5ba31e58356228c964d": {
+    constants: LIQUIDITY_RECIPE_CONSTANTS,
+    args: { type: "(uint256)", display: "encodeExtraData(uint256 anchorRate) = abi.encode(anchorRate) — read only while the pair's oracle is undeployed" },
+  },
+  "0xed6a6b0448b89f35889aaf6df1bdef27f83787e3": {
+    constants: LIQUIDITY_RECIPE_CONSTANTS,
+    args: { type: "(uint256)", display: "encodeExtraData(uint256 anchorRate) = abi.encode(anchorRate) — read only while the pair's oracle is undeployed" },
+  },
+  "0xec26bb7d911afe374721ecd963543f7e52468c49": {
+    constants: ["WINDOW_WIDTH"],
+    args: { type: "()", display: "no payload — the fixed-rate recipe rejects any extraData (UnexpectedExtraData)" },
+  },
+  "0xd5e8f76aafa20aa9a8983a35b71ad3a793070ed9": {
+    constants: ["CAPACITY_DAYS", "EXTRA_DATA_LENGTH", "MAX_APY_SPREAD_PERCENTAGE", "MAX_BAND_PERCENTAGE", "SECONDS_PER_YEAR"],
+    args: { type: "(uint256,uint256,uint256)", display: IMPAIRMENT_ARGS_DISPLAY },
   },
 };
 
-/** ABI-encode decimal uint256 words in order — the additionalData shape every current recipe
+/** ABI-encode decimal uint256 words in order — the extraData shape every current recipe
  *  reads (liquidity: one word; impairment: three). One 32-byte word per value, no hand-built
  *  hex; the schema's `argsUints` rides through here. */
 export function encodeUintWords(words: readonly bigint[]): `0x${string}` {
@@ -285,12 +461,14 @@ export function encodeUintWords(words: readonly bigint[]): `0x${string}` {
 }
 
 /** The ApySpreadImpairmentRecipe's order-carried args, built the one way its _decode accepts
- *  them: abi.encode(anchorRate, durationSeconds, apySpreadPercentage), exactly 96 bytes.
- *  Scales are the recipe's own (its description() states them): anchorRate 1e18 = 1.0 (honoured
- *  only while the pair's oracle is undeployed — a live oracle's rate wins, the liquidity
- *  recipe's rule), durationSeconds plain seconds (the recipe rejects 0 and anything over the
- *  registry's maxExpiryDuration), apySpreadPercentage 1e18 = 1% (a 10%/year spread is 10e18 —
- *  the PERCENTAGE scale, not the rate scale; the recipe rejects a band of 100% or more). */
+ *  them: abi.encode(anchorRate, durationSeconds, apySpreadPercentage), exactly 96 bytes — the
+ *  same bytes the 0.5.0 recipe's own `encodeExtraData(uint256,uint256,uint256)` returns
+ *  (golden vector captured live 2026-09-22). Scales are the recipe's own (its description()
+ *  states them): anchorRate 1e18 = 1.0 (honoured only while the pair's oracle is undeployed — a
+ *  live oracle's rate wins, the liquidity recipe's rule), durationSeconds plain seconds (the
+ *  recipe rejects 0 and anything over the registry's maxExpiryDuration), apySpreadPercentage
+ *  1e18 = 1% (a 10%/year spread is 10e18 — the PERCENTAGE scale, not the rate scale; the recipe
+ *  rejects a band of 100% or more). */
 export function encodeImpairmentArgs(a: { anchorRate: bigint; durationSeconds: bigint; apySpreadPercentage: bigint }): `0x${string}` {
   return encodeUintWords([a.anchorRate, a.durationSeconds, a.apySpreadPercentage]);
 }
@@ -302,7 +480,7 @@ export function constantGetterAbi(name: string): Abi {
   return [{ type: "function", name, stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }];
 }
 
-// ── JIT hook payload (2.1.0 shape) + 1inch v4 extension building ────────────────────────────
+// ── JIT hook payload + 1inch v4 extension building (one TS shape, two wire layouts) ─────────
 export interface ResolvedConstraint {
   rateMin: bigint;
   rateMax: bigint;
@@ -310,6 +488,12 @@ export interface ResolvedConstraint {
   rateChangeCapacityMax: bigint;
 }
 
+/** The JIT market instruction as THIS TOOL holds it — FLAT for callers on every wire; the codec
+ *  nests it for the nested adapter. `extraData` is the one internal name for the recipe bytes
+ *  (the 0.5.0 contracts' word; the 0.3.x wire calls the same member additionalData and the
+ *  flat encoder writes it there). `oracleSalt` exists only on the nested wire: undefined or the
+ *  zero salt = the pair's default wrapper; the flat encoder REFUSES a non-zero salt because
+ *  no field carries it. */
 export interface JITMarketParams {
   collateralAsset: `0x${string}`;
   referenceAsset: `0x${string}`;
@@ -322,8 +506,10 @@ export interface JITMarketParams {
   /** The four limits, derived OFF-CHAIN at signing time (recipe.resolve) — part of pool identity. */
   constraint: ResolvedConstraint;
   /** The recipe-specific bytes the constraint was derived from (verify re-reads them). */
-  additionalData: `0x${string}`;
-  swapFeePercentage: bigint; // 1e18 = 1%, max 5e18 — consumed only when the fill creates the pool
+  extraData: `0x${string}`;
+  /** Nested wire only: mixed into the CREATE2 salt of the pair's FIRST oracle wrapper. */
+  oracleSalt?: `0x${string}` | undefined;
+  swapFeePercentage: bigint; // 1e18 = 1% — consumed only when the fill creates the pool; part of the 10-field id
   unwindSwapFeePercentage: bigint;
   enableJitMint: boolean; // gates the maker-side mint; IGNORED on the taker path (always mints)
 }
@@ -336,7 +522,34 @@ export interface PermitParams {
   s: `0x${string}`;
 }
 
-const JIT_PARAMS_ABI = [
+/** The two registry wires this build's codecs implement (the `legacy` wire is the deprecated
+ *  lane in market-registry-legacy.ts, reached through its own module). */
+export type ImplementedMarketRegistryWire = Extract<MarketRegistryWire, "flat" | "nested">;
+
+function assertImplementedWire(wire: MarketRegistryWire): asserts wire is ImplementedMarketRegistryWire {
+  if (wire !== "flat" && wire !== "nested") throw new Error(`market-registry codec: wire '${wire}' is not implemented here (the legacy wire lives in market-registry-legacy.ts behind the deprecation gate)`);
+}
+
+const CONSTRAINT_COMPONENTS = [
+  { name: "rateMin", type: "uint256" },
+  { name: "rateMax", type: "uint256" },
+  { name: "rateChangePerDayMax", type: "uint256" },
+  { name: "rateChangeCapacityMax", type: "uint256" },
+] as const;
+const PERMITS_ABI = {
+  type: "tuple[]" as const,
+  components: [
+    { name: "token", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+    { name: "v", type: "uint8" },
+    { name: "r", type: "bytes32" },
+    { name: "s", type: "bytes32" },
+  ],
+};
+
+/** FLAT wire: abi.encode(JITMarketParams_{9 fields + bool enableJitMint LAST}, PermitParams[]). */
+const JIT_PARAMS_FLAT_ABI = [
   {
     type: "tuple" as const,
     components: [
@@ -345,52 +558,103 @@ const JIT_PARAMS_ABI = [
       { name: "expiryTimestamp", type: "uint256" },
       { name: "recipe", type: "address" },
       { name: "rateOverride", type: "uint256" },
-      {
-        name: "constraint",
-        type: "tuple",
-        components: [
-          { name: "rateMin", type: "uint256" },
-          { name: "rateMax", type: "uint256" },
-          { name: "rateChangePerDayMax", type: "uint256" },
-          { name: "rateChangeCapacityMax", type: "uint256" },
-        ],
-      },
+      { name: "constraint", type: "tuple", components: CONSTRAINT_COMPONENTS },
       { name: "additionalData", type: "bytes" },
       { name: "swapFeePercentage", type: "uint256" },
       { name: "unwindSwapFeePercentage", type: "uint256" },
       { name: "enableJitMint", type: "bool" },
     ],
   },
-  {
-    type: "tuple[]" as const,
-    components: [
-      { name: "token", type: "address" },
-      { name: "value", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-      { name: "v", type: "uint8" },
-      { name: "r", type: "bytes32" },
-      { name: "s", type: "bytes32" },
-    ],
-  },
+  PERMITS_ABI,
 ];
 
-/** Hook extraData = abi.encode(JITMarketParams, PermitParams[]) — the adapter decodes exactly this. */
-export function encodeJitExtraData(params: JITMarketParams, permits: readonly PermitParams[] = []): `0x${string}` {
-  return encodeAbiParameters(JIT_PARAMS_ABI, [
-    {
-      collateralAsset: params.collateralAsset,
-      referenceAsset: params.referenceAsset,
-      expiryTimestamp: params.expiryTimestamp,
-      recipe: params.recipe,
-      rateOverride: params.rateOverride,
-      constraint: { ...params.constraint },
-      additionalData: params.additionalData,
-      swapFeePercentage: params.swapFeePercentage,
-      unwindSwapFeePercentage: params.unwindSwapFeePercentage,
-      enableJitMint: params.enableJitMint,
-    },
-    permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, v: p.v, r: p.r, s: p.s })),
-  ]);
+/** The creator's 10-field MarketParams — the SAME struct in createNewPool and inside the nested
+ *  adapter's wrapper. oracleSalt sits between the bytes and the fees (index 7). */
+const MARKET_PARAMS_NESTED_COMPONENTS = [
+  { name: "collateralAsset", type: "address" },
+  { name: "referenceAsset", type: "address" },
+  { name: "expiryTimestamp", type: "uint256" },
+  { name: "recipe", type: "address" },
+  { name: "rateOverride", type: "uint256" },
+  { name: "constraint", type: "tuple", components: CONSTRAINT_COMPONENTS },
+  { name: "extraData", type: "bytes" },
+  { name: "oracleSalt", type: "bytes32" },
+  { name: "swapFeePercentage", type: "uint256" },
+  { name: "unwindSwapFeePercentage", type: "uint256" },
+] as const;
+
+/** NESTED wire: abi.encode((MarketParams market, bool enableJitMint), PermitParams[]). */
+const JIT_PARAMS_NESTED_ABI = [
+  {
+    type: "tuple" as const,
+    components: [
+      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },
+      { name: "enableJitMint", type: "bool" },
+    ],
+  },
+  PERMITS_ABI,
+];
+
+type DecodedConstraint = { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+type DecodedPermit = { token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` };
+/** The nested wire's inner MarketParams as decoded/encoded. */
+type NestedMarketParams = {
+  collateralAsset: `0x${string}`;
+  referenceAsset: `0x${string}`;
+  expiryTimestamp: bigint;
+  recipe: `0x${string}`;
+  rateOverride: bigint;
+  constraint: DecodedConstraint;
+  extraData: `0x${string}`;
+  oracleSalt: `0x${string}`;
+  swapFeePercentage: bigint;
+  unwindSwapFeePercentage: bigint;
+};
+
+const isZeroSalt = (salt: `0x${string}` | undefined): boolean => salt === undefined || /^0x0*$/i.test(salt);
+
+/** The creator-shaped nested MarketParams for a TS JITMarketParams (the salt defaults to zero). */
+function nestedMarketParamsOf(p: Omit<JITMarketParams, "enableJitMint">): NestedMarketParams {
+  return {
+    collateralAsset: p.collateralAsset,
+    referenceAsset: p.referenceAsset,
+    expiryTimestamp: p.expiryTimestamp,
+    recipe: p.recipe,
+    rateOverride: p.rateOverride,
+    constraint: { ...p.constraint },
+    extraData: p.extraData,
+    oracleSalt: p.oracleSalt ?? ZERO_ORACLE_SALT,
+    swapFeePercentage: p.swapFeePercentage,
+    unwindSwapFeePercentage: p.unwindSwapFeePercentage,
+  };
+}
+
+/** Hook extraData for the given wire — flat: abi.encode(JITMarketParams_, PermitParams[]) with
+ *  the bytes member written as `additionalData` and the mint flag LAST; nested:
+ *  abi.encode((MarketParams, enableJitMint), PermitParams[]) with `extraData`, `oracleSalt`, and
+ *  the mint flag as the wrapper's second member. The adapter of that wire decodes exactly this. */
+export function encodeJitExtraData(wire: MarketRegistryWire, params: JITMarketParams, permits: readonly PermitParams[] = []): `0x${string}` {
+  assertImplementedWire(wire);
+  const permitRows = permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, v: p.v, r: p.r, s: p.s }));
+  if (wire === "flat") {
+    if (!isZeroSalt(params.oracleSalt)) throw new Error("encodeJitExtraData: the flat (0.3.x) wire carries no oracleSalt — a non-zero salt cannot be encoded for a flat-wire adapter");
+    return encodeAbiParameters(JIT_PARAMS_FLAT_ABI, [
+      {
+        collateralAsset: params.collateralAsset,
+        referenceAsset: params.referenceAsset,
+        expiryTimestamp: params.expiryTimestamp,
+        recipe: params.recipe,
+        rateOverride: params.rateOverride,
+        constraint: { ...params.constraint },
+        additionalData: params.extraData,
+        swapFeePercentage: params.swapFeePercentage,
+        unwindSwapFeePercentage: params.unwindSwapFeePercentage,
+        enableJitMint: params.enableJitMint,
+      },
+      permitRows,
+    ]);
+  }
+  return encodeAbiParameters(JIT_PARAMS_NESTED_ABI, [{ market: nestedMarketParamsOf(params), enableJitMint: params.enableJitMint }, permitRows]);
 }
 
 /** Build the 1inch LOP v4 extension whose ONLY dynamic field is PreInteractionData =
@@ -405,32 +669,48 @@ export function buildJitExtension(adapter: `0x${string}`, extraData: `0x${string
   return concatHex([toHex(offsets, { size: 32 }), pre]);
 }
 
-/** Round-trip reader for tests + decode paths: extract field 6 (PreInteractionData) per
- *  ExtensionLib._get semantics, then split target/extraData. */
-/** Decode the adapter's extraData alone — `abi.decode(extraData, (JITMarketParams, PermitParams[]))`,
- *  the same layout the on-chain decodeExtraData helper returns. */
-export function decodeJitExtraData(extraData: `0x${string}`): { params: JITMarketParams; permits: PermitParams[] } {
-  const [p, permits] = decodeAbiParameters(JIT_PARAMS_ABI, extraData) as [
-    {
-      collateralAsset: `0x${string}`;
-      referenceAsset: `0x${string}`;
-      expiryTimestamp: bigint;
-      recipe: `0x${string}`;
-      rateOverride: bigint;
-      constraint: { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
-      additionalData: `0x${string}`;
-      swapFeePercentage: bigint;
-      unwindSwapFeePercentage: bigint;
-      enableJitMint: boolean;
+/** Normalize the nested adapter's own decodeExtraData return (or our decode) into the flat TS
+ *  shape — the ONE place the wrapper is unwrapped, shared by decodeJitExtraData and the on-chain
+ *  round-trip so the two cannot read the same words differently. */
+export function flattenNestedJitParams(out: readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedPermit[]]): { params: JITMarketParams; permits: PermitParams[] } {
+  const m = out[0].market;
+  return {
+    params: {
+      collateralAsset: m.collateralAsset,
+      referenceAsset: m.referenceAsset,
+      expiryTimestamp: m.expiryTimestamp,
+      recipe: m.recipe,
+      rateOverride: m.rateOverride,
+      constraint: { ...m.constraint },
+      extraData: m.extraData,
+      oracleSalt: m.oracleSalt,
+      swapFeePercentage: m.swapFeePercentage,
+      unwindSwapFeePercentage: m.unwindSwapFeePercentage,
+      enableJitMint: out[0].enableJitMint,
     },
-    Array<{ token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` }>,
-  ];
-  return { params: { ...p, constraint: { ...p.constraint } }, permits: permits.map((x) => ({ ...x })) };
+    permits: out[1].map((x) => ({ ...x })),
+  };
+}
+
+/** Decode the adapter's extraData alone for the given wire — the same layout that wire's
+ *  on-chain decodeExtraData helper returns, unwrapped into the flat TS shape. */
+export function decodeJitExtraData(wire: MarketRegistryWire, extraData: `0x${string}`): { params: JITMarketParams; permits: PermitParams[] } {
+  assertImplementedWire(wire);
+  if (wire === "flat") {
+    const [p, permits] = decodeAbiParameters(JIT_PARAMS_FLAT_ABI, extraData) as [
+      { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: bigint; recipe: `0x${string}`; rateOverride: bigint; constraint: DecodedConstraint; additionalData: `0x${string}`; swapFeePercentage: bigint; unwindSwapFeePercentage: bigint; enableJitMint: boolean },
+      DecodedPermit[],
+    ];
+    const { additionalData, ...rest } = p;
+    return { params: { ...rest, constraint: { ...p.constraint }, extraData: additionalData }, permits: permits.map((x) => ({ ...x })) };
+  }
+  const out = decodeAbiParameters(JIT_PARAMS_NESTED_ABI, extraData) as unknown as readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedPermit[]];
+  return flattenNestedJitParams(out);
 }
 
 /** Field-by-field difference between the params this tool ENCODED and what a decoder READ back:
  *  the names of every field that disagrees (empty = the two layouts agree). Addresses and hex
- *  compare case-insensitively; everything else exactly. */
+ *  compare case-insensitively; everything else exactly. An absent oracleSalt is the zero salt. */
 export function diffJitExtraData(encoded: { params: JITMarketParams; permits: readonly PermitParams[] }, decoded: { params: JITMarketParams; permits: readonly PermitParams[] }): string[] {
   const out: string[] = [];
   const lc = (s: string) => s.toLowerCase();
@@ -441,7 +721,8 @@ export function diffJitExtraData(encoded: { params: JITMarketParams; permits: re
   if (lc(e.recipe) !== lc(d.recipe)) out.push("recipe");
   if (e.rateOverride !== d.rateOverride) out.push("rateOverride");
   for (const k of ["rateMin", "rateMax", "rateChangePerDayMax", "rateChangeCapacityMax"] as const) if (e.constraint[k] !== d.constraint[k]) out.push(`constraint.${k}`);
-  if (lc(e.additionalData) !== lc(d.additionalData)) out.push("additionalData");
+  if (lc(e.extraData) !== lc(d.extraData)) out.push("extraData");
+  if (lc(e.oracleSalt ?? ZERO_ORACLE_SALT) !== lc(d.oracleSalt ?? ZERO_ORACLE_SALT)) out.push("oracleSalt");
   if (e.swapFeePercentage !== d.swapFeePercentage) out.push("swapFeePercentage");
   if (e.unwindSwapFeePercentage !== d.unwindSwapFeePercentage) out.push("unwindSwapFeePercentage");
   if (e.enableJitMint !== d.enableJitMint) out.push("enableJitMint");
@@ -455,33 +736,65 @@ export function diffJitExtraData(encoded: { params: JITMarketParams; permits: re
   return out;
 }
 
-export function decodeJitExtension(extension: `0x${string}`): { adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
+/** Split a LOP v4 extension into the JIT hook's target adapter and its extraData bytes — the
+ *  wire-INDEPENDENT half of a JIT decode (field 6, PreInteractionData, per ExtensionLib._get).
+ *  Decode callers classify the adapter FIRST (generations.ts classifyAddress → the generation's
+ *  registry wire) and only then pick the codec; trial-decoding across wires would let a flat
+ *  payload read as a plausible nested market, or the reverse. */
+export function jitExtensionTarget(extension: `0x${string}`): { adapter: `0x${string}`; extraData: `0x${string}` } {
   const offsets = BigInt(sliceHex(extension, 0, 32));
   const concat = sliceHex(extension, 32);
   const begin = Number((offsets >> (32n * 5n)) & 0xffffffffn);
   const end = Number((offsets >> (32n * 6n)) & 0xffffffffn);
   const pre = sliceHex(concat, begin, end);
-  const adapter = getAddress(sliceHex(pre, 0, 20));
-  return { adapter, ...decodeJitExtraData(sliceHex(pre, 20)) };
+  return { adapter: getAddress(sliceHex(pre, 0, 20)), extraData: sliceHex(pre, 20) };
+}
+
+/** Decode a JIT extension on a KNOWN wire: adapter + params + permits. */
+export function decodeJitExtension(wire: MarketRegistryWire, extension: `0x${string}`): { adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
+  const { adapter, extraData } = jitExtensionTarget(extension);
+  return { adapter, ...decodeJitExtraData(wire, extraData) };
+}
+
+/** "Is this a JIT extension, and what does it say about the MAKER side?" for readers that hold
+ *  no address book (the ForSelf coherence pre-flight, the maker-readiness probe): tries the
+ *  implemented wires in turn and reports which one read the bytes. A best-effort SHAPE read for
+ *  heuristics only — anything that labels, trusts, or builds against the payload dispatches by
+ *  the adapter's classification instead (decodeJitExtension with the generation's wire). */
+export function decodeJitExtensionAny(extension: `0x${string}`): { wire: ImplementedMarketRegistryWire; adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
+  const { adapter, extraData } = jitExtensionTarget(extension);
+  let lastError: unknown;
+  for (const wire of ["nested", "flat"] as const) {
+    try {
+      return { wire, adapter, ...decodeJitExtraData(wire, extraData) };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("not a JIT extension on any implemented wire");
 }
 
 // ── Market derivation (what the fill will compute) ──────────────────────────────────────────
-/** Build the Market struct + poolId a fill carrying `constraint` would produce. In 2.1.0 the
- *  constraint comes IN (resolved off-chain at signing), so the identity is a pure function of
- *  the order — no rate read, no drift. Field order matches the adapter/controller exactly; the
- *  id is our verified computeMarketId (keccak256(abi.encode(Market)), bit-identical to
- *  poolManager.getId). */
+/** Build the Market struct + poolId a fill carrying `constraint` would produce. The constraint
+ *  comes IN (resolved off-chain at signing), so the identity is a pure function of the order —
+ *  no rate read, no drift. The width follows the PHOENIX wire of the generation the fill creates
+ *  on: 8-field (fees outside the id — the default, so pre-0.6 call sites are unchanged) or
+ *  10-field (the two fee percentages are the Market's last two members AND part of the id, so
+ *  they are required there and default to zero — a pool with a different fee is a different
+ *  pool). The id is computeMarketId on that wire, bit-identical to poolManager.getId (10-field
+ *  golden vector captured live 2026-09-22). */
 export function deriveJitMarket(args: {
   collateralAsset: `0x${string}`;
   referenceAsset: `0x${string}`;
   expiryTimestamp: bigint;
   constraint: ResolvedConstraint;
   oracle: `0x${string}`;
-}): { market: Market8; poolId: `0x${string}` } {
-  // stage 2: the flat-wire (0.3.x) adapter creates pools on an 8-field pool manager, so this
-  // derivation is pinned to the 8-field id; the nested-wire codec derives a 10-field market
-  // (fees inside the struct and the id) and hashes it on the 10-field wire.
-  const market: Market8 = {
+  wire?: PhoenixWire | undefined;
+  swapFeePercentage?: bigint | undefined;
+  unwindSwapFeePercentage?: bigint | undefined;
+}): { market: Market; poolId: `0x${string}`; wire: PhoenixWire } {
+  const wire: PhoenixWire = args.wire ?? "8-field";
+  const eight: Market8 = {
     collateralAsset: args.collateralAsset,
     referenceAsset: args.referenceAsset,
     expiryTimestamp: args.expiryTimestamp,
@@ -491,28 +804,47 @@ export function deriveJitMarket(args: {
     rateChangeCapacityMax: args.constraint.rateChangeCapacityMax,
     rateOracle: args.oracle,
   };
-  return { market, poolId: computeMarketId(market, "8-field") };
+  if (wire === "10-field") {
+    const market: Market10 = { ...eight, swapFeePercentage: args.swapFeePercentage ?? 0n, unwindSwapFeePercentage: args.unwindSwapFeePercentage ?? 0n };
+    return { market, poolId: computeMarketId(market, "10-field"), wire };
+  }
+  return { market: eight, poolId: computeMarketId(eight, "8-field"), wire };
 }
 
-/** Unsigned MarketRegistry.deploy(ca, ref, mode) calldata — permissionless + idempotent (an
- *  existing pair/mode just returns the recorded wrapper). */
-export function buildDeployOracleCall(ca: `0x${string}`, ref: `0x${string}`, mode: OracleModeName): `0x${string}` {
-  return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode]] });
+/** Unsigned MarketRegistry.deploy calldata for the wire — flat: deploy(ca, ref, mode); nested:
+ *  deploy(ca, ref, mode, oracleSalt) (zero salt = the pair's default wrapper; the salt is refused
+ *  non-zero on flat, which has no field for it). Permissionless + idempotent on both (an existing
+ *  pair/mode wrapper is returned whatever the salt). */
+export function buildDeployOracleCall(wire: MarketRegistryWire, ca: `0x${string}`, ref: `0x${string}`, mode: OracleModeName, oracleSalt?: `0x${string}` | undefined): `0x${string}` {
+  assertImplementedWire(wire);
+  if (wire === "flat") {
+    if (!isZeroSalt(oracleSalt)) throw new Error("buildDeployOracleCall: the flat (0.3.x) registry's deploy(ca, ref, mode) carries no oracleSalt — a non-zero salt cannot be encoded for a flat-wire registry");
+    return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode]] });
+  }
+  return encodeFunctionData({ abi: marketRegistryNestedAbi, functionName: "deploy", args: [ca, ref, ORACLE_MODE[mode], oracleSalt ?? ZERO_ORACLE_SALT] });
 }
 
 /** Unsigned MarketRegistry.deployFixedRateOracle(rate) calldata — CREATE2-salted by the rate,
  *  so a given rate has ONE oracle per chain; idempotent; a zero rate reverts in the oracle
- *  constructor. */
+ *  constructor. Identical bytes on both wires (the selector and shape did not change). */
 export function buildDeployFixedRateOracleCall(rate: bigint): `0x${string}` {
   return encodeFunctionData({ abi: marketRegistryAbi, functionName: "deployFixedRateOracle", args: [rate] });
 }
 
-/** controller.createNewPool calldata for share-prediction simulations. */
-export function buildCreatePoolCall(market: Market8, unwindSwapFeePercentage: bigint, swapFeePercentage: bigint): `0x${string}` {
+/** controller.createNewPool calldata for share-prediction simulations, per PHOENIX wire:
+ *  8-field `(Market_ pool, unwindFee, swapFee, isWhitelistEnabled)` (unwind BEFORE swap);
+ *  10-field `((Market10 pool, isWhitelistEnabled))` — the fees are the market's own last two
+ *  members, so a 10-field call takes NO fee arguments (they are already in `market`). */
+export function buildCreatePoolCall(wire: PhoenixWire, market: Market, fees: { unwindSwapFeePercentage: bigint; swapFeePercentage: bigint } = { unwindSwapFeePercentage: 0n, swapFeePercentage: 0n }): `0x${string}` {
+  if (wire === "10-field") {
+    if (!("swapFeePercentage" in market)) throw new Error("buildCreatePoolCall: a 10-field controller takes a 10-field Market (fees inside the struct) — derive it on the 10-field wire");
+    return encodeFunctionData({ abi: controllerCreatePool10Abi, functionName: "createNewPool", args: [{ pool: { ...market }, isWhitelistEnabled: false }] });
+  }
+  if ("swapFeePercentage" in market) throw new Error("buildCreatePoolCall: an 8-field controller takes an 8-field Market — the fees ride as separate arguments there");
   return encodeFunctionData({
     abi: controllerCreatePoolAbi,
     functionName: "createNewPool",
-    args: [{ pool: { ...market }, unwindSwapFeePercentage, swapFeePercentage, isWhitelistEnabled: false }],
+    args: [{ pool: { ...market }, unwindSwapFeePercentage: fees.unwindSwapFeePercentage, swapFeePercentage: fees.swapFeePercentage, isWhitelistEnabled: false }],
   });
 }
 
@@ -523,12 +855,12 @@ export function buildSharesCall(poolId: `0x${string}`): `0x${string}` {
   return encodeFunctionData({ abi: sharesAbi, functionName: "shares", args: [poolId] });
 }
 
-// ── CorkMarketCreator (cork-periphery): direct pool creation ahead of a fill ─────────────────
+// ── CorkMarketCreator: direct pool creation ahead of a fill ─────────────────────────────────
 
-/** CorkMarketCreator surface (cork-periphery 0.1.0). `MarketParams` is the adapter's
- *  JITMarketParams WITHOUT the fill-only mint flag — the nine shared fields keep the same
- *  names, types, and ORDER (wire format; the contract states the parity as a rule). The typed
- *  errors are declared so simulate/decode name the creator's own reverts. */
+/** CorkMarketCreator surface on the FLAT wire (cork-periphery 0.1.0). `MarketParams` is the
+ *  adapter's JITMarketParams WITHOUT the fill-only mint flag — the nine shared fields keep the
+ *  same names, types, and ORDER (wire format; the contract states the parity as a rule). The
+ *  typed errors are declared so simulate/decode name the creator's own reverts. */
 export const marketCreatorAbi = parseAbi([
   "struct CreatorRateConstraint { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
   "struct CreatorMarketParams { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; CreatorRateConstraint constraint; bytes additionalData; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
@@ -549,25 +881,131 @@ export const marketCreatorAbi = parseAbi([
 /** The creator's input: JITMarketParams minus `enableJitMint` (creation only, never a mint). */
 export type CreatorMarketParams = Omit<JITMarketParams, "enableJitMint">;
 
-/** Unsigned CorkMarketCreator.createNewPool(params) calldata — the same pool a JIT fill would
- *  derive and create, creatable AHEAD of the fill; permissionless + idempotent (an existing
- *  pool is a lookup returning (poolId, cst, cpt)). */
-export function buildCreatorCreatePoolCall(params: CreatorMarketParams): `0x${string}` {
-  return encodeFunctionData({
-    abi: marketCreatorAbi,
-    functionName: "createNewPool",
-    args: [{
-      collateralAsset: params.collateralAsset,
-      referenceAsset: params.referenceAsset,
-      expiryTimestamp: params.expiryTimestamp,
-      recipe: params.recipe,
-      rateOverride: params.rateOverride,
-      constraint: { ...params.constraint },
-      additionalData: params.additionalData,
-      swapFeePercentage: params.swapFeePercentage,
-      unwindSwapFeePercentage: params.unwindSwapFeePercentage,
-    }],
-  });
+/** Unsigned CorkMarketCreator.createNewPool(params) calldata for the wire — the same pool a JIT
+ *  fill would derive and create, creatable AHEAD of the fill; permissionless + idempotent (an
+ *  existing pool is a lookup returning (poolId, cst, cpt)). Flat: the nine-field periphery
+ *  struct (bytes as `additionalData`, no salt — refused non-zero); nested: the registry
+ *  package's 10-field MarketParams (selector 0x59c8eb4c; `extraData`, `oracleSalt` at index 7). */
+export function buildCreatorCreatePoolCall(wire: MarketRegistryWire, params: CreatorMarketParams): `0x${string}` {
+  assertImplementedWire(wire);
+  if (wire === "flat") {
+    if (!isZeroSalt(params.oracleSalt)) throw new Error("buildCreatorCreatePoolCall: the flat (cork-periphery 0.1.0) creator's MarketParams carries no oracleSalt — a non-zero salt cannot be encoded for a flat-wire creator");
+    return encodeFunctionData({
+      abi: marketCreatorAbi,
+      functionName: "createNewPool",
+      args: [{
+        collateralAsset: params.collateralAsset,
+        referenceAsset: params.referenceAsset,
+        expiryTimestamp: params.expiryTimestamp,
+        recipe: params.recipe,
+        rateOverride: params.rateOverride,
+        constraint: { ...params.constraint },
+        additionalData: params.extraData,
+        swapFeePercentage: params.swapFeePercentage,
+        unwindSwapFeePercentage: params.unwindSwapFeePercentage,
+      }],
+    });
+  }
+  return encodeFunctionData({ abi: marketCreatorNestedAbi, functionName: "createNewPool", args: [nestedMarketParamsOf(params)] });
+}
+
+/** The recipe.verify staticcall per wire — flat: verify(ca, ref, oracle, constraint, bytes);
+ *  nested: verify(ca, ref, oracle, expiryTimestamp, creating, constraint, bytes) — `creating` is
+ *  what the creator/adapter pass when THIS call would create the pool (the recipe applies its
+ *  creation-only rules once, e.g. the impairment duration bound). One call site for the arg
+ *  order, so the maker ladder, the taker ladder and create-pool cannot hold it differently. */
+export async function recipeVerify(
+  wire: MarketRegistryWire,
+  client: Pick<PublicClient, "readContract">,
+  a: { recipe: `0x${string}`; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; oracle: `0x${string}`; expiryTimestamp: bigint; creating: boolean; constraint: ResolvedConstraint; extraData: `0x${string}` },
+): Promise<boolean> {
+  assertImplementedWire(wire);
+  if (wire === "flat") {
+    return client.readContract({ address: a.recipe, abi: recipeAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, { ...a.constraint }, a.extraData] });
+  }
+  return client.readContract({ address: a.recipe, abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.expiryTimestamp, a.creating, { ...a.constraint }, a.extraData] });
+}
+
+/** The verify calldata alone (for tests pinning the selector/arg layout and for simulations). */
+export function buildRecipeVerifyCall(wire: MarketRegistryWire, a: Parameters<typeof recipeVerify>[2]): `0x${string}` {
+  assertImplementedWire(wire);
+  if (wire === "flat") return encodeFunctionData({ abi: recipeAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, { ...a.constraint }, a.extraData] });
+  return encodeFunctionData({ abi: recipeNestedAbi, functionName: "verify", args: [a.collateralAsset, a.referenceAsset, a.oracle, a.expiryTimestamp, a.creating, { ...a.constraint }, a.extraData] });
+}
+
+/** Which contract holds the controller's pool-creator role on each wire — the adapter (flat:
+ *  it creates pools itself) or the market creator (nested: the adapter delegates creation to
+ *  it). The share-prediction simulation grants the role to and runs as THIS account. */
+export function roleHolderOf(wire: MarketRegistryWire): "adapter" | "creator" {
+  assertImplementedWire(wire);
+  return wire === "flat" ? "adapter" : "creator";
+}
+
+/** The ONE codec table keyed by implemented registry wire: every per-wire ABI and builder in one
+ *  row, so a handler picks the row once (`wireCodec(mr.wire)`) and cannot mix a flat ABI with a
+ *  nested builder. The binding chain and role holder are the pre-flight facts a handler reads
+ *  off the chain for that wire. */
+export interface WireCodec {
+  wire: ImplementedMarketRegistryWire;
+  adapterAbi: Abi;
+  creatorAbi: Abi;
+  registryAbi: Abi;
+  recipeAbi: Abi;
+  /** The account the controller's POOL_CREATOR_ROLE must be granted to. */
+  roleHolder: "adapter" | "creator";
+  /** The adapter's binding reads → what each must equal (teaching + the pre-flight's shape). */
+  bindingChain: readonly string[];
+  /** Whether the registry stack exposes MAX_FEE_PERCENTAGE() (flat: adapter + creator do). */
+  hasFeeCapView: boolean;
+  /** The name the wire's own contracts use for the recipe bytes. */
+  bytesField: "additionalData" | "extraData";
+  encodeExtraData: (params: JITMarketParams, permits?: readonly PermitParams[]) => `0x${string}`;
+  decodeExtraData: (extraData: `0x${string}`) => { params: JITMarketParams; permits: PermitParams[] };
+  deployCall: (ca: `0x${string}`, ref: `0x${string}`, mode: OracleModeName, oracleSalt?: `0x${string}` | undefined) => `0x${string}`;
+  creatorCreatePoolCall: (params: CreatorMarketParams) => `0x${string}`;
+  verify: (client: Pick<PublicClient, "readContract">, a: Parameters<typeof recipeVerify>[2]) => Promise<boolean>;
+}
+
+export const WIRES: Readonly<Record<ImplementedMarketRegistryWire, WireCodec>> = {
+  flat: {
+    wire: "flat",
+    adapterAbi: jitAdapterAbi,
+    creatorAbi: marketCreatorAbi,
+    registryAbi: marketRegistryAbi,
+    recipeAbi,
+    roleHolder: "adapter",
+    bindingChain: ["adapter.LIMIT_ORDER_PROTOCOL == the chain's LOP", "adapter.MARKET_REGISTRY == the configured registry", "adapter.CONTROLLER → the controller whose roles gate creation"],
+    hasFeeCapView: true,
+    bytesField: "additionalData",
+    encodeExtraData: (params, permits) => encodeJitExtraData("flat", params, permits),
+    decodeExtraData: (bytes) => decodeJitExtraData("flat", bytes),
+    deployCall: (ca, ref, mode, salt) => buildDeployOracleCall("flat", ca, ref, mode, salt),
+    creatorCreatePoolCall: (params) => buildCreatorCreatePoolCall("flat", params),
+    verify: (client, a) => recipeVerify("flat", client, a),
+  },
+  nested: {
+    wire: "nested",
+    adapterAbi: jitAdapterNestedAbi,
+    creatorAbi: marketCreatorNestedAbi,
+    registryAbi: marketRegistryNestedAbi,
+    recipeAbi: recipeNestedAbi,
+    roleHolder: "creator",
+    bindingChain: ["adapter.LIMIT_ORDER_PROTOCOL == the chain's LOP", "adapter.MARKET_CREATOR == the configured market creator", "creator.MARKET_REGISTRY == the configured registry", "creator.CONTROLLER → the controller whose POOL_CREATOR role the CREATOR holds", "adapter.POOL_MANAGER == creator.POOL_MANAGER == the generation's pool manager"],
+    hasFeeCapView: false,
+    bytesField: "extraData",
+    encodeExtraData: (params, permits) => encodeJitExtraData("nested", params, permits),
+    decodeExtraData: (bytes) => decodeJitExtraData("nested", bytes),
+    deployCall: (ca, ref, mode, salt) => buildDeployOracleCall("nested", ca, ref, mode, salt),
+    creatorCreatePoolCall: (params) => buildCreatorCreatePoolCall("nested", params),
+    verify: (client, a) => recipeVerify("nested", client, a),
+  },
+};
+
+/** The codec row for a generation's declared registry wire; throws on the legacy wire (its lane
+ *  is market-registry-legacy.ts, reached only through the deprecation gate). */
+export function wireCodec(wire: MarketRegistryWire): WireCodec {
+  assertImplementedWire(wire);
+  return WIRES[wire];
 }
 
 /** rateOverride ↔ recipe-source coherence — the ONE comparator behind the JIT ladder's and the
@@ -616,7 +1054,8 @@ export async function readForeignSharePool(client: PublicClient, addr: `0x${stri
  *  - `unavailable`: the RPC lacks eth_simulateV1/state overrides or the simulation reverted.
  *  cST/cPT are deployed via plain `new PoolShare(...)` (nonce CREATE, NOT CREATE2 — see
  *  SharesFactory.sol), so there is no off-chain address derivation: simulation is the only
- *  predictor. Fees are NOT part of market identity; callers that only want the tokens pass 0. */
+ *  predictor. On the 8-field wire fees are NOT part of market identity (callers that only want
+ *  the tokens pass 0); on the 10-field wire they ride inside `market` and ARE the identity. */
 export interface PredictSharesResult {
   cst?: `0x${string}` | undefined;
   cpt?: `0x${string}` | undefined;
@@ -627,11 +1066,16 @@ export interface PredictSharesResult {
 export async function predictShares(
   client: PublicClient,
   args: {
+    /** The account the simulation runs AS and grants POOL_CREATOR to: the role holder of the
+     *  registry wire — the JIT adapter (flat) or the market creator (nested), see roleHolderOf. */
     adapter: `0x${string}`;
     controller: `0x${string}`;
     poolManager: `0x${string}`;
-    market: Market8;
+    market: Market;
     poolId: `0x${string}`;
+    /** The controller's wire (defaults to 8-field, the pre-0.6 behaviour); a 10-field market
+     *  must be derived on the 10-field wire — buildCreatePoolCall refuses a mixed pair. */
+    wire?: PhoenixWire | undefined;
     unwindSwapFeePercentage?: bigint;
     swapFeePercentage?: bigint;
     /** Legs to run BEFORE createNewPool in the simulation — e.g. the permissionless
@@ -673,15 +1117,15 @@ export async function predictShares(
   } catch {
     /* pool does not exist yet — fall through to simulation */
   }
-  // 2. Simulate the creation the fill would perform, granting the simulating account (the
-  //    adapter) POOL_CREATOR_ROLE via state override — role-grant-independent, so the
-  //    prediction works both before and after governance grants the real roles. The role hash
-  //    prefers the controller's own cached live value (warmed by readAdapterRoles in the same
-  //    prepare); the compiled fallback covers a cold cache.
+  // 2. Simulate the creation the fill would perform, granting the simulating account (the role
+  //    holder) POOL_CREATOR_ROLE via state override — role-grant-independent, so the prediction
+  //    works both before and after governance grants the real roles. The role hash prefers the
+  //    controller's own cached live value (warmed by readRoleHolder in the same prepare); the
+  //    compiled fallback covers a cold cache.
   try {
     const pre = args.preCalls ?? [];
     const creatorRole = (args.chainId !== undefined ? cachedContractConstantBytes32(args.chainId, args.controller, "POOL_CREATOR_ROLE") : undefined) ?? POOL_CREATOR_ROLE;
-    const createData = buildCreatePoolCall(args.market, args.unwindSwapFeePercentage ?? 0n, args.swapFeePercentage ?? 0n);
+    const createData = buildCreatePoolCall(args.wire ?? "8-field", args.market, { unwindSwapFeePercentage: args.unwindSwapFeePercentage ?? 0n, swapFeePercentage: args.swapFeePercentage ?? 0n });
     const simulated = await client.simulateCalls({
       account: args.adapter,
       calls: [
@@ -711,14 +1155,22 @@ export async function predictShares(
   return { exists: false, status: "unavailable" };
 }
 
-// ── JIT lifecycle events (adapter source, frozen signatures) ────────────────────────────────
+// ── JIT + market lifecycle events (source-verified signatures) ─────────────────────────────
 // 2.1.0 JITMarketCreated carries the RECIPE ADDRESS where the legacy event carried a mode
-// string — both topics stay decodable (receipts from either generation label correctly).
+// string — both topics stay decodable (receipts from either generation label correctly). The
+// nested-wire adapter emits ONLY JITMinted (same signature); market creation is announced by the
+// CREATOR's MarketCreated (9 args, poolId/rateOracle/caller indexed) and by the 10-field pool
+// manager's MarketCreated (9 args: the 8-field seven plus the two fees) — both topic0s verified
+// against the 0.5.0 / 1.4.0-rc.1 ABIs 2026-09-22.
 export const JIT_MARKET_CREATED_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,address)");
 export const JIT_MINTED_TOPIC = toEventSelector("JITMinted(bytes32,address,uint256,uint256)");
 export const JIT_MARKET_CREATED_LEGACY_TOPIC = toEventSelector("JITMarketCreated(bytes32,address,address,address,uint256,string)");
+export const CREATOR_MARKET_CREATED_TOPIC = toEventSelector("MarketCreated(bytes32,address,address,address,uint256,address,uint256,uint256,address)");
+export const POOL_MANAGER_MARKET_CREATED_10_TOPIC = toEventSelector("MarketCreated(bytes32,address,address,uint256,address,address,address,uint256,uint256)");
 export const JIT_EVENTS: Record<string, string> = {
   [JIT_MARKET_CREATED_TOPIC]: "JITMarketCreated",
   [JIT_MINTED_TOPIC]: "JITMinted",
   [JIT_MARKET_CREATED_LEGACY_TOPIC]: "JITMarketCreated (legacy pre-2.1.0)",
+  [CREATOR_MARKET_CREATED_TOPIC]: "MarketCreated (CorkMarketCreator, nested wire)",
+  [POOL_MANAGER_MARKET_CREATED_10_TOPIC]: "MarketCreated (pool manager, 10-field wire)",
 };

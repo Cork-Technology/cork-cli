@@ -9,7 +9,7 @@ import type { PublicClient } from "viem";
 import { UNITS_TOPIC_REFERENCE, type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
-import { decodeJitExtension } from "../market-registry.ts";
+import { decodeJitExtensionAny } from "../market-registry.ts";
 import { buildTakerFill, decodeMakerTraits } from "../orders.ts";
 import { annotateApprovalStatus, approvalMissingWarning, takerApprovalRequirements } from "../order-approvals.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
@@ -250,7 +250,7 @@ export async function prepareForSelfTakerFill(args: {
         let hasJit = false;
         if (signed.extension && signed.extension !== "0x") {
           try {
-            decodeJitExtension(signed.extension);
+            decodeJitExtensionAny(signed.extension);
             hasJit = true;
           } catch {
             /* not a JIT extension */

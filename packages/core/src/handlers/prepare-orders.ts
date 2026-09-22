@@ -1,19 +1,20 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
-import { isAddressEqual } from "viem";
+import { isAddressEqual, zeroHash } from "viem";
 import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
-import { buildDeployFixedRateOracleCall, buildDeployOracleCall, buildJitExtension, deriveJitMarket, encodeJitExtraData, type JITMarketParams, predictShares } from "../market-registry.ts";
+import type { MarketRegistryWire } from "../generations.ts";
+import { buildDeployFixedRateOracleCall, buildJitExtension, deriveJitMarket, type JITMarketParams, predictShares, wireCodec } from "../market-registry.ts";
 import { resolveRollover } from "../config-remote.ts";
-import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
+import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, deriveRolloverJitPool, hashJitMarketParams, phoenixWireOfRolloverWire, retiredSettlerTeaching, RolloverJitWireError, rolloverGenerations, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeCap, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeRule, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
@@ -31,6 +32,9 @@ type MakerJitReport = {
   hook: string;
   recipe: `0x${string}`;
   enableJitMint: boolean;
+  /** The registry wire the extension bytes are encoded for + the generation it targets. */
+  wire?: MarketRegistryWire;
+  generation?: string;
   source?: NonNullable<Extract<JitLadderResult, { gate?: undefined }>["verified"]>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
   derivedPoolId?: `0x${string}`;
@@ -245,7 +249,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const swapFee = BigInt(jm.swapFeePercentage);
       const unwindFee = BigInt(jm.unwindSwapFeePercentage);
       const expiryTimestamp = BigInt(jm.expiryTimestamp);
-      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { capWei: await resolveFeeCap(chainId, "adapter", ctx) });
+      const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { feeRule: await resolveFeeRule(chainId, "adapter", ctx) });
       if (valueGate) return valueGate;
       const farFuture = farFutureExpiryWarning(expiryTimestamp, nowSecs);
       if (farFuture) warnings.push(farFuture);
@@ -263,9 +267,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // maker tail below (cST prediction with maker-facing wording, extension encode) is local.
         const ladder = await runJitPreflightLadder({ ctx, chainId, lop, jm, side: "maker" });
         if (ladder.gate) return ladder.gate;
-        const { recipe, rateOverride, additionalData, constraint } = ladder;
+        const { recipe, rateOverride, extraData: recipeBytes, oracleSalt, constraint, wire, phoenixWire } = ladder;
+        const codec = wireCodec(wire);
         warnings.push(...ladder.warnings);
-        jitData = { adapter: ladder.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint };
+        jitData = { adapter: ladder.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint, wire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
 
         if (ladder.verified) {
           const { client, boundController, source, oracle, derived } = ladder.verified;
@@ -280,7 +285,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             const { dep: jitDep } = await getDep(ctx, chainId, { ...(ladder.generation ? { generation: ladder.generation.label } : {}) });
             const preCalls: Array<{ to: `0x${string}`; data: `0x${string}` }> = [];
             if (!oracle.deployed) {
-              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : buildDeployOracleCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price") });
+              preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
             }
             // A missing/partial deployment config is NOT a chain read failure [C11]: guarding
             // (like the legacy-jit and registry siblings) instead of `jitDep!` keeps a config
@@ -288,12 +293,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             if (jitDep?.poolManager === undefined) {
               warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
             } else {
+              // The simulation runs AS the wire's role holder (adapter on flat, creator on nested).
               const pred = await predictShares(client, {
-                adapter: ladder.adapter,
+                adapter: codec.roleHolder === "creator" ? ladder.marketCreator! : ladder.adapter,
                 controller: boundController,
                 poolManager: jitDep.poolManager,
                 market: derived.market,
                 poolId: derived.poolId,
+                wire: phoenixWire,
                 unwindSwapFeePercentage: unwindFee,
                 swapFeePercentage: swapFee,
                 preCalls,
@@ -329,12 +336,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
           }
         }
         const permits = parsePermitWires(jm.permits);
-        const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, additionalData, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
-        const extraData = encodeJitExtraData(jitParams, permits);
+        const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData: recipeBytes, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
+        const extraData = codec.encodeExtraData(jitParams, permits);
         if (ladder.verified) {
           // Decode round-trip: the deployed adapter's own decoder is the layout oracle for the
           // bytes this build produced. A disagreement is the finding's failure class — refused.
-          const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
+          const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
           if ("gate" in layout) return layout.gate;
           jitData = { ...jitData, extraDataLayout: layout.status };
         }
@@ -513,6 +520,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     if (cls.status === "unknown") {
       warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — the venue only admits factory-approved settlers` });
     }
+    // The JIT commitment is hashed on the SETTLER generation's wire, never the chain primary's:
+    // the order is filled by the BaseFiller of the factory that approved this settler (each
+    // factory admits only its own), so an rc.2 settler takes the rc.2 layout while the primary
+    // set speaks 0.2. An unrecognized settler has no generation to speak for it — the primary's
+    // wire is the only available guess, and settler_not_recognized already says the address is
+    // unvouched; a chain with no live rollover generation cannot hash a commitment at all.
+    const settlerGeneration = cls.status === "active" ? cls.generation : rolloverGenerations(rollover).find((g) => g.primary);
+    const jitWire = settlerGeneration?.wire;
 
     // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
     // pre-computed hash verbatim; never both (two sources of the same commitment can disagree).
@@ -522,9 +537,29 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     let jitMarketHash: `0x${string}` | undefined = action.jitMarketHash;
     if (action.jitMarket) {
       const jm = action.jitMarket;
-      // Same value-domain gate the LOP JIT builders run (fee cap + future expiry, one place so
-      // the boundary rules cannot drift), plus the rollover-specific window rule.
-      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { capWei: await resolveFeeCap(chainId, "adapter", ctx) });
+      if (jitWire === undefined || jitWire === "rc.1") {
+        return unavailable(chainId, "invalid_order_terms", `a jitMarket instruction cannot be committed for settler ${action.settler}: ${jitWire === "rc.1" ? "its generation predates jitMarketHash (rc.1)" : "no live rollover generation on this chain speaks a JIT commitment wire"} — bind the order to an active settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")})`, ctx);
+      }
+      // Vocabulary parity with the registry side (its struct renamed the bytes member to
+      // `extraData`; the BaseFiller kept `additionalData`): either spelling is accepted on INPUT,
+      // both present and different is two instructions, refused. The struct/typed-data OUTPUT
+      // keeps the contract's own name. The schema types only `additionalData` today, so the alias
+      // reaches this branch once the shared JIT wire schema carries it; the handler is ready.
+      const jmx = jm as typeof jm & { extraData?: `0x${string}` | undefined; oracleSalt?: `0x${string}` | undefined };
+      if (jmx.extraData !== undefined && jm.additionalData !== "0x" && jmx.extraData.toLowerCase() !== jm.additionalData.toLowerCase()) {
+        return unavailable(chainId, "invalid_order_terms", `jitMarket.extraData (${jmx.extraData}) and jitMarket.additionalData (${jm.additionalData}) are two spellings of the SAME recipe bytes (BaseFiller.JITMarketParams.additionalData) and they differ — pass one`, ctx);
+      }
+      const additionalData: `0x${string}` = jmx.extraData ?? jm.additionalData;
+      // oracleSalt exists only on the 0.2 wire: defaulted to the ZERO salt there (the nested
+      // registry's deploy(ca, ref, mode, salt) with the zero salt is the pair's default oracle —
+      // market-registry's ZERO_ORACLE_SALT), refused non-zero on rc.2 by the hash function itself.
+      const oracleSalt: `0x${string}` | undefined = jmx.oracleSalt ?? (jitWire === "0.2" ? zeroHash : undefined);
+      // Same value-domain gate the LOP JIT builders run (fee rule + future expiry, one place so
+      // the boundary rules cannot drift), plus the rollover-specific window rule. The fee rule
+      // is the SETTLER generation's (its pool manager creates the destination pool): 5e18 on an
+      // 8-field set, strictly below 100e18 on a 10-field one — never the chain primary's.
+      const settlerCtx: HandlerContext = settlerGeneration !== undefined ? { ...ctx, generation: settlerGeneration.label } : ctx;
+      const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { feeRule: await resolveFeeRule(chainId, "adapter", settlerCtx) });
       if (gate) return gate;
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
         return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
@@ -537,7 +572,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // LOP JIT ladder: runs whenever an RPC resolves; silent without one.
       try {
         const resolved = await getRpc(ctx, chainId);
-        const { mr } = await getMarketRegistry(ctx, chainId);
+        // The oracle the pool binds is the SETTLER generation's registry's: a cross-check
+        // against another generation's registry derives a pool that BaseFiller never creates
+        // and would warn about a mismatch that is ours, not the caller's. So the registry is
+        // BOUND to the settler's set (its declared wire picks the codec — nested for a 0.2
+        // settler, flat for rc.2), and the salt rides into the simulated oracle deploy.
+        const { mr, generation: mrGeneration } = await getMarketRegistry(settlerCtx, chainId);
         if (resolved && mr) {
           const res = await resolveRecipeOracleConstraint({
             client: resolved.client,
@@ -548,47 +588,60 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             collateralAsset: jm.collateralAsset,
             referenceAsset: jm.referenceAsset,
             ...(BigInt(jm.rateOverride) > 0n ? { fixedRate: BigInt(jm.rateOverride) } : {}),
+            ...(oracleSalt !== undefined ? { oracleSalt } : {}),
             wantConstraint: false,
           });
-          if (!res.gate && res.oracle.address) {
-            const derived = deriveJitMarket({
-              collateralAsset: jm.collateralAsset,
-              referenceAsset: jm.referenceAsset,
-              expiryTimestamp: BigInt(jm.expiryTimestamp),
-              constraint: {
-                rateMin: BigInt(jm.constraint.rateMin),
-                rateMax: BigInt(jm.constraint.rateMax),
-                rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
-                rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
-              },
-              oracle: res.oracle.address,
-            });
+          if (!res.gate && res.oracle.address && settlerGeneration !== undefined && mrGeneration?.label === settlerGeneration.label) {
+            // The pool id width is the pool manager's, read from the settler's chain generation
+            // (its phoenix block); the rollover wire is the fallback when no phoenix block
+            // resolves (a test-injected deployment). 10-field = the fees ARE the id.
+            const { generation: phoenixGeneration } = await getDep(ctx, chainId, { generation: settlerGeneration.label });
+            const phoenixWire = phoenixGeneration?.wire ?? phoenixWireOfRolloverWire(settlerGeneration.wire);
+            const constraint = {
+              rateMin: BigInt(jm.constraint.rateMin),
+              rateMax: BigInt(jm.constraint.rateMax),
+              rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
+              rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
+            };
+            const derived = phoenixWire === "8-field"
+              ? deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), constraint, oracle: res.oracle.address })
+              : deriveRolloverJitPool({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), ...constraint, oracle: res.oracle.address, swapFeePercentage: BigInt(jm.swapFeePercentage), unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage), phoenixWire });
             if (derived.poolId.toLowerCase() !== action.dstPoolId.toLowerCase()) {
-              warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${action.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
+              warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${action.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, a ${phoenixWire} Market against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}${phoenixWire === "10-field" ? "; the two fee percentages are part of the 10-field id" : ""}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
             }
           }
         }
       } catch {
         /* best-effort leg: a transport failure must not block an offline-buildable artifact */
       }
-      jitMarketHash = hashJitMarketParams({
-        collateralAsset: jm.collateralAsset,
-        referenceAsset: jm.referenceAsset,
-        expiryTimestamp: BigInt(jm.expiryTimestamp),
-        recipe: jm.recipe,
-        rateOverride: BigInt(jm.rateOverride),
-        rateMin: BigInt(jm.constraint.rateMin),
-        rateMax: BigInt(jm.constraint.rateMax),
-        rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
-        rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
-        additionalData: jm.additionalData,
-        swapFeePercentage: BigInt(jm.swapFeePercentage),
-        unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
-      });
+      try {
+        jitMarketHash = hashJitMarketParams(
+          {
+            collateralAsset: jm.collateralAsset,
+            referenceAsset: jm.referenceAsset,
+            expiryTimestamp: BigInt(jm.expiryTimestamp),
+            recipe: jm.recipe,
+            rateOverride: BigInt(jm.rateOverride),
+            rateMin: BigInt(jm.constraint.rateMin),
+            rateMax: BigInt(jm.constraint.rateMax),
+            rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
+            rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
+            additionalData,
+            ...(oracleSalt !== undefined ? { oracleSalt } : {}),
+            swapFeePercentage: BigInt(jm.swapFeePercentage),
+            unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
+          },
+          jitWire,
+        );
+      } catch (err) {
+        // A wire/struct disagreement (a salt on rc.2) is the caller's terms, not a fault.
+        if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${action.settler} belongs to the ${settlerGeneration?.label ?? "primary"} generation, rollover wire ${jitWire})`, ctx);
+        throw err;
+      }
     }
 
     if (jitMarketHash !== undefined && jitMarketHash !== ZERO_JIT_MARKET_HASH) {
-      warnings.push({ code: "jit_market_notice", message: "this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free" });
+      warnings.push({ code: "jit_market_notice", message: `this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash, the ${jitWire ?? "settler generation's"} JITMarketParams layout${jitWire === "0.2" ? " — oracleSalt committed" : jitWire === "rc.2" ? " — no oracleSalt member" : ""}${action.jitMarketHash !== undefined ? "; a pre-computed hash must have been produced for THAT wire or the fill reverts BaseFiller__JitMarketHashMismatch" : ""}) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free` });
     }
 
     // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
@@ -645,6 +698,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         kind: "rollover-intent",
         settler: action.settler,
         ...(cls.status === "active" ? { settlerKind: cls.kind, settlerGeneration: cls.generation.label } : {}),
+        /** The JITMarketParams layout `rolloverParams.jitMarketHash` is (or must be) computed on — the settler generation's rollover wire. */
+        ...(jitWire !== undefined ? { jitMarketWire: jitWire } : {}),
         typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
         orderDigest: built.orderDigest,
         rolloverIntentHash: built.rolloverIntentHash,
