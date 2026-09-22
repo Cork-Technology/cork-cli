@@ -22,6 +22,7 @@
 // invariant, the same claim the compute labels make), so a per-generation sum of shares is exact;
 // collateral and reference balances are NOT read here (they are per-token, not per-position — the
 // single-pool read has them).
+import { z } from "zod";
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { erc20Abi } from "../chain/abis.ts";
 import type { ResolvedRpc } from "../chain/rpc.ts";
@@ -44,6 +45,87 @@ export interface PositionsEmitter {
  *  backfill+tail primitive; the rows come back decoded per emitter wire. */
 export interface PositionsDeps {
   enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "hybrid" | "full-decentralized" }>;
+}
+
+/** The positions sweep walks the venue's pool list at the venue's MAXIMUM page (200 rows): the read
+ *  is about completeness — every pool on every generation — and the live count is 453 pools on
+ *  Arbitrum / 466 on Base (2026-09-22), so the default 25-row page × 10 pages answered `pools: 250,
+ *  complete: false` on both chains. `pageSize` is a per-page presentation knob for lists; here
+ *  `maxPages` alone bounds the walk (10 × 200 = 2000 pools before `pagination_incomplete`). */
+export const POSITIONS_SWEEP_PAGE_SIZE = 200;
+
+/** The venue serves a pool's `expiry` as an ISO-8601 timestamp (`2026-08-10T12:30:00.000Z`,
+ *  verified live 2026-09-22); the chain scan serves unix seconds. The sweep's rows are the scan's
+ *  shape, so a venue expiry is normalised to decimal seconds here — an ISO string through
+ *  Date.parse (floored to the second), a digits-only string or number verbatim, anything else
+ *  undefined (the caller skips the row and discloses the count). The first live run against a real
+ *  position threw `Failed to parse String to BigInt` on the ISO form. */
+export function venueExpirySeconds(v: unknown): string | undefined {
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return String(Math.floor(v));
+  if (typeof v !== "string" || v.length === 0) return undefined;
+  if (/^[0-9]+$/.test(v)) return v;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;
+}
+
+const Address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+/** A token leg as the venue serves it: a bare address, or the `{ address, symbol, decimals }`
+ *  object /pools/v1 carries (verified live 2026-09-22) — both read to the address. */
+const TokenRef = z.union([Address, z.object({ address: Address }).loose().transform((t) => t.address)]);
+/** The subset of a venue /pools/v1 row the sweep needs. `.loose()`: the venue adds fields freely
+ *  and none of them may break an enumeration. */
+const VenuePoolRow = z
+  .object({
+    poolId: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+    poolManagerAddress: Address,
+    swapToken: TokenRef,
+    principalToken: TokenRef,
+    collateralToken: TokenRef,
+    referenceToken: TokenRef,
+    expiry: z.unknown(),
+    rateOracleAddress: TokenRef.optional(),
+    deploymentBlockNumber: z.union([z.string(), z.number()]).optional(),
+    deploymentTxHash: z.string().optional(),
+  })
+  .loose();
+
+/** Venue /pools/v1 rows → the scan's MarketRow shape, attributed to the asked emitters. PURE: a row
+ *  on a manager no asked generation owns is skipped (a filtered-out set, or venue noise — another
+ *  chain's row cannot occur, the list is chain-scoped server-side); a row that fails the shape is
+ *  skipped; a row whose expiry is unreadable is skipped AND counted so the caller can disclose it.
+ *  The sweep's completeness claim stays the traversal's — this mapping never invents a pool. */
+export function venuePoolRowsToMarketRows(items: readonly Record<string, unknown>[], emitters: readonly PositionsEmitter[]): { rows: MarketRow[]; unreadableExpiry: number } {
+  const byPm = new Map(emitters.map((e) => [e.poolManager.toLowerCase(), e] as const));
+  const rows: MarketRow[] = [];
+  let unreadableExpiry = 0;
+  for (const raw of items) {
+    const parsed = VenuePoolRow.safeParse(raw);
+    if (!parsed.success) continue;
+    const r = parsed.data;
+    const e = byPm.get(r.poolManagerAddress.toLowerCase());
+    if (!e) continue; // a manager no asked generation owns
+    const expiry = venueExpirySeconds(r.expiry);
+    if (expiry === undefined) {
+      unreadableExpiry += 1;
+      continue;
+    }
+    rows.push({
+      poolId: r.poolId as `0x${string}`,
+      referenceAsset: r.referenceToken as `0x${string}`,
+      collateralAsset: r.collateralToken as `0x${string}`,
+      expiry,
+      rateOracle: (r.rateOracleAddress ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
+      corkPrincipalToken: r.principalToken as `0x${string}`,
+      corkSwapToken: r.swapToken as `0x${string}`,
+      poolManager: e.poolManager,
+      wire: e.wire,
+      generation: e.label,
+      blockNumber: String(r.deploymentBlockNumber ?? ""),
+      txHash: r.deploymentTxHash ?? "",
+      emitter: e.poolManager,
+    });
+  }
+  return { rows, unreadableExpiry };
 }
 
 export interface AccountPosition {

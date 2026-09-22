@@ -5464,9 +5464,9 @@ const CATALOG: Mutant[] = [
     // A venue row on a manager no asked generation owns KEPT: a filtered-out set's pool (or
     // venue noise) would be swept and reported under an undefined generation.
     id: "mig-venue-unlisted-manager-kept",
-    file: "packages/core/src/handlers/query.ts",
-    find: "        if (!e) continue; // a manager no asked generation owns",
-    replace: "        if (!e) {} // a manager no asked generation owns",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "    if (!e) continue; // a manager no asked generation owns",
+    replace: "    if (!e) {} // a manager no asked generation owns",
     tests: [T.migration],
   },
   {
@@ -5500,7 +5500,7 @@ const CATALOG: Mutant[] = [
     // The venue's ISO-8601 expiry passed through unparsed: the live shape (verified 2026-09-22)
     // threw `Failed to parse String to BigInt` on the first account with a real position.
     id: "mig-venue-iso-expiry-unparsed",
-    file: "packages/core/src/handlers/query.ts",
+    file: "packages/core/src/handlers/query-positions.ts",
     find: "  const ms = Date.parse(v);\n  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;",
     replace: "  return v;",
     tests: [T.migration],

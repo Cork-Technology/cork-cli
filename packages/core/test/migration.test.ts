@@ -14,6 +14,7 @@ import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
 import { BUNDLED_DEFAULTS, generationsOf, GENERATION_ALIASES, type HandlerContext, resolveGenerationAlias, runTool, selectGeneration, ToolInputError } from "@cork/core";
 import { stubResolved } from "./helpers.ts";
+import { POSITIONS_SWEEP_PAGE_SIZE, venueExpirySeconds, venuePoolRowsToMarketRows } from "../src/handlers/query-positions.ts";
 
 const NOW = 1_753_000_000n;
 const CHAIN = 42161;
@@ -350,6 +351,42 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("mode_unavailable");
     expect(env.warnings[0]?.message).toContain("full-decentralized");
+  });
+});
+
+describe("the venue row → MarketRow mapping is pure and shape-checked", () => {
+  const emitters = [
+    { poolManager: V03_PM, wire: "8-field" as const, label: "phoenix/v0.3-rc.1" },
+    { poolManager: PRIMARY_PM, wire: "10-field" as const, label: "phoenix/v0.4-rc.1" },
+  ];
+  it("venueExpirySeconds: ISO-8601 → floored seconds; digits verbatim; a finite number floored; anything else undefined", () => {
+    expect(venueExpirySeconds("2026-08-10T12:30:00.000Z")).toBe("1786365000");
+    expect(venueExpirySeconds("2026-08-10T12:30:00.999Z")).toBe("1786365000");
+    expect(venueExpirySeconds("1786365000")).toBe("1786365000");
+    expect(venueExpirySeconds(1786365000.7)).toBe("1786365000");
+    for (const bad of ["", "next tuesday", -1, Number.NaN, null, undefined, {}]) expect(venueExpirySeconds(bad)).toBeUndefined();
+  });
+  it("maps a live-shaped row (token OBJECTS, ISO expiry, string block number) and a bare-address row alike; attributes wire + generation from the emitter", () => {
+    const live = { chainId: 8453, poolId: P_OLD, poolName: "x", expiry: "2026-08-10T12:30:00.000Z", deploymentBlockNumber: "49786153", deploymentTxHash: `0x${"ab".repeat(32)}`, poolManagerAddress: V03_PM.toLowerCase(), collateralToken: { address: COL, symbol: "sUSDe", decimals: 18 }, referenceToken: { address: REF, symbol: "mwUSDC", decimals: 18 }, principalToken: { address: SHARES[P_OLD]!.cpt, symbol: "cPT", decimals: 18 }, swapToken: { address: SHARES[P_OLD]!.cst, symbol: "cST", decimals: 18 }, rateOracleAddress: ORACLE };
+    const bare = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "1800000000" };
+    const { rows, unreadableExpiry } = venuePoolRowsToMarketRows([live, bare], emitters);
+    expect(unreadableExpiry).toBe(0);
+    expect(rows).toEqual([
+      { poolId: P_OLD, referenceAsset: REF, collateralAsset: COL, expiry: "1786365000", rateOracle: ORACLE, corkPrincipalToken: SHARES[P_OLD]!.cpt, corkSwapToken: SHARES[P_OLD]!.cst, poolManager: V03_PM, wire: "8-field", generation: "phoenix/v0.3-rc.1", blockNumber: "49786153", txHash: `0x${"ab".repeat(32)}`, emitter: V03_PM },
+      { poolId: P_NEW, referenceAsset: REF, collateralAsset: COL, expiry: "1800000000", rateOracle: ZERO, corkPrincipalToken: SHARES[P_NEW]!.cpt, corkSwapToken: SHARES[P_NEW]!.cst, poolManager: PRIMARY_PM, wire: "10-field", generation: "phoenix/v0.4-rc.1", blockNumber: "", txHash: "", emitter: PRIMARY_PM },
+    ]);
+  });
+  it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry", () => {
+    const ok = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "1800000000" };
+    const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(
+      [{ ...ok, poolManagerAddress: "0x9999999999999999999999999999999999999999" }, { ...ok, swapToken: undefined }, { ...ok, poolId: "0x1234" }, { ...ok, expiry: "someday" }, { ...ok, expiry: null }, ok],
+      emitters,
+    );
+    expect(rows.map((r) => r.poolId)).toEqual([P_NEW]);
+    expect(unreadableExpiry).toBe(2);
+  });
+  it("the sweep page is the venue's maximum (200)", () => {
+    expect(POSITIONS_SWEEP_PAGE_SIZE).toBe(200);
   });
 });
 
