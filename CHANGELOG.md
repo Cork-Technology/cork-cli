@@ -5,7 +5,7 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [0.5.1] — Unreleased
+## [0.5.1] — 2026-09-22
 
 Supersedes 0.5.1-rc.1 through 0.5.1-rc.7. This is the last release for the current generation of on-chain contracts (market-registry 0.3.3, phoenix v1.3.0-rc.1, rollover v0.1.0-rc.2 on Arbitrum One and Base). The Distribution 0.4 contract set is not in this release. Orders that name its rollover settlers read `settler_not_recognized`.
 
