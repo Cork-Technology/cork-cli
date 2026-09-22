@@ -131,8 +131,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "domain terms",
     envelope: "unavailable",
     contract:
-      "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); private_order is taker-fill's exclusivity refusal (the signed allowed-sender suffix is not this fill's sender — the LOP would revert PrivateOrder); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead",
-    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance", "private_order"],
+      "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); private_order is taker-fill's exclusivity refusal (the signed allowed-sender suffix is not this fill's sender — the LOP would revert PrivateOrder); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead; fee_view_mismatch is INFO on an ok pool read of a 10-field manager whose market() tuple (the identity) and swapFee/unwindSwapFee views disagree — a chain fact to branch on, the tuple is what the result carries",
+    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance", "private_order", "fee_view_mismatch"],
   },
   {
     family: "jit & prediction",

@@ -62,7 +62,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     // envelope on a domain violation instead of masquerading as a chain failure.
     let s: Awaited<ReturnType<typeof readPoolState>>;
     try {
-      s = await readPoolState(client, addrs, p.poolId, pinnedBlock);
+      s = await readPoolState(client, addrs, p.poolId, pinnedBlock, pd.shares);
     } catch (err) {
       return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...w], ctx, resolved);
     }

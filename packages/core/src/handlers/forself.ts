@@ -10,7 +10,8 @@ import { UNITS_TOPIC_REFERENCE, type ChainId, Envelope, executionEthTransaction,
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
 import type { GenerationRef, PhoenixWire } from "../generations.ts";
-import { decodeJitExtensionAny } from "../market-registry.ts";
+import { decodeJitExtensionFor } from "../jit-extension.ts";
+import { resolveGenerations } from "../config-remote.ts";
 import { buildTakerFill, decodeMakerTraits } from "../orders.ts";
 import { annotateApprovalStatus, approvalMissingWarning, takerApprovalRequirements } from "../order-approvals.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
@@ -19,7 +20,7 @@ import { whitelistManagerAbi } from "../chain/abis.ts";
 import { POST_EXPIRY_ACTIONS, poolPreflightWarnings } from "../bundle/preflight.ts";
 import { decodeSingleCall } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR, generationRefusal } from "./shared.ts";
+import { envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, type PoolDepResolution, isTransportFailure, nowSecondsOf, poolMissing, poolNotFound, resolveDeadline, revertReason, ToolInputError, unavailable, ZERO_ADDR, generationRefusal } from "./shared.ts";
 
 const ZERO = ZERO_ADDR;
 
@@ -262,13 +263,15 @@ export async function prepareForSelfTakerFill(args: {
     try {
       const tokens = await resolvePoolTokens(resolved.client, dep, forSelf.poolId, ctx.atBlock);
       if (tokens.collateral === ZERO || tokens.cst === ZERO) {
+        // "Does the resting order carry a Cork JIT hook?" — decided by the adapter's
+        // classification against the chain's generations, never by trial-decoding the bytes
+        // (jit-extension.ts, review A3): a hook at an unconfigured address is not Cork's.
         let hasJit = false;
         if (signed.extension && signed.extension !== "0x") {
           try {
-            decodeJitExtensionAny(signed.extension);
-            hasJit = true;
+            hasJit = decodeJitExtensionFor((await resolveGenerations(chainId)).generations, signed.extension) !== null;
           } catch {
-            /* not a JIT extension */
+            /* malformed bytes at a classified adapter — not a readable JIT hook */
           }
         }
         if (hasJit) {
@@ -394,13 +397,15 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   // one the selected generation stands in, as before.
   let dep = selectedDep;
   let gen: (GenerationRef & { wire: PhoenixWire }) | undefined;
+  let knownShares: PoolDepResolution["shares"];
   if (resolved) {
     const pd = await getPoolDep(ctx, input.chainId, resolved, poolId, { purpose: POST_EXPIRY_ACTIONS.has(action.type) ? "read" : "prepare", tool: "cork_prepare_phoenix" });
     if (pd.refusal) return pd.refusal;
     dep = pd.dep!;
     gen = pd.generation;
+    knownShares = pd.shares;
   }
-  if (!dep) return refusal ? generationRefusal(input.chainId, refusal, selectedGeneration, ctx) : unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
+  if (!dep) return refusal ? generationRefusal(input.chainId, refusal, selectedGeneration, ctx, "cork_prepare_phoenix") : unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
   const bind = await verifyForSelfBindings({
     client: resolved?.client ?? null,
     ctx,
@@ -414,7 +419,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
   let tokenAddresses: Record<string, string> | undefined;
   if (resolved) {
     try {
-      const tokens = await resolvePoolTokens(resolved.client, dep, poolId, ctx.atBlock);
+      const tokens = await resolvePoolTokens(resolved.client, dep, poolId, ctx.atBlock, knownShares);
       if (poolMissing(tokens)) return poolNotFound(input.chainId, poolId, ctx);
       tokenAddresses = { collateral: tokens.collateral, reference: tokens.reference, cST: tokens.cst, cPT: tokens.cpt };
       warnings.push(

@@ -3,7 +3,8 @@
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type DecodedMakerTraits, type LopOrder } from "../orders.ts";
-import { decodeJitExtraData, jitExtensionTarget, type ResolvedConstraint } from "../market-registry.ts";
+import { type decodeJitExtraData, jitExtensionTarget, type ResolvedConstraint } from "../market-registry.ts";
+import { decodeJitExtensionFor } from "../jit-extension.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
@@ -11,7 +12,7 @@ import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTar
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveGenerations, resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
-import type { MarketRegistryWire } from "../generations.ts";
+import type { MarketRegistryWire, ResolvedGeneration } from "../generations.ts";
 import { rolloverGenerations } from "../rollover.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
@@ -30,6 +31,9 @@ type FusionLabel =
  *  configured is labeled by a best-effort shape read and reported `unverified`. */
 export interface JitTrustTargets {
   adapters?: ReadonlyArray<{ address: `0x${string}`; label: string; status: "active" | "read-only"; wire: MarketRegistryWire }> | undefined;
+  /** The chain's generations — the classification the ONE JIT decoder dispatches on
+   *  (jit-extension.ts `decodeJitExtensionFor`). `adapters` is derived from it. */
+  generations?: readonly ResolvedGeneration[] | undefined;
 }
 
 /** The hook target's verdict: the extension's adapter IS a configured Cork JIT adapter
@@ -46,6 +50,16 @@ type JitVerification =
  *  `generation` is the chain generation's label ("phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1",
  *  "arbitrum-v1.1"), or `unconfigured` for a hook at an address no generation names. */
 type JitLabel = JitVerification & (
+  | {
+      /** A preInteraction hook at an address NO generation configures as a JIT adapter: the
+       *  verdict is reported (mismatch on a chain that has Cork adapters, unverified elsewhere)
+       *  but the payload is NOT decoded — no wire is known for it, and a trial decode across
+       *  wires would present a plausible market that nobody signed (review A3, 2026-09-22). */
+      generation: "unconfigured";
+      wire: null;
+      adapter: `0x${string}`;
+      note: string;
+    }
   | {
       generation: string;
       wire: "flat" | "nested";
@@ -208,37 +222,34 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
       note: "LEGACY mode-string JIT payload (constraint derived at FILL time from the live rate; pool id drifts with the rate) — targets the pre-2.1.0 adapter generation",
     });
     if (known) {
-      // Classified: ONE codec, the generation's declared wire. A payload that does not decode on
-      // it is not a JIT payload for THIS adapter (malformed, or bytes for another generation
-      // pasted at the wrong target) — no label, never a guess from another wire.
-      jit = known.wire === "legacy"
-        ? legacyShape(legacyRegistry.decodeJitExtension(extension), { verification: "trusted" }, known.label)
-        : shape(known.wire, decodeJitExtraData(known.wire, extraData), { verification: "trusted" }, known.label);
-    } else {
-      // Unconfigured target: shape-only, tried nested → flat → legacy. The verdict: on a chain
-      // that configures JIT adapters, a hook at some OTHER address is bytes claiming Cork
-      // semantics at a contract that is not Cork's — `mismatch`, naming the primary's adapter
-      // (the one a genuine order would call); on a chain with no JIT generation at all there is
-      // nothing to compare against — `unverified`.
+      // Classified: ONE codec, the generation's declared wire (jit-extension.ts). A payload that
+      // does not decode on it is not a JIT payload for THIS adapter (malformed, or bytes for
+      // another generation pasted at the wrong target) — no label, never a guess from another
+      // wire. The legacy lane is reached ONLY through the generation whose wire is `legacy`.
+      const dec = decodeJitExtensionFor(jitTrust.generations ?? [], extension);
+      if (dec !== null) {
+        jit = dec.wire === "legacy"
+          ? legacyShape({ adapter: dec.adapter, params: dec.params, permits: dec.permits }, { verification: "trusted" }, dec.generation)
+          : shape(dec.wire, { params: dec.params, permits: dec.permits }, { verification: "trusted" }, dec.generation);
+      }
+    } else if (extraData.length > 2) {
+      // Unconfigured target with a non-empty hook payload: the verdict rides, the payload does
+      // not. On a chain that configures JIT adapters, a preInteraction at some OTHER address is
+      // bytes at a contract that is not Cork's — `mismatch`, naming the primary's adapter (the
+      // one a genuine order would call); on a chain with no JIT generation at all there is
+      // nothing to compare against — `unverified`. No trial decode (review A3): a shape read
+      // across wires could only present a plausible market for bytes nobody can vouch for.
       const primaryAdapter = jitTrust.adapters?.[0]?.address;
       const verdict: JitVerification = primaryAdapter !== undefined ? { verification: "mismatch", expectedAdapter: primaryAdapter } : { verification: "unverified" };
-      let labeled: JitLabel | undefined;
-      for (const wire of ["nested", "flat"] as const) {
-        try {
-          labeled = shape(wire, decodeJitExtraData(wire, extraData), verdict, "unconfigured");
-          break;
-        } catch {
-          /* next wire */
-        }
-      }
-      if (!labeled) {
-        try {
-          labeled = legacyShape(legacyRegistry.decodeJitExtension(extension), verdict, "unconfigured");
-        } catch {
-          /* not a JIT extension on any wire — no label */
-        }
-      }
-      jit = labeled;
+      jit = {
+        ...verdict,
+        generation: "unconfigured",
+        wire: null,
+        adapter,
+        note: primaryAdapter !== undefined
+          ? `the order's preInteraction calls ${adapter}, which no configured generation names as a Cork JIT adapter — its payload was NOT decoded (no wire is known for an unconfigured contract). A genuine Cork JIT order calls ${primaryAdapter}; identify this contract before filling`
+          : `the order's preInteraction calls ${adapter}; this chain configures no Cork JIT adapter, so the hook cannot be classified and its payload was NOT decoded`,
+      };
     }
   } catch {
     /* not a JIT extension — no label */
@@ -299,7 +310,7 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {
     targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
-    jitTrust: { adapters },
+    jitTrust: { adapters, generations },
     dep,
     depWarn,
     marketRegistry: mr,

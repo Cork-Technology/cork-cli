@@ -20,7 +20,7 @@ export async function getRegistry(ctx: HandlerContext, chainId: ChainId): Promis
   | { gate?: undefined; mr: NonNullable<Awaited<ReturnType<typeof getMarketRegistry>>["mr"]>; wire: MarketRegistryWire; phoenixWire: PhoenixWire; generation?: { label: string }; resolved: ResolvedRpc; warnings: Array<{ code: string; message: string }> }
 > {
   const { mr, mrWarn, generation, phoenixWire, refusal } = await getMarketRegistry(ctx, chainId);
-  if (refusal) return { gate: generationRefusal(chainId, refusal, generation, ctx) };
+  if (refusal) return { gate: generationRefusal(chainId, refusal, generation, ctx, "cork_query") };
   if (!mr) {
     return { gate: unavailable(chainId, "unknown_deployment", `no MarketRegistry configured for chainId ${chainId} — the registry stack is live on Arbitrum One and Base (42161, 8453)`, ctx) };
   }
@@ -608,7 +608,8 @@ export async function resolveRecipeOracleConstraint(args: {
   client: RegistryClient;
   ctx: HandlerContext;
   chainId: ChainId;
-  mr: { registry: `0x${string}`; recipes?: Record<string, `0x${string}`> | undefined };
+  /** The registry block — its DECLARED `wire` is the codec default (every block carries one). */
+  mr: { registry: `0x${string}`; recipes?: Record<string, `0x${string}`> | undefined; wire: MarketRegistryWire };
   recipe?: `0x${string}` | undefined;
   mode?: string | undefined;
   collateralAsset: `0x${string}`;
@@ -619,12 +620,13 @@ export async function resolveRecipeOracleConstraint(args: {
   extraData?: `0x${string}` | undefined;
   /** Nested wire: the salt of the pair's FIRST wrapper (the simulated deploy carries it). */
   oracleSalt?: `0x${string}` | undefined;
-  /** The registry wire of `mr` (defaults to its declared wire; flat when the block has none). */
+  /** The registry wire to dispatch on (defaults to `mr`'s DECLARED wire — the block always
+   *  carries one; a silent fall-back to flat was removed 2026-09-22, review D). */
   wire?: MarketRegistryWire | undefined;
   wantConstraint: boolean;
 }): Promise<RecipeResolution> {
   const { client, ctx, chainId, mr } = args;
-  const wire: MarketRegistryWire = args.wire ?? (mr as { wire?: MarketRegistryWire }).wire ?? "flat";
+  const wire: MarketRegistryWire = args.wire ?? mr.wire;
   const warnings: Array<{ code: string; message: string }> = [];
   const bad = (g: Envelope): RecipeResolution => ({ gate: g, recipe: ZERO_ADDR, source: "price", oracle: { address: null, deployed: false, deployable: false, mode: null, rate: null }, warnings });
   const reg = { address: mr.registry, abi: marketRegistryAbi } as const;

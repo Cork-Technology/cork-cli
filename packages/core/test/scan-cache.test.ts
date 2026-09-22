@@ -5,7 +5,11 @@
 import { describe, expect, it } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { readScanCache, SCAN_CACHE_MAX_ROWS, writeScanCache } from "../src/scan-cache.ts";
+import { readScanCache, SCAN_CACHE_MAX_ROWS, SCAN_CACHE_SCHEMA, writeScanCache } from "../src/scan-cache.ts";
+
+/** Keys carry the row-shape schema prefix, as `scanCacheId` writes them — a key without it is a
+ *  stale-schema entry and is pruned at load (review C6). */
+const k = (name: string) => `v${String(SCAN_CACHE_SCHEMA)}:${name}`;
 
 const VAR = "CORK_SCAN_CACHE_FILE";
 const freshPath = (tag: string) => `${process.env["TMPDIR"] ?? "/tmp"}/cork-scan-unit-${tag}-${process.pid}-${Math.floor(performance.now() * 1e6)}.json`;
@@ -25,17 +29,20 @@ function withCache(tag: string, fn: (path: string) => void): void {
 describe("scan-cache", () => {
   it("merges from DISK at write: a sibling process's entry survives our write", () => {
     withCache("merge", (path) => {
-      writeScanCache("scan-a", { watermark: 1, rows: [{ x: 1 }] });
+      writeScanCache(k("scan-a"), { watermark: 1, rows: [{ x: 1 }] });
       // A sibling process writes its own entry directly (our in-process memo knows nothing).
       const onDisk = JSON.parse(readFileSync(path, "utf8")) as { entries: Record<string, unknown> };
-      onDisk.entries["scan-b"] = { watermark: 2, rows: [] };
+      onDisk.entries[k("scan-b")] = { watermark: 2, rows: [] };
+      // A sibling from an OLDER build (no schema prefix) sits beside it — pruned at our next load.
+      onDisk.entries["scan-stale"] = { watermark: 9, rows: [{ old: true }] };
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify(onDisk));
       // Our next write must MERGE, not clobber the whole file with our stale view.
-      writeScanCache("scan-c", { watermark: 3, rows: [] });
+      writeScanCache(k("scan-c"), { watermark: 3, rows: [] });
       const final = JSON.parse(readFileSync(path, "utf8")) as { entries: Record<string, { watermark: number }> };
-      expect(Object.keys(final.entries).sort()).toEqual(["scan-a", "scan-b", "scan-c"]);
-      expect(final.entries["scan-b"]!.watermark).toBe(2);
+      expect(Object.keys(final.entries).sort()).toEqual([k("scan-a"), k("scan-b"), k("scan-c")].sort());
+      expect(final.entries[k("scan-b")]!.watermark).toBe(2);
+      expect(final.entries["scan-stale"]).toBeUndefined();
     });
   });
 

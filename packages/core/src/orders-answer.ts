@@ -88,6 +88,13 @@ interface InlineCommonParams {
   expiry?: bigint;
   swapFeeWad?: string;
   unwindSwapFeeWad?: string;
+  /** OPTIONAL `oracle_salt` (bytes32 hex) — the salt of the destination pair's FIRST oracle
+   *  wrapper on a nested-wire generation (market-registry 0.5.0 `deploy(ca, ref, mode, salt)`;
+   *  part of the pool's identity through the oracle address). A requester↔underwriter
+   *  convention of OURS on both inline schemas (2026-09-22): the venue stores the bag verbatim
+   *  and has no view on it. Absent = the zero salt (the pair's default wrapper); an explicit
+   *  `jitMarket.oracleSalt` on the answer wins over it. Read only as a 32-byte hex string. */
+  oracleSalt?: `0x${string}`;
 }
 export interface InlineLiquidityParams extends InlineCommonParams {
   schema: typeof INLINE_LIQUIDITY_SCHEMA;
@@ -113,12 +120,14 @@ export function inlineParamsOfTemplate(t: unknown): InlineTemplateParams | undef
     const d = digits(v);
     return d !== undefined && BigInt(d) > 0n ? BigInt(d) : undefined;
   };
-  const anchor = positive(o.anchor_rate), expiry = positive(o.expiry), swapFee = digits(o.swap_fee_wad), unwindFee = digits(o.unwind_swap_fee_wad);
+  const bytes32 = (v: unknown): `0x${string}` | undefined => (typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v as `0x${string}`) : undefined);
+  const anchor = positive(o.anchor_rate), expiry = positive(o.expiry), swapFee = digits(o.swap_fee_wad), unwindFee = digits(o.unwind_swap_fee_wad), oracleSalt = bytes32(o.oracle_salt);
   const common: InlineCommonParams = {
     ...(anchor !== undefined ? { anchorRate: anchor } : {}),
     ...(expiry !== undefined ? { expiry } : {}),
     ...(swapFee !== undefined ? { swapFeeWad: swapFee } : {}),
     ...(unwindFee !== undefined ? { unwindSwapFeeWad: unwindFee } : {}),
+    ...(oracleSalt !== undefined ? { oracleSalt } : {}),
   };
   if (o.schema === INLINE_IMPAIRMENT_SCHEMA) {
     const durationSeconds = positive(o.duration_seconds), apySpreadPercentage = positive(o.apy_spread_percentage);

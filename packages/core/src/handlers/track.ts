@@ -20,11 +20,11 @@ import { collectVenuePages } from "./query.ts";
 type RolloverChainVerification = {
   leg?: string;
   settler?: `0x${string}`;
-  /** Which configured generation the settler belongs to — chain provenance is only ever
-   *  attached to a settler this build recognizes. */
-  settlerGeneration?: "active" | "retired";
-  /** That generation's config label ("primary" for the pinned set when the config names none). */
-  settlerGenerationLabel?: string;
+  /** Which configured ROLLOVER generation the settler belongs to — its chain-generation label and
+   *  the rollover block's standing (`retired` = venue-inadmissible, wire-incompatible). Chain
+   *  provenance is only ever attached to a settler this build recognizes. ONE object since
+   *  2026-09-22 (review B4): a status string plus a `*Label` twin described one fact twice. */
+  settlerGeneration?: { label: string; status: "active" | "retired" };
   chainStatus?: ReturnType<typeof chainStatusName>;
   venueStatus?: string;
   consistent?: boolean;
@@ -139,8 +139,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   }
 
   // chain-authoritative subjects need an RPC.
-  const { dep, depWarn, refusal } = await getDep(ctx, chainId);
-  void depWarn;
+  const { dep, refusal } = await getDep(ctx, chainId);
   if (subj.kind === "marketRef") {
     if (!dep && !refusal) return unavailable(chainId, "unknown_deployment", `no known Cork deployment for chainId ${chainId}`, ctx);
     const resolved = await getRpc(ctx, chainId);
@@ -156,7 +155,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     const gen = pd.generation;
     const pdWarn = pd.depWarn;
     try {
-      const s = await readPoolState(client, { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) }, subj.poolId, ctx.atBlock);
+      const s = await readPoolState(client, { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) }, subj.poolId, ctx.atBlock, pd.shares);
       const recomputed = computeMarketId(s.market, s.wire);
       const idMatches = recomputed.toLowerCase() === subj.poolId.toLowerCase();
       return envelope({
@@ -263,12 +262,10 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // active or retired generation is called.
           const classification = settlerAddr && rollover ? classifyRolloverSettler(rollover, settlerAddr) : undefined;
           const configuredSettler = classification?.status === "active" || classification?.status === "retired" ? classification.status : undefined;
-          const settlerGenerationLabel = classification?.status === "active" || classification?.status === "retired" ? classification.generation.label : undefined;
           /** The provenance fields every chain leg attaches: the settler and the generation that vouches for it. */
-          const settlerProvenance: Pick<RolloverChainVerification, "settler" | "settlerGeneration" | "settlerGenerationLabel"> = {
+          const settlerProvenance: Pick<RolloverChainVerification, "settler" | "settlerGeneration"> = {
             ...(settlerAddr !== undefined ? { settler: settlerAddr } : {}),
-            ...(configuredSettler !== undefined ? { settlerGeneration: configuredSettler } : {}),
-            ...(settlerGenerationLabel !== undefined ? { settlerGenerationLabel } : {}),
+            ...(classification?.status === "active" || classification?.status === "retired" ? { settlerGeneration: { label: classification.generation.label, status: classification.status } } : {}),
           };
           // The one predicate every chain leg below consults; the mutation probe targets it.
           const settlerReadable = settlerAddr !== undefined && configuredSettler !== undefined;
@@ -470,9 +467,9 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             const digest = ref.toLowerCase() as `0x${string}`;
             const sweep = rolloverDigestScanTargets(rollover); // full generation span
             // Every swept address is a configured settler by construction; name its generation.
-            const sweepProvenance = (settler: string): Pick<RolloverChainVerification, "settlerGeneration" | "settlerGenerationLabel"> => {
+            const sweepProvenance = (settler: string): Pick<RolloverChainVerification, "settlerGeneration"> => {
               const c = classifyRolloverSettler(rollover, settler);
-              return c.status === "unknown" ? {} : { settlerGeneration: c.status, settlerGenerationLabel: c.generation.label };
+              return c.status === "unknown" ? {} : { settlerGeneration: { label: c.generation.label, status: c.status } };
             };
             for (const settler of sweep.addresses) {
               let statusNum: number;

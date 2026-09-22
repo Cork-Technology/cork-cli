@@ -191,6 +191,18 @@ describe("answer-rfq reads the requester's inline template (cork-inline-liquidit
     expect(encodeAnchorArgs(7n * 10n ** 17n)).toBe(`0x${(7n * 10n ** 17n).toString(16).padStart(64, "0")}`);
   });
 
+  it("both inline schemas read an OPTIONAL oracle_salt (bytes32 hex — the destination pair's first-wrapper salt on a nested generation, our requester↔underwriter convention); anything but 32 bytes of hex is absent, never a guess", () => {
+    const salt = `0x${"11".repeat(32)}`;
+    const liq = inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, oracle_salt: salt } } });
+    expect(liq).toMatchObject({ schema: INLINE_LIQUIDITY_SCHEMA, oracleSalt: salt });
+    const imp = inlineParamsOfTemplate({ inline: { oracle_params: { schema: "cork-inline-impairment/1", anchor_rate: RFQ_INLINE_ANCHOR, duration_seconds: "86400", apy_spread_percentage: "1000000000000000000", oracle_salt: salt } } });
+    expect(imp).toMatchObject({ schema: "cork-inline-impairment/1", oracleSalt: salt });
+    for (const bad of ["0x11", "11".repeat(32), `0x${"gg".repeat(32)}`, 7, null]) {
+      expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR, oracle_salt: bad } } })).not.toHaveProperty("oracleSalt");
+    }
+    expect(inlineParamsOfTemplate({ inline: { oracle_params: { schema: INLINE_LIQUIDITY_SCHEMA, anchor_rate: RFQ_INLINE_ANCHOR } } })).not.toHaveProperty("oracleSalt");
+  });
+
   it("uncited: the RFQ's anchor rides as additionalData, its fees fill the JIT block, and against a DEPLOYED oracle the drift notice says the anchor is not honored", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry } }, ctx);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");

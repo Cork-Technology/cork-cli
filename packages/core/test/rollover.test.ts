@@ -17,9 +17,9 @@ import {
   CALL_TYPEHASH,
   encodeOrderData,
   hashJitMarketParams,
-  deriveRolloverJitPool,
+  deriveJitMarket,
+  ToolInputError,
   jitMarketParamsWireOf,
-  phoenixWireOfRolloverWire,
   rolloverGenerations,
   RolloverJitWireError,
   JIT_MARKET_PARAMS_TYPEHASH,
@@ -641,36 +641,31 @@ describe("the 0.2 settlers (phoenix/v0.4-rc.1) — config pins + ERC-5267 domain
   });
 });
 
-describe("deriveRolloverJitPool — the destination pool id on the pool manager's wire", () => {
+describe("the rollover destination pool id is derived by the ONE JIT derivation (deriveJitMarket on the phoenix wire)", () => {
+  // deriveRolloverJitPool and phoenixWireOfRolloverWire were deleted 2026-09-22 (review B6/A2):
+  // the rollover branch derives with deriveJitMarket on the settler generation's DECLARED phoenix
+  // wire — never a width inferred from the rollover wire.
   const base = {
     collateralAsset: SAMPLE_02.collateralAsset,
     referenceAsset: SAMPLE_02.referenceAsset,
     expiryTimestamp: SAMPLE_02.expiryTimestamp,
-    rateMin: SAMPLE_02.rateMin,
-    rateMax: SAMPLE_02.rateMax,
-    rateChangePerDayMax: SAMPLE_02.rateChangePerDayMax,
-    rateChangeCapacityMax: SAMPLE_02.rateChangeCapacityMax,
+    constraint: { rateMin: SAMPLE_02.rateMin, rateMax: SAMPLE_02.rateMax, rateChangePerDayMax: SAMPLE_02.rateChangePerDayMax, rateChangeCapacityMax: SAMPLE_02.rateChangeCapacityMax },
     oracle: "0x2ba2103a37c4cff9dbb96e6f74513923d960d757" as const,
     swapFeePercentage: SAMPLE_02.swapFeePercentage,
     unwindSwapFeePercentage: SAMPLE_02.unwindSwapFeePercentage,
   };
   it("10-field hashes the fees INTO the id (equals the independently golden-tested computeMarketId); 8-field ignores them", () => {
-    const ten = deriveRolloverJitPool({ ...base, phoenixWire: "10-field" });
-    const eight = deriveRolloverJitPool({ ...base, phoenixWire: "8-field" });
-    expect(ten.poolId).toBe(computeMarketId({ ...base, rateOracle: base.oracle, swapFeePercentage: base.swapFeePercentage, unwindSwapFeePercentage: base.unwindSwapFeePercentage } as never, "10-field"));
-    const { oracle: _o, swapFeePercentage: _s, unwindSwapFeePercentage: _u, ...eightFields } = base;
-    expect(eight.poolId).toBe(computeMarketId({ ...eightFields, rateOracle: base.oracle }, "8-field"));
+    const ten = deriveJitMarket({ ...base, wire: "10-field" });
+    const eight = deriveJitMarket({ ...base, wire: "8-field" });
+    const legs = { collateralAsset: base.collateralAsset, referenceAsset: base.referenceAsset, expiryTimestamp: base.expiryTimestamp, ...base.constraint, rateOracle: base.oracle };
+    expect(ten.poolId).toBe(computeMarketId({ ...legs, swapFeePercentage: base.swapFeePercentage, unwindSwapFeePercentage: base.unwindSwapFeePercentage }, "10-field"));
+    expect(eight.poolId).toBe(computeMarketId(legs, "8-field"));
     expect(ten.poolId).not.toBe(eight.poolId);
     expect("swapFeePercentage" in ten.market).toBe(true);
     expect("swapFeePercentage" in eight.market).toBe(false);
     // Fees swapped = another 10-field pool; on 8-field the fees are not identity at all.
-    expect(deriveRolloverJitPool({ ...base, phoenixWire: "10-field", swapFeePercentage: base.unwindSwapFeePercentage, unwindSwapFeePercentage: base.swapFeePercentage }).poolId).not.toBe(ten.poolId);
-    expect(deriveRolloverJitPool({ ...base, phoenixWire: "8-field", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n }).poolId).toBe(eight.poolId);
-  });
-  it("the rollover-wire fallback maps 0.2 → 10-field, rc.2/rc.1 → 8-field (the Distribution binding of each BaseFiller)", () => {
-    expect(phoenixWireOfRolloverWire("0.2")).toBe("10-field");
-    expect(phoenixWireOfRolloverWire("rc.2")).toBe("8-field");
-    expect(phoenixWireOfRolloverWire("rc.1")).toBe("8-field");
+    expect(deriveJitMarket({ ...base, wire: "10-field", swapFeePercentage: base.unwindSwapFeePercentage, unwindSwapFeePercentage: base.swapFeePercentage }).poolId).not.toBe(ten.poolId);
+    expect(deriveJitMarket({ ...base, wire: "8-field", swapFeePercentage: 0n, unwindSwapFeePercentage: 0n }).poolId).toBe(eight.poolId);
   });
 });
 
@@ -727,6 +722,18 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     expect(notice?.message).toContain("oracleSalt committed");
   });
 
+  it("a settler generation that declares NO phoenix block refuses unknown_deployment — the pool id width is declared, never inferred from the rollover wire (review A2)", async () => {
+    // `ctx.deployment` is the SDK address override: getDep short-circuits on it and returns no
+    // generation, which is exactly the shape of a generation whose rollover block outlived its
+    // phoenix block. Before the fix, `phoenixWireOfRolloverWire` guessed 10-field from the 0.2
+    // settler and hashed a pool id of a width nobody declared.
+    const env = await runTool("cork_prepare_orders", base, { ...ctx, deployment: { poolManager: `0x${"00".repeat(20)}`, constraintAdapter: `0x${"00".repeat(20)}`, wire: "8-field" } });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("unknown_deployment");
+    expect(env.warnings[0]?.message).toContain("declares no phoenix block");
+    expect(env.warnings[0]?.message).toContain(CANDIDATE_EXACT);
+  });
+
   it("an rc.2 settler (NOT the primary) commits on the rc.2 layout — the same instruction, a different hash", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: EXACT } }, ctx);
     expect(env.state).toBe("ok");
@@ -745,9 +752,14 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     // accepted; different, the two are two instructions and refuse.
     const alias = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: jitMarket.additionalData, oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
     expect(hashOf(alias)).toBe(GOLDEN_02);
-    const twoPayloads = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
-    expect(twoPayloads.state).toBe("unavailable");
-    expect(twoPayloads.warnings[0]?.code).toBe("invalid_order_terms");
+    // Both present and different is INVALID INPUT (the ONE alias rule every JIT block shares
+    // since 2026-09-22 — the rollover branch used to answer invalid_order_terms here, review B2).
+    await expect(runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx)).rejects.toBeInstanceOf(ToolInputError);
+    // An explicit "0x" COUNTS as present: it is not a silent default that lets the alias win.
+    await expect(runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, additionalData: "0x", extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx)).rejects.toBeInstanceOf(ToolInputError);
+    // The alias alone is accepted with the deprecation notice; extraData alone carries none.
+    expect(alias.warnings.some((w) => w.code === "deprecation_notice")).toBe(false);
+    expect(env.warnings.find((w) => w.code === "deprecation_notice")?.message).toContain("additionalData");
   });
 
   it("the 0.2 PartialSettler (allowPartialFills) takes the 0.2 wire too; the wire rides on a plain order as well (no jitMarket)", async () => {
@@ -777,12 +789,24 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     expect(env.warnings[0]?.message).toContain(CANDIDATE_EXACT);
   });
 
-  it("an UNRECOGNIZED settler falls back to the PRIMARY generation's wire (0.2) and says the address is unvouched", async () => {
+  it("an UNRECOGNIZED settler with a jitMarket is REFUSED invalid_order_terms: no generation vouches for its wire, so no commitment is hashed (the pre-0.6 fallback signed the primary's 0.2 typehash — a coin toss between two live wires)", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, settler: "0x00000000000000000000000000000000DeaDBeef" } }, ctx);
-    expect(env.state).toBe("ok");
-    expect(env.data).toMatchObject({ jitMarketWire: "0.2" });
-    expect(env.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
-    expect(hashOf(env)).toBe(hashJitMarketParams({ ...SAMPLE_02, oracleSalt: zeroHash }, "0.2"));
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(env.warnings[0]?.message).toContain("0x00000000000000000000000000000000DeaDBeef");
+    expect(env.warnings[0]?.message).toContain("SETTLER generation's wire");
+    expect(env.warnings[0]?.message).toContain(CANDIDATE_EXACT);
+    // A pre-computed non-zero jitMarketHash is the same commitment class — refused the same way.
+    const { jitMarket: _jm, ...noJit } = base.action;
+    const pre = await runTool("cork_prepare_orders", { ...base, action: { ...noJit, settler: "0x00000000000000000000000000000000DeaDBeef", jitMarketHash: `0x${"11".repeat(32)}` } }, ctx);
+    expect(pre.state).toBe("unavailable");
+    expect(pre.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(pre.warnings[0]?.message).toContain("non-zero jitMarketHash");
+    // A PLAIN order (no commitment) keeps the warn-and-build path: nothing wire-shaped is signed.
+    const plain = await runTool("cork_prepare_orders", { ...base, action: { ...noJit, settler: "0x00000000000000000000000000000000DeaDBeef" } }, ctx);
+    expect(plain.state).toBe("ok");
+    expect(plain.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
+    expect((plain.data as Record<string, unknown>).jitMarketWire).toBeUndefined();
   });
 
   it("Base (8453) mirrors Arbitrum: the same 0.2 settler address, the same wire, a chain-distinct digest", async () => {
@@ -809,8 +833,10 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     };
     const rpcCtx: HandlerContext = { nowSeconds: NOW, resolveRpc: stubRpc(registryStub) };
     const legs = { collateralAsset: SAMPLE_02.collateralAsset, referenceAsset: SAMPLE_02.referenceAsset, expiryTimestamp: SAMPLE_02.expiryTimestamp, rateMin: SAMPLE_02.rateMin, rateMax: SAMPLE_02.rateMax, rateChangePerDayMax: SAMPLE_02.rateChangePerDayMax, rateChangeCapacityMax: SAMPLE_02.rateChangeCapacityMax, oracle: ORACLE_02 as `0x${string}`, swapFeePercentage: SAMPLE_02.swapFeePercentage, unwindSwapFeePercentage: SAMPLE_02.unwindSwapFeePercentage };
-    const tenField = deriveRolloverJitPool({ ...legs, phoenixWire: "10-field" }).poolId;
-    const eightField = deriveRolloverJitPool({ ...legs, phoenixWire: "8-field" }).poolId;
+    const { rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax, ...rest } = legs;
+    const derivable = { ...rest, constraint: { rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax } };
+    const tenField = deriveJitMarket({ ...derivable, wire: "10-field" }).poolId;
+    const eightField = deriveJitMarket({ ...derivable, wire: "8-field" }).poolId;
     expect(tenField).not.toBe(eightField);
     // 0.2 settler + the 10-field id: no warning; the 8-field id: the mismatch names the 10-field width.
     const ok02 = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, dstPoolId: tenField } }, rpcCtx);

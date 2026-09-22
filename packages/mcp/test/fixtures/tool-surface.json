@@ -2819,12 +2819,12 @@
                         "additionalProperties": false,
                         "description": "the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"
                       },
-                      "additionalData": {
-                        "description": "recipe-specific bytes the constraint was derived from — committed as keccak256(additionalData). The BaseFiller struct keeps this name; `extraData` is accepted as the registry-side spelling of the same bytes (both present and different is refused)",
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint was derived from — committed as keccak256 in the BaseFiller's `additionalData` member (the struct keeps that name; the typed-data output shows it). Defaults to 0x. This is the input name on every JIT block; `additionalData` is the deprecated alias",
                         "$ref": "#/$defs/Hex"
                       },
-                      "extraData": {
-                        "description": "the registry-side spelling of `additionalData` (the same recipe bytes; the 0.5.0 registry contracts renamed the member) — either name; both present and different is refused as invalid_order_terms",
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the BaseFiller struct's own member name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
                         "$ref": "#/$defs/Hex"
                       },
                       "oracleSalt": {

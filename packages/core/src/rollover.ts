@@ -36,9 +36,7 @@ import {
   zeroAddress,
   zeroHash,
 } from "viem";
-import type { PhoenixWire, RolloverWire } from "./generations.ts";
-import { computeMarketId } from "./marketid.ts";
-import type { Market10, Market8 } from "./types.ts";
+import type { RolloverWire } from "./generations.ts";
 
 type Address = `0x${string}`;
 type Hex = `0x${string}`;
@@ -502,51 +500,6 @@ export function hashJitMarketParams(p: JitMarketParamsStruct, wire: RolloverWire
       ],
     ),
   );
-}
-
-/** The DESTINATION pool a rollover JIT instruction derives, on the pool manager's wire: the
- *  BaseFiller builds the Market from the instruction's fields (field order load-bearing for the
- *  id — BaseFiller.sol `_execute…` "Field order is load-bearing") and asks the pool manager for
- *  its id. An 8-field pool manager (≤ v1.3, the rc.2 generation) ignores the fees; a 10-field one
- *  (v1.4.0-rc.1, the 0.2 generation) hashes them INTO the id — so a dstPoolId derived without the
- *  fees under a 0.2 settler names a pool that will never exist (BaseFiller__JitPoolMismatch).
- *  `computeMarketId` refuses a shape/wire disagreement, never widens or narrows silently. */
-export function deriveRolloverJitPool(args: {
-  collateralAsset: Address;
-  referenceAsset: Address;
-  expiryTimestamp: bigint;
-  rateMin: bigint;
-  rateMax: bigint;
-  rateChangePerDayMax: bigint;
-  rateChangeCapacityMax: bigint;
-  oracle: Address;
-  swapFeePercentage: bigint;
-  unwindSwapFeePercentage: bigint;
-  phoenixWire: PhoenixWire;
-}): { market: Market8 | Market10; poolId: Hex } {
-  const market8: Market8 = {
-    collateralAsset: args.collateralAsset,
-    referenceAsset: args.referenceAsset,
-    expiryTimestamp: args.expiryTimestamp,
-    rateMin: args.rateMin,
-    rateMax: args.rateMax,
-    rateChangePerDayMax: args.rateChangePerDayMax,
-    rateChangeCapacityMax: args.rateChangeCapacityMax,
-    rateOracle: args.oracle,
-  };
-  if (args.phoenixWire === "10-field") {
-    const market10: Market10 = { ...market8, swapFeePercentage: args.swapFeePercentage, unwindSwapFeePercentage: args.unwindSwapFeePercentage };
-    return { market: market10, poolId: computeMarketId(market10, "10-field") };
-  }
-  return { market: market8, poolId: computeMarketId(market8, "8-field") };
-}
-
-/** The pool-manager wire a rollover generation's BaseFiller creates pools on, when the chain
- *  generation's phoenix block is not at hand: the 0.2 BaseFiller binds the v1.4.0-rc.1 (10-field)
- *  pool manager, rc.2 the v1.3 (8-field) one — the Distribution facts of 2026-09-22. Callers with
- *  the resolved generation pass its `phoenix.wire` instead; this is the fallback, not the source. */
-export function phoenixWireOfRolloverWire(wire: RolloverWire): PhoenixWire {
-  return wire === "0.2" ? "10-field" : "8-field";
 }
 
 const U64 = (1n << 64n) - 1n;

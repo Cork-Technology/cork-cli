@@ -9,32 +9,49 @@
 // `other` — because a decoder that drops what it cannot name hides exactly what a reader most
 // needs to see. Neither of those two collections is lifecycle evidence.
 import { resolveGenerations, resolveRollover } from "./config-remote.ts";
+import type { GenerationStatus, MarketRegistryWire, PhoenixWire } from "./generations.ts";
 import { CLONE_DEPLOYED_TOPIC, MARKET_CREATED_TOPIC, WHITELIST_TOPICS } from "./datasources/hypersync.ts";
 import { CREATOR_MARKET_CREATED_TOPIC, JIT_MARKET_CREATED_LEGACY_TOPIC, JIT_MARKET_CREATED_TOPIC, JIT_MINTED_TOPIC, POOL_MANAGER_MARKET_CREATED_10_TOPIC } from "./market-registry.ts";
 import { BASE_FILLER_JIT_MARKET_CREATED_TOPIC, SETTLER_EVENTS } from "./rollover-verify.ts";
 import { rolloverGenerations } from "./rollover.ts";
 
-/** Who is allowed to emit a given protocol event. */
-export type EmitterRole = "exactSettler" | "partialSettler" | "baseFiller" | "factory" | "jitAdapter" | "legacyJitAdapter" | "marketCreator" | "poolManager" | "whitelistManager";
+/** Who is allowed to emit a given protocol event. The pre-2.1.0 adapter is a `jitAdapter` too
+ *  (its `legacyJitAdapter` role was retired 2026-09-22, review B4): which JITMarketCreated
+ *  signature an adapter emits is a WIRE fact, gated by `EMITTER_WIRE_TOPICS`, not a role. */
+export type EmitterRole = "exactSettler" | "partialSettler" | "baseFiller" | "factory" | "jitAdapter" | "marketCreator" | "poolManager" | "whitelistManager";
+
+/** The compact generation reference every emitter carries — the chain generation's label and
+ *  its `active | read-only` status (generations.ts GenerationStatus, the one vocabulary; until
+ *  2026-09-22 this field held an `active | retired` string that mapped read-only to retired and
+ *  forced the legacy adapter to retired while its generation is active — review B4). */
+export interface EmitterGeneration {
+  label: string;
+  status: GenerationStatus;
+}
 
 /** One configured emitter: the contract, its role, and which generation it belongs to. */
 export interface ProtocolEmitter {
   address: `0x${string}`;
   role: EmitterRole;
-  generation: "active" | "retired";
-  /** The chain generation's label (every emitter carries one since 0.6: "phoenix/v0.4-rc.1",
-   *  "arbitrum-v1.1" for the retired July settlers and the legacy JIT adapter, …). */
-  label?: string;
-  /** `poolManager` emitters only: the manager's phoenix wire — decides WHICH MarketCreated topic
-   *  it legitimately emits (7-arg on 8-field, 9-arg on 10-field). */
-  wire?: "8-field" | "10-field";
+  generation: EmitterGeneration;
+  /** Rollover-block roles only: the block's `retired` date when the venue no longer admits the
+   *  generation (a rollover fact, kept beside the chain generation's status — never folded into it). */
+  retired?: string;
+  /** `poolManager` (phoenix wire) and `jitAdapter` (registry wire) emitters: the wire decides
+   *  WHICH creation topic the contract legitimately emits (7-arg vs 9-arg MarketCreated; the
+   *  2.1.0 six-arg vs the legacy mode-string JITMarketCreated). */
+  wire?: PhoenixWire | MarketRegistryWire;
 }
 
-/** The MarketCreated topic each phoenix wire speaks; a pool-manager emitter is attributed only
- *  for its own wire's topic. */
-const MARKET_CREATED_TOPIC_BY_WIRE: Record<"8-field" | "10-field", string> = {
-  "8-field": MARKET_CREATED_TOPIC.toLowerCase(),
-  "10-field": POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase(),
+/** The creation topics that are WIRE-specific: an emitter carrying a wire is attributed for one
+ *  of these topics only when its wire is listed. Topics not in this table (JITMinted, the settler
+ *  events, …) are gated by role alone. The nested-wire adapter emits NO JITMarketCreated (the
+ *  creator's MarketCreated announces creation there), so no wire lists the six-arg topic for it. */
+const EMITTER_WIRE_TOPICS: Readonly<Record<string, readonly (PhoenixWire | MarketRegistryWire)[]>> = {
+  [MARKET_CREATED_TOPIC.toLowerCase()]: ["8-field"],
+  [POOL_MANAGER_MARKET_CREATED_10_TOPIC.toLowerCase()]: ["10-field"],
+  [JIT_MARKET_CREATED_TOPIC.toLowerCase()]: ["flat"],
+  [JIT_MARKET_CREATED_LEGACY_TOPIC.toLowerCase()]: ["legacy"],
 };
 
 /** The event registry: topic0 → event name + the roles that legitimately emit it. Built from
@@ -44,7 +61,7 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
   ...Object.fromEntries(Object.entries(SETTLER_EVENTS).map(([topic, event]) => [topic.toLowerCase(), { event, roles: ["exactSettler", "partialSettler"] as const }])),
   [JIT_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "JITMarketCreated", roles: ["jitAdapter"] },
   [JIT_MINTED_TOPIC.toLowerCase()]: { event: "JITMinted", roles: ["jitAdapter"] },
-  [JIT_MARKET_CREATED_LEGACY_TOPIC.toLowerCase()]: { event: "JITMarketCreated (legacy pre-2.1.0)", roles: ["legacyJitAdapter"] },
+  [JIT_MARKET_CREATED_LEGACY_TOPIC.toLowerCase()]: { event: "JITMarketCreated (legacy pre-2.1.0)", roles: ["jitAdapter"] },
   // The nested wire's creation evidence: the adapter emits no JITMarketCreated; the CREATOR does
   // (its own MarketCreated), and the 10-field pool manager announces the pool with its fees.
   [CREATOR_MARKET_CREATED_TOPIC.toLowerCase()]: { event: "MarketCreated (CorkMarketCreator)", roles: ["marketCreator"] },
@@ -66,44 +83,42 @@ export const PROTOCOL_EVENTS: Readonly<Record<string, { event: string; roles: re
 };
 
 /** Every contract this build recognizes as a protocol emitter on `chainId`, from the same
- *  config every other trust decision reads: every rollover generation's settlers (active and
- *  retired, primary first), then every generation's JIT adapter in resolution order — the
- *  flat/nested-wire adapters as `jitAdapter` (active), the legacy-wire adapter as
- *  `legacyJitAdapter` (retired — the deprecated lane's emitter keeps its own role because its
- *  JITMarketCreated carries a different signature). Every emitter carries its chain
- *  generation's label. */
+ *  config every other trust decision reads: every rollover generation's settlers (live and
+ *  retired, primary first), then every generation's JIT adapter in resolution order, each
+ *  tagged with its registry wire (the legacy-wire adapter is a `jitAdapter` whose wire admits
+ *  only the mode-string JITMarketCreated). Every emitter carries its chain generation's
+ *  `{ label, status }`; rollover roles add the block's `retired` date when it has one. */
 export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmitter[]> {
   const [{ rollover }, { generations }] = await Promise.all([resolveRollover(chainId), resolveGenerations(chainId)]);
   const out: ProtocolEmitter[] = [];
+  const refOf = (label: string): EmitterGeneration => ({ label, status: generations.find((g) => g.label === label)?.status ?? "active" });
   if (rollover) {
     for (const g of rolloverGenerations(rollover)) {
-      out.push({ address: g.exactSettler as `0x${string}`, role: "exactSettler", generation: g.status, label: g.label });
-      out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: g.status, label: g.label });
-      out.push({ address: g.factory as `0x${string}`, role: "factory", generation: g.status, label: g.label });
-      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: g.status, label: g.label });
+      const retired = g.retired !== undefined ? { retired: g.retired } : {};
+      out.push({ address: g.exactSettler as `0x${string}`, role: "exactSettler", generation: refOf(g.label), ...retired });
+      out.push({ address: g.partialSettler as `0x${string}`, role: "partialSettler", generation: refOf(g.label), ...retired });
+      out.push({ address: g.factory as `0x${string}`, role: "factory", generation: refOf(g.label), ...retired });
+      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: refOf(g.label), ...retired });
     }
   }
   for (const g of generations) {
-    const standing = g.status === "active" ? "active" : "retired";
+    const standing: EmitterGeneration = { label: g.label, status: g.status };
     const adapter = g.marketRegistry?.adapter as `0x${string}` | undefined;
-    if (adapter) {
-      if (g.marketRegistry!.wire === "legacy") out.push({ address: adapter, role: "legacyJitAdapter", generation: "retired", label: g.label });
-      else out.push({ address: adapter, role: "jitAdapter", generation: standing, label: g.label });
-    }
+    if (adapter) out.push({ address: adapter, role: "jitAdapter", generation: standing, wire: g.marketRegistry!.wire });
     // The nested wire's creation evidence: the 0.5.0 CREATOR emits MarketCreated (the adapter
     // emits no JITMarketCreated there) and the 10-field pool manager announces the pool with its
     // fees. Only the generations whose wires SPEAK those topics are listed for them — a periphery
     // creator or an 8-field manager never emits them, and an emitter table that named them would
     // be a claim about bytes those contracts never produce.
     const creator = g.marketRegistry?.marketCreator as `0x${string}` | undefined;
-    if (creator && g.marketRegistry!.wire === "nested") out.push({ address: creator, role: "marketCreator", generation: standing, label: g.label });
+    if (creator && g.marketRegistry!.wire === "nested") out.push({ address: creator, role: "marketCreator", generation: standing });
     // Every pool manager is a `poolManager` emitter; WHICH MarketCreated it may emit is decided
     // at attribution by the topic ↔ wire pairing (the 7-arg event on 8-field managers, the 9-arg
     // on 10-field) — see `poolManagerWireOf`.
     const poolManager = g.phoenix?.poolManager as `0x${string}` | undefined;
-    if (poolManager) out.push({ address: poolManager, role: "poolManager", generation: standing, label: g.label, wire: g.phoenix!.wire });
+    if (poolManager) out.push({ address: poolManager, role: "poolManager", generation: standing, wire: g.phoenix!.wire });
     const whitelistManager = g.phoenix?.whitelistManager as `0x${string}` | undefined;
-    if (whitelistManager) out.push({ address: whitelistManager, role: "whitelistManager", generation: standing, label: g.label });
+    if (whitelistManager) out.push({ address: whitelistManager, role: "whitelistManager", generation: standing });
   }
   return out;
 }
@@ -130,7 +145,7 @@ interface LogOrigin {
 /** A log whose emitter IS the configured contract for its event's role: lifecycle evidence. */
 export interface AttributedEvent extends LogOrigin {
   event: string;
-  emitter: { role: EmitterRole; generation: "active" | "retired"; label?: string };
+  emitter: { role: EmitterRole; generation: EmitterGeneration; retired?: string };
   /** topics[1] — for every settler event and JIT event, the order digest / pool id. */
   topic1?: string;
 }
@@ -180,10 +195,11 @@ export function attributeLogs(logs: readonly AttributableLog[], emitters: readon
       continue;
     }
     const emitter = emitters.find((e) => e.address.toLowerCase() === log.address.toLowerCase());
-    // A pool manager emits ONE MarketCreated shape — its wire's. The other wire's topic from the
-    // same address is a role mismatch (a 7-arg log claiming to come from a 10-field manager is
-    // not that manager's creation evidence).
-    const wireMismatch = emitter?.role === "poolManager" && emitter.wire !== undefined && topic0 !== undefined && Object.values(MARKET_CREATED_TOPIC_BY_WIRE).includes(topic0) && MARKET_CREATED_TOPIC_BY_WIRE[emitter.wire] !== topic0;
+    // A contract emits ONE creation shape — its wire's. The other wire's topic from the same
+    // address is a role mismatch (a 7-arg MarketCreated claiming to come from a 10-field manager,
+    // a mode-string JITMarketCreated from the 2.1.0 adapter — not that contract's evidence).
+    const wireGate = topic0 !== undefined ? EMITTER_WIRE_TOPICS[topic0] : undefined;
+    const wireMismatch = wireGate !== undefined && emitter !== undefined && (emitter.wire === undefined || !wireGate.includes(emitter.wire));
     if (emitter === undefined || !spec.roles.includes(emitter.role) || wireMismatch) {
       unattributedEvents.push({
         ...originOf(log),
@@ -197,7 +213,7 @@ export function attributeLogs(logs: readonly AttributableLog[], emitters: readon
     corkEvents.push({
       ...originOf(log),
       event: spec.event,
-      emitter: { role: emitter.role, generation: emitter.generation, ...(emitter.label ? { label: emitter.label } : {}) },
+      emitter: { role: emitter.role, generation: emitter.generation, ...(emitter.retired !== undefined ? { retired: emitter.retired } : {}) },
       ...(log.topics[1] ? { topic1: log.topics[1] } : {}),
     });
   }

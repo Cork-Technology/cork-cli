@@ -32,7 +32,7 @@
 // it: cork-pool, account-state, pool-whitelist, the three chain compute kinds, track marketRef,
 // the 13 phoenix actions and the ForSelf twins all follow the POOL's set, not the primary).
 import { z } from "zod";
-import { Address } from "@cork/schemas";
+import { Address, nearestValue } from "@cork/schemas";
 import type { PublicClient } from "viem";
 import { poolManagerAbi } from "./chain/abis.ts";
 
@@ -226,11 +226,16 @@ export function selectGeneration(list: readonly ResolvedGeneration[], label?: Ge
   }
   const generation = label === undefined ? primaryOf(list) : list.find((g) => g.label === label);
   if (generation === undefined) {
+    // The label is the caller's OWN field, so the refusal is invalid-input-class everywhere
+    // (handlers/shared.ts `generationRefusal` throws it; 2026-09-22 review B1 found two exit
+    // codes for one typo). A near miss gets the same did-you-mean the schema layer gives enum
+    // typos — the list alone made a caller diff four labels by eye.
+    const nearest = label !== undefined ? nearestValue(label, list.map((g) => g.label)) : undefined;
     return {
       ok: false,
       refusal: {
         code: "generation_unknown",
-        message: `generation '${label}' is not configured on this chain — known generations: ${list.map((g) => `${g.label} (${g.status}${g.primary ? ", primary" : ""})`).join(", ")}; omit \`generation\` to target the primary`,
+        message: `generation '${label}' is not configured on this chain — known generations: ${list.map((g) => `${g.label} (${g.status}${g.primary ? ", primary" : ""})`).join(", ")}${nearest !== undefined ? `; did you mean '${nearest}'?` : ""}; omit \`generation\` to target the primary`,
       },
     };
   }
@@ -311,7 +316,7 @@ export function classifyAddress(list: readonly ResolvedGeneration[], address: st
 }
 
 /** The market-registry wires this build's codecs IMPLEMENT (the config declares wires; this is
- *  the code's half of that contract): `flat` (0.3.x) and, since stage 2a, `nested` (0.5.x —
+ *  the code's half of that contract): `flat` (0.3.x) and, since 0.6 (2026-09-22), `nested` (0.5.x —
  *  (MarketParams, enableJitMint) + permits, extraData + oracleSalt, verify(7), deploy(4), the
  *  10-field derivation; market-registry.ts `WIRES`). With both implemented, every registry-bound
  *  path (JIT ladder, registry-* reads, derive-cork-pool, create-pool, deploy-oracle) binds the

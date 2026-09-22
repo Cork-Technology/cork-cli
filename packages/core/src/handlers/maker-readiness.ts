@@ -21,7 +21,8 @@
 // explained by the getCode result, which the classifier consults first.
 import { erc20Abi, permit2AllowanceAbi } from "../chain/abis.ts";
 import { decodeExtensionFields, decodeMakerTraits, type LopOrder } from "../orders.ts";
-import { decodeJitExtensionAny } from "../market-registry.ts";
+import type { ResolvedGeneration } from "../generations.ts";
+import { decodeJitExtensionFor } from "../jit-extension.ts";
 import { PERMIT2_ADDRESS } from "../order-approvals.ts";
 import type { MakerCodeProbe } from "./order-auth.ts";
 
@@ -52,21 +53,27 @@ export interface MakerExtensionContext {
 }
 
 /** Decode what the extension says about the MAKER side, never throwing: a non-JIT extension
- *  (auction-only, or foreign bytes) yields `jit: null`; unreadable fields yield null legs. */
-export function decodeMakerExtensionContext(extension: `0x${string}` | undefined): MakerExtensionContext {
+ *  (auction-only, or foreign bytes) yields `jit: null`; unreadable fields yield null legs. The
+ *  JIT hook is decoded by its adapter's CLASSIFICATION against `generations` (jit-extension.ts,
+ *  2026-09-22, review A3) — an adapter no generation configures yields `jit: null`, so the
+ *  readiness verdict downstream reads `unknown` for that leg instead of judging a payload on a
+ *  guessed wire (this context feeds `maker_not_ready`, which EXCLUDES rows from the ranked book). */
+export function decodeMakerExtensionContext(generations: readonly ResolvedGeneration[], extension: `0x${string}` | undefined): MakerExtensionContext {
   if (extension === undefined || extension === "0x") return { jit: null, extensionPermitToken: null };
   let jit: MakerJitContext | null = null;
   try {
-    const dec = decodeJitExtensionAny(extension);
-    jit = {
-      adapter: dec.adapter,
-      collateralAsset: dec.params.collateralAsset,
-      enableJitMint: Boolean(dec.params.enableJitMint),
-      predictedCorkSwapToken: dec.permits[0]?.token ?? null,
-      permitTokens: dec.permits.map((p) => p.token),
-    };
+    const dec = decodeJitExtensionFor(generations, extension);
+    if (dec !== null) {
+      jit = {
+        adapter: dec.adapter,
+        collateralAsset: dec.params.collateralAsset,
+        enableJitMint: Boolean(dec.params.enableJitMint),
+        predictedCorkSwapToken: dec.permits[0]?.token ?? null,
+        permitTokens: dec.permits.map((p: { token: `0x${string}` }) => p.token),
+      };
+    }
   } catch {
-    /* not a JIT extension */
+    /* malformed bytes at a classified adapter — not a readable JIT hook */
   }
   let extensionPermitToken: `0x${string}` | null = null;
   try {
@@ -329,9 +336,9 @@ export function assessMakerReadiness(a: MakerReadinessInput): MakerReadiness {
 // ── Sugar: everything from a signed order + facts in one call ───────────────────────────────
 
 /** The classifier's chain-free inputs derived from a signed order's own bytes. */
-export function makerReadinessTargetOf(a: { order: LopOrder; extension: `0x${string}`; lop: `0x${string}`; makerSignedEcdsa: boolean }): { target: MakerReadinessTarget; extensionPermitToken: `0x${string}` | null; allowPartialFills: boolean; orderExpiry: bigint } {
+export function makerReadinessTargetOf(a: { generations: readonly ResolvedGeneration[]; order: LopOrder; extension: `0x${string}`; lop: `0x${string}`; makerSignedEcdsa: boolean }): { target: MakerReadinessTarget; extensionPermitToken: `0x${string}` | null; allowPartialFills: boolean; orderExpiry: bigint } {
   const traits = decodeMakerTraits(a.order.makerTraits);
-  const ext = decodeMakerExtensionContext(a.extension);
+  const ext = decodeMakerExtensionContext(a.generations, a.extension);
   return {
     target: { maker: a.order.maker, makerAsset: a.order.makerAsset, lop: a.lop, usePermit2: traits.usePermit2, makerSignedEcdsa: a.makerSignedEcdsa, jit: ext.jit },
     extensionPermitToken: ext.extensionPermitToken,

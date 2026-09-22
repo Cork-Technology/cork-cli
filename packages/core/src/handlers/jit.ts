@@ -86,32 +86,42 @@ export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint)
   return { code: "expiry_far_future", message: `jitMarket.expiryTimestamp ${expiryTimestamp} is more than 5 years out — cPT principal stays locked until expiry, and pool CREATION is bounded by the registry's maxExpiryDuration, so a fill that must create this pool reverts ExpiryOutOfRange until that window reaches the expiry; double-check this is intended` };
 }
 
-/** The recipe-bytes + oracle-salt inputs of a JIT/create-pool block, resolved ONCE for every
- *  site: `extraData` is the name (the 0.5.0 contracts' word); `additionalData` is accepted as a
+/** The recipe-bytes + oracle-salt inputs of EVERY JIT block — the registry jitMarket, create-pool
+ *  AND the rollover jitMarket — resolved by ONE rule (2026-09-22, review B2: the rollover branch
+ *  had its own alias check with the opposite canonical name, no deprecation notice, a different
+ *  refusal class, and a presence test that let an explicit "0x" hide a conflicting alias):
+ *  `extraData` is the input name (the 0.5.0 contracts' word); `additionalData` is accepted as a
  *  deprecated alias — both present and DIFFERENT is two payloads and refuses (invalid input
- *  naming both), both equal is fine, the alias alone is accepted with an info
- *  deprecation_notice. `oracleSalt` defaults to the zero salt (the pair's default wrapper); a
- *  NON-ZERO salt on a flat/legacy generation refuses with teaching — that wire has no field for
- *  it, so the bytes could only drop it silently. */
+ *  naming both; an explicit "0x" COUNTS as present), both equal is fine, the alias alone is
+ *  accepted with an info deprecation_notice. `site.bytesField` is the name the target wire's OWN
+ *  struct gives the member (`WireCodec.bytesField`; `additionalData` for the rollover
+ *  BaseFiller) — it rides in the teaching and is what the typed-data OUTPUT shows; it never
+ *  changes which input name is canonical. `oracleSalt` defaults to the zero salt (the pair's
+ *  default wrapper); with a registry `wire`, a NON-ZERO salt on a flat/legacy generation refuses
+ *  with teaching — that wire has no field for it, so the bytes could only drop it silently.
+ *  `wire: undefined` skips that gate (the rollover hash applies its own per-rollover-wire rule);
+ *  `saltGiven` tells the caller whether the salt was the caller's or the default. */
 export function resolveJitBytesInput(
   jm: { extraData?: `0x${string}` | undefined; additionalData?: `0x${string}` | undefined; oracleSalt?: `0x${string}` | undefined },
-  wire: MarketRegistryWire,
+  wire: MarketRegistryWire | undefined,
   generationLabel: string | undefined,
-  site: { tool: string; path: string[] },
+  site: { tool: string; path: string[]; bytesField?: "additionalData" | "extraData" },
   warnings: Array<{ code: string; message: string }>,
-): { extraData: `0x${string}`; oracleSalt: `0x${string}` } {
+): { extraData: `0x${string}`; oracleSalt: `0x${string}`; saltGiven: boolean } {
+  const member = site.bytesField ?? "extraData";
   if (jm.extraData !== undefined && jm.additionalData !== undefined && jm.extraData.toLowerCase() !== jm.additionalData.toLowerCase()) {
-    throw new ToolInputError(site.tool, [{ path: [...site.path, "extraData"], message: `extraData (${jm.extraData}) and additionalData (${jm.additionalData}) are two spellings of the SAME recipe bytes and they differ — pass one (extraData is the name; additionalData is the deprecated alias)` }]);
+    throw new ToolInputError(site.tool, [{ path: [...site.path, "extraData"], message: `extraData (${jm.extraData}) and additionalData (${jm.additionalData}) are two spellings of the SAME recipe bytes (the target struct's \`${member}\` member) and they differ — pass one (extraData is the input name; additionalData is the deprecated alias)` }]);
   }
   if (jm.extraData === undefined && jm.additionalData !== undefined) {
-    warnings.push({ code: "deprecation_notice", message: `${site.path.join(".")}.additionalData is the deprecated spelling of extraData (the market-registry 0.5.0 contracts renamed the recipe-bytes member; the 0.3.x wire still writes it as additionalData) — accepted, pass extraData in new calls` });
+    warnings.push({ code: "deprecation_notice", message: `${site.path.join(".")}.additionalData is the deprecated input spelling of extraData (the market-registry 0.5.0 contracts renamed the recipe-bytes member${member === "additionalData" ? "; the target struct itself still names it additionalData, and the typed-data output keeps that name" : "; the 0.3.x wire still writes it as additionalData"}) — accepted, pass extraData in new calls` });
   }
   const extraData = (jm.extraData ?? jm.additionalData ?? "0x") as `0x${string}`;
+  const saltGiven = jm.oracleSalt !== undefined;
   const oracleSalt = (jm.oracleSalt ?? ZERO_ORACLE_SALT) as `0x${string}`;
-  if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
+  if (wire !== undefined && wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
     throw new ToolInputError(site.tool, [{ path: [...site.path, "oracleSalt"], message: `oracleSalt ${oracleSalt} is non-zero, but generation '${generationLabel ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) / MarketParams carry NO oracle salt — the value would be dropped, not honoured. Omit it (or pass the zero salt), or target a nested-wire generation (the phoenix/v0.4-rc.1 primary)` }]);
   }
-  return { extraData, oracleSalt };
+  return { extraData, oracleSalt, saltGiven };
 }
 
 /** Best-effort maxExpiryDuration bound check (the creator/adapter/BaseFiller creation rule:
@@ -256,8 +266,15 @@ export async function runJitPreflightLadder(args: {
   // declarations and a config may pair them otherwise — the id must follow the manager).
   const codec = wireCodec(mr.wire);
   const wire = codec.wire;
-  const phoenixWire: PhoenixWire = phoenixWireResolved ?? (wire === "nested" ? "10-field" : "8-field");
-  const { extraData, oracleSalt } = resolveJitBytesInput(jm, wire, mrGeneration?.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"] }, warnings);
+  // The pool-id width is DECLARED by the generation's phoenix block, never inferred from the
+  // registry wire (the pre-0.6 `nested → 10-field` guess: review A2, 2026-09-22 — a generation
+  // carrying a registry block but no phoenix block has no pool manager to create on, and a
+  // guessed width derives an id no fill produces, OrderNotForPool on chain).
+  if (phoenixWireResolved === undefined) {
+    return { gate: unavailable(chainId, "unknown_deployment", `generation '${mrGeneration?.label ?? "?"}' declares no phoenix block; the pool id width is unknown, so no ${words.artifact} can be derived against it — refresh cork-defaults.v2.json or target a generation whose phoenix block is configured`, ctx) };
+  }
+  const phoenixWire: PhoenixWire = phoenixWireResolved;
+  const { extraData, oracleSalt } = resolveJitBytesInput(jm, wire, mrGeneration?.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"], bytesField: codec.bytesField }, warnings);
   if (wire === "nested" && !mr.marketCreator) {
     return { gate: unavailable(chainId, "unknown_deployment", `generation '${mrGeneration?.label}' speaks the nested registry wire but configures no CorkMarketCreator — on that wire the adapter delegates pool creation to the creator (and the creator holds the controller role), so no ${words.artifact} can be pre-flighted; refresh cork-defaults.v2.json`, ctx) };
   }
@@ -313,7 +330,7 @@ export async function runJitPreflightLadder(args: {
         client.readContract({ address: mr.adapter, abi: jitAdapterAbi, functionName: "CONTROLLER" }),
       ]);
       if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.json before ${words.act} anything` }], ctx }) };
+        return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: `the configured JIT adapter's on-chain bindings do not match this tool's LOP/registry config — a stale/previous-generation address (the old registry answers 2.1.0 calls with misdecoded garbage); refresh cork-defaults.v2.json before ${words.act} anything` }], ctx }) };
       }
       boundController = controller;
       roleHolder = mr.adapter;
@@ -469,10 +486,11 @@ export async function buildTakerJitInteraction(args: {
       if (!oracle.deployed) {
         preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
       }
-      // A missing/partial deployment config is NOT a chain read failure [C11] — guard, don't `!`
-      // (the legacy path below and registry.ts already degrade this way).
+      // A generation with a registry block but no phoenix block has no pool manager to create on
+      // — a refusal naming the set, not a warning that lets bytes ride (review A2, 2026-09-22;
+      // the ladder's own phoenix-wire gate makes this unreachable, kept as the second tripwire).
       if (jitDep?.poolManager === undefined) {
-        warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
+        return { gate: unavailable(chainId, "unknown_deployment", `generation '${ladder.generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown and no pool manager exists to predict the cST on — refresh cork-defaults.v2.json`, ctx) };
       } else {
         // The simulation runs AS the wire's role holder (the account the override grants).
         const pred = await predictShares(client, { adapter: codec.roleHolder === "creator" ? ladder.marketCreator! : ladder.adapter, controller: boundController, poolManager: jitDep.poolManager, market: derived.market, poolId: derived.poolId, wire: phoenixWire, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId });
@@ -606,7 +624,7 @@ export async function prepareJitLegacy(args: {
       client.readContract({ address: mr.adapter, abi: legacyRegistry.jitAdapterAbi, functionName: "CONTROLLER" }),
     ]);
     if (boundLop.toLowerCase() !== lop.toLowerCase() || boundRegistry.toLowerCase() !== mr.registry.toLowerCase()) {
-      return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.json before signing anything" }], ctx }) };
+      return { gate: envelope({ state: "conflict", data: { adapter: mr.adapter, expected: { lop, registry: mr.registry }, onChain: { lop: boundLop, registry: boundRegistry } }, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the LEGACY JIT adapter's on-chain bindings do not match this tool's legacy config — refresh cork-defaults.v2.json before signing anything" }], ctx }) };
     }
     const adapterRoles = await readRoleHolder(client, boundController, mr.adapter, { creator: legacyRegistry.POOL_CREATOR_ROLE, second: legacyRegistry.CONFIGURATOR_ROLE, secondLabel: "CONFIGURATOR" });
     if (!adapterRoles.granted) {

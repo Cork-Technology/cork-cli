@@ -12,7 +12,7 @@ import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rollove
 import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
-import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
+import { chainReadFailed, envelope, firstLine, generationData, generationRefOf, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
@@ -743,10 +743,15 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   // list — every block's addresses and wire, so a reader can see which set is primary, which
   // sets are preparable, and which wire each speaks (generations.ts).
   if (input.resource === "protocol-config") {
-    if (refusal) return generationRefusal(chainId, refusal, generation, ctx);
+    if (refusal) return generationRefusal(chainId, refusal, generation, ctx, "cork_query");
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
     const { generations } = await resolveGenerations(chainId);
     const selected = generations.find((g) => g.label === generation?.label) ?? generations.find((g) => g.primary);
+    // `data.generation` is the SAME compact ref every other result carries (label/status/
+    // distribution — generationRefOf), and `provenance.generation` rides too (review B3,
+    // 2026-09-22: this branch used to answer a wider shape in data and none in provenance). The
+    // extras a config reader wants — primary flag, per-block contractsVersion — live under
+    // `data.selected`, so the shared ref stays one shape everywhere.
     return envelope({
       state: "ok",
       data: {
@@ -755,7 +760,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         deployment: dep,
         ...(selected
           ? {
-              generation: {
+              generation: generationRefOf(selected),
+              selected: {
                 label: selected.label,
                 status: selected.status,
                 primary: selected.primary,
@@ -784,6 +790,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       chainId,
       source: "config",
       warnings: depWarn,
+      ...(selected ? { generation: generationRefOf(selected) } : {}),
       ctx,
     });
   }
@@ -824,7 +831,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
 
   try {
     if (input.resource === "cork-pool") {
-      const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock);
+      // The resolver already read shares(poolId) on this manager — passed through (review C1).
+      const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock, pd.shares);
       return envelope({
         state: "ok",
         data: {
@@ -874,7 +882,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
 
     if (input.resource === "account-state") {
       if (!filters.account) return unavailable(chainId, "missing_filter", "account-state requires filters.account", ctx);
-      const tokens = await resolvePoolTokens(client, poolDep, filters.poolId, ctx.atBlock);
+      const tokens = await resolvePoolTokens(client, poolDep, filters.poolId, ctx.atBlock, pd.shares);
       const blockOpt = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
       const bal = (token: `0x${string}`) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });

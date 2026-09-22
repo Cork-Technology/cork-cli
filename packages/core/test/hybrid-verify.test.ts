@@ -264,8 +264,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as VerifiedData;
     expect(d.count).toBe(2);
     expect(d.items[0]!.verification).toBe("confirmed");
-    expect(d.items[0]!.settlerGeneration).toBe("retired");
-    expect(d.items[0]!.settlerGenerationLabel).toBe("arbitrum-v1.1");
+    expect(d.items[0]!.settlerGeneration).toEqual({ label: "arbitrum-v1.1", status: "retired" });
+    expect(d.items[0]).not.toHaveProperty("settlerGenerationLabel");
     expect(d.items[1]!.verification).toBe("unverified"); // unknown vocabulary kept, labeled
     expect(d.verification.dropped).toBe(1);
   });
@@ -291,8 +291,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as VerifiedData;
     expect(asked.sort()).toEqual([candidate.toLowerCase(), rc2.toLowerCase()].sort());
     const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
-    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
-    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.3-rc.1" });
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "phoenix/v0.3-rc.1", status: "active" } });
     expect(env.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
   });
 
@@ -317,8 +317,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as VerifiedData;
     expect(asked).toEqual([active.toLowerCase()]); // the attacker was never called
     const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
-    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: "active" });
-    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "unverified", settlerGeneration: "unknown" });
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { status: "active" } });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "unverified", settlerGeneration: { status: "unknown" } });
     expect(d.verification.dropped).toBe(0); // unverified is not refuted: the row still serves
     const w = env.warnings.find((x) => x.code === "settler_not_recognized")!;
     expect(w.message).toContain(attacker);

@@ -7,7 +7,7 @@
 // data.makerReadiness.
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildJitExtension, encodeExtensionFields, encodeJitExtraData } from "@cork/core";
+import { buildJitExtension, BUNDLED_DEFAULTS, encodeExtensionFields, encodeJitExtraData, generationsOf } from "@cork/core";
 import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
 import {
@@ -29,7 +29,9 @@ const NOW = 1_790_000_000n;
 const LOP = LOP_ADDRESSES[1]!;
 const ASSET = "0x00000000000000000000000000000000000000c5" as const;
 const MAKER = "0x00000000000000000000000000000000000000fa" as const;
-const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const;
+const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const; // the phoenix/v0.3-rc.1 (flat-wire) JIT adapter on 42161
+/** The chain generations the classified decoder dispatches on (jit-extension.ts, review A3). */
+const GENS = generationsOf(BUNDLED_DEFAULTS, 42161);
 const COLLATERAL = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" as const;
 const OTHER_TOKEN = "0x00000000000000000000000000000000000000d6" as const;
 
@@ -268,30 +270,41 @@ describe("decodeMakerExtensionContext — from the signed bytes, never throwing"
   const permit = { token: ASSET, value: 10n ** 18n, deadline: 1_795_000_000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` } as const;
 
   it("no extension: nulls", () => {
-    expect(decodeMakerExtensionContext(undefined)).toEqual({ jit: null, extensionPermitToken: null });
-    expect(decodeMakerExtensionContext("0x")).toEqual({ jit: null, extensionPermitToken: null });
+    expect(decodeMakerExtensionContext(GENS, undefined)).toEqual({ jit: null, extensionPermitToken: null });
+    expect(decodeMakerExtensionContext(GENS, "0x")).toEqual({ jit: null, extensionPermitToken: null });
   });
 
   it("a JIT extension with a permit: adapter, collateral, mint flag, and the permit-derived cST prediction", () => {
     const ext = buildJitExtension(ADAPTER, encodeJitExtraData("flat", jitParams, [permit]));
-    const ctx = decodeMakerExtensionContext(ext);
+    const ctx = decodeMakerExtensionContext(GENS, ext);
     expect(ctx.jit).toMatchObject({ adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: true, predictedCorkSwapToken: ASSET, permitTokens: [ASSET] });
   });
 
   it("a JIT extension WITHOUT permits: the created token is unknowable from the bytes (null prediction)", () => {
-    const ctx = decodeMakerExtensionContext(buildJitExtension(ADAPTER, encodeJitExtraData("flat", jitParams, [])));
+    const ctx = decodeMakerExtensionContext(GENS, buildJitExtension(ADAPTER, encodeJitExtraData("flat", jitParams, [])));
     expect(ctx.jit).toMatchObject({ predictedCorkSwapToken: null, permitTokens: [] });
   });
 
   it("a LOP-level makerPermit field: the token is the first 20 bytes; the field alone is not a JIT hook", () => {
     const ext = encodeExtensionFields({ makerPermit: `0x${ASSET.slice(2)}${"00".repeat(32)}` as `0x${string}` });
-    const ctx = decodeMakerExtensionContext(ext);
+    const ctx = decodeMakerExtensionContext(GENS, ext);
     expect(ctx.jit).toBeNull();
     expect(ctx.extensionPermitToken?.toLowerCase()).toBe(ASSET.toLowerCase());
   });
 
   it("foreign or garbage bytes never throw: null legs", () => {
-    expect(decodeMakerExtensionContext("0xdeadbeef")).toEqual({ jit: null, extensionPermitToken: null });
+    expect(decodeMakerExtensionContext(GENS, "0xdeadbeef")).toEqual({ jit: null, extensionPermitToken: null });
+  });
+
+  it("dispatch is by the adapter's CLASSIFICATION, never a trial decode: flat bytes at the flat adapter read; the SAME bytes at an unconfigured address are `jit: null` (readiness unknown, no verdict on a guessed wire); flat bytes pasted at the NESTED adapter do not read as a nested market", () => {
+    const flatBytes = encodeJitExtraData("flat", jitParams, [permit]);
+    expect(decodeMakerExtensionContext(GENS, buildJitExtension(ADAPTER, flatBytes)).jit).not.toBeNull();
+    const foreign = "0x00000000000000000000000000000000000000ee" as const;
+    expect(decodeMakerExtensionContext(GENS, buildJitExtension(foreign, flatBytes)).jit).toBeNull();
+    const nestedAdapter = GENS.find((g) => g.marketRegistry?.wire === "nested")!.marketRegistry!.adapter as `0x${string}`;
+    expect(decodeMakerExtensionContext(GENS, buildJitExtension(nestedAdapter, flatBytes)).jit).toBeNull();
+    // An empty generation list knows no adapter at all — nothing is ever decoded.
+    expect(decodeMakerExtensionContext([], buildJitExtension(ADAPTER, flatBytes)).jit).toBeNull();
   });
 });
 
@@ -428,12 +441,12 @@ describe("makerReadinessTargetOf — the classifier's chain-free inputs from the
   });
 
   it("decodes usePermit2 (bit 248), partial fills (bit 255 inverted), and the 40-bit expiry from the traits", () => {
-    const plain = makerReadinessTargetOf({ order: order(0n), extension: "0x", lop: LOP, makerSignedEcdsa: true });
+    const plain = makerReadinessTargetOf({ generations: GENS, order: order(0n), extension: "0x", lop: LOP, makerSignedEcdsa: true });
     expect(plain.target).toMatchObject({ maker: MAKER, makerAsset: ASSET, lop: LOP, usePermit2: false, makerSignedEcdsa: true, jit: null });
     expect(plain.allowPartialFills).toBe(true);
     expect(plain.orderExpiry).toBe(0n);
     const traits = (1n << 248n) | (1n << 255n) | (12345n << 80n);
-    const rich = makerReadinessTargetOf({ order: order(traits), extension: "0x", lop: LOP, makerSignedEcdsa: false });
+    const rich = makerReadinessTargetOf({ generations: GENS, order: order(traits), extension: "0x", lop: LOP, makerSignedEcdsa: false });
     expect(rich.target.usePermit2).toBe(true);
     expect(rich.allowPartialFills).toBe(false);
     expect(rich.orderExpiry).toBe(12345n);

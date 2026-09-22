@@ -43,7 +43,11 @@ function loadFile(): ScanCacheFile {
     if (existsSync(path)) {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
       if (parsed && typeof parsed === "object" && "entries" in parsed && typeof (parsed as ScanCacheFile).entries === "object") {
-        file = parsed as ScanCacheFile;
+        // Keep only entries of THIS row-shape schema: an older decoder's cursors are never
+        // served (the identity would not match) and would otherwise accumulate ≤20k decoded
+        // rows each for as long as the file lives. Pruned on load, so the next write drops them.
+        const entries = (parsed as ScanCacheFile).entries ?? {};
+        file = { entries: Object.fromEntries(Object.entries(entries).filter(([id]) => id.startsWith(`v${String(SCAN_CACHE_SCHEMA)}:`))) };
       }
     }
   } catch {
@@ -57,8 +61,10 @@ function loadFile(): ScanCacheFile {
  *  decoder's output changes for the same (address, topics) — the cache stores DECODED rows, so a
  *  cursor written by an older decoder would otherwise serve rows in the old shape forever (the
  *  identity below would still match) and the reorg overlap re-decodes only the tail.
- *  2 (0.6, stage 2c): MarketCreated rows gained `wire` / `generation` / the 10-field fees and the
- *  scan asks for both MarketCreated topics; every 0.5.x entry (schema 1, 7-arg only) is ignored. */
+ *  2 (0.6, 2026-09-22): MarketCreated rows gained `wire` / `generation` / the 10-field fees and the
+ *  scan asks for both MarketCreated topics; every 0.5.x entry (schema 1, 7-arg only) is ignored —
+ *  and DROPPED at load (`loadFile`), so a stale cursor's ≤20k decoded rows do not sit in the file
+ *  forever (review C6). */
 export const SCAN_CACHE_SCHEMA = 2;
 
 /** Stable identity for one scan: the row-shape schema plus the spec fields that define WHAT is

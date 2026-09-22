@@ -33,6 +33,9 @@ const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
 const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
 const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
 const STAGING_PM = "0x4d0ab6735def9fbaddbf0f2ffb92353afae623d2";
+/** The emitter table decodeMarketRows REQUIRES since 2026-09-22 (review A4): the fixture manager
+ *  is the arbitrum-v1.1 (8-field) one. */
+const EMITTERS = [{ poolManager: STAGING_PM as `0x${string}`, wire: "8-field" as const, label: "arbitrum-v1.1" }];
 // Clone fixtures are emitted by the RETIRED July factory — the multi-generation scan must still
 // discover them (rc.2 retired the generation at the venue, not on-chain).
 const FACTORY = "0xbbcc54c637c26b484a8c57b5695c04e09dace13a";
@@ -220,13 +223,13 @@ describe("loadHyperSync honesty (no injection)", () => {
 
 describe("decode fidelity", () => {
   it("decodeMarketRows tolerates foreign logs (skips, never throws)", () => {
-    const rows = decodeMarketRows([marketLog(), { address: STAGING_PM, topics: ["0xdead"], data: "0x", blockNumber: 1, transactionHash: "0x" }]);
+    const rows = decodeMarketRows([marketLog(), { address: STAGING_PM, topics: ["0xdead"], data: "0x", blockNumber: 1, transactionHash: "0x" }], EMITTERS);
     expect(rows.length).toBe(1);
     expect(rows[0]!.expiry).toBe("1798761600");
   });
 
   it("decentralized market rows use the shared corkSwapToken/corkPrincipalToken names (NOT raw swap/principal)", () => {
-    const row = decodeMarketRows([marketLog()])[0]!;
+    const row = decodeMarketRows([marketLog()], EMITTERS)[0]!;
     // marketLog() encodes (…, principalToken=CPT, swapToken=CST); the row must map them to the
     // surface vocabulary, not pass the raw event field names through (which inverted the label).
     expect((row.corkSwapToken as string).toLowerCase()).toBe(CST); // cST == swapToken
@@ -571,7 +574,7 @@ describe("collectPagedLogs — pure pagination walk (transport-agnostic)", () =>
 
 describe("decode row helpers — direct, including the honest malformed-log skip", () => {
   it("decodeMarketRows emits blockNumber as a string and cST/cPT under the canonical names", () => {
-    const rows = decodeMarketRows([marketLog()]);
+    const rows = decodeMarketRows([marketLog()], EMITTERS);
     expect(rows).toHaveLength(1);
     expect(String(rows[0]!.poolId).toLowerCase()).toBe(POOL);
     expect(String(rows[0]!.corkSwapToken).toLowerCase()).toBe(CST);
@@ -581,7 +584,7 @@ describe("decode row helpers — direct, including the honest malformed-log skip
 
   it("a malformed log is SKIPPED (returns []), never throws — one bad log can't abort the batch", () => {
     const bad: HyperSyncLog = { address: "0x00", topics: ["0xdeadbeef"], data: "0x", blockNumber: 1, transactionHash: "0x00" };
-    expect(decodeMarketRows([bad])).toEqual([]);
+    expect(decodeMarketRows([bad], EMITTERS)).toEqual([]);
     expect(decodeCloneRows([bad])).toEqual([]);
     expect(decodeLopFillRows([bad])).toEqual([]);
     expect(decodeRolloverFillRows([bad])).toEqual([]);
@@ -655,7 +658,7 @@ describe("normalizeNapiLog — 1.4.0 topics-array shape AND legacy topic0..3 sca
   });
   it("a real MarketCreated row in 1.4.0 shape decodes to a market", () => {
     const src = marketLog();
-    const rows = decodeMarketRows([normalizeNapiLog({ address: src.address, topics: src.topics, data: src.data, blockNumber: src.blockNumber, transactionHash: src.transactionHash })]);
+    const rows = decodeMarketRows([normalizeNapiLog({ address: src.address, topics: src.topics, data: src.data, blockNumber: src.blockNumber, transactionHash: src.transactionHash })], EMITTERS);
     expect(rows).toHaveLength(1);
     expect(String(rows[0]!.poolId).toLowerCase()).toBe(POOL);
   });

@@ -262,6 +262,9 @@ export async function verifyVenueRows(a: {
   if (book) {
     const bookLop = book.lop;
     const nowSeconds = nowSecondsOf(ctx);
+    // The chain's generations, for the readiness decode: a JIT hook is read on the wire of the
+    // generation its adapter belongs to, never trial-decoded (jit-extension.ts, review A3).
+    const bookGenerations = generationsOf((await resolveConfig()).defaults, chainId);
     // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
     // page needs. One bit word covers 256 orders of the same (maker, slot), so rows dedupe
     // onto shared reads. A read is keyed on the WORD it fetches (bit mode: maker + slot index,
@@ -289,7 +292,7 @@ export async function verifyVenueRows(a: {
     const readinessInputByRow = new Map<Row, { key: string; input: Omit<MakerReadinessInput, "facts"> }>();
     for (const ref of refs) {
       if (!ref.parsed) continue;
-      const rCtx = makerReadinessTargetOf({ order: ref.parsed.signed.order, extension: ref.parsed.signed.extension, lop: bookLop, makerSignedEcdsa: ref.parsed.makerSignature === "eoa-verified" });
+      const rCtx = makerReadinessTargetOf({ generations: bookGenerations, order: ref.parsed.signed.order, extension: ref.parsed.signed.extension, lop: bookLop, makerSignedEcdsa: ref.parsed.makerSignature === "eoa-verified" });
       const t = rCtx.target;
       const jit = t.jit;
       const key = [t.maker, t.makerAsset, t.usePermit2 ? "p2" : "erc20", jit ? [jit.adapter, jit.collateralAsset, String(jit.enableJitMint), jit.predictedCorkSwapToken ?? "?"].join(",") : "-"].join(":").toLowerCase();
@@ -498,12 +501,15 @@ export async function verifyVenueRows(a: {
     const unknownSettlers = new Set<string>();
     for (const row of inBudget) {
       const generation = generationOf(row);
-      // The generation rides on the row: a reader can see WHY a row is unverified, and WHICH
-      // configured generation (its label) vouched for a verified one.
+      // The generation rides on the row as ONE object — `{ label, status }` for a configured
+      // settler (status = the rollover block's standing, active | retired), `{ status: "unknown" }`
+      // for an address no generation vouches for — so a reader sees WHY a row is unverified and
+      // WHICH generation vouched for a verified one (review B4, 2026-09-22: a status string with a
+      // `*Label` twin said one fact twice).
       const labeled =
         generation === undefined ? row
-        : generation.status === "unknown" ? { ...row, settlerGeneration: "unknown" }
-        : { ...row, settlerGeneration: generation.status, settlerGenerationLabel: generation.label };
+        : generation.status === "unknown" ? { ...row, settlerGeneration: { status: "unknown" } }
+        : { ...row, settlerGeneration: { label: generation.label, status: generation.status } };
       if (generation?.status === "unknown") unknownSettlers.add(str(row.settler)!.toLowerCase());
       const k = readKeyOf(row);
       const venueStatus = str(row.status);

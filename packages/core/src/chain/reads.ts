@@ -2,7 +2,7 @@
 // swapRate / preview* in pure TS. All reads are pinned to one blockNumber so a mutable
 // oracle cannot race the parity comparison.
 //
-// Generation-aware since 0.6 (stage 2c): every read takes the POOL MANAGER together with its
+// Generation-aware since 0.6 (2026-09-22): every read takes the POOL MANAGER together with its
 // declared wire (`8-field` | `10-field`), because the `market()` return widened by two words on
 // phoenix v1.4.0-rc.1 and viem decodes the wider return through the narrower ABI SILENTLY. The
 // 8-field path is byte-identical to 0.5.x; the 10-field path decodes the widened tuple, takes the
@@ -12,7 +12,7 @@
 import type { PublicClient } from "viem";
 import type { GenerationRef, PhoenixWire } from "../generations.ts";
 import type { ConstraintState, Market, Market10, Market8 } from "../types.ts";
-import { constraintAdapterAbi, erc20Abi, poolManagerAbi, poolManagerMarket10Abi, poolShareAbi, rateOracleAbi } from "./abis.ts";
+import { constraintAdapterAbi, erc20Abi, marketAbiFor, poolManagerAbi, poolShareAbi, rateOracleAbi } from "./abis.ts";
 
 /** A pool manager and the wire it speaks — the minimum every pool read needs. `CorkDeployment`
  *  (config.ts) satisfies it, and so does a generation's phoenix block. */
@@ -25,6 +25,16 @@ export interface CorkAddresses extends PoolManagerRef {
   constraintAdapter: `0x${string}`;
   /** The generation the addresses came from, echoed on the read so a result can carry it. */
   generation?: GenerationRef;
+}
+
+/** The pool's share tokens as an EARLIER read in the same call returned them — the generation
+ *  resolver's `shares(poolId)` (generations.ts). Passed through so the state read does not ask
+ *  the same manager the same question twice (review C1, 2026-09-22). Safe across blocks: a pool's
+ *  share contracts are set at creation and never change, so a value read at "latest" by the
+ *  resolver is the value at any pinned block at or after creation. */
+export interface KnownShares {
+  corkPrincipalToken: `0x${string}`;
+  corkSwapToken: `0x${string}`;
 }
 
 /** One tuple-vs-view fee disagreement on a 10-field manager (both 1e18 = 1%). */
@@ -67,27 +77,14 @@ export interface PoolTokensRead {
   expiryTimestamp: bigint;
 }
 
-/** Read `market(poolId)` through the ABI of the manager's declared wire. The 8-field decode is
- *  the 0.5.x one; the 10-field decode carries the two fee words a narrower ABI would drop. */
+/** Read `market(poolId)` through the ABI of the manager's declared wire — `marketAbiFor` is the
+ *  ONE place that choice is made (this function branched on the wire itself until 2026-09-22,
+ *  review B5). The 8-field decode is the 0.5.x one; the 10-field decode carries the two fee words
+ *  a narrower ABI would drop. viem types the return by the ABI, so the Market8/Market10 shape
+ *  follows the wire without a widening cast. */
 async function readMarketTuple(client: PublicClient, pm: PoolManagerRef, poolId: `0x${string}`, blockArg: { blockNumber?: bigint }): Promise<Market> {
-  if (pm.wire === "10-field") {
-    const t = await client.readContract({ address: pm.poolManager, abi: poolManagerMarket10Abi, functionName: "market", args: [poolId], ...blockArg });
-    const m: Market10 = {
-      collateralAsset: t.collateralAsset,
-      referenceAsset: t.referenceAsset,
-      expiryTimestamp: t.expiryTimestamp,
-      rateMin: t.rateMin,
-      rateMax: t.rateMax,
-      rateChangePerDayMax: t.rateChangePerDayMax,
-      rateChangeCapacityMax: t.rateChangeCapacityMax,
-      rateOracle: t.rateOracle,
-      swapFeePercentage: t.swapFeePercentage,
-      unwindSwapFeePercentage: t.unwindSwapFeePercentage,
-    };
-    return m;
-  }
-  const t = await client.readContract({ address: pm.poolManager, abi: poolManagerAbi, functionName: "market", args: [poolId], ...blockArg });
-  const m: Market8 = {
+  const t = await client.readContract({ address: pm.poolManager, abi: marketAbiFor(pm.wire), functionName: "market", args: [poolId], ...blockArg });
+  const eight: Market8 = {
     collateralAsset: t.collateralAsset,
     referenceAsset: t.referenceAsset,
     expiryTimestamp: t.expiryTimestamp,
@@ -97,7 +94,12 @@ async function readMarketTuple(client: PublicClient, pm: PoolManagerRef, poolId:
     rateChangeCapacityMax: t.rateChangeCapacityMax,
     rateOracle: t.rateOracle,
   };
-  return m;
+  if (pm.wire === "10-field") {
+    const wide = t as typeof t & { swapFeePercentage: bigint; unwindSwapFeePercentage: bigint };
+    const m: Market10 = { ...eight, swapFeePercentage: wide.swapFeePercentage, unwindSwapFeePercentage: wide.unwindSwapFeePercentage };
+    return m;
+  }
+  return eight;
 }
 
 /** Light read of the four token addresses for a pool (market + shares), for funding-leg building. */
@@ -106,11 +108,14 @@ export async function resolvePoolTokens(
   pm: PoolManagerRef,
   poolId: `0x${string}`,
   atBlock?: bigint,
+  knownShares?: KnownShares,
 ): Promise<PoolTokensRead> {
   const blockArg = atBlock !== undefined ? { blockNumber: atBlock } : {};
   const [market, shares] = await Promise.all([
     readMarketTuple(client, pm, poolId, blockArg),
-    client.readContract({ address: pm.poolManager, abi: poolManagerAbi, functionName: "shares", args: [poolId], ...blockArg }),
+    knownShares !== undefined
+      ? ([knownShares.corkPrincipalToken, knownShares.corkSwapToken] as const)
+      : client.readContract({ address: pm.poolManager, abi: poolManagerAbi, functionName: "shares", args: [poolId], ...blockArg }),
   ]);
   return { collateral: market.collateralAsset, reference: market.referenceAsset, cpt: shares[0], cst: shares[1], expiryTimestamp: market.expiryTimestamp };
 }
@@ -121,6 +126,7 @@ export async function readPoolState(
   addrs: CorkAddresses,
   poolId: `0x${string}`,
   atBlock?: bigint,
+  knownShares?: KnownShares,
 ): Promise<PoolStateRead> {
   const blockNumber = atBlock ?? (await client.getBlockNumber());
   const block = await client.getBlock({ blockNumber });
@@ -139,7 +145,7 @@ export async function readPoolState(
       client.readContract({ ...pm, functionName: "swapRate", args: [poolId], blockNumber }),
       client.readContract({ ...pm, functionName: "swapFee", args: [poolId], blockNumber }),
       client.readContract({ ...pm, functionName: "unwindSwapFee", args: [poolId], blockNumber }),
-      client.readContract({ ...pm, functionName: "shares", args: [poolId], blockNumber }),
+      knownShares !== undefined ? ([knownShares.corkPrincipalToken, knownShares.corkSwapToken] as const) : client.readContract({ ...pm, functionName: "shares", args: [poolId], blockNumber }),
     ]);
 
   // 8-field: the views are the fees (the struct has none). 10-field: the TUPLE is the identity
@@ -191,13 +197,15 @@ export async function readPoolState(
   };
 }
 
-/** The `invalid_state` warning a 10-field fee disagreement surfaces as — ONE spelling for every
- *  handler that reads pool state (cork-pool, the three compute kinds, track marketRef). */
+/** The `fee_view_mismatch` warning a 10-field fee disagreement surfaces as — ONE spelling for
+ *  every handler that reads pool state (cork-pool, the three compute kinds, track marketRef). Its
+ *  own code since 2026-09-22 (review B7): a tuple ≠ views split on the pool's IDENTITY is a chain
+ *  fact a reader must be able to branch on, not the local-computation class `invalid_state` names. */
 export function feeDisagreementWarnings(s: Pick<PoolStateRead, "feeDisagreements" | "poolId">): Array<{ code: string; message: string }> {
   if (!s.feeDisagreements || s.feeDisagreements.length === 0) return [];
   return [
     {
-      code: "invalid_state",
+      code: "fee_view_mismatch",
       message: `the pool manager's market(${s.poolId}) tuple and its fee views DISAGREE on a 10-field manager — ${s.feeDisagreements.map((d) => `${d.field}: tuple ${d.tuple.toString()} vs ${d.field === "swapFeePercentage" ? "swapFee" : "unwindSwapFee"}() ${d.view.toString()}`).join("; ")} (both 1e18 = 1%). The tuple is the pool's identity (the id was hashed over it) and is what this result carries; the view is what the swap math charges. Treat the pool as suspect until the chain explains the split`,
     },
   ];

@@ -174,11 +174,15 @@ describe("runTool: cork_query", () => {
   });
   it("protocol-config reports the selected GENERATION and the chain's whole generation list (each block's addresses + wire), keeping `deployment` for the selected set", async () => {
     type Gen = { label: string; status: string; primary: boolean; distribution?: string; phoenix?: { wire: string; poolManager: string }; marketRegistry?: { wire: string; registry: string }; rollover?: { wire: string; factory: string }; forSelf?: { adapter: string } };
-    type Data = { deployment: { poolManager: string; wire: string }; generation: { label: string; status: string; primary: boolean; distribution?: string; contractsVersions: Record<string, string> }; generations: Gen[] };
+    type Data = { deployment: { poolManager: string; wire: string }; generation: { label: string; status: string; distribution?: string }; selected: { label: string; status: string; primary: boolean; distribution?: string; contractsVersions: Record<string, string> }; generations: Gen[] };
     const env = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
     const d = env.data as Data;
-    expect(d.generation).toEqual({
+    // `data.generation` is the compact ref EVERY result carries (and provenance carries the same);
+    // the config extras live under `data.selected` (review B3, 2026-09-22).
+    expect(d.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1" });
+    expect(env.provenance.generation).toEqual(d.generation);
+    expect(d.selected).toEqual({
       label: "phoenix/v0.4-rc.1",
       status: "active",
       primary: true,
@@ -197,16 +201,28 @@ describe("runTool: cork_query", () => {
     const v03 = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v0.3-rc.1" });
     const d03 = v03.data as Data;
     expect(d03.deployment).toMatchObject({ poolManager: "0x02803Bb52D2184f906F45B50C66AA969C2E37263", wire: "8-field" });
-    expect(d03.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", primary: false, contractsVersions: { phoenix: "v1.3.0-rc.1", marketRegistry: "0.3.3", rollover: "v0.1.0-rc.2" } });
+    expect(d03.generation).toEqual({ label: "phoenix/v0.3-rc.1", status: "active", distribution: "phoenix/v0.3-rc.1" });
+    expect(v03.provenance.generation).toEqual(d03.generation);
+    expect(d03.selected).toMatchObject({ label: "phoenix/v0.3-rc.1", primary: false, contractsVersions: { phoenix: "v1.3.0-rc.1", marketRegistry: "0.3.3", rollover: "v0.1.0-rc.2" } });
     expect(d03.generations).toHaveLength(4);
     // A read-only set is READABLE here; an unknown label refuses with the list.
     const ro = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "arbitrum-legacy" });
     expect(ro.state).toBe("ok");
-    expect((ro.data as Data).generation).toMatchObject({ label: "arbitrum-legacy", status: "read-only", contractsVersions: {} });
-    const bad = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v9" });
-    expect(bad.state).toBe("unavailable");
-    expect(bad.warnings[0]?.code).toBe("generation_unknown");
-    expect(bad.warnings[0]?.message).toContain("phoenix/v0.4-rc.1 (active, primary)");
+    expect((ro.data as Data).generation).toEqual({ label: "arbitrum-legacy", status: "read-only" });
+    expect((ro.data as Data).selected).toMatchObject({ label: "arbitrum-legacy", status: "read-only", contractsVersions: {} });
+    // An unknown label is the caller's OWN field → invalid input (exit 2) on EVERY path, the same
+    // class getPoolDep always threw (review B1, 2026-09-22); the message lists the chain's labels
+    // and suggests the nearest one.
+    const bad = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v0.4-rc1" }).catch((e: unknown) => e);
+    expect(bad).toBeInstanceOf(ToolInputError);
+    const issues = JSON.stringify((bad as ToolInputError).issues);
+    expect(issues).toContain("phoenix/v0.4-rc.1 (active, primary)");
+    for (const label of ["phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]) expect(issues).toContain(label);
+    expect(issues).toContain("did you mean 'phoenix/v0.4-rc.1'");
+    expect(issues).toContain('"generation"');
+    // A label nothing resembles gets the list without a suggestion.
+    const far = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "zzzzzzzzzzzzzzzz" }).catch((e: unknown) => e);
+    expect(JSON.stringify((far as ToolInputError).issues)).not.toContain("did you mean");
   });
   it("the generation gate on PREPARES: a read-only set refuses generation_read_only; a registry path selecting a wire this build does not encode refuses phase_gated", async () => {
     const ro = await runTool(

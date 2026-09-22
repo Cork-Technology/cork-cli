@@ -117,7 +117,7 @@ describe("JIT extension bytes (2.1.0 JITMarketParams: recipe + carried constrain
 
 describe("deriveJitMarket (2.1.0): identity is a pure function of the CARRIED constraint", () => {
   it("same constraint → same poolId regardless of any rate; different constraint → different id", () => {
-    const base = { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1795000000n, oracle: ACCT } as const;
+    const base = { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1795000000n, oracle: ACCT, wire: "8-field" } as const;
     const a = deriveJitMarket({ ...base, constraint: CONSTRAINT });
     const b = deriveJitMarket({ ...base, constraint: CONSTRAINT });
     const c = deriveJitMarket({ ...base, constraint: { ...CONSTRAINT, rateMax: 3n * WAD } });
@@ -129,7 +129,7 @@ describe("deriveJitMarket (2.1.0): identity is a pure function of the CARRIED co
   it("maps every constraint field to its OWN Market slot (mutation killer: the captured GT has perDay == capacity, so a field-cross was invisible to it)", () => {
     // Four DISTINCT values — any crossed assignment changes both the struct echo and the id.
     const distinct: ResolvedConstraint = { rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 3n, rateChangeCapacityMax: 4n };
-    const d = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 5n, constraint: distinct, oracle: ACCT });
+    const d = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 5n, constraint: distinct, oracle: ACCT, wire: "8-field" });
     expect(d.market.rateMin).toBe(1n);
     expect(d.market.rateMax).toBe(2n);
     expect(d.market.rateChangePerDayMax).toBe(3n);
@@ -155,6 +155,7 @@ describe("deriveJitMarket (2.1.0): identity is a pure function of the CARRIED co
       expiryTimestamp: 1900000000n,
       constraint: { rateMin: 8062338796602994n, rateMax: 1612467759320598742n, rateChangePerDayMax: 806233879660299371n, rateChangeCapacityMax: 806233879660299371n },
       oracle: "0x2ba2103a37c4cff9dbb96e6f74513923d960d757",
+      wire: "8-field",
     });
     expect(d.poolId).toBe("0xda9325fad061bbcaa92fdec93d81398ca31ad1494c16ac658b9cc67079078c75");
   });

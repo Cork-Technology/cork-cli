@@ -40,7 +40,7 @@ function clientWith(simulate: (calls: readonly { to: `0x${string}`; data: `0x${s
   } as unknown as PublicClient;
 }
 
-const base = { adapter: CREATOR, controller: CONTROLLER, poolManager: PM, market, poolId: POOL_ID } as const;
+const base = { adapter: CREATOR, controller: CONTROLLER, poolManager: PM, market, poolId: POOL_ID, wire: "8-field" } as const;
 
 describe("predictShares — the reason a prediction is unavailable", () => {
   it("names the creation leg's DECODED revert: a live rate outside the carried window is InvalidRate on the pool manager", async () => {

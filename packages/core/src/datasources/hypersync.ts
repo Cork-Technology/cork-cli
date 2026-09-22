@@ -19,6 +19,7 @@
 //    (setting CH_HYPERSYNC_BINDING to a `.node` path in the environment overrides that).
 import { decodeEventLog, parseAbi, toEventSelector } from "viem";
 import type { PhoenixWire } from "../generations.ts";
+import { MARKET_CREATED_8_EVENT, MARKET_CREATED_10_EVENT } from "../event-decode.ts";
 import { BUILD_TARGET, HYPERSYNC_BINDING } from "../version.ts";
 import { hyperSyncUrl } from "./envio.ts";
 
@@ -238,16 +239,14 @@ export function normalizeNapiLog(l: Record<string, unknown>): HyperSyncLog {
 
 // ── Event decoding (signatures validated on-chain / against the pinned repos) ──────────────────
 
-const marketCreatedAbi = parseAbi([
-  "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
-]);
-// phoenix v1.4.0-rc.1 (the 10-field wire): the same seven plus the two fee percentages that are
-// now part of the Market struct and its id. A DIFFERENT topic0 — a scan keyed on the 7-arg form
-// alone sees nothing on a 10-field manager, so every MarketCreated scan asks for BOTH topics and
-// decodes each log with the ABI of its EMITTER's declared wire (never by trying both).
-const marketCreated10Abi = parseAbi([
-  "event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)",
-]);
+// The two pool-manager MarketCreated declarations live ONCE in event-decode.ts (the receipt
+// decoder's verified set) and are parsed here for the scan. phoenix v1.4.0-rc.1 (the 10-field
+// wire) adds the two fee percentages that are now part of the Market struct and its id — a
+// DIFFERENT topic0: a scan keyed on the 7-arg form alone sees nothing on a 10-field manager, so
+// every MarketCreated scan asks for BOTH topics and decodes each log with the ABI of its
+// EMITTER's declared wire (never by trying both).
+const marketCreatedAbi = parseAbi([MARKET_CREATED_8_EVENT]);
+const marketCreated10Abi = parseAbi([MARKET_CREATED_10_EVENT]);
 const cloneDeployedAbi = parseAbi(["event RolloverContractDeployed(address indexed user, address indexed rolloverContract)"]);
 const rolloverFillAbis = parseAbi([
   "event RolloverLegFilled(bytes32 indexed orderDigest, address indexed filler, bytes32 indexed subFiller, uint256 srcCstProvided, uint256 dstCstProduced)",
@@ -350,20 +349,20 @@ export type LopFillRow = LogMeta & {
 };
 
 /** Decode MarketCreated logs, choosing the ABI by the EMITTER's declared wire (`emitters`,
- *  from the chain's generations) — a 10-field manager's 9-arg log through the 7-arg ABI fails
- *  the strict topic count and a 7-arg log through the 9-arg ABI fails on data length, and both
- *  failures are SKIPPED rather than retried with the other ABI: the wire is a config fact about
- *  the emitter, not something to infer from the bytes. A log from an address the emitter table
- *  does not name is skipped too (HyperSync only serves the addresses asked, so this is the
- *  defensive branch). Without `emitters` every log is read as 8-field — the pre-0.6 behaviour,
- *  kept for callers that scan one known manager. */
-export function decodeMarketRows(logs: HyperSyncLog[], emitters?: readonly MarketEmitter[]): MarketRow[] {
-  const byAddress = emitters ? new Map(emitters.map((e) => [e.poolManager.toLowerCase(), e] as const)) : undefined;
+ *  from the chain's generations — REQUIRED: the optional parameter with an 8-field default was
+ *  a public /indexer path on which a 10-field log was silently dropped, review A4, 2026-09-22)
+ *  — a 10-field manager's 9-arg log through the 7-arg ABI fails the strict topic count and a
+ *  7-arg log through the 9-arg ABI fails on data length, and both failures are SKIPPED rather
+ *  than retried with the other ABI: the wire is a config fact about the emitter, not something
+ *  to infer from the bytes. A log from an address the emitter table does not name is skipped
+ *  too (HyperSync only serves the addresses asked, so this is the defensive branch). */
+export function decodeMarketRows(logs: HyperSyncLog[], emitters: readonly MarketEmitter[]): MarketRow[] {
+  const byAddress = new Map(emitters.map((e) => [e.poolManager.toLowerCase(), e] as const));
   return logs.flatMap((l) => {
-    const emitter = byAddress ? byAddress.get(l.address.toLowerCase()) : undefined;
-    if (byAddress && emitter === undefined) return [];
-    const wire: PhoenixWire = emitter?.wire ?? "8-field";
-    const tag = { poolManager: l.address, wire, ...(emitter ? { generation: emitter.label } : {}), ...meta(l) };
+    const emitter = byAddress.get(l.address.toLowerCase());
+    if (emitter === undefined) return [];
+    const wire: PhoenixWire = emitter.wire;
+    const tag = { poolManager: l.address, wire, generation: emitter.label, ...meta(l) };
     try {
       if (wire === "10-field") {
         const d = decodeEventLog({ abi: marketCreated10Abi, topics: strictTopics(l), data: l.data as Hex });

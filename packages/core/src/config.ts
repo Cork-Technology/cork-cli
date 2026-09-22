@@ -5,18 +5,14 @@
 // because not every era's deployment is fully known/verified — handlers gate per-capability
 // with an honest `unknown_deployment` rather than pretending. Production callers should
 // re-verify via CREATE2 (create2.ts) where an attestation exists.
-import type { CorkAddresses } from "./chain/reads.ts";
-import type { PhoenixWire } from "./generations.ts";
+import type { PhoenixBlock } from "./generations.ts";
 
-export interface CorkDeployment extends CorkAddresses {
-  corkAdapter?: `0x${string}`;
-  bundler3?: `0x${string}`;
-  whitelistManager?: `0x${string}`;
-  /** The DefaultCorkController that owns pool creation on this pool manager (2.1.0+ eras). */
-  controller?: `0x${string}`;
-  contractsVersion?: string;
-  wire: PhoenixWire;
-}
+/** A deployment IS a generation's phoenix block (generations.ts `PhoenixBlockSchema`): pool
+ *  manager + constraint adapter + wire required; corkAdapter / bundler3 / whitelistManager /
+ *  controller / contractsVersion optional. ONE type — the structurally-identical interface this
+ *  aliased until 2026-09-22 needed `as CorkDeployment` casts wherever a block was handed out
+ *  (review D). `chain/reads.ts` `CorkAddresses` is satisfied by it. */
+export type CorkDeployment = PhoenixBlock;
 
 // Addresses live in the canonical `cork-defaults.v2.json` at the repo root — the runtime fetches
 // the latest copy from GitHub (config-remote.ts) and this bundled copy is the distribution
@@ -30,8 +26,8 @@ import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json"
  *  REMOTE-FIRST via `resolveDeployment` (config-remote.ts); nothing at runtime may read this
  *  bundled-only view — a `deploymentFor(chainId)` convenience that did exactly that was removed
  *  2026-08-11. The mainnet stack predates the controller era, so `controller` is absent there. */
-export const MAINNET_DEPLOYMENT: Required<Omit<CorkDeployment, "controller" | "contractsVersion">> =
-  bundledDefaults.generations["1"].sets.mainnet.phoenix as Required<Omit<CorkDeployment, "controller" | "contractsVersion">>;
+export const MAINNET_DEPLOYMENT: CorkDeployment & { corkAdapter: `0x${string}`; bundler3: `0x${string}`; whitelistManager: `0x${string}` } =
+  bundledDefaults.generations["1"].sets.mainnet.phoenix as CorkDeployment & { corkAdapter: `0x${string}`; bundler3: `0x${string}`; whitelistManager: `0x${string}` };
 
 /** Safe Singleton Factory — the CREATE2 deployer for Cork's cross-chain-identical addresses. */
 export const CREATE2_DEPLOYER = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as const;

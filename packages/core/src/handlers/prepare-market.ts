@@ -47,7 +47,7 @@ export async function handlePrepareMarket(
   // A prepare: the selected generation must be active (the read-only gate lives here because
   // resolveMarketRegistry is a read; a read-only set's registry stays readable).
   const { mr, mrWarn, generation, phoenixWire: phoenixWireResolved, refusal } = await getMarketRegistry(ctx, chainId);
-  if (refusal) return generationRefusal(chainId, refusal, generation, ctx);
+  if (refusal) return generationRefusal(chainId, refusal, generation, ctx, "cork_prepare_market");
   if (generation && generation.status !== "active") {
     return unavailable(chainId, "generation_read_only", `generation '${generation.label}' is read-only: no new bytes are built against its contracts — omit \`generation\` to target the primary, or name another active generation`, ctx);
   }
@@ -57,7 +57,13 @@ export async function handlePrepareMarket(
   const warnings: Array<{ code: string; message: string }> = [...mrWarn];
   const wire: MarketRegistryWire = mr.wire;
   const codec = wireCodec(wire);
-  const phoenixWire: PhoenixWire = phoenixWireResolved ?? (wire === "nested" ? "10-field" : "8-field");
+  // Declared by the generation's phoenix block, never inferred from the registry wire (review
+  // A2, 2026-09-22): a create-pool against a generation with no pool manager has nothing to
+  // create on, and a guessed width would derive an id the creator never mints.
+  if (phoenixWireResolved === undefined) {
+    return unavailable(chainId, "unknown_deployment", `generation '${generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown, so no market-infrastructure tx can be derived against it — refresh cork-defaults.v2.json or target a generation whose phoenix block is configured`, ctx);
+  }
+  const phoenixWire: PhoenixWire = phoenixWireResolved;
   const a = input.action;
   if (a.type === "create-pool") return handleCreatePool(input, a, mr, warnings, ctx, { wire, phoenixWire, generation: generation?.label });
   const resolved = await getRpc(ctx, chainId);
@@ -267,7 +273,7 @@ async function handleCreatePool(
         data: { marketCreator: creator, expected: { registry: mr.registry, ...(dep?.poolManager ? { poolManager: dep.poolManager } : {}), ...(mr.controller ? { controller: mr.controller } : {}) }, onChain: { registry: boundRegistry, poolManager: boundPm, controller: boundController } },
         chainId,
         source: "chain",
-        warnings: [{ code: "adapter_binding_mismatch", message: `the configured CorkMarketCreator's on-chain bindings do not match this tool's ${controllerMismatch ? "controller" : "registry/pool-manager"} config — a stale or cross-generation address; refresh cork-defaults.json before signing anything` }],
+        warnings: [{ code: "adapter_binding_mismatch", message: `the configured CorkMarketCreator's on-chain bindings do not match this tool's ${controllerMismatch ? "controller" : "registry/pool-manager"} config — a stale or cross-generation address; refresh cork-defaults.v2.json before signing anything` }],
         ctx,
       });
     }

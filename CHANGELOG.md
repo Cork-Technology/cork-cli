@@ -44,6 +44,19 @@ The rollover config can name more than one ACTIVE generation. On 2026-09-11 the 
 - **The settler teachings list every active generation.** `settler_not_recognized` and `settler_retired` name every active ExactSettler or PartialSettler with its label, the primary one marked. `settler_mode_mismatch` names the SAME generation's partner, never the primary's.
 
 ### Fixed
+- A `rollover-intent` whose settler belongs to no configured generation refuses `invalid_order_terms` when it carries a JIT commitment (`jitMarket` or a non-zero `jitMarketHash`). Before, the commitment was hashed on the primary's wire — a guess no filler on another wire can reproduce. A plain order keeps the `settler_not_recognized` path.
+- The pool id width comes only from the settler generation's declared `phoenix.wire`. A generation that declares no phoenix block refuses `unknown_deployment`. Before, two sites inferred the width from the registry or rollover wire.
+- One JIT extension decoder, `decodeJitExtensionFor`: the hook adapter is classified first and the bytes decode on that generation's wire. An adapter no generation vouches for yields no label and a maker-readiness verdict of `unknown`. The two trial-decode ladders are gone.
+- `decodeMarketRows` requires the emitter table; a log from an unlisted address is dropped, never decoded on a default width.
+- `generation_unknown` is invalid input on every path and suggests the nearest label. `generation_read_only` stays an `unavailable` envelope. Both carry `provenance.generation`.
+- One `resolveJitBytesInput` handles the `extraData` / `additionalData` alias for the registry jitMarket, `create-pool` and the rollover jitMarket: the alias alone is accepted with a `deprecation_notice`; both present and different refuse.
+- `protocol-config` carries `provenance.generation` and the same compact `data.generation` as every other result; the extras moved under `data.selected`.
+- One status vocabulary: emitters and rollover rows carry `generation: { label, status }`; the `settlerGenerationLabel` twin and the `legacyJitAdapter` role name are gone.
+- `readPoolState` reads `market()` through the one ABI chooser, `marketAbiFor(wire)`; one `deriveJitMarket({ wire })` derives every JIT pool id.
+- A 10-field `market()` tuple whose fees disagree with the `swapFee` / `unwindSwapFee` views warns `fee_view_mismatch`, its own code.
+- The scan cache prunes entries written under an older schema on load; they no longer grow the file forever.
+- The inline templates `cork-inline-liquidity/1` and `cork-inline-impairment/1` accept an optional `oracle_salt`; an explicit `jitMarket.oracleSalt` wins.
+- `cork-defaults.json` (schema 1) is byte-frozen at its v0.5.1 contents and its digest is pinned by a test.
 
 - Registry-bound prepares never emit one wire's bytes at another wire's adapter: the selected generation's declared wire drives the codec, and a generation whose wire this build does not implement refuses `phase_gated`.
 - `share_prediction_unavailable` names the simulated revert (for example `InvalidRate`, `RecipeRejectedConstraint`) instead of a generic transport guess.

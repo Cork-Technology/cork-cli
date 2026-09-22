@@ -222,8 +222,12 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // carry the same values or the answer would name a pool the fill never creates.
   const swapFeePercentage = action.jitMarket?.swapFeePercentage ?? inline?.swapFeeWad ?? "0";
   const unwindSwapFeePercentage = action.jitMarket?.unwindSwapFeePercentage ?? inline?.unwindSwapFeeWad ?? "0";
+  // The inline block's OPTIONAL oracle_salt (our convention on both schemas, 2026-09-22) rides
+  // into the derivation and the order's JIT block the same way the fees do — the salt picks the
+  // pair's first wrapper address, which is part of the pool's identity. The explicit field wins.
+  const oracleSalt = action.jitMarket?.oracleSalt ?? inline?.oracleSalt;
   const derive = await handleQuery(
-    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(action.jitMarket?.oracleSalt !== undefined ? { oracleSalt: action.jitMarket.oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
+    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(oracleSalt !== undefined ? { oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
   );
   // A gated derive keeps its reason FIRST (the envelope contract) — but the warnings gathered
@@ -275,6 +279,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const jitExplicit = Object.fromEntries(Object.entries(jitRest).filter(([, v]) => v !== undefined));
   const jitFromInline = {
     ...(extraData !== undefined ? { extraData } : {}),
+    ...(inline?.oracleSalt !== undefined ? { oracleSalt: inline.oracleSalt } : {}),
     ...(pinnedConstraint !== undefined ? { constraint: pinnedConstraint } : {}),
     swapFeePercentage,
     unwindSwapFeePercentage,

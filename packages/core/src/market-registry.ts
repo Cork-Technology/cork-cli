@@ -16,7 +16,7 @@
 //  - ENUM TRAP: RecipeSource is NAV=0,PRICE=1,FIXED=2 while OracleMode/SourceType are
 //    PRICE=0,NAV=1 — inverted. Never pass one where the other is expected.
 //
-// Two IMPLEMENTED registry wires live here since 0.6 (stage 2a), keyed by `MarketRegistryWire`
+// Two IMPLEMENTED registry wires live here since 0.6 (2026-09-22), keyed by `MarketRegistryWire`
 // (generations.ts): `flat` — the 0.3.x set above, byte-identical to what it always emitted — and
 // `nested` — market-registry 0.5.0 (Distribution phoenix/v0.4-rc.1, deployed 2026-09-22 on
 // Arbitrum One + Base at identical addresses): the adapter's JITMarketParams became a WRAPPER
@@ -756,44 +756,28 @@ export function decodeJitExtension(wire: MarketRegistryWire, extension: `0x${str
   return { adapter, ...decodeJitExtraData(wire, extraData) };
 }
 
-/** "Is this a JIT extension, and what does it say about the MAKER side?" for readers that hold
- *  no address book (the ForSelf coherence pre-flight, the maker-readiness probe): tries the
- *  implemented wires in turn and reports which one read the bytes. A best-effort SHAPE read for
- *  heuristics only — anything that labels, trusts, or builds against the payload dispatches by
- *  the adapter's classification instead (decodeJitExtension with the generation's wire). */
-export function decodeJitExtensionAny(extension: `0x${string}`): { wire: ImplementedMarketRegistryWire; adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] } {
-  const { adapter, extraData } = jitExtensionTarget(extension);
-  let lastError: unknown;
-  for (const wire of ["nested", "flat"] as const) {
-    try {
-      return { wire, adapter, ...decodeJitExtraData(wire, extraData) };
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("not a JIT extension on any implemented wire");
-}
-
 // ── Market derivation (what the fill will compute) ──────────────────────────────────────────
-/** Build the Market struct + poolId a fill carrying `constraint` would produce. The constraint
- *  comes IN (resolved off-chain at signing), so the identity is a pure function of the order —
- *  no rate read, no drift. The width follows the PHOENIX wire of the generation the fill creates
- *  on: 8-field (fees outside the id — the default, so pre-0.6 call sites are unchanged) or
- *  10-field (the two fee percentages are the Market's last two members AND part of the id, so
- *  they are required there and default to zero — a pool with a different fee is a different
- *  pool). The id is computeMarketId on that wire, bit-identical to poolManager.getId (10-field
- *  golden vector captured live 2026-09-22). */
+/** Build the Market struct + poolId a fill carrying `constraint` would produce — the ONE
+ *  derivation of a JIT pool's identity (the rollover branch had a twin, `deriveRolloverJitPool`,
+ *  deleted 2026-09-22, review B6). The constraint comes IN (resolved off-chain at signing), so
+ *  the identity is a pure function of the order — no rate read, no drift. The width is the
+ *  PHOENIX wire of the generation the fill creates on and is REQUIRED (the pre-0.6 8-field
+ *  default let a caller that forgot it hash the wrong width silently — review D): 8-field keeps
+ *  the fees outside the id; 10-field makes the two fee percentages the Market's last two
+ *  members AND part of the id (they default to zero there — a pool with a different fee is a
+ *  different pool). The id is computeMarketId on that wire, bit-identical to poolManager.getId
+ *  (10-field golden vector captured live 2026-09-22). */
 export function deriveJitMarket(args: {
   collateralAsset: `0x${string}`;
   referenceAsset: `0x${string}`;
   expiryTimestamp: bigint;
   constraint: ResolvedConstraint;
   oracle: `0x${string}`;
-  wire?: PhoenixWire | undefined;
+  wire: PhoenixWire;
   swapFeePercentage?: bigint | undefined;
   unwindSwapFeePercentage?: bigint | undefined;
 }): { market: Market; poolId: `0x${string}`; wire: PhoenixWire } {
-  const wire: PhoenixWire = args.wire ?? "8-field";
+  const wire: PhoenixWire = args.wire;
   const eight: Market8 = {
     collateralAsset: args.collateralAsset,
     referenceAsset: args.referenceAsset,
@@ -1114,9 +1098,10 @@ export async function predictShares(
     poolManager: `0x${string}`;
     market: Market;
     poolId: `0x${string}`;
-    /** The controller's wire (defaults to 8-field, the pre-0.6 behaviour); a 10-field market
-     *  must be derived on the 10-field wire — buildCreatePoolCall refuses a mixed pair. */
-    wire?: PhoenixWire | undefined;
+    /** The controller's wire — REQUIRED (the pre-0.6 8-field default was removed 2026-09-22,
+     *  review D); a 10-field market must be derived on the 10-field wire — buildCreatePoolCall
+     *  refuses a mixed pair. */
+    wire: PhoenixWire;
     unwindSwapFeePercentage?: bigint;
     swapFeePercentage?: bigint;
     /** Legs to run BEFORE createNewPool in the simulation — e.g. the permissionless
@@ -1166,7 +1151,7 @@ export async function predictShares(
   try {
     const pre = args.preCalls ?? [];
     const creatorRole = (args.chainId !== undefined ? cachedContractConstantBytes32(args.chainId, args.controller, "POOL_CREATOR_ROLE") : undefined) ?? POOL_CREATOR_ROLE;
-    const createData = buildCreatePoolCall(args.wire ?? "8-field", args.market, { unwindSwapFeePercentage: args.unwindSwapFeePercentage ?? 0n, swapFeePercentage: args.swapFeePercentage ?? 0n });
+    const createData = buildCreatePoolCall(args.wire, args.market, { unwindSwapFeePercentage: args.unwindSwapFeePercentage ?? 0n, swapFeePercentage: args.swapFeePercentage ?? 0n });
     const simulated = await client.simulateCalls({
       account: args.adapter,
       calls: [

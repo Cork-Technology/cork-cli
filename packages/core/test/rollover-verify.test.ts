@@ -115,7 +115,8 @@ describe("settler provenance gate [STATE-003]: only a configured generation may 
       expect(asked).toEqual([settler.toLowerCase()]);
       expect(env.state).toBe("ok");
       expect(env.provenance.source).toBe("chain");
-      expect(env.data).toMatchObject({ chainVerification: { settler, settlerGeneration: generation, settlerGenerationLabel: label, chainStatus: "Opened", consistent: true } });
+      expect(env.data).toMatchObject({ chainVerification: { settler, settlerGeneration: { label, status: generation }, chainStatus: "Opened", consistent: true } });
+      expect((env.data as { chainVerification: Record<string, unknown> }).chainVerification).not.toHaveProperty("settlerGenerationLabel");
     },
   );
 
@@ -172,7 +173,7 @@ describe("status leg (settler orderStatus view)", () => {
     expect(env.provenance.source).toBe("chain");
     expect(asked).toEqual([settler02.toLowerCase()]);
     const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
-    expect(v).toMatchObject({ chainStatus: "Settled", consistent: true, settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
+    expect(v).toMatchObject({ chainStatus: "Settled", consistent: true, settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
     expect(String(v.settler).toLowerCase()).toBe(settler02.toLowerCase());
   });
 });
@@ -338,7 +339,7 @@ describe("fetchDigestLogs — the two failure modes are distinguished (never con
 });
 
 describe("attributeLogs (history rows)", () => {
-  const retiredExact = [{ address: EXACT as `0x${string}`, role: "exactSettler" as const, generation: "retired" as const, label: "arbitrum-v1.1" }];
+  const retiredExact = [{ address: EXACT as `0x${string}`, role: "exactSettler" as const, generation: { label: "arbitrum-v1.1", status: "active" as const }, retired: "2026-08-13" }];
   it("attributes a known settler event from its configured emitter; an unknown topic rides byte-exact as otherLogs", () => {
     const known = toEventSelector("OrderSettled(bytes32)");
     const a = attributeLogs(
@@ -349,7 +350,7 @@ describe("attributeLogs (history rows)", () => {
       retiredExact,
     );
     expect(a.corkEvents).toEqual([
-      { event: "OrderSettled", address: EXACT, emitter: { role: "exactSettler", generation: "retired", label: "arbitrum-v1.1" }, topic1: DIGEST, txHash: `0x${"ab".repeat(32)}`, blockNumber: String(0x1de5b3a0), logIndex: "0" },
+      { event: "OrderSettled", address: EXACT, emitter: { role: "exactSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" }, topic1: DIGEST, txHash: `0x${"ab".repeat(32)}`, blockNumber: String(0x1de5b3a0), logIndex: "0" },
     ]);
     expect(a.unattributedEvents).toEqual([]);
     expect(a.otherLogs).toEqual([{ address: EXACT, topics: [`0x${"de".repeat(32)}`, DIGEST], data: "0xbeef", txHash: `0x${"cd".repeat(32)}`, blockNumber: String(0x1de5b3a1), logIndex: "1" }]);
@@ -475,7 +476,7 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     const v = (env.data as { chainVerification: { settler: string; chainStatus: string } }).chainVerification;
     expect(v.settler.toLowerCase()).toBe(EXACT.toLowerCase());
     expect(v.chainStatus).toBe("Settled");
-    expect(v).toMatchObject({ settlerGeneration: "retired", settlerGenerationLabel: "arbitrum-v1.1" });
+    expect(v).toMatchObject({ settlerGeneration: { label: "arbitrum-v1.1", status: "retired" } });
     expect(env.warnings.some((w) => w.code === "order_not_found" && w.message.includes("outranks"))).toBe(true);
   });
 
@@ -489,7 +490,7 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     expect(env.state).toBe("ok");
     const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
     expect(String(v.settler).toLowerCase()).toBe(candidatePartial.toLowerCase());
-    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: "active", settlerGenerationLabel: "phoenix/v0.4-rc.1" });
+    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
   });
 
   it("all settlers answering None (and the venue empty) is an honest order_not_found", async () => {

@@ -18,7 +18,7 @@ import {
   computeMarketId,
   CREATOR_MARKET_CREATED_TOPIC,
   decodeJitExtension,
-  decodeJitExtensionAny,
+  decodeJitExtensionFor,
   decodeJitExtraData,
   decodeKnownLog,
   deriveJitMarket,
@@ -136,10 +136,25 @@ describe("nested wire — the deployed adapter's own bytes (golden, 42161 2026-0
       }
     };
     for (const r of [readNestedAsFlat(), readFlatAsNested()]) expect(r === "threw" || r.length > 0).toBe(true);
-    // decodeJitExtensionAny names the wire that read the bytes.
+    // decodeJitExtensionFor dispatches by the ADAPTER's classification (review A3): the nested
+    // adapter's bytes read nested; flat bytes pasted at the nested adapter are NOT re-read as
+    // flat (a throw from the nested codec, never a wire guess); flat bytes at the flat adapter
+    // read flat; an unconfigured adapter reads as null.
     const adapter = NESTED_MR.adapter as `0x${string}`;
-    expect(decodeJitExtensionAny(buildJitExtension(adapter, LIVE_EXTRA_DATA)).wire).toBe("nested");
-    expect(decodeJitExtensionAny(buildJitExtension(adapter, flatBytes)).wire).toBe("flat");
+    const gens = generationsOf(BUNDLED_DEFAULTS, 42161);
+    expect(decodeJitExtensionFor(gens, buildJitExtension(adapter, LIVE_EXTRA_DATA))?.wire).toBe("nested");
+    expect(() => decodeJitExtensionFor(gens, buildJitExtension(adapter, flatBytes))).toThrow();
+    expect(decodeJitExtensionFor(gens, buildJitExtension(FLAT.marketRegistry!.adapter as `0x${string}`, flatBytes))?.wire).toBe("flat");
+    // An adapter NO generation on the list vouches for is not decoded on any wire — null, never a
+    // guess and never a throw (review A3, 2026-09-22: a book verdict must not ride on a guessed
+    // wire, and an unknown hook target is "no label", not "the primary's label").
+    const stranger = `0x${"5a".repeat(20)}` as const;
+    expect(decodeJitExtensionFor(gens, buildJitExtension(stranger, LIVE_EXTRA_DATA))).toBeNull();
+    // …and the same nested bytes at the primary adapter, classified against a chain where that
+    // adapter is unknown (mainnet has no registry block), are null too — classification is per
+    // chain list, not per address shape.
+    expect(decodeJitExtensionFor(generationsOf(BUNDLED_DEFAULTS, 1), buildJitExtension(adapter, LIVE_EXTRA_DATA))).toBeNull();
+    expect(decodeJitExtensionFor(gens, buildJitExtension("0x00000000000000000000000000000000000000ee", flatBytes))).toBeNull();
     expect(decodeJitExtension("nested", buildJitExtension(adapter, LIVE_EXTRA_DATA)).adapter).toBe(adapter);
   });
 
@@ -159,7 +174,7 @@ describe("nested wire — the 10-field identity and the calls this build emits (
     expect("swapFeePercentage" in d.market).toBe(true);
     // Different fees, different pool; the 8-field twin of the same legs is another id entirely.
     expect(deriveJitMarket({ collateralAsset: USDC, referenceAsset: BASEUSD, expiryTimestamp: 1_800_000_000n, constraint: SAMPLE.constraint, oracle: NAV_RECIPE, wire: "10-field", swapFeePercentage: 2n * WAD, unwindSwapFeePercentage: WAD }).poolId).not.toBe(LIVE_GET_ID);
-    expect(deriveJitMarket({ collateralAsset: USDC, referenceAsset: BASEUSD, expiryTimestamp: 1_800_000_000n, constraint: SAMPLE.constraint, oracle: NAV_RECIPE }).poolId).not.toBe(LIVE_GET_ID);
+    expect(deriveJitMarket({ collateralAsset: USDC, referenceAsset: BASEUSD, expiryTimestamp: 1_800_000_000n, constraint: SAMPLE.constraint, oracle: NAV_RECIPE, wire: "8-field" }).poolId).not.toBe(LIVE_GET_ID);
     expect(computeMarketId({ ...d.market }, "10-field")).toBe(LIVE_GET_ID);
   });
 
@@ -221,7 +236,7 @@ describe("nested wire — the 10-field identity and the calls this build emits (
     expect(BigInt(bodyWord(data, 10))).toBe(0n); // isWhitelistEnabled false
     // Wire/shape refusals: a 10-field market on the 8-field controller and the reverse.
     expect(() => buildCreatePoolCall("8-field", d.market)).toThrow(/8-field controller/);
-    const eight = deriveJitMarket({ collateralAsset: USDC, referenceAsset: BASEUSD, expiryTimestamp: 1_800_000_000n, constraint: SAMPLE.constraint, oracle: NAV_RECIPE }).market;
+    const eight = deriveJitMarket({ collateralAsset: USDC, referenceAsset: BASEUSD, expiryTimestamp: 1_800_000_000n, constraint: SAMPLE.constraint, oracle: NAV_RECIPE, wire: "8-field" }).market;
     expect(() => buildCreatePoolCall("10-field", eight)).toThrow(/10-field controller/);
     expect(buildCreatePoolCall("8-field", eight).slice(0, 10)).toBe("0xc2e8dc2f");
   });
@@ -312,7 +327,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     const c = { rateMin: BigInt(d.jit.constraint.rateMin!), rateMax: BigInt(d.jit.constraint.rateMax!), rateChangePerDayMax: BigInt(d.jit.constraint.rateChangePerDayMax!), rateChangeCapacityMax: BigInt(d.jit.constraint.rateChangeCapacityMax!) };
     const expected = deriveJitMarket({ ...JIT_TASK_PAIR, expiryTimestamp: BigInt(EXPIRY), constraint: c, oracle: STUB_ORACLE as `0x${string}`, wire: "10-field", swapFeePercentage: WAD, unwindSwapFeePercentage: 0n }).poolId;
     expect(d.jit.derivedPoolId).toBe(expected);
-    expect(d.jit.derivedPoolId).not.toBe(deriveJitMarket({ ...JIT_TASK_PAIR, expiryTimestamp: BigInt(EXPIRY), constraint: c, oracle: STUB_ORACLE as `0x${string}` }).poolId);
+    expect(d.jit.derivedPoolId).not.toBe(deriveJitMarket({ ...JIT_TASK_PAIR, expiryTimestamp: BigInt(EXPIRY), constraint: c, oracle: STUB_ORACLE as `0x${string}`, wire: "8-field" }).poolId);
     expect(d.jit.predictedCorkSwapToken?.toLowerCase()).toBe(CST.toLowerCase());
     // The decode labels it by CLASSIFICATION: the primary's adapter → its generation, its wire.
     const built = env.data as { typedData: { message: Record<string, string> } };
@@ -347,7 +362,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     // The zero salt is fine on flat (the same as no salt); the flat bytes stay flat.
     const zero = await makerJit(flat, "nested-maker-0006", { oracleSalt: ZERO_ORACLE_SALT, constraint: JIT_TASK_CONSTRAINT });
     expect(zero.state, JSON.stringify(zero.warnings)).toBe("ok");
-    expect(decodeJitExtensionAny((zero.data as { extension: `0x${string}` }).extension).wire).toBe("flat");
+    expect(decodeJitExtensionFor(generationsOf(BUNDLED_DEFAULTS, 42161), (zero.data as { extension: `0x${string}` }).extension)?.wire).toBe("flat");
     expect((zero.data as { jit: { wire: string } }).jit.wire).toBe("flat");
   });
 

@@ -99,9 +99,11 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
       if (c.args.extension) {
         const j = leg.label?.jit;
         hooks.push(
-          j
+          j && "collateralAsset" in j
             ? `maker extension: Cork just-in-time market via adapter ${short(j.adapter)} — ${short(j.collateralAsset)}/${short(j.referenceAsset)} expiring ${j.expiryTimestamp}, ${"recipe" in j ? `recipe ${short(j.recipe)}` : `legacy mode '${j.mode}'`}, ${j.enableJitMint ? "mints the cST from the maker's collateral" : "market creation only"}, ${j.permits} embedded permit${j.permits === 1 ? "" : "s"}`
-            : `${(c.args.extension.length - 2) / 2}-byte maker extension${leg.label?.fusion ? ` (${leg.label.fusion.classification === "legacy" ? "legacy Fusion" : "Fusion auction"} amount getter)` : ""}`,
+            : j
+              ? `maker extension: preInteraction hook at ${short(j.adapter)}, which NO configured generation names as a Cork JIT adapter — payload not decoded; identify it before filling`
+              : `${(c.args.extension.length - 2) / 2}-byte maker extension${leg.label?.fusion ? ` (${leg.label.fusion.classification === "legacy" ? "legacy Fusion" : "Fusion auction"} amount getter)` : ""}`,
         );
       }
       if (c.args.interaction) hooks.push(`${(c.args.interaction.length - 2) / 2}-byte taker interaction on ${short(c.args.interaction.slice(0, 42))}`);

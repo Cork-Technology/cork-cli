@@ -4920,8 +4920,8 @@ const CATALOG: Mutant[] = [
     // rc.2 settler's order on the wrong layout — the order signs, rests, and never fills.
     id: "rollover02-wire-from-primary",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "const settlerGeneration = cls.status === \"active\" ? cls.generation : rolloverGenerations(rollover).find((g) => g.primary);",
-    replace: "const settlerGeneration = rolloverGenerations(rollover).find((g) => g.primary);",
+    find: "const settlerGeneration = cls.status === \"active\" ? cls.generation : undefined;",
+    replace: "const settlerGeneration = cls.status === \"active\" ? cls.generation : rolloverGenerations(rollover).find((g) => g.primary);",
     tests: [T.rollover],
   },
   {
@@ -4929,25 +4929,28 @@ const CATALOG: Mutant[] = [
     // it turns every 0.2 rollover-intent with a jitMarket into a refusal.
     id: "rollover02-default-salt-omitted",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: 'jmx.oracleSalt ?? (jitWire === "0.2" ? zeroHash : undefined);',
-    replace: "jmx.oracleSalt ?? undefined;",
+    find: 'saltGiven ? resolvedSalt : jitWire === "0.2" ? zeroHash : undefined;',
+    replace: 'saltGiven ? resolvedSalt : undefined;',
     tests: [T.rollover],
   },
   {
     // 10-field identity: the fees ARE the pool id on the v1.4 pool manager; hashing the 8-field
     // shape under 0.2 names a pool the 0.2 BaseFiller never creates (BaseFiller__JitPoolMismatch).
     id: "rollover02-10field-identity-dropped",
-    file: "packages/core/src/rollover.ts",
-    find: 'return { market: market10, poolId: computeMarketId(market10, "10-field") };',
-    replace: 'return { market: market10, poolId: computeMarketId(market8, "8-field") };',
+    file: "packages/core/src/market-registry.ts",
+    find: '    return { market, poolId: computeMarketId(market, "10-field"), wire };',
+    replace: '    return { market, poolId: computeMarketId(eight, "8-field"), wire };',
     tests: [T.rollover],
   },
   {
     // The fallback binding of each BaseFiller to its pool manager width (0.2 → 10-field).
     id: "rollover02-phoenix-wire-fallback-flattened",
-    file: "packages/core/src/rollover.ts",
-    find: 'return wire === "0.2" ? "10-field" : "8-field";',
-    replace: 'return "8-field";',
+    // Review A2 (2026-09-22): the width is DECLARED by the settler generation's phoenix block; a
+    // generation without one is refused. The mutant restores the old guess (an 8-field width for
+    // a set that declares none) — the pool id hashed for a 0.2 settler is then the wrong width.
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      const phoenixWire = phoenixGeneration?.wire;",
+    replace: "      const phoenixWire = phoenixGeneration?.wire ?? \"8-field\";",
     tests: [T.rollover],
   },
 
@@ -5082,7 +5085,7 @@ const CATALOG: Mutant[] = [
     // as typed invalid input, never fall through to the codec's throw or a silent drop.
     id: "nested-oraclesalt-flat-accepted",
     file: "packages/core/src/handlers/jit.ts",
-    find: '  if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {',
+    find: '  if (wire !== undefined && wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {',
     replace: "  if (false) {",
     tests: [T.nested],
   },
@@ -5140,8 +5143,8 @@ const CATALOG: Mutant[] = [
     // The pool's tokens read through the selected generation's manager and wire.
     id: "poolgen-tokens-from-selected-manager",
     file: "packages/core/src/handlers/phoenix.ts",
-    find: "    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock);",
-    replace: "    tokens = await resolvePoolTokens(resolved.client, dep!, poolId, ctx.atBlock);",
+    find: "    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock, pd.shares);",
+    replace: "    tokens = await resolvePoolTokens(resolved.client, dep!, poolId, ctx.atBlock, pd.shares);",
     tests: [T.poolgen],
   },
   {
@@ -5180,8 +5183,8 @@ const CATALOG: Mutant[] = [
     // The 10-field market() decoded through the 8-field ABI (viem drops the fee words silently).
     id: "poolgen-market-abi-not-by-wire",
     file: "packages/core/src/chain/reads.ts",
-    find: '  if (pm.wire === "10-field") {\n    const t = await client.readContract({ address: pm.poolManager, abi: poolManagerMarket10Abi,',
-    replace: '  if (pm.wire === "never") {\n    const t = await client.readContract({ address: pm.poolManager, abi: poolManagerMarket10Abi,',
+    find: 'abi: marketAbiFor(pm.wire), functionName: "market"',
+    replace: 'abi: marketAbiFor("8-field"), functionName: "market"',
     tests: [T.poolgen],
   },
   {
@@ -5204,7 +5207,7 @@ const CATALOG: Mutant[] = [
     // Topic guessing: a log from an unlisted emitter decoded anyway.
     id: "poolgen-marketcreated-unlisted-emitter-decoded",
     file: "packages/core/src/datasources/hypersync.ts",
-    find: "    if (byAddress && emitter === undefined) return [];",
+    find: "    if (emitter === undefined) return [];",
     replace: "",
     tests: [T.poolgen],
   },
@@ -5244,7 +5247,7 @@ const CATALOG: Mutant[] = [
     // BaseFiller never listed as an emitter.
     id: "poolgen-basefiller-emitter-dropped",
     file: "packages/core/src/event-attribution.ts",
-    find: '      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: g.status, label: g.label });',
+    find: '      if (g.baseFiller) out.push({ address: g.baseFiller, role: "baseFiller", generation: refOf(g.label), ...retired });',
     replace: "",
     tests: [T.poolgen, T.attribution],
   },
@@ -5321,6 +5324,69 @@ const CATALOG: Mutant[] = [
     find: 'reason: `eth_simulateV1 with state overrides failed on this endpoint: ${err instanceof Error ? err.message.split("\\n")[0] : String(err)}`',
     replace: 'reason: "eth_simulateV1 with state overrides failed on this endpoint"',
     tests: [T.predictReason],
+  },
+  {
+    // Review A1 (2026-09-22): an unrecognized settler carrying a JIT commitment refuses — the
+    // mutant re-admits it (the commitment would be hashed on a guessed wire nobody can reproduce).
+    id: "rev-a1-unknown-settler-commitment-admitted",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      if (action.jitMarket !== undefined || (action.jitMarketHash !== undefined && action.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {",
+    replace: "      if (false) {",
+    tests: [T.rollover],
+  },
+  {
+    // Review A3: the JIT extension is decoded on the wire of the adapter it NAMES, found by
+    // classification; the mutant decodes an unknown adapter as if it were the primary's wire.
+    id: "rev-a3-unknown-adapter-decoded-anyway",
+    file: "packages/core/src/jit-extension.ts",
+    find: "  if (hit === undefined) return null;",
+    replace: "  if (hit === undefined && false) return null;",
+    tests: [T.nested, T.decodeJit, T.makerReadiness],
+  },
+  {
+    // Review A4: a MarketCreated log from an address the emitter table does not list is dropped,
+    // never decoded on a guessed width.
+    id: "rev-a4-unlisted-emitter-decoded-on-guess",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "    if (emitter === undefined) return [];\n    const wire: PhoenixWire = emitter.wire;",
+    replace: "    const wire: PhoenixWire = emitter?.wire ?? \"8-field\";",
+    tests: [T.hypersync, T.poolgen],
+  },
+  {
+    // Review B1: generation_unknown is INVALID INPUT on every path (ToolInputError), never an
+    // unavailable envelope on one path and an exception on another.
+    id: "rev-b1-generation-unknown-not-invalid-input",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  if (refusal.code === \"generation_unknown\") throw new ToolInputError(tool, [{ path: [\"generation\"], message: refusal.message }]);",
+    replace: "",
+    tests: [T.handlers, T.poolgen],
+  },
+  {
+    // Review B2: the alias alone is accepted WITH a deprecation notice; dropping the notice makes
+    // the deprecated spelling silent.
+    id: "rev-b2-alias-notice-dropped",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "    warnings.push({ code: \"deprecation_notice\", message: `${site.path.join(\".\")}.additionalData is the deprecated input spelling of extraData",
+    replace: "    void warnings; if (false) warnings.push({ code: \"deprecation_notice\", message: `${site.path.join(\".\")}.additionalData is the deprecated input spelling of extraData",
+    tests: [T.handlers, T.rollover],
+  },
+  {
+    // Review C6: stale scan-cache entries (a pre-schema-2 key) are PRUNED on load, not carried
+    // forever; the mutant keeps every key.
+    id: "rev-c6-stale-scan-entries-kept",
+    file: "packages/core/src/scan-cache.ts",
+    find: "        file = { entries: Object.fromEntries(Object.entries(entries).filter(([id]) => id.startsWith(`v${String(SCAN_CACHE_SCHEMA)}:`))) };",
+    replace: "        file = { entries };",
+    tests: [T.scanCache],
+  },
+  {
+    // The inline template's optional oracle_salt flows into the JIT block (CLAUDE.md's claim,
+    // implemented 2026-09-22); the mutant ignores the requester's salt.
+    id: "rev-inline-oracle-salt-ignored",
+    file: "packages/core/src/orders-answer.ts",
+    find: "oracleSalt = ",
+    replace: "oracleSalt = undefined; const _ignoredSalt = ",
+    tests: [T.answer],
   },
 ];
 

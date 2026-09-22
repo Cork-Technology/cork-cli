@@ -9,10 +9,9 @@ import { encodeMulticall } from "../bundle/bundler3.ts";
 import { decodeBundle } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { canAutoFund, fundingPlan } from "../bundle/funding.ts";
-import { poolPreflightWarnings } from "../bundle/preflight.ts";
+import { POST_EXPIRY_ACTIONS, poolPreflightWarnings } from "../bundle/preflight.ts";
 import { approvedImplementationGuard, PHOENIX_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
-import { POST_EXPIRY_ACTIONS } from "../bundle/preflight.ts";
 import { chainReadFailed, envelope, generationData, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, poolMissing, poolNotFound, resolveDeadline, rpcProvenance, rpcWarn, unavailable, generationRefusal, generationRefOf } from "./shared.ts";
 import type { GenerationRef } from "../generations.ts";
 import { preparePhoenixForSelf } from "./forself.ts";
@@ -136,7 +135,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   // pool resolver (a post-expiry settle stays buildable on a read-only set).
   const { dep, depWarn, generation: selectedGeneration, refusal } = await getDep(ctx, input.chainId, { purpose: isAuthority ? "prepare" : "read" });
   if (action.type === "authority-onboard" || action.type === "authority-revoke") {
-    if (refusal) return generationRefusal(input.chainId, refusal, selectedGeneration, ctx);
+    if (refusal) return generationRefusal(input.chainId, refusal, selectedGeneration, ctx, "cork_prepare_phoenix");
     if (!dep) return unavailable(input.chainId, "unknown_deployment", `no known Cork deployment for chainId ${input.chainId}`, ctx);
     if (!dep.corkAdapter || !dep.bundler3) {
       return unavailable(input.chainId, "unknown_deployment", `tx-path contracts (corkAdapter/bundler3) are not configured for chainId ${input.chainId} (partial deployment — read tools still work); pass ctx.deployment to override`, ctx);
@@ -183,7 +182,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   const actionLeg = buildPhoenixCall(input.action, corkAdapter, deadline);
   let tokens;
   try {
-    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock);
+    tokens = await resolvePoolTokens(resolved.client, poolDep, poolId, ctx.atBlock, pd.shares);
   } catch (err) {
     return chainReadFailed(input.chainId, err, [], ctx, resolved);
   }

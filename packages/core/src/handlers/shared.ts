@@ -161,7 +161,7 @@ export async function getDep(
 
 /** The compact `{ label, status, distribution? }` every result carries — ONE projection so a
  *  ref that grew a `wire` (getDep's) or a `primary` flag never leaks extra keys into data/provenance. */
-export function generationRefOf(g: GenerationRef): GenerationRef {
+export function generationRefOf(g: { label: string; status: GenerationRef["status"]; distribution?: string | undefined }): GenerationRef {
   return { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}) };
 }
 
@@ -248,7 +248,7 @@ export async function getPoolDep(
     });
     return { dep: undefined, depWarn, generation: ref, shares, refusal };
   }
-  return { dep: g.phoenix as CorkDeployment, depWarn, generation: ref, shares };
+  return { dep: g.phoenix, depWarn, generation: ref, shares };
 }
 
 /**
@@ -433,12 +433,17 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
   return envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code, message }], ctx });
 }
 
-/** The envelope for a generation refusal (`generation_unknown` / `generation_read_only`) from
- *  getDep / getMarketRegistry: `unavailable` PLUS `provenance.generation` naming the set the call
- *  resolved to, so a refused prepare and an accepted one describe the same generation in the same
- *  place — the caller never rebuilds this by hand (six handlers dropped the label before this
- *  helper existed; the killer test for `getdep-readonly-prepare-gate-dropped` found the gap). */
-export function generationRefusal(chainId: ChainId, refusal: { code: string; message: string }, generation: GenerationRef | undefined, ctx: HandlerContext): Envelope {
+/** The ONE exit for a generation refusal from getDep / getMarketRegistry. `generation_unknown`
+ *  THROWS ToolInputError naming the `generation` field: the label is the caller's OWN input, so
+ *  it is invalid-input-class (exit 2) on EVERY path — getPoolDep already threw it, and until
+ *  2026-09-22 this helper answered the same typo with an `unavailable` envelope (exit 3): two
+ *  exit codes for one fact (review B1). `generation_read_only` (and any other code) stays an
+ *  `unavailable` envelope PLUS `provenance.generation` naming the set the call resolved to, so a
+ *  refused prepare and an accepted one describe the same generation in the same place — the
+ *  caller never rebuilds this by hand (six handlers dropped the label before this helper
+ *  existed; the killer test for `getdep-readonly-prepare-gate-dropped` found the gap). */
+export function generationRefusal(chainId: ChainId, refusal: { code: string; message: string }, generation: GenerationRef | undefined, ctx: HandlerContext, tool: string): Envelope {
+  if (refusal.code === "generation_unknown") throw new ToolInputError(tool, [{ path: ["generation"], message: refusal.message }]);
   return envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code: refusal.code, message: refusal.message }], ...(generation ? { generation: generationRefOf(generation) } : {}), ctx });
 }
 

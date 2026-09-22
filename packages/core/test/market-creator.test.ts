@@ -214,7 +214,7 @@ describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewP
     expect(BigInt(d.constraint.rateMax)).toBe(CONSTRAINT.rateMax);
     expect(d.source).toBe("price");
     expect(d.oracle).toEqual(expect.objectContaining({ address: ORACLE, deployed: true }));
-    const expected = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, constraint: CONSTRAINT, oracle: ORACLE });
+    const expected = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, constraint: CONSTRAINT, oracle: ORACLE, wire: "8-field" });
     expect(d.pool.poolId).toBe(expected.poolId);
     expect(d.pool.exists).toBe(false);
     expect(env.warnings.some((w) => w.code === "constraint_window_notice")).toBe(true);
@@ -363,7 +363,7 @@ describe("cork_decode recognizes market-infrastructure calls (validate-before-br
 // poolId sanity: the derivation feeding create-pool is the verified computeMarketId — pin one
 // value so the fixture above cannot drift silently from the market-registry suite's.
 it("derive parity: the happy-path poolId is keccak256(abi.encode(Market)) with the fixture's fields", () => {
-  const d = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, constraint: CONSTRAINT, oracle: ORACLE });
+  const d = deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: 1790000000n, constraint: CONSTRAINT, oracle: ORACLE, wire: "8-field" });
   const independent = keccak256(
     encodeAbiParameters(
       [{ type: "address" }, { type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "address" }],

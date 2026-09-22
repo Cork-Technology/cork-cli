@@ -253,6 +253,10 @@
       "kind": "type"
     },
     {
+      "name": "DecodedJitExtension",
+      "kind": "type"
+    },
+    {
       "name": "DecodedLeg",
       "kind": "type"
     },
@@ -283,6 +287,10 @@
     {
       "name": "ERC20_TRANSFER_TOPIC",
       "kind": "value"
+    },
+    {
+      "name": "EmitterGeneration",
+      "kind": "type"
     },
     {
       "name": "EmitterRole",
@@ -589,6 +597,10 @@
       "kind": "value"
     },
     {
+      "name": "KnownShares",
+      "kind": "type"
+    },
+    {
       "name": "LADDER_ID_MAX",
       "kind": "value"
     },
@@ -653,7 +665,15 @@
       "kind": "value"
     },
     {
+      "name": "MARKET_CREATED_10_EVENT",
+      "kind": "value"
+    },
+    {
       "name": "MARKET_CREATED_10_TOPIC",
+      "kind": "value"
+    },
+    {
+      "name": "MARKET_CREATED_8_EVENT",
       "kind": "value"
     },
     {
@@ -1689,7 +1709,7 @@
       "kind": "value"
     },
     {
-      "name": "decodeJitExtensionAny",
+      "name": "decodeJitExtensionFor",
       "kind": "value"
     },
     {
@@ -1754,10 +1774,6 @@
     },
     {
       "name": "deriveJitMarket",
-      "kind": "value"
-    },
-    {
-      "name": "deriveRolloverJitPool",
       "kind": "value"
     },
     {
@@ -2198,10 +2214,6 @@
     },
     {
       "name": "permit2ApproveTx",
-      "kind": "value"
-    },
-    {
-      "name": "phoenixWireOfRolloverWire",
       "kind": "value"
     },
     {
@@ -2806,6 +2818,18 @@
     },
     {
       "name": "KNOWN_EVENTS_ABI",
+      "kind": "value"
+    },
+    {
+      "name": "KnownShares",
+      "kind": "type"
+    },
+    {
+      "name": "MARKET_CREATED_10_EVENT",
+      "kind": "value"
+    },
+    {
+      "name": "MARKET_CREATED_8_EVENT",
       "kind": "value"
     },
     {
@@ -3885,6 +3909,10 @@
       "kind": "value"
     },
     {
+      "name": "EmitterGeneration",
+      "kind": "type"
+    },
+    {
       "name": "EmitterRole",
       "kind": "type"
     },
@@ -4393,10 +4421,6 @@
       "kind": "value"
     },
     {
-      "name": "deriveRolloverJitPool",
-      "kind": "value"
-    },
-    {
       "name": "diffBook",
       "kind": "value"
     },
@@ -4569,10 +4593,6 @@
       "kind": "value"
     },
     {
-      "name": "phoenixWireOfRolloverWire",
-      "kind": "value"
-    },
-    {
       "name": "premiumAmount",
       "kind": "value"
     },
@@ -4661,6 +4681,10 @@
     {
       "name": "DENOMINATION_PSEUDO_UNITS",
       "kind": "value"
+    },
+    {
+      "name": "DecodedJitExtension",
+      "kind": "type"
     },
     {
       "name": "ImplementedMarketRegistryWire",
@@ -4815,7 +4839,7 @@
       "kind": "value"
     },
     {
-      "name": "decodeJitExtensionAny",
+      "name": "decodeJitExtensionFor",
       "kind": "value"
     },
     {

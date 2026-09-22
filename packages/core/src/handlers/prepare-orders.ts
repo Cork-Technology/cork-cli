@@ -6,15 +6,15 @@ import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill,
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import type { MarketRegistryWire } from "../generations.ts";
 import { buildDeployFixedRateOracleCall, buildJitExtension, deriveJitMarket, type JITMarketParams, predictShares, wireCodec } from "../market-registry.ts";
-import { resolveRollover } from "../config-remote.ts";
-import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, deriveRolloverJitPool, hashJitMarketParams, phoenixWireOfRolloverWire, retiredSettlerTeaching, RolloverJitWireError, rolloverGenerations, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
+import { resolveGenerations, resolveRollover } from "../config-remote.ts";
+import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, RolloverJitWireError, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
-import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeRule, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
+import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeRule, resolveJitBytesInput, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
@@ -178,7 +178,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // from the decoded extension and the predicted cST from its embedded permit. Advisory
       // only — deliberately OUTSIDE `artifact`, so the digest pins signed content alone.
       const finalizeTraits = decodeMakerTraits(finalized.order.makerTraits);
-      const finalizeJit = decodeMakerExtensionContext(finalized.extension).jit;
+      const finalizeJit = decodeMakerExtensionContext((await resolveGenerations(chainId)).generations, finalized.extension).jit;
       const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
         maker: finalized.order.maker,
         makerAsset: finalized.order.makerAsset,
@@ -287,11 +287,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             if (!oracle.deployed) {
               preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
             }
-            // A missing/partial deployment config is NOT a chain read failure [C11]: guarding
-            // (like the legacy-jit and registry siblings) instead of `jitDep!` keeps a config
-            // gap from surfacing as a misattributed `chain_read_failed` TypeError.
+            // A generation with a registry block but no phoenix block has no pool manager to
+            // create on — a refusal naming the set, never bytes with a skipped prediction (review
+            // A2, 2026-09-22; the ladder's phoenix-wire gate already refused, this is the second
+            // tripwire on the same fact).
             if (jitDep?.poolManager === undefined) {
-              warnings.push({ code: "share_prediction_unavailable", message: `no poolManager deployment configured for chainId ${chainId} — cST prediction skipped; VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool (refresh cork-defaults.json)` });
+              return unavailable(chainId, "unknown_deployment", `generation '${ladder.generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown and no pool manager exists to predict the cST on — refresh cork-defaults.v2.json`, ctx);
             } else {
               // The simulation runs AS the wire's role holder (adapter on flat, creator on nested).
               const pred = await predictShares(client, {
@@ -518,15 +519,25 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the PartialSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:false on-chain — use that generation's ExactSettler ${cls.generation.exactSettler} or set allowPartialFills:true`, ctx);
     }
     if (cls.status === "unknown") {
+      // A JIT commitment is hashed on the SETTLER generation's wire (each factory admits only its
+      // own settlers, so the BaseFiller that reproduces the hash is that generation's). An
+      // address no generation vouches for has no wire — and with two live wires (rc.2 and 0.2)
+      // a guess is a coin toss on SIGNED bytes: the pre-0.6 fallback took the primary's 0.2
+      // typehash, so an rc.2-shaped partner filler could never reproduce the commitment
+      // (BaseFiller__JitMarketHashMismatch at best). Refused since 2026-09-22 (review A1);
+      // a plain order (no commitment) keeps the warn-and-build path — the venue's admission
+      // decides, and nothing wire-shaped is signed.
+      if (action.jitMarket !== undefined || (action.jitMarketHash !== undefined && action.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {
+        return unavailable(chainId, "invalid_order_terms", `settler ${action.settler} belongs to no configured rollover generation on chainId ${chainId}, and this order carries a JIT market commitment (${action.jitMarket !== undefined ? "jitMarket" : "a non-zero jitMarketHash"}) — the commitment's JITMarketParams typehash is the SETTLER generation's wire (rc.2 or 0.2), so an unvouched settler cannot be hashed for; bind the order to a configured settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) or drop the commitment`, ctx);
+      }
       warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — the venue only admits factory-approved settlers` });
     }
     // The JIT commitment is hashed on the SETTLER generation's wire, never the chain primary's:
     // the order is filled by the BaseFiller of the factory that approved this settler (each
     // factory admits only its own), so an rc.2 settler takes the rc.2 layout while the primary
-    // set speaks 0.2. An unrecognized settler has no generation to speak for it — the primary's
-    // wire is the only available guess, and settler_not_recognized already says the address is
-    // unvouched; a chain with no live rollover generation cannot hash a commitment at all.
-    const settlerGeneration = cls.status === "active" ? cls.generation : rolloverGenerations(rollover).find((g) => g.primary);
+    // set speaks 0.2. No fallback: an unrecognized settler was refused above whenever a
+    // commitment rides along, and a plain order hashes nothing.
+    const settlerGeneration = cls.status === "active" ? cls.generation : undefined;
     const jitWire = settlerGeneration?.wire;
 
     // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
@@ -540,25 +551,34 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (jitWire === undefined || jitWire === "rc.1") {
         return unavailable(chainId, "invalid_order_terms", `a jitMarket instruction cannot be committed for settler ${action.settler}: ${jitWire === "rc.1" ? "its generation predates jitMarketHash (rc.1)" : "no live rollover generation on this chain speaks a JIT commitment wire"} — bind the order to an active settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")})`, ctx);
       }
-      // Vocabulary parity with the registry side (its struct renamed the bytes member to
-      // `extraData`; the BaseFiller kept `additionalData`): either spelling is accepted on INPUT,
-      // both present and different is two instructions, refused. The struct/typed-data OUTPUT
-      // keeps the contract's own name. The schema types only `additionalData` today, so the alias
-      // reaches this branch once the shared JIT wire schema carries it; the handler is ready.
-      const jmx = jm as typeof jm & { extraData?: `0x${string}` | undefined; oracleSalt?: `0x${string}` | undefined };
-      if (jmx.extraData !== undefined && jm.additionalData !== "0x" && jmx.extraData.toLowerCase() !== jm.additionalData.toLowerCase()) {
-        return unavailable(chainId, "invalid_order_terms", `jitMarket.extraData (${jmx.extraData}) and jitMarket.additionalData (${jm.additionalData}) are two spellings of the SAME recipe bytes (BaseFiller.JITMarketParams.additionalData) and they differ — pass one`, ctx);
-      }
-      const additionalData: `0x${string}` = jmx.extraData ?? jm.additionalData;
+      // The recipe bytes + salt, resolved by the ONE alias rule every JIT input shares
+      // (handlers/jit.ts resolveJitBytesInput, since 2026-09-22 — review B2 found three
+      // behaviours across the registry, create-pool and rollover blocks): `extraData` is the
+      // input name, `additionalData` the deprecated alias (info deprecation_notice), both present
+      // and different is two payloads and refuses as invalid input; an explicit "0x" counts as
+      // present. The struct/typed-data OUTPUT keeps the BaseFiller's own member name,
+      // `additionalData` (`bytesField`). The salt gate is NOT applied here: hashJitMarketParams
+      // refuses a non-zero salt on rc.2 itself, as the caller's order terms.
+      const { extraData: additionalData, oracleSalt: resolvedSalt, saltGiven } = resolveJitBytesInput(jm, undefined, settlerGeneration?.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"], bytesField: "additionalData" }, warnings);
       // oracleSalt exists only on the 0.2 wire: defaulted to the ZERO salt there (the nested
       // registry's deploy(ca, ref, mode, salt) with the zero salt is the pair's default oracle —
       // market-registry's ZERO_ORACLE_SALT), refused non-zero on rc.2 by the hash function itself.
-      const oracleSalt: `0x${string}` | undefined = jmx.oracleSalt ?? (jitWire === "0.2" ? zeroHash : undefined);
+      const oracleSalt: `0x${string}` | undefined = saltGiven ? resolvedSalt : jitWire === "0.2" ? zeroHash : undefined;
       // Same value-domain gate the LOP JIT builders run (fee rule + future expiry, one place so
       // the boundary rules cannot drift), plus the rollover-specific window rule. The fee rule
       // is the SETTLER generation's (its pool manager creates the destination pool): 5e18 on an
       // 8-field set, strictly below 100e18 on a 10-field one — never the chain primary's.
       const settlerCtx: HandlerContext = settlerGeneration !== undefined ? { ...ctx, generation: settlerGeneration.label } : ctx;
+      // The pool id width is the pool manager's, read from the settler's chain generation (its
+      // phoenix block) — declared, never inferred from the rollover wire (the pre-0.6
+      // `phoenixWireOfRolloverWire` mapping did that, and a generation whose rollover block
+      // outlived its phoenix block would have hashed the wrong width: review A2, 2026-09-22).
+      // A generation with no phoenix block cannot create the destination pool at all — refused.
+      const { generation: phoenixGeneration } = await getDep(ctx, chainId, { generation: settlerGeneration!.label });
+      const phoenixWire = phoenixGeneration?.wire;
+      if (phoenixWire === undefined) {
+        return unavailable(chainId, "unknown_deployment", `generation '${settlerGeneration!.label}' (settler ${action.settler}) declares no phoenix block; the pool id width is unknown, so the jitMarket destination pool cannot be derived or committed — refresh cork-defaults.v2.json or bind the order to a settler whose generation carries a pool manager`, ctx);
+      }
       const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { feeRule: await resolveFeeRule(chainId, "adapter", settlerCtx) });
       if (gate) return gate;
       if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
@@ -592,20 +612,15 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             wantConstraint: false,
           });
           if (!res.gate && res.oracle.address && settlerGeneration !== undefined && mrGeneration?.label === settlerGeneration.label) {
-            // The pool id width is the pool manager's, read from the settler's chain generation
-            // (its phoenix block); the rollover wire is the fallback when no phoenix block
-            // resolves (a test-injected deployment). 10-field = the fees ARE the id.
-            const { generation: phoenixGeneration } = await getDep(ctx, chainId, { generation: settlerGeneration.label });
-            const phoenixWire = phoenixGeneration?.wire ?? phoenixWireOfRolloverWire(settlerGeneration.wire);
+            // ONE derivation for one identity (review B6): deriveJitMarket on the phoenix wire
+            // resolved above — 10-field hashes the two fees INTO the id, 8-field ignores them.
             const constraint = {
               rateMin: BigInt(jm.constraint.rateMin),
               rateMax: BigInt(jm.constraint.rateMax),
               rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax),
               rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
             };
-            const derived = phoenixWire === "8-field"
-              ? deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), constraint, oracle: res.oracle.address })
-              : deriveRolloverJitPool({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), ...constraint, oracle: res.oracle.address, swapFeePercentage: BigInt(jm.swapFeePercentage), unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage), phoenixWire });
+            const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), constraint, oracle: res.oracle.address, wire: phoenixWire, swapFeePercentage: BigInt(jm.swapFeePercentage), unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage) });
             if (derived.poolId.toLowerCase() !== action.dstPoolId.toLowerCase()) {
               warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${action.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, a ${phoenixWire} Market against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}${phoenixWire === "10-field" ? "; the two fee percentages are part of the 10-field id" : ""}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
             }
@@ -635,7 +650,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         );
       } catch (err) {
         // A wire/struct disagreement (a salt on rc.2) is the caller's terms, not a fault.
-        if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${action.settler} belongs to the ${settlerGeneration?.label ?? "primary"} generation, rollover wire ${jitWire})`, ctx);
+        if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${action.settler} belongs to the ${settlerGeneration!.label} generation, rollover wire ${jitWire})`, ctx);
         throw err;
       }
     }
@@ -1105,7 +1120,7 @@ async function buildTakerFillArtifact(a: {
   // approval annotation against the client the liveness pre-flight already resolved (the
   // batching client coalesces the overlapping legs — no extra chain-contact policy).
   // Build-and-warn, never refuse: every reason is the MAKER's to fix, without re-signing.
-  const makerCtx = makerReadinessTargetOf({ order: signed.order, extension: signed.extension, lop, makerSignedEcdsa: signed.makerAccountType === "EOA" });
+  const makerCtx = makerReadinessTargetOf({ generations: (await resolveGenerations(chainId)).generations, order: signed.order, extension: signed.extension, lop, makerSignedEcdsa: signed.makerAccountType === "EOA" });
   let makerEntries = makerApprovalRequirements({
     maker: signed.order.maker,
     makerAsset: signed.order.makerAsset,

@@ -385,7 +385,7 @@ export async function resolveDeployment(
   if (!sel.ok) return { deployment: undefined, refusal: sel.refusal, ...provenanceOf(cfg) };
   const g = sel.generation;
   return {
-    deployment: g.phoenix as CorkDeployment | undefined,
+    deployment: g.phoenix,
     generation: { ...refOf(g), ...(g.phoenix ? { wire: g.phoenix.wire } : {}) },
     ...provenanceOf(cfg),
   };

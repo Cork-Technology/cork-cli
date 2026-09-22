@@ -8,7 +8,9 @@ import {
   buildAuctionAmountData,
   decodeExtensionFields,
   decodeFusionOrder,
-  decodeJitExtensionAny,
+  decodeJitExtensionFor,
+  BUNDLED_DEFAULTS,
+  generationsOf,
   encodeAuctionGetterData,
   encodeExtensionFields,
   FUSION_SETTLEMENTS,
@@ -392,7 +394,9 @@ describe("runTool: cork_prepare_orders maker-order + auction (offline, pure loca
     expect(d.jit).toBeDefined();
     expect(d.fusion).toBeDefined();
     // BOTH decoders read the same composed blob.
-    const jit = decodeJitExtensionAny(d.extension); // the 42161 primary encodes the nested layout
+    const jit = decodeJitExtensionFor(generationsOf(BUNDLED_DEFAULTS, 42161), d.extension)!; // the 42161 primary encodes the nested layout at ITS adapter
+    expect(jit.wire).toBe("nested");
+    if (jit.wire === "legacy") throw new Error("unreachable: the nested adapter classifies to the nested wire");
     expect(jit.params.recipe.toLowerCase()).toBe("0xb881db48ad6da84a8f0d1ce4150caf7ae016dc55");
     const m = d.typedData.message;
     const order: LopOrder = { salt: BigInt(m.salt!), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount!), takingAmount: BigInt(m.takingAmount!), makerTraits: BigInt(m.makerTraits!) };

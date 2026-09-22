@@ -10,13 +10,19 @@ import { JIT_EVENTS } from "./market-registry.ts";
 
 type Hex = `0x${string}`;
 
+/** The pool manager's MarketCreated on the 8-field wire (v1.1 … v1.3.0-rc.1): SEVEN args. ONE
+ *  declaration — the HyperSync scanner (datasources/hypersync.ts) and the receipt decoder below
+ *  both parse this string (a second copy lived in the scanner until 2026-09-22, review D). */
+export const MARKET_CREATED_8_EVENT = "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)";
+/** phoenix v1.4.0-rc.1 (10-field wire): the same seven plus the two fee percentages (1e18 = 1%)
+ *  — a different topic0, so scanners keyed on the 8-field form see nothing on the new manager. */
+export const MARKET_CREATED_10_EVENT = "event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)";
+
 /** Every event with a SOURCE-VERIFIED full declaration (indexed layout included). */
 export const KNOWN_EVENTS_ABI = parseAbi([
   // phoenix: pool lifecycle + whitelist (IPoolManager / IWhitelistManager)
-  "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)",
-  // phoenix v1.4.0-rc.1 (10-field wire): the same seven plus the two fee percentages (1e18 = 1%)
-  // — a different topic0, so scanners keyed on the 8-field form see nothing on the new manager.
-  "event MarketCreated(bytes32 indexed poolId, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage)",
+  MARKET_CREATED_8_EVENT,
+  MARKET_CREATED_10_EVENT,
   // market-registry 0.5.0 CorkMarketCreator: the nested-wire adapter emits NO JITMarketCreated —
   // creation is announced by the CREATOR, with the direct caller (the adapter on a fill) indexed.
   "event MarketCreated(bytes32 indexed poolId, address indexed rateOracle, address collateralAsset, address referenceAsset, uint256 expiryTimestamp, address recipe, uint256 swapFeePercentage, uint256 unwindSwapFeePercentage, address indexed caller)",
