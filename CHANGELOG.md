@@ -5,7 +5,7 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [0.6.0-rc.1] — 2026-09-22
+## [0.6.0-rc.1] — 2026-09-23
 
 This release adds the Distribution `phoenix/v0.4-rc.1` contract set: Phoenix 1.4.0-rc.1, Market Registry 0.5.0, Rollover 0.2.0 and cork-periphery 0.2.0-rc.1, on Arbitrum One and Base. It keeps every older set. A chain now hosts a SET of contract generations, one of them primary. Prepares target the primary. Reads, decode and event attribution follow the generation a pool or contract belongs to. Nothing here retires an address.
 
