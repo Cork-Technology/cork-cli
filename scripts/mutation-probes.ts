@@ -5724,7 +5724,12 @@ process.on("SIGTERM", () => process.exit(143));
 console.log(`sandbox: ${sandbox} (the working tree is never mutated — concurrent runs in the tree are safe)`);
 
 async function vitest(tests: string[]): Promise<boolean> {
-  const proc = Bun.spawn(["bun", "x", "vitest", "run", ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
+  // Every vitest child runs at the LOWEST CPU priority whatever launched the catalogue: a niced
+  // parent does not reach these children (`bun x` re-execs through npm with a fresh scheduling
+  // class — observed nice=0 children under a nice=19 parent, 2026-09-23), and a full run
+  // saturates every core and starves the terminal (owner). `nice` is POSIX; the value is
+  // clamped where the platform's range is narrower.
+  const proc = Bun.spawn(["nice", "-n", "19", "bun", "x", "vitest", "run", ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
   return (await proc.exited) === 0;
 }
 
