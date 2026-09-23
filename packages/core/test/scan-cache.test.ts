@@ -2,10 +2,22 @@
 // server and CLI runs share one file — a memo-based read-modify-write would clobber sibling
 // entries), the oversized-row-set cap, and corrupt-file recovery. Env manipulation uses indexed
 // access: these are PUBLIC configuration names in test-only save/restore helpers.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { readScanCache, SCAN_CACHE_MAX_ROWS, SCAN_CACHE_SCHEMA, writeScanCache } from "../src/scan-cache.ts";
+
+// The home directory is OWNED by the test through a module mock, not by mutating HOME: Bun's
+// os.homedir() does not follow a runtime HOME change (Node's does), so on a Node-less host — where
+// vitest itself runs under Bun — the HOME redirect was silently ignored, the gate test passed
+// vacuously, and the gate-dropped mutants survived while writing into the developer's REAL
+// ~/.cache (mutation run on 4f7099d, 2026-09-23). The mock holds on either runtime.
+const home = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+vi.mock("node:os", async (importOriginal) => {
+  const os = await importOriginal<typeof import("node:os")>();
+  const homedir = (): string => home.dir ?? os.homedir();
+  return { ...os, default: { ...os, homedir }, homedir };
+});
 
 /** Keys carry the row-shape schema prefix, as `scanCacheId` writes them — a key without it is a
  *  stale-schema entry and is pruned at load (review C6). */
@@ -28,18 +40,17 @@ function withCache(tag: string, fn: (path: string) => void): void {
 
 describe("scan-cache", () => {
   it("is a NO-OP under vitest when CORK_SCAN_CACHE_FILE is unset (the constants cache's rule): the DEFAULT file under the home directory is neither read nor written by a bare test run", () => {
-    // Redirect the home directory to a scratch dir so the "default" file is one this test owns,
-    // seed it with an entry, and prove the gate: a read does not see the seed, a write does not
-    // change the file. (homedir() reads HOME on POSIX.)
+    // Redirect the home directory to a scratch dir (the node:os mock above) so the "default" file
+    // is one this test owns, seed it with an entry, and prove the gate: a read does not see the
+    // seed, a write does not change the file.
     const prevVar = process.env[VAR];
-    const prevHome = process.env["HOME"];
-    const home = `${process.env["TMPDIR"] ?? "/tmp"}/cork-scan-home-${process.pid}-${Math.floor(performance.now() * 1e6)}`;
-    const defaultFile = `${home}/.cache/cork-helper-cli/scan-cache.json`;
+    const scratchHome = `${process.env["TMPDIR"] ?? "/tmp"}/cork-scan-home-${process.pid}-${Math.floor(performance.now() * 1e6)}`;
+    const defaultFile = `${scratchHome}/.cache/cork-helper-cli/scan-cache.json`;
     mkdirSync(dirname(defaultFile), { recursive: true });
     const seeded = JSON.stringify({ entries: { [k("seeded")]: { watermark: 7, rows: [{ seed: true }] } } });
     writeFileSync(defaultFile, seeded);
     delete process.env[VAR];
-    process.env["HOME"] = home;
+    home.dir = scratchHome;
     try {
       expect(process.env["VITEST"]).toBeDefined(); // the gate's precondition holds in this worker
       expect(readScanCache(k("seeded"))).toBeUndefined(); // gated read: the seed is invisible
@@ -47,8 +58,7 @@ describe("scan-cache", () => {
       expect(readFileSync(defaultFile, "utf8")).toBe(seeded); // gated write: the file is untouched
     } finally {
       if (prevVar !== undefined) process.env[VAR] = prevVar;
-      if (prevHome === undefined) delete process.env["HOME"];
-      else process.env["HOME"] = prevHome;
+      home.dir = undefined;
     }
     // Opted in, the same write round-trips.
     withCache("gate-optin", () => {
