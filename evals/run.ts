@@ -83,7 +83,12 @@ interface TaskResult {
   trace: TraceCall[];
 }
 
-function subsetMatch(expected: unknown, actual: unknown): boolean {
+/** Expected params are a SUBSET of the call's input. A RegExp in the expectation tests a string
+ *  value: a task whose intent is "searched for unwind" must accept `unwind covered position` as
+ *  readily as `unwind` (2026-09-23: discover-unwind failed twice on a broader, better query). A
+ *  RegExp never matches a non-string, so it can only widen the match on the field it names. */
+export function subsetMatch(expected: unknown, actual: unknown): boolean {
+  if (expected instanceof RegExp) return typeof actual === "string" && expected.test(actual);
   if (expected === null || typeof expected !== "object") return expected === actual;
   if (actual === null || typeof actual !== "object") return false;
   return Object.entries(expected as Record<string, unknown>).every(([k, v]) => subsetMatch(v, (actual as Record<string, unknown>)[k]));

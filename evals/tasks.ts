@@ -375,7 +375,7 @@ export const TASKS: EvalTask[] = [
   { id: "track-receipt", prompt: "Reconcile transaction 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa on mainnet — did it succeed?", expect: { tool: "cork_track", params: { mode: "reconcile", subject: { kind: "txHash" } }, state: "ok", answer: /success/i, maxCalls: 2 } },
   { id: "verify-pool", prompt: `Verify that Cork pool ${P} on chain matches its market id (re-hash check).`, expect: { tool: "cork_track", params: { mode: "verify", subject: { kind: "marketRef", poolId: P } }, state: "ok", maxCalls: 2 } },
   // ── discovery ──────────────────────────────────────────────────────────
-  { id: "discover-unwind", prompt: "I'm new to these Cork tools. Which tool and variant do I use to undo a covered position, and what does an invocation look like?", expect: { tool: "cork_capabilities", params: { search: "unwind" }, state: "ok", maxCalls: 2 } },
+  { id: "discover-unwind", prompt: "I'm new to these Cork tools. Which tool and variant do I use to undo a covered position, and what does an invocation look like?", expect: { tool: "cork_capabilities", params: { search: /unwind/i }, state: "ok", maxCalls: 2 } },
   // ── sign-and-broadcast teaching (the remote-deployment story: the server never signs; clients
   //    complete artifacts client-side and broadcast through their OWN RPC) ──
   { id: "signing-topic", prompt: "I have a prepared Cork bundle from cork_prepare_phoenix. How do I actually execute it on-chain from here? Walk me through the exact steps.", expect: { tool: "cork_capabilities", state: "ok", answer: /signTypedData|eth_sendRawTransaction|sign.*client/i, maxCalls: 3 } },
