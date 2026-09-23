@@ -6,14 +6,14 @@
 // full-decentralized, the venue's list under hybrid —
 // then a balance sweep, zero-position pools dropped, `expired` per pool, per-generation
 // subtotals); and the `migration` doc topic. Offline: a venueFetch stub serves /pools/v1 rows per
-// manager in two 200-row pages, a stub HyperSync source serves the same pools as MarketCreated
+// manager in pages, a stub HyperSync source serves the same pools as MarketCreated
 // logs, and an address-aware `balanceOf` puts a position on two of three managers.
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
 import { BUNDLED_DEFAULTS, generationsOf, GENERATION_ALIASES, type HandlerContext, resolveGenerationAlias, runTool, selectGeneration, ToolInputError } from "@cork/core";
 import { stubResolved } from "./helpers.ts";
-import { POSITIONS_SWEEP_PAGE_SIZE, venueExpirySeconds, venuePoolRowsToMarketRows } from "../src/handlers/query-positions.ts";
+import { venueExpirySeconds, venuePoolRowsToMarketRows } from "../src/handlers/query-positions.ts";
 
 const NOW = 1_753_000_000n;
 const CHAIN = 42161;
@@ -317,7 +317,7 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     expect(d.scanned).toEqual({ managers: 4, pools: 4, complete: true, source: "lite-decentralized" });
     expect(d.positions.map((p) => p.poolId)).toEqual([P_OLD, P_EXPIRED, P_NEW]);
   });
-  it("`mode: hybrid` walks the venue's /pools/v1 at the 200-row page until hasMore is false, attributes each row to its manager's generation, skips a row on a manager no generation owns, and sweeps balances over YOUR RPC — provenance.mode hybrid", async () => {
+  it("`mode: hybrid` walks the venue's /pools/v1 at the CALLER's pageSize (never a substituted one) until hasMore is false, attributes each row to its manager's generation, skips a row on a manager no generation owns, and sweeps balances over YOUR RPC — provenance.mode hybrid", async () => {
     const urls: string[] = [];
     const asked: string[][] = [];
     const env = await positions(ctxFor(asked, { venueFetch: venueOf(urls) }), undefined, "hybrid");
@@ -325,7 +325,7 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     expect(env.provenance.mode).toBe("hybrid");
     expect(asked).toEqual([]); // no log scan ran
     expect(urls).toHaveLength(2); // 5 rows, 3 per page → two pages, the cursor threaded
-    for (const u of urls) expect(new URL(u).searchParams.get("limit")).toBe("200");
+    for (const u of urls) expect(new URL(u).searchParams.get("limit")).toBe("25"); // the input's pageSize, verbatim
     expect(new URL(urls[0]!).searchParams.get("chainId")).toBe(String(CHAIN));
     expect(new URL(urls[1]!).searchParams.get("cursor")).toBe("3");
     const d = env.data as PositionsData;
@@ -360,6 +360,7 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     const d = env.data as PositionsData;
     expect(d.scanned).toMatchObject({ pools: 3, complete: false, source: "hybrid" });
     const w = env.warnings.find((x) => x.code === "pagination_incomplete");
+    expect(w?.message).toContain("pageSize");
     expect(w?.message).toContain("maxPages");
   });
   it("a venue row whose expiry is neither seconds nor ISO-8601 is skipped and DISCLOSED, never thrown on; a digits-only expiry passes verbatim", async () => {
@@ -453,9 +454,6 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
     );
     expect(rows.map((r) => r.poolId)).toEqual([P_NEW]);
     expect(unreadableExpiry).toBe(2);
-  });
-  it("the sweep page is the venue's maximum (200)", () => {
-    expect(POSITIONS_SWEEP_PAGE_SIZE).toBe(200);
   });
 });
 

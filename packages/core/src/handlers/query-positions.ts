@@ -49,13 +49,6 @@ export interface PositionsDeps {
   enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "lite-decentralized" | "hybrid" | "full-decentralized" }>;
 }
 
-/** The positions sweep walks the venue's pool list at the venue's MAXIMUM page (200 rows): the read
- *  is about completeness — every pool on every generation — and the live count is 453 pools on
- *  Arbitrum / 466 on Base (2026-09-22), so the default 25-row page × 10 pages answered `pools: 250,
- *  complete: false` on both chains. `pageSize` is a per-page presentation knob for lists; here
- *  `maxPages` alone bounds the walk (10 × 200 = 2000 pools before `pagination_incomplete`). */
-export const POSITIONS_SWEEP_PAGE_SIZE = 200;
-
 /** The venue serves a pool's `expiry` as an ISO-8601 timestamp (`2026-08-10T12:30:00.000Z`,
  *  verified live 2026-09-22); the chain scan serves unix seconds. The sweep's rows are the scan's
  *  shape, so a venue expiry is normalised to decimal seconds here — an ISO string through
@@ -263,7 +256,7 @@ export async function handleAccountPositions(
     const scan = await deps.enumeratePools(emitters);
     w.push(...scan.warnings);
     if (!scan.complete) {
-      w.push({ code: "pagination_incomplete", message: scan.source === "hybrid" ? "the venue's pool list was not walked to the end (maxPages) — pools beyond the last page are missing from this sweep; raise maxPages" : "the pool-creation scan hit its per-call range budget on this RPC — pools created later than the last scanned block are missing from this sweep; partial evidence (this endpoint caps eth_getLogs hard: use one that serves address-filtered ranges, set ENVIO_HYPERSYNC_TOKEN with mode full-decentralized, or mode hybrid for the venue's list)" });
+      w.push({ code: "pagination_incomplete", message: scan.source === "hybrid" ? "the venue's pool list was not walked to the end — pools beyond the last page are missing from this sweep; raise pageSize (the venue serves up to 200 rows per page) and/or maxPages, exactly as for cork-pools" : "the pool-creation scan hit its per-call range budget on this RPC — pools created later than the last scanned block are missing from this sweep; partial evidence (this endpoint caps eth_getLogs hard: use one that serves address-filtered ranges, set ENVIO_HYPERSYNC_TOKEN with mode full-decentralized, or mode hybrid for the venue's list)" });
     }
     const generationOf = (l: string): GenerationRef | undefined => {
       const g = generations.find((x) => x.label === l);

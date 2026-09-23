@@ -19,7 +19,7 @@ import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
 import { handleQueryWait } from "./query-watch.ts";
-import { handleAccountPositions, type PositionsEmitter, POSITIONS_SWEEP_PAGE_SIZE, venuePoolRowsToMarketRows } from "./query-positions.ts";
+import { handleAccountPositions, type PositionsEmitter, venuePoolRowsToMarketRows } from "./query-positions.ts";
 import { probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
@@ -837,7 +837,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     // windowedRpcSource and the default returned to the chain.
     const venueRows = async (emitters: readonly PositionsEmitter[]) => {
       const deps = venueDepsOf(ctx);
-      const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: POSITIONS_SWEEP_PAGE_SIZE }));
+      const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(traversal.items, emitters);
       const warnings = venueNoticeWarnings(traversal);
       if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is neither unix seconds nor an ISO-8601 timestamp — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });

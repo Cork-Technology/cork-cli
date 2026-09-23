@@ -5525,12 +5525,12 @@ const CATALOG: Mutant[] = [
     tests: [T.migration],
   },
   {
-    // The sweep walking the caller's presentation page size: the live default (25 × 10) stopped
-    // at 250 of 453 pools on Arbitrum.
-    id: "mig-venue-sweep-page-size-dropped",
+    // The hybrid walk substitutes its own page size for the caller's: a knob the caller set is
+    // silently ignored — the 2026-09-22 constant, refused everywhere else in this tool.
+    id: "mig-venue-page-size-substituted",
     file: "packages/core/src/handlers/query.ts",
-    find: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: POSITIONS_SWEEP_PAGE_SIZE }));",
-    replace: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));",
+    find: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));",
+    replace: "getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: 200 }));",
     tests: [T.migration],
   },
   {
