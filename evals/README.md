@@ -126,6 +126,23 @@ expect scores close to the active set; a gap means the active set has leaked int
 
 ### Running
 
+**Auth policy (owner ruling 2026-09-23).** The runner picks ONE of four auth modes from the
+environment (`evals/auth-mode.ts`); none is "blocked", and a missing `ANTHROPIC_API_KEY` is NOT a
+reason to skip a run:
+
+| Where | Mode | How it authenticates | Evidence status |
+|---|---|---|---|
+| GitHub CI | `aws` | Claude Platform on AWS: GitHub OIDC → assumed role → SigV4. **No API credential is stored in GitHub Secrets**, by design (nothing stored, nothing to expire). | the release gate |
+| a developer / agent shell with a configured gateway | `ambient` | `ANTHROPIC_BASE_URL` names the gateway; auth headers omitted; the gateway supplies the credential. The runner prints that it is proceeding via the gateway. | the intended path for LOCAL runs — accepted evidence for the surface gate; record the mode in the cut notes |
+| an explicit credential in the shell | `keyed` | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | preferred when a run must pin one model/region reproducibly |
+| nothing configured | `skip` | prints the skip line, exits 0 | the fork/PR contract |
+
+A gateway that fails auth fails LOUD on the first request (the 2026-08-10 regression is the
+reason `ambient` never silently no-ops). Lesson recorded 2026-09-23: an agent reported the evals
+"blocked" for a day while the gateway mode was one command away — check the mode, not the
+credential.
+
+
 ```sh
 bun run eval                                   # ANTHROPIC_API_KEY/AUTH_TOKEN recommended; else ambient auth (e.g. ANTHROPIC_BASE_URL gateway) — fails loud, never skips
 CORK_EVAL_MODEL=claude-opus-4-8 bun run eval   # heavier tier (default: claude-sonnet-5 — owner ruling 2026-07-28: never haiku)
