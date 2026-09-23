@@ -1425,11 +1425,13 @@ const CATALOG: Mutant[] = [
   },
   {
     // The anchor-drift gate is what makes a reworded private line FAIL instead of silently
-    // porting an un-repointed file (a private URL/reference reaching the public tree).
+    // porting an un-repointed file (a private URL/reference reaching the public tree). Since the
+    // `history` spellings (0be3d59) the gate is "no pair applies"; the mutant makes the lookup
+    // never miss, so a reworded anchor falls through to a no-op replace — the silent port.
     id: "port-anchor-gate-dropped",
     file: "scripts/port-to-public.ts",
-    find: "    if (!content.includes(r.from)) {",
-    replace: "    if (false) {",
+    find: "    const applicable = pairs.find((p) => content.includes(p.from));",
+    replace: "    const applicable = pairs.find((p) => content.includes(p.from)) ?? pairs[0];",
     tests: [T.port],
   },
   {
