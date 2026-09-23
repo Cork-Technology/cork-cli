@@ -2074,11 +2074,13 @@ const CATALOG: Mutant[] = [
     // Finalization is the SAME request as its prepare [K2]: a prompt that names a DIFFERENT
     // request id than the prepared fixture carries makes the task unpassable for every agent
     // (prepared_context_mismatch). Mutating the shared constant is inert — prompt and fixture
-    // move together — so the defect is planted where drift actually happens: the prompt.
+    // move together — so the defect is planted where drift actually happens: the prompt. The
+    // anchor names the happy-path finalize task's own wording: conflict-finalize-bad-signature
+    // (1cbb8e8) carries the same "(chain 1, request id …)" clause.
     id: "eval-task-finalize-prompt-id-drift",
     file: "evals/tasks.ts",
-    find: '(chain 1, request id "${FINALIZE_REQUEST_ID}")',
-    replace: '(chain 1, request id "eval-fin-other")',
+    find: 'give me the ready-to-relay artifact (chain 1, request id "${FINALIZE_REQUEST_ID}")',
+    replace: 'give me the ready-to-relay artifact (chain 1, request id "eval-fin-other")',
     tests: [T.taskFixtures],
   },
   // ── eval task set: an expectation that grades nothing must fail a test, not pass quietly ────
