@@ -20,7 +20,7 @@ const baseResult = {
   tokens: 81234,
   finalText: "x".repeat(3000),
   trace: [
-    { tool: "cork_track", invalid: false, state: "conflict", codes: ["marketid_mismatch", "venue_reported"] },
+    { tool: "cork_track", input: { mode: "verify", subject: { kind: "marketRef", poolId: "0xab" } }, invalid: false, state: "conflict", codes: ["marketid_mismatch", "venue_reported"] },
     { tool: "cork_query", invalid: true },
   ],
 } as never as Parameters<typeof evalLogRow>[0];
@@ -49,6 +49,8 @@ describe("eval per-task log row", () => {
     // Trace rows render the same compact form the console FAIL line uses — one vocabulary
     // (every warning code rides, `+`-joined: expect.code grades against ANY of them).
     expect(row.trace).toEqual(["cork_track→conflict/marketid_mismatch+venue_reported", "cork_query!"]);
+    // Every call's input rides beside its trace cell — a params miss is reconstructible.
+    expect(row.inputs).toEqual([{ mode: "verify", subject: { kind: "marketRef", poolId: "0xab" } }, null]);
     // Bounded answer excerpt: enough to diagnose a failed answer-regex from the log alone
     // (400 cut a graded answer mid-table, 2026-08-17), never the transcript bulk.
     expect(row.finalText.length).toBe(2000);

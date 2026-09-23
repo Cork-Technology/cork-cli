@@ -211,6 +211,10 @@ export function evalLogRow(r: TaskResult, model: string) {
     tokens: r.tokens,
     cacheReadTokens: r.cacheReadTokens ?? 0,
     trace: r.trace.map(traceCell),
+    // The INPUT of every call, verbatim: a failed params axis must be diagnosable from the log
+    // alone (2026-09-23: discover-unwind failed params on one trial in three and the row held
+    // only "cork_capabilities→ok" — right tool, unknown argument, nothing to act on).
+    inputs: r.trace.map((c) => c.input ?? null), // null, never undefined: the row is NDJSON
     // 2000, not 400: a failed answer-regex must be diagnosable from the log alone. The 400-char
     // excerpt cut a graded answer mid-table (2026-08-17), leaving the miss unexplainable — the
     // same evidence-destruction class the log file itself exists to prevent.
