@@ -53,7 +53,7 @@ describe("eval per-task log row", () => {
     expect(row.inputs).toEqual([{ mode: "verify", subject: { kind: "marketRef", poolId: "0xab" } }, null]);
     // Bounded answer excerpt: enough to diagnose a failed answer-regex from the log alone
     // (400 cut a graded answer mid-table, 2026-08-17), never the transcript bulk.
-    expect(row.finalText.length).toBe(2000);
+    expect(row.finalText.length).toBe(3000); // the whole answer — the row is re-grade evidence
     // recovered is tri-state (undefined = no invalid-call happened): absent, not null/false.
     expect("recovered" in row).toBe(false);
   });

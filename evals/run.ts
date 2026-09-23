@@ -229,10 +229,11 @@ export function evalLogRow(r: TaskResult, model: string) {
     // alone (2026-09-23: discover-unwind failed params on one trial in three and the row held
     // only "cork_capabilities→ok" — right tool, unknown argument, nothing to act on).
     inputs: r.trace.map((c) => c.input ?? null), // null, never undefined: the row is NDJSON
-    // 2000, not 400: a failed answer-regex must be diagnosable from the log alone. The 400-char
-    // excerpt cut a graded answer mid-table (2026-08-17), leaving the miss unexplainable — the
-    // same evidence-destruction class the log file itself exists to prevent.
-    finalText: r.finalText.slice(0, 2000),
+    // The WHOLE answer, not an excerpt: the row is the evidence a grader-only change is re-graded
+    // against (evals/regrade.ts). A 400-char excerpt cut a graded answer mid-table (2026-08-17);
+    // the 2000-char cap that replaced it flipped a recorded PASS to FAIL on re-grade because the
+    // regex had matched past the cap (2026-09-23). Answers are a few KB; the file is per run.
+    finalText: r.finalText,
   };
 }
 
