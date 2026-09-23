@@ -30,8 +30,18 @@ export const EXCLUDED_FILES = [".DS_Store"] as const;
 
 /** The sanctioned private→public line substitutions. `from` must appear (or `to` already —
  *  idempotence) in each listed file, or the port fails loudly: a reworded private line means
- *  this table needs a deliberate update, not a silent pass-through. */
-export const REPOINTS: ReadonlyArray<{ file: string; from: string; to: string }> = [
+ *  this table needs a deliberate update, not a silent pass-through. `history` lists EARLIER
+ *  private spellings of the same line with their public forms: a range that spans the commit
+ *  where the line changed (2026-09-23: the config URL moved from cork-defaults.json to
+ *  cork-defaults.v2.json at dc50de1, and the 0.6 port starts one commit earlier) ports every
+ *  commit under whichever spelling it carries. A file matching NO listed spelling still fails. */
+export interface Repoint {
+  file: string;
+  from: string;
+  to: string;
+  history?: ReadonlyArray<{ from: string; to: string }>;
+}
+export const REPOINTS: ReadonlyArray<Repoint> = [
   {
     file: ".github/workflows/apk-repo.yml",
     from: "# apk-repository + OCI-image channel (notes/single-binary-release-plan.md, stages 1-2).",
@@ -56,6 +66,12 @@ export const REPOINTS: ReadonlyArray<{ file: string; from: string; to: string }>
     file: "packages/core/src/config-remote.ts",
     from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";',
     to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";',
+    history: [
+      {
+        from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";',
+        to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";',
+      },
+    ],
   },
   {
     file: "packaging/VERIFY.md",
@@ -110,11 +126,15 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
     } catch {
       throw new Error(`repoint file ${r.file} is missing from ${privateCommit} — if it was renamed or deleted deliberately, update REPOINTS first`);
     }
-    if (content.includes(r.to) && !content.includes(r.from)) continue; // already public form (idempotence)
-    if (!content.includes(r.from)) {
-      throw new Error(`repoint anchor not found in ${r.file} at ${privateCommit}:\n  expected: ${r.from}\nThe private line was reworded — update REPOINTS deliberately, then re-run`);
+    // The current spelling first, then each historical one: the FIRST pair whose private form
+    // is present is applied; a pair already in its public form satisfies idempotence.
+    const pairs = [{ from: r.from, to: r.to }, ...(r.history ?? [])];
+    const applicable = pairs.find((p) => content.includes(p.from));
+    if (applicable === undefined) {
+      if (pairs.some((p) => content.includes(p.to))) continue; // already public form (idempotence)
+      throw new Error(`repoint anchor not found in ${r.file} at ${privateCommit}:\n  expected: ${r.from}${r.history ? ` (or an earlier spelling: ${r.history.map((h) => h.from).join(" | ")})` : ""}\nThe private line was reworded — update REPOINTS deliberately, then re-run`);
     }
-    const replaced = content.replace(r.from, r.to);
+    const replaced = content.replace(applicable.from, applicable.to);
     const blob = git(repo, ["hash-object", "-w", "--stdin"], { input: replaced }).trim();
     git(repo, ["update-index", "--cacheinfo", `100644,${blob},${r.file}`], { env });
   }
@@ -132,7 +152,7 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
     if (!diff.includes(r.file)) continue; // untouched relative to private (already-public content)
     const fileDiff = git(repo, ["diff", `${privateCommit}^{tree}`, tree, "--", r.file]);
     const changed = fileDiff.split("\n").filter((l) => /^[-+][^-+]/.test(l));
-    const expected = new Set([`-${r.from}`, `+${r.to}`]);
+    const expected = new Set([{ from: r.from, to: r.to }, ...(r.history ?? [])].flatMap((p) => [`-${p.from}`, `+${p.to}`]));
     const extra = changed.filter((l) => !expected.has(l));
     if (extra.length > 0) {
       throw new Error(`fidelity gate: ${r.file} changed beyond its sanctioned repoint line:\n  ${extra.join("\n  ")}`);

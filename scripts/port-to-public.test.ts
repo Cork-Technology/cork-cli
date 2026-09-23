@@ -68,6 +68,25 @@ describe("port-to-public: the transform is a pure function of the private tree",
     }
   });
 
+  it("a repoint line's EARLIER spelling (history) ports under its own public form; a spelling matching neither fails loudly", () => {
+    const r = REPOINTS.find((x) => x.history !== undefined)!;
+    expect(r).toBeDefined();
+    const h = r.history![0]!;
+    write(r.file, `neighbor line above\n${h.from}\nbody of ${r.file}\n`);
+    const c = commitAll("the line in its earlier private spelling");
+    const { head } = portCommits(repo, [c], "public", false);
+    const content = git(["show", `${head}:${r.file}`]);
+    expect(content).toContain(h.to);
+    expect(content).not.toContain(h.from);
+    expect(content).not.toContain(r.to); // the CURRENT public form is not invented onto an old commit
+    write(r.file, `neighbor line above\n  "https://example.invalid/reworded";\nbody of ${r.file}\n`);
+    const bad = commitAll("the line reworded beyond every spelling");
+    expect(() => portCommits(repo, [bad], "public", false)).toThrow(/repoint anchor not found/);
+    // The fixture repo is shared by the later tests: put the file back in its current private form.
+    write(r.file, `neighbor line above\n${r.from}\nbody of ${r.file}\n`);
+    commitAll("restore the current spelling");
+  });
+
   it("ports an edit ADJACENT to a repoint anchor (the patch-context failure that shipped an empty commit)", () => {
     write(".github/workflows/apk-repo.yml", `neighbor line above EDITED\n${REPOINTS[0]!.from}\nbody of ${REPOINTS[0]!.file}\n`);
     const c = commitAll("edit next to the strip line");
