@@ -793,7 +793,11 @@ export const TASKS: EvalTask[] = [
   // paste real hashes; the degenerate fixture accidentally measured tokenizer counting, not
   // cancel-building. The residual miscount rate is model behavior — never tune the tool
   // surface against it.
-  { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x8f3c1a76e0b2d94c55f10e7a3db6c821904bfe5d67a8c3210e5b49d7fa6301cb (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", maxCalls: 2 } },
+  // The prompt names no chain and an order hash carries none to infer from; a signed cancel on
+  // the wrong chain is a footgun, so an agent that ASKS which chain is right — the same rule
+  // ho-authority already grades with `clarify`. 2026-09-23: the agent asked on 1 of 3 trials and
+  // called with mainnet on 2 of 3; both are acceptable answers to this prompt.
+  { id: "ho-cancel", heldOut: true, prompt: `Build the cancel calldata for my resting Cork order 0x8f3c1a76e0b2d94c55f10e7a3db6c821904bfe5d67a8c3210e5b49d7fa6301cb (maker traits 0), account ${A}, request id "eval-can-0001".`, expect: { tool: "cork_prepare_orders", params: { action: { type: "cancel" } }, state: "ok", clarify: /(chainId|chain\s*id|network)/i, maxCalls: 2 } },
   // Near-twin variant discrimination under a MISLEADING framing: "swap" is the covered payout
   // (cST + reference in), but the user says "swap my cST back" — which is unwind-swap's
   // direction. Grades reading the DIRECTION, not the verb. Held out: exactly the kind of
