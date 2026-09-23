@@ -28,5 +28,16 @@ export default defineConfig({
     // re-point the variable again themselves.
     env: { CORK_CONFIG_NO_FETCH: "1" },
     setupFiles: ["./vitest.setup.ts"],
+    // The suite must run where only Bun is installed. With no `node` on PATH, vitest itself runs
+    // on Bun, and Bun answers `"__esModule" in <ESM namespace>` with true (Node: false) although
+    // no such property exists. vite-node's default interop reads that as "CJS module" and
+    // replaces an external module with its `default` export — zod's default is its inner
+    // namespace, so `import { z } from "zod"` came back undefined and most files failed to load
+    // (2026-09-23: a Node-less host ran the whole mutation catalogue in 9 minutes, every
+    // load failure counted "caught"). The suite needs none of that interop (green on Bun AND
+    // Node with it off); if a CJS-only dependency imported by NAME ever reads undefined in a
+    // test, import its default export instead. No vitest before 5 fixes this on Bun (3.2.7,
+    // 4.0.18, 4.1.11 all fail; 5.0.1 passes).
+    deps: { interopDefault: false },
   },
 });
