@@ -125,8 +125,8 @@ ch track reconcile --tx-hash <0x…>
 that carries the contracts the command needs) or `primary` (the default). Results always carry the
 resolved label, never the alias. `all` is refused on every command but the positions read, which
 spans generations by itself. `ch capabilities --topic migration` is the full recipe, including the
-two standing facts about the new set (no registered assets on its registry yet; no CREATE2
-attestation).
+one standing fact about the new set (it has no CREATE2 attestation; its registry has held
+registered assets since 2026-09-23).
 
 ## Deterministic math — `ch compute`
 
