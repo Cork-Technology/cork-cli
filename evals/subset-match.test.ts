@@ -2,7 +2,7 @@
 // the expectation tests a string field. Pinned so the widening stays exactly that — a RegExp can
 // only match a string, and only the field it names.
 import { describe, expect, it } from "vitest";
-import { subsetMatch } from "./run.ts";
+import { plainAnswer, subsetMatch } from "./run.ts";
 
 describe("subsetMatch", () => {
   it("matches a nested subset and rejects a missing or different leaf", () => {
@@ -19,5 +19,16 @@ describe("subsetMatch", () => {
     expect(subsetMatch({ search: /unwind/i }, { search: 5 })).toBe(false);
     expect(subsetMatch({ search: /unwind/i }, { search: { nested: "unwind" } })).toBe(false);
     expect(subsetMatch({ search: /unwind/i }, {})).toBe(false);
+  });
+});
+
+describe("plainAnswer", () => {
+  it("strips markdown emphasis and code markers and collapses whitespace, so a phrase split by bold still reads as the phrase", () => {
+    expect(plainAnswer("does **not** check out")).toBe("does not check out");
+    expect(plainAnswer("hash `0xabc`\n\nis _wrong_")).toBe("hash 0xabc is wrong");
+    expect(/not check out/.test(plainAnswer("Your claim does **not** check out."))).toBe(true);
+  });
+  it("never inserts words: a text lacking the concept still lacks it", () => {
+    expect(/not check out|mismatch/.test(plainAnswer("The claim **checks out** and the hashes match."))).toBe(false);
   });
 });
