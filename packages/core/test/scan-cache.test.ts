@@ -27,6 +27,35 @@ function withCache(tag: string, fn: (path: string) => void): void {
 }
 
 describe("scan-cache", () => {
+  it("is a NO-OP under vitest when CORK_SCAN_CACHE_FILE is unset (the constants cache's rule): the DEFAULT file under the home directory is neither read nor written by a bare test run", () => {
+    // Redirect the home directory to a scratch dir so the "default" file is one this test owns,
+    // seed it with an entry, and prove the gate: a read does not see the seed, a write does not
+    // change the file. (homedir() reads HOME on POSIX.)
+    const prevVar = process.env[VAR];
+    const prevHome = process.env["HOME"];
+    const home = `${process.env["TMPDIR"] ?? "/tmp"}/cork-scan-home-${process.pid}-${Math.floor(performance.now() * 1e6)}`;
+    const defaultFile = `${home}/.cache/cork-helper-cli/scan-cache.json`;
+    mkdirSync(dirname(defaultFile), { recursive: true });
+    const seeded = JSON.stringify({ entries: { [k("seeded")]: { watermark: 7, rows: [{ seed: true }] } } });
+    writeFileSync(defaultFile, seeded);
+    delete process.env[VAR];
+    process.env["HOME"] = home;
+    try {
+      expect(process.env["VITEST"]).toBeDefined(); // the gate's precondition holds in this worker
+      expect(readScanCache(k("seeded"))).toBeUndefined(); // gated read: the seed is invisible
+      writeScanCache(k("gated"), { watermark: 5, rows: [{ x: 1 }] });
+      expect(readFileSync(defaultFile, "utf8")).toBe(seeded); // gated write: the file is untouched
+    } finally {
+      if (prevVar !== undefined) process.env[VAR] = prevVar;
+      if (prevHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = prevHome;
+    }
+    // Opted in, the same write round-trips.
+    withCache("gate-optin", () => {
+      writeScanCache(k("gated"), { watermark: 5, rows: [{ x: 1 }] });
+      expect(readScanCache(k("gated"))).toEqual({ watermark: 5, rows: [{ x: 1 }] });
+    });
+  });
   it("merges from DISK at write: a sibling process's entry survives our write", () => {
     withCache("merge", (path) => {
       writeScanCache(k("scan-a"), { watermark: 1, rows: [{ x: 1 }] });

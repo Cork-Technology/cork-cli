@@ -372,6 +372,36 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     const w = env.warnings.find((x) => x.code === "invalid_service_response");
     expect(w?.message).toContain("1 venue pool row(s)");
   });
+  it("the sweep shares the cork-pools scan's incremental cursor: a second read resumes past the watermark (minus the reorg overlap) and answers the same positions", async () => {
+    // The scan cache is keyed by the CORK_SCAN_CACHE_FILE variable; point it at a private file
+    // for this test the way hypersync.test.ts does, and restore whatever was there.
+    const SCAN_CACHE_VAR = "CORK_SCAN_CACHE_FILE";
+    const envGet = (k: string): string | undefined => process.env[k];
+    const envSet = (k: string, v: string | undefined): void => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    const saved = envGet(SCAN_CACHE_VAR);
+    envSet(SCAN_CACHE_VAR, `${envGet("TMPDIR") ?? "/tmp"}/cork-scan-cache-mig-${process.pid}-${Date.now()}.json`);
+    try {
+      const froms: number[] = [];
+      const source = {
+        async queryLogs(q: { fromBlock: number; address?: string[] }) {
+          froms.push(q.fromBlock);
+          const scope = new Set((q.address ?? []).map((a) => a.toLowerCase()));
+          return { logs: LOGS.filter((l) => scope.has(l.address.toLowerCase()) && l.blockNumber >= q.fromBlock), archiveHeight: 1_000 };
+        },
+      };
+      const first = await positions(ctxFor([], { hyperSync: source }), undefined, "full-decentralized");
+      const second = await positions(ctxFor([], { hyperSync: source }), undefined, "full-decentralized");
+      expect(froms[0]).toBe(0);
+      expect(froms[1]).toBeGreaterThan(0); // resumed from the cached watermark, not block 0
+      expect((second.data as PositionsData).positions).toEqual((first.data as PositionsData).positions);
+      expect((second.data as PositionsData).scanned).toMatchObject({ pools: 4, complete: true });
+    } finally {
+      envSet(SCAN_CACHE_VAR, saved);
+    }
+  });
   it("`mode: full-decentralized` WITHOUT a HyperSync source falls back to the windowed walk and SAYS so (cork-pools parity); with one, it uses it and stays silent", async () => {
     const asked: string[][] = [];
     const withHs = await positions(ctxFor(asked), undefined, "full-decentralized");

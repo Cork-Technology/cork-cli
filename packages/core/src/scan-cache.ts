@@ -76,13 +76,23 @@ export function scanCacheId(a: { chainId: number; name: string; fromBlock: numbe
   return `v${String(SCAN_CACHE_SCHEMA)}:${String(a.chainId)}:${a.name}:${String(a.fromBlock)}:${addr}:${topics}`;
 }
 
+/** Under vitest the cache is a NO-OP unless a test opts in with CORK_SCAN_CACHE_FILE — the same
+ *  rule the constants cache follows. Found 2026-09-23: suites that never set the variable were
+ *  writing STUB rows (fixture pools, watermark 23 000 000) into the developer's real
+ *  ~/.cache/cork-helper-cli/scan-cache.json, and a read in one test inherited rows another test's
+ *  stub world had cached under the same scan identity (6 pools where the stub holds 2).
+ *  Production and the CLI never set VITEST. */
+const disabled = (): boolean => process.env.VITEST !== undefined && process.env.CORK_SCAN_CACHE_FILE === undefined;
+
 export function readScanCache(id: string): ScanCacheEntry | undefined {
+  if (disabled()) return undefined;
   const entry = loadFile().entries[id];
   if (!entry || !Number.isFinite(entry.watermark) || !Array.isArray(entry.rows)) return undefined;
   return entry;
 }
 
 export function writeScanCache(id: string, entry: ScanCacheEntry): void {
+  if (disabled()) return;
   if (entry.rows.length > SCAN_CACHE_MAX_ROWS) return; // too big to be worth persisting — see header
   // Merge from DISK, not from the in-process memo: the long-lived MCP server and any number of
   // CLI runs share this file, and a memo-based read-modify-write would clobber every entry a

@@ -856,11 +856,12 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         source = wantsArchive ? "full-decentralized" : "lite-decentralized";
         if (wantsArchive) warnings.push({ code: "logs_windowed_fallback", message: `no Envio token — pool enumeration via adaptive-window eth_getLogs over ${hostOf(resolved.url)} (up to ${String(WINDOWED_RPC_MAX_WINDOWS)} ranges per call; a capped walk is disclosed as pagination_incomplete) — set ENVIO_HYPERSYNC_TOKEN for the archive index` });
       }
-      const { spec: full } = marketCreatedSpecFor(emitters.map((e) => ({ poolManager: e.poolManager, wire: e.wire, label: e.label })), filters);
-      // No incremental cursor for the sweep: it shares the cork-pools scan's identity, and a
-      // read whose result decides which pools to EXIT must not inherit rows another read
-      // cached (the balance batch dominates the cost anyway; one call, one fresh scan).
-      const { cache: _cache, ...spec } = full;
+      const { spec } = marketCreatedSpecFor(emitters.map((e) => ({ poolManager: e.poolManager, wire: e.wire, label: e.label })), filters);
+      // The sweep shares the cork-pools scan's identity AND its incremental cursor: the cache may
+      // only make the read cheaper, never change it (a reorg overlap is re-scanned, a partial walk
+      // is never written back), so the rows it resumes from are exactly the rows a fresh scan
+      // would decode. Stripping it here (2026-09-22) rested on the false premise that the walk
+      // was incomplete by nature — that was the fixed-window defect, since fixed.
       const run = await runScanWithTail(ctx, chainId, hs, spec);
       if (run.tail.status === "error") warnings.push({ code: "live_tail_unavailable", message: run.tail.message });
       return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };

@@ -21,8 +21,12 @@ export default defineConfig({
     hookTimeout: 120_000,
     // Unit tests must be deterministic offline: serve the bundled cork-defaults.json without
     // attempting the GitHub fetch (config-remote.ts honors this). The scan-cursor cache is
-    // pointed at a per-run scratch file so tests never write (or read) the USER's real
-    // ~/.cache state — tests needing per-test isolation re-point it again in beforeEach.
-    env: { CORK_CONFIG_NO_FETCH: "1", CORK_SCAN_CACHE_FILE: `/tmp/cork-scan-cache-vitest-${process.pid}.json` },
+    // pointed at a per-TEST-FILE scratch path by vitest.setup.ts (a single per-run path, set
+    // here, was shared by every file and every worker and let one file's stub rows leak into
+    // another's read — 2026-09-23); scan-cache.ts is a no-op under vitest when unset, so the
+    // USER's real ~/.cache state is never touched either way. Tests needing per-test isolation
+    // re-point the variable again themselves.
+    env: { CORK_CONFIG_NO_FETCH: "1" },
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

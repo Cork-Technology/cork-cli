@@ -1236,6 +1236,24 @@ const CATALOG: Mutant[] = [
     tests: [T.hypersync],
   },
   {
+    // The vitest no-op gate dropped from the READ side: a bare test run reads the developer's
+    // real ~/.cache cursors (and, unset, whatever another run left there).
+    id: "scan-cache-vitest-gate-read-dropped",
+    file: "packages/core/src/scan-cache.ts",
+    find: "  if (disabled()) return undefined;\n  const entry = loadFile().entries[id];",
+    replace: "  const entry = loadFile().entries[id];",
+    tests: [T.scanCache],
+  },
+  {
+    // …and from the WRITE side: stub rows land in the real file (observed 2026-09-23: fixture
+    // pools under watermark 23,000,000 in ~/.cache/cork-helper-cli/scan-cache.json).
+    id: "scan-cache-vitest-gate-write-dropped",
+    file: "packages/core/src/scan-cache.ts",
+    find: "  if (disabled()) return;\n  if (entry.rows.length > SCAN_CACHE_MAX_ROWS) return;",
+    replace: "  if (entry.rows.length > SCAN_CACHE_MAX_ROWS) return;",
+    tests: [T.scanCache],
+  },
+  {
     // The windowed walk stops disclosing its bound: a capped walk claims completeness.
     id: "windowed-partial-honesty-lost",
     file: "packages/core/src/datasources/hypersync.ts",
@@ -5548,6 +5566,15 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/query.ts",
     find: "      if (wantsArchive && ctx.hyperSync) {",
     replace: "      if (false) {",
+    tests: [T.migration],
+  },
+  {
+    // The sweep strips the scan cache again: every read re-walks from block 0 and diverges from
+    // the cork-pools scan whose identity it claims to share.
+    id: "mig-sweep-cache-stripped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "      const run = await runScanWithTail(ctx, chainId, hs, spec);\n      if (run.tail.status === \"error\") warnings.push({ code: \"live_tail_unavailable\", message: run.tail.message });\n      return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };",
+    replace: "      const { cache: _c, ...uncached } = spec;\n      const run = await runScanWithTail(ctx, chainId, hs, uncached);\n      if (run.tail.status === \"error\") warnings.push({ code: \"live_tail_unavailable\", message: run.tail.message });\n      return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };",
     tests: [T.migration],
   },
   {
