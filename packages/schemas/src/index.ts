@@ -1,4 +1,5 @@
 export * from "./primitives.ts";
+export * from "./instant.ts";
 export * from "./tools.ts";
 export * from "./registry.ts";
 export * from "./examples.ts";

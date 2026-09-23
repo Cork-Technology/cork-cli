@@ -80,6 +80,7 @@ const T = {
   release: "packages/cli/test/release.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
   migration: "packages/core/test/migration.test.ts",
+  instant: "packages/schemas/test/instant.test.ts",
   predictReason: "packages/core/test/predict-shares-reason.test.ts",
   attribution: "packages/core/test/event-attribution.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
@@ -5581,34 +5582,62 @@ const CATALOG: Mutant[] = [
     // The zone made optional (an EMPTY alternative): a zone-less ISO string reaches Date.parse,
     // which reads it as LOCAL time — the ambiguity the strict parser exists to refuse.
     id: "mig-venue-iso-zone-optional",
-    file: "packages/core/src/handlers/query-positions.ts",
+    file: "packages/schemas/src/instant.ts",
     find: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})$/;",
     replace: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2}|)$/;",
-    tests: [T.migration],
+    tests: [T.instant, T.migration],
   },
   {
     // The calendar round-trip dropped: 2026-02-30 rolls into March instead of being refused.
     id: "mig-venue-iso-calendar-unchecked",
-    file: "packages/core/src/handlers/query-positions.ts",
+    file: "packages/schemas/src/instant.ts",
     find: "  if (rebuilt !== `${y}-${mo}-${d}T${h}:${mi}:${sec}`) return undefined;",
     replace: "",
-    tests: [T.migration],
+    tests: [T.instant, T.migration],
   },
   {
     // The canonical form loses its second-precision normalisation: two sources spell one instant
     // two ways ("…:00.000Z" vs "…:00Z").
     id: "mig-expiry-iso-not-canonical",
-    file: "packages/core/src/handlers/query-positions.ts",
+    file: "packages/schemas/src/instant.ts",
     find: "  return new Date(Number(seconds) * 1000).toISOString().replace(/\\.\\d{3}Z$/, \"Z\");",
     replace: "  return new Date(Number(seconds) * 1000).toISOString();",
+    tests: [T.instant, T.migration],
+  },
+  {
+    // The year-2100 bound dropped on the digit-string path: a 13-digit millisecond value is read
+    // as seconds — an expiry in the year 58,000.
+    id: "instant-milliseconds-accepted",
+    file: "packages/schemas/src/instant.ts",
+    find: "    if (s > MAX_SECONDS) return undefined; // 13-digit millisecond values land here and are refused",
+    replace: "",
+    tests: [T.instant, T.migration],
+  },
+  {
+    // The explicit-endpoint guard dropped: the operator's OWN --rpc-url is silently swapped for
+    // a chainlist endpoint when it refuses a range — the manual override no longer means manual.
+    id: "mig-rangecap-explicit-failover",
+    file: "packages/core/src/handlers/query.ts",
+    find: "if (!(err instanceof LogRangeCapError) || !windowed || resolved.source === \"explicit\") throw err;",
+    replace: "if (!(err instanceof LogRangeCapError) || !windowed) throw err;",
     tests: [T.migration],
   },
   {
-    // Bare digits accepted again as seconds — an ambiguous shape (seconds vs milliseconds).
-    id: "mig-venue-digits-accepted",
-    file: "packages/core/src/handlers/query-positions.ts",
-    find: "  if (typeof v !== \"string\") return undefined;\n  const m = STRICT_ISO.exec(v);\n  if (!m) return undefined;",
-    replace: "  if (typeof v !== \"string\") return undefined;\n  if (/^[0-9]+$/.test(v)) return { iso: expiryIsoOfSeconds(BigInt(v)), seconds: v };\n  const m = STRICT_ISO.exec(v);\n  if (!m) return undefined;",
+    // The failover swallowed for automatic endpoints too: a strict fallback endpoint kills the
+    // read instead of moving to the next one.
+    id: "mig-rangecap-auto-no-failover",
+    file: "packages/core/src/handlers/query.ts",
+    find: "if (!(err instanceof LogRangeCapError) || !windowed || resolved.source === \"explicit\") throw err;",
+    replace: "throw err;",
+    tests: [T.migration],
+  },
+  {
+    // The floor refusal is thrown as the raw endpoint error, not the typed LogRangeCapError: the
+    // handler cannot recognise it and never fails over.
+    id: "windowed-rangecap-untyped",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "          throw new LogRangeCapError(from, to, err);",
+    replace: "          throw err;",
     tests: [T.migration],
   },
   {

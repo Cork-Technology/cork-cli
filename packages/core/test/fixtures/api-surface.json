@@ -637,6 +637,10 @@
       "kind": "type"
     },
     {
+      "name": "LogRangeCapError",
+      "kind": "value+type"
+    },
+    {
       "name": "LogsEndpoint",
       "kind": "type"
     },
@@ -3487,6 +3491,10 @@
     {
       "name": "LogMeta",
       "kind": "type"
+    },
+    {
+      "name": "LogRangeCapError",
+      "kind": "value+type"
     },
     {
       "name": "LopFillRow",

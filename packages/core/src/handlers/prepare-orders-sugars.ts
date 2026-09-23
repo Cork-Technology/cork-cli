@@ -2,7 +2,7 @@
 // call each. Split from prepare-orders.ts (2026-09-03). Both re-enter the maker-order path through
 // injected deps (`prepare` = handlePrepareOrders, `annotateApprovals` = its approval annotator), so
 // this module has no import cycle with the dispatcher.
-import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionAnswerRfq, executionRefreshOrder, PrepareOrdersInput } from "@cork/schemas";
+import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionAnswerRfq, executionRefreshOrder, PrepareOrdersInput, venueInstant } from "@cork/schemas";
 import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, LOP_ADDRESSES, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
@@ -127,7 +127,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
       return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} was posted by ${underwriter}, not by ${input.account} — a maker may cite only its OWN answer (the RFQ requester may cite any; cork-api 0.4.1 party rule). Post your own answer first (cork_submit rfq-answer) or answer uncited with premiumAnnualized`, ctx);
     }
     const p = str(found.option.premium_annualized);
-    const e = str(found.option.expiry);
+    const e = venueInstant(found.option.expiry)?.seconds; // the cited option's pool expiry: seconds or strict ISO, canonicalised to seconds
     if (p === undefined || e === undefined || !/^\d+$/.test(e)) return unavailable(chainId, "invalid_service_response", `option ${action.optionId} carries no usable premium_annualized/expiry`, ctx);
     premiumAnnualized = p;
     expiryTimestamp = BigInt(e);
@@ -266,9 +266,11 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   if (takingAmount === 0n) return unavailable(chainId, "invalid_order_terms", "the premium rounds to zero collateral units for this notional and tenor — nothing to take", ctx);
 
   // ── expiry: the venue's re-rest rule against the RFQ's remaining validity ──
-  const validUntil = str(rfq.valid_until);
-  const remaining = validUntil !== undefined && /^\d+$/.test(validUntil) ? BigInt(validUntil) - nowSecs : tenorSeconds;
-  if (remaining <= 0n) return unavailable(chainId, "invalid_order_terms", `RFQ ${action.rfqId} validity lapsed at ${validUntil} (now ${nowSecs}) — the requester is no longer taking answers`, ctx);
+  // valid_until through the shared boundary parser (integer seconds or strict ISO, canonicalised);
+  // an unreadable value falls back to the tenor as before — the venue's own admission still gates.
+  const validUntilT = venueInstant(rfq.valid_until);
+  const remaining = validUntilT ? BigInt(validUntilT.seconds) - nowSecs : tenorSeconds;
+  if (remaining <= 0n) return unavailable(chainId, "invalid_order_terms", `RFQ ${action.rfqId} validity lapsed at ${validUntilT!.iso} (${validUntilT!.seconds}; now ${nowSecs}) — the requester is no longer taking answers`, ctx);
   const expirySeconds = action.expirySeconds ?? reRestExpirySeconds(remaining);
   const ocoGroup = action.ocoGroup ?? answerOcoGroup(action.rfqId);
 

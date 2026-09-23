@@ -4,12 +4,12 @@ import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork
 import { rankBookRows } from "../orders-rank.ts";
 import { bookWatermarkOf, decodeBookWatermark, diffBook, encodeBookWatermark, WatermarkError } from "../orders-watch.ts";
 import { type CorkAddresses, feeDisagreementWarnings, readPoolState, resolvePoolTokens } from "../chain/reads.ts";
-import { hostOf, type ResolvedRpc } from "../chain/rpc.ts";
+import { hostOf, reportEndpointFailure, type ResolvedRpc } from "../chain/rpc.ts";
 import { erc20Abi, permit2AllowanceAbi, whitelistManagerAbi } from "../chain/abis.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { CREATE2_DEPLOYER } from "../config.ts";
 import { resolveGenerations, resolveRollover, rolloverDigestScanTargets, rolloverFactoryScanTargets } from "../config-remote.ts";
-import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, type MarketRow, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
+import { CLONE_DEPLOYED_TOPIC, decodeCloneRows, LogRangeCapError, WINDOWED_RPC_MIN_WINDOW_BLOCKS, decodeLopFillRows, decodeMarketRows, decodeRolloverFillRows, decodeShareTransferRows, decodeWhitelistRows, ERC20_TRANSFER_TOPIC, type HyperSyncLog, type HyperSyncSource, loadHyperSync, LOP_FILLED_TOPIC, MARKET_CREATED_TOPICS, type MarketEmitter, type MarketRow, replayWhitelist, ROLLOVER_FILL_TOPICS, WHITELIST_TOPICS, WINDOWED_RPC_MAX_WINDOWS, windowedRpcSource } from "../datasources/hypersync.ts";
 import { envioToken } from "../datasources/envio.ts";
 import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs, getRolloverContracts, getRolloverFills, getRolloverOrder, getRolloverOrders, venueBaseUrl, type VenueList } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, generationData, generationRefOf, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
@@ -840,7 +840,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(traversal.items, emitters);
       const warnings = venueNoticeWarnings(traversal);
-      if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is not a strict ISO-8601 date-time with an explicit zone (YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)) — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });
+      if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is neither integer unix seconds nor a strict ISO-8601 date-time with an explicit zone (YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)) — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });
       return { rows, complete: traversal.complete, warnings, source: "hybrid" as const };
     };
     const scanRows = async (emitters: readonly PositionsEmitter[]) => {
@@ -848,10 +848,12 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       const wantsArchive = input.mode === "full-decentralized";
       let hs: HyperSyncSource;
       let source: "lite-decentralized" | "full-decentralized";
+      let windowed = false;
       if (wantsArchive && ctx.hyperSync) {
         hs = ctx.hyperSync;
         source = "full-decentralized";
       } else {
+        windowed = true;
         hs = windowedRpcSource(resolved.client);
         source = wantsArchive ? "full-decentralized" : "lite-decentralized";
         if (wantsArchive) warnings.push({ code: "logs_windowed_fallback", message: `no Envio token — pool enumeration via adaptive-window eth_getLogs over ${hostOf(resolved.url)} (up to ${String(WINDOWED_RPC_MAX_WINDOWS)} ranges per call; a capped walk is disclosed as pagination_incomplete) — set ENVIO_HYPERSYNC_TOKEN for the archive index` });
@@ -862,7 +864,21 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // is never written back), so the rows it resumes from are exactly the rows a fresh scan
       // would decode. Stripping it here (2026-09-22) rested on the false premise that the walk
       // was incomplete by nature — that was the fixed-window defect, since fixed.
-      const run = await runScanWithTail(ctx, chainId, hs, spec);
+      let run: Awaited<ReturnType<typeof runScanWithTail>>;
+      try {
+        run = await runScanWithTail(ctx, chainId, hs, spec);
+      } catch (err) {
+        // An endpoint that refuses eth_getLogs even at the floor cannot serve the walk (owner
+        // ruling 2026-09-23): an AUTOMATIC endpoint is reported to the breaker and the walk is
+        // re-run ONCE on the next resolution — the same recovery a transport failure gets — while
+        // an EXPLICIT endpoint (the operator's own choice) fails loudly naming the host.
+        if (!(err instanceof LogRangeCapError) || !windowed || resolved.source === "explicit") throw err;
+        reportEndpointFailure(chainId, resolved.url);
+        const next = await getRpc(ctx, chainId);
+        if (!next || next.url === resolved.url) throw err;
+        warnings.push({ code: "rpc_fallback", message: `${hostOf(resolved.url)} refused eth_getLogs at the ${String(WINDOWED_RPC_MIN_WINDOW_BLOCKS)}-block floor — the pool enumeration re-ran on ${hostOf(next.url)}` });
+        run = await runScanWithTail(ctx, chainId, windowedRpcSource(next.client), spec);
+      }
       if (run.tail.status === "error") warnings.push({ code: "live_tail_unavailable", message: run.tail.message });
       return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };
     };

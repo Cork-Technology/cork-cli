@@ -25,7 +25,7 @@
 // collateral and reference balances are NOT read here (they are per-token, not per-position — the
 // single-pool read has them).
 import { z } from "zod";
-import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
+import { type ChainId, Envelope, isoOfSeconds, QueryInput, UNITS_TOPIC_REFERENCE, venueInstant } from "@cork/schemas";
 import { erc20Abi } from "../chain/abis.ts";
 import type { ResolvedRpc } from "../chain/rpc.ts";
 import { resolveGenerations } from "../config-remote.ts";
@@ -49,42 +49,16 @@ export interface PositionsDeps {
   enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "lite-decentralized" | "hybrid" | "full-decentralized" }>;
 }
 
-/** Canonical expiry text: STRICT ISO-8601, UTC, second precision — `YYYY-MM-DDTHH:MM:SSZ`. One
- *  spelling for every source (the chain's integer seconds, the venue's ISO strings), so two rows
- *  naming the same instant compare equal as strings and a human reads a date beside the seconds. */
-export function expiryIsoOfSeconds(seconds: bigint): string {
-  return new Date(Number(seconds) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
-}
+/** Canonical expiry text: STRICT ISO-8601 UTC, second precision — the schemas package's ONE
+ *  spelling for every venue instant (`isoOfSeconds`); chain rows and venue rows land on it alike. */
+export const expiryIsoOfSeconds = isoOfSeconds;
 
-/** The ONLY expiry shapes the venue boundary accepts (2026-09-23, owner ruling: normalise to a
- *  strict, unambiguous ISO string): a full ISO-8601 date-time with a `T` separator, seconds, an
- *  optional fraction, and an EXPLICIT zone — `Z` or `±HH:MM`. Everything else is refused as
- *  unreadable: a date with no zone (`Date.parse` would read it as LOCAL time — the ambiguity),
- *  a date-only string, a space separator, a bare digit string (seconds or milliseconds? — nobody
- *  can tell), a number, or a natural-language date. The calendar is checked by round-trip: the
- *  parsed instant must reproduce the date fields it was built from (`2026-02-30` is refused, not
- *  rolled into March). A sub-second fraction is dropped: pool expiry is an integer second on
- *  chain, and the venue's `.000` carries no information. */
-const STRICT_ISO = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
+/** The venue's pool `expiry` through the shared boundary parser (`venueInstant`, @cork/schemas):
+ *  integer unix seconds or strict explicit-zone ISO-8601, canonicalised; anything else undefined
+ *  (the caller skips the row and discloses the count). */
 export function venueExpiry(v: unknown): { iso: string; seconds: string } | undefined {
-  if (typeof v !== "string") return undefined;
-  const m = STRICT_ISO.exec(v);
-  if (!m) return undefined;
-  const [, y, mo, d, h, mi, sec, , zone] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string];
-  const canonicalInput = `${y}-${mo}-${d}T${h}:${mi}:${sec}${zone}`; // fraction dropped, zone kept
-  const ms = Date.parse(canonicalInput);
-  if (!Number.isFinite(ms) || ms < 0) return undefined;
-  const date = new Date(ms);
-  // Round-trip the calendar fields in the INPUT's own zone by re-deriving the zone offset:
-  // an out-of-range field (month 13, day 30 of February, hour 24) parses to a shifted instant
-  // that no longer reproduces the fields — refuse, never roll over.
-  const offsetMin = zone === "Z" ? 0 : (zone.startsWith("-") ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
-  const local = new Date(ms + offsetMin * 60_000);
-  const two = (n: number) => String(n).padStart(2, "0");
-  const rebuilt = `${String(local.getUTCFullYear()).padStart(4, "0")}-${two(local.getUTCMonth() + 1)}-${two(local.getUTCDate())}T${two(local.getUTCHours())}:${two(local.getUTCMinutes())}:${two(local.getUTCSeconds())}`;
-  if (rebuilt !== `${y}-${mo}-${d}T${h}:${mi}:${sec}`) return undefined;
-  const seconds = BigInt(Math.floor(date.getTime() / 1000));
-  return { iso: expiryIsoOfSeconds(seconds), seconds: seconds.toString() };
+  const t = venueInstant(v);
+  return t ? { iso: t.iso, seconds: t.seconds } : undefined;
 }
 
 const Address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);

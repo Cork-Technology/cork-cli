@@ -1,3 +1,4 @@
+import { venueInstant } from "@cork/schemas";
 // `ch query rfqs --watch`: the RFQ-firmness liveness loop (2026-09-11).
 //
 // The dead-kernel-underwriter signature, seen live on 2026-09-10: the requester posts a counter
@@ -59,7 +60,12 @@ export interface RfqWatchChanges {
   note: string;
 }
 
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
+/** A venue timestamp (received_at, fresh_until) as unix seconds through the shared boundary parser:
+ *  integer seconds or strict explicit-zone ISO-8601; anything else null. */
+const num = (v: unknown): number | null => {
+  const t = venueInstant(v);
+  return t ? Number(t.seconds) : null;
+};
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 

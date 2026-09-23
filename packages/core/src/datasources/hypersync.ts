@@ -123,6 +123,21 @@ interface WindowedRpcClient {
  *  complete: false` on a chain whose pool managers hold 453 pools — honest, and useless. The
  *  budget WINDOWED_RPC_MAX_WINDOWS still bounds one call; a capped walk says so (`complete:false`,
  *  `nextBlock`). */
+/** The endpoint refused an eth_getLogs range AT the floor: it cannot serve the walk at all. Thrown
+ *  (never swallowed) so the caller can decide — an AUTOMATIC endpoint fails over to the next one
+ *  the way a transport failure does; an EXPLICIT one (the operator's own --rpc-url) fails loudly
+ *  naming the host (owner ruling 2026-09-23). Carries the refused span for the message. */
+export class LogRangeCapError extends Error {
+  constructor(
+    public readonly fromBlock: number,
+    public readonly toBlock: number,
+    cause: unknown,
+  ) {
+    super(`eth_getLogs refused a ${String(toBlock - fromBlock + 1)}-block range (the ${String(WINDOWED_RPC_MIN_WINDOW_BLOCKS)}-block floor): ${cause instanceof Error ? cause.message.split("\n")[0] : String(cause)}`);
+    this.name = "LogRangeCapError";
+  }
+}
+
 export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
   return {
     async queryLogs(q) {
@@ -157,7 +172,7 @@ export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
             window = Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, Math.floor(window / 5));
             continue;
           }
-          throw err;
+          throw new LogRangeCapError(from, to, err);
         }
       }
       return { logs, archiveHeight: head, ...(from <= head ? { complete: false as const, nextBlock: from } : {}) };

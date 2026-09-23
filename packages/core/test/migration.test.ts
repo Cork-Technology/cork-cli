@@ -363,10 +363,10 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     expect(w?.message).toContain("pageSize");
     expect(w?.message).toContain("maxPages");
   });
-  it("a venue row whose expiry is not strict ISO-8601 is skipped and DISCLOSED, never thrown on — bare digits included; an explicit offset is canonicalised", async () => {
-    // "next tuesday" and a BARE DIGIT string are both refused (seconds or milliseconds is
-    // undecidable); an explicit-offset ISO string is accepted and canonicalised.
-    const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: (NOW - 3_600n).toString() }, { ...VENUE_ROWS[2]!, expiry: new Date(Number(NOW + 86_400n) * 1000).toISOString().replace("Z", "+00:00") }];
+  it("a venue row whose expiry is not seconds-or-strict-ISO is skipped and DISCLOSED, never thrown on; an explicit offset is canonicalised", async () => {
+    // "next tuesday" and a MILLISECOND digit string are both refused; an explicit-offset ISO
+    // string is accepted and canonicalised.
+    const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: ((NOW - 3_600n) * 1000n).toString() }, { ...VENUE_ROWS[2]!, expiry: new Date(Number(NOW + 86_400n) * 1000).toISOString().replace("Z", "+00:00") }];
     const env = await positions(ctxFor([], { venueFetch: venueOf([], rows) }), undefined, "hybrid");
     expect(env.state).toBe("ok");
     const d = env.data as PositionsData;
@@ -427,6 +427,64 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
   });
 });
 
+describe("an endpoint that refuses eth_getLogs at the floor (owner ruling 2026-09-23)", () => {
+  /** An RPC whose eth_getLogs refuses EVERY range; getBlockNumber works. */
+  const refusingClient = () => ({
+    getBlockNumber: async () => 1_000n,
+    request: async () => {
+      throw new Error("eth_getLogs is limited to a 1,000 range");
+    },
+    readContract: async ({ address, functionName }: { address: string; functionName: string }) => (functionName === "balanceOf" ? (BALANCES[address.toLowerCase()] ?? 0n) : functionName === "decimals" ? 18 : 0n),
+  });
+  /** A healthy RPC serving the LOGS over eth_getLogs. */
+  const servingClient = () => ({
+    getBlockNumber: async () => 1_000n,
+    request: async () => LOGS.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: `0x${l.blockNumber.toString(16)}`, transactionHash: l.transactionHash })),
+    readContract: async ({ address, functionName }: { address: string; functionName: string }) => (functionName === "balanceOf" ? (BALANCES[address.toLowerCase()] ?? 0n) : functionName === "decimals" ? 18 : 0n),
+  });
+  it("AUTOMATIC endpoint: the walk fails over ONCE to the next resolution, discloses rpc_fallback naming both hosts, and completes", async () => {
+    let calls = 0;
+    const ctx: HandlerContext = {
+      nowSeconds: NOW,
+      resolveRpc: async () => {
+        calls += 1;
+        return calls === 1 ? ({ url: "https://strict.example/rpc", source: "default", client: refusingClient() } as never) : ({ url: "https://healthy.example/rpc", source: "default", client: servingClient() } as never);
+      },
+    };
+    const env = await positions(ctx, undefined, null);
+    expect(env.state).toBe("ok");
+    // Re-resolved for the walk (the live-tail leg resolves once more on its own); the BALANCE
+    // sweep keeps the first client — a range cap is about eth_getLogs, not eth_call.
+    expect(calls).toBeGreaterThanOrEqual(2);
+    const w = env.warnings.find((x) => x.code === "rpc_fallback");
+    expect(w?.message).toContain("strict.example");
+    expect(w?.message).toContain("healthy.example");
+    expect((env.data as PositionsData).scanned).toMatchObject({ pools: 4, complete: true });
+  });
+  it("EXPLICIT endpoint (the operator's own --rpc-url): NO failover — a loud unavailable naming the host and the floor", async () => {
+    let calls = 0;
+    const ctx: HandlerContext = {
+      nowSeconds: NOW,
+      resolveRpc: async () => {
+        calls += 1;
+        return { url: "https://mine.example/rpc", source: "explicit", client: refusingClient() } as never;
+      },
+    };
+    const env = await positions(ctx, undefined, null);
+    expect(env.state).toBe("unavailable");
+    expect(calls).toBe(1); // never re-resolved
+    expect(env.warnings[0]?.code).toBe("chain_read_failed");
+    expect(env.warnings[0]?.message).toContain("1000-block floor");
+    expect(env.warnings.map((w) => w.code)).not.toContain("rpc_fallback");
+  });
+  it("AUTOMATIC endpoint whose re-resolution lands on the SAME host: the original refusal propagates (no silent loop)", async () => {
+    const ctx: HandlerContext = { nowSeconds: NOW, resolveRpc: async () => ({ url: "https://only.example/rpc", source: "default", client: refusingClient() }) as never };
+    const env = await positions(ctx, undefined, null);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.message).toContain("1000-block floor");
+  });
+});
+
 describe("the venue row → MarketRow mapping is pure and shape-checked", () => {
   const emitters = [
     { poolManager: V03_PM, wire: "8-field" as const, label: "phoenix/v0.3-rc.1" },
@@ -441,15 +499,19 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
     expect(venueExpiry("2026-08-10T14:30:00+02:00")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
     expect(venueExpiry("2026-08-10T07:30:00-05:00")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
   });
+  it("venueExpiry accepts integer unix seconds too (the shape every RFQ field serves live) — one parser for every venue instant", () => {
+    expect(venueExpiry("1786365000")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+    expect(venueExpiry(1786365000)).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+  });
   it("venueExpiry REFUSES every ambiguous or lenient shape Date.parse would have accepted", () => {
     const refused: unknown[] = [
       "2026-08-10T12:30:00", // no zone — Date.parse reads LOCAL time
       "2026-08-10", // date only
       "2026-08-10 12:30:00Z", // space separator
       "2026-08-10T12:30Z", // no seconds
-      "1786365000", // bare digits: seconds or milliseconds? nobody can tell
-      "1786365000000",
-      1786365000, // a number
+      "1786365000000", // 13 digits: milliseconds masquerading as seconds
+      1786365000000,
+      1786365000.5, // a fractional number
       "Aug 10 2026 12:30:00 GMT", // natural-language / RFC-2822 forms
       "next tuesday",
       "2026-02-30T00:00:00Z", // invalid calendar date — refused, never rolled into March
@@ -476,14 +538,14 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
       { poolId: P_NEW, referenceAsset: REF, collateralAsset: COL, expiry: "1800000000", rateOracle: ZERO, corkPrincipalToken: SHARES[P_NEW]!.cpt, corkSwapToken: SHARES[P_NEW]!.cst, poolManager: PRIMARY_PM, wire: "10-field", generation: "phoenix/v0.4-rc.1", blockNumber: "", txHash: "", emitter: PRIMARY_PM },
     ]);
   });
-  it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry — a bare digit string INCLUDED", () => {
+  it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry — a millisecond digit string INCLUDED", () => {
     const ok = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "2027-01-15T08:00:00Z" };
     const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(
-      [{ ...ok, poolManagerAddress: "0x9999999999999999999999999999999999999999" }, { ...ok, swapToken: undefined }, { ...ok, poolId: "0x1234" }, { ...ok, expiry: "someday" }, { ...ok, expiry: "1800000000" }, { ...ok, expiry: null }, ok],
+      [{ ...ok, poolManagerAddress: "0x9999999999999999999999999999999999999999" }, { ...ok, swapToken: undefined }, { ...ok, poolId: "0x1234" }, { ...ok, expiry: "someday" }, { ...ok, expiry: "1800000000000" }, { ...ok, expiry: null }, ok],
       emitters,
     );
     expect(rows.map((r) => r.poolId)).toEqual([P_NEW]);
-    expect(unreadableExpiry).toBe(3); // "someday", a bare digit string, null
+    expect(unreadableExpiry).toBe(3); // "someday", a 13-digit (millisecond) string, null
   });
 });
 
