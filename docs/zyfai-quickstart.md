@@ -1070,7 +1070,7 @@ active. `cork-cli` supports both at the same time so you can move funds:
   first when it does not exist. A cST holder rolls cover with a `rollover-intent`.
 - `--generation previous` (or `primary`, or a label) targets a set explicitly; the result always
   carries the resolved label. `ch capabilities --topic migration` has the recipe and the two
-  standing facts (the new registry holds no registered assets yet; the new set has no CREATE2
+  standing facts (the new registry holds registered assets since 2026-09-23 — read them with `ch query registry-assets`; the new set has no CREATE2
   attestation).
 
 ## 5. Risks & ownership

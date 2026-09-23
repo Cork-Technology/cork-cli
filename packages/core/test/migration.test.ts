@@ -555,7 +555,7 @@ describe("the `migration` doc topic", () => {
     expect(t).toBeDefined();
     for (const alias of ["migrate", "move-funds", "previous-generation"]) expect(findDocTopic(alias)?.name).toBe("migration");
     expect(DOC_TOPICS["migration"]).toBe(t);
-    for (const needle of ["`previous`", "`primary`", "unwind-deposit", "unwind-mint", "withdraw", "redeem", "withdraw-other", "create-pool", "rollover-intent", "cork_track", "deposit", "mint", "account-state", "no registered assets", "no CREATE2 attestation"]) {
+    for (const needle of ["`previous`", "`primary`", "unwind-deposit", "unwind-mint", "withdraw", "redeem", "withdraw-other", "create-pool", "rollover-intent", "cork_track", "deposit", "mint", "account-state", "registered assets since 2026-09-23", "no CREATE2 attestation"]) {
       expect(t.body).toContain(needle);
     }
   });

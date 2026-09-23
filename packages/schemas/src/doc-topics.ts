@@ -726,10 +726,11 @@ provenance of a prepared artifact is exact.
 
 ## Two standing facts (2026-09-22)
 
-- The primary's Market Registry (0.5.0) has **no registered assets** on chain yet. No market can
-  be created on the new set until the registry owner registers pairs — so \`create-pool\` and
-  every JIT order against the primary refuse until then, and the positions read shows nothing on
-  \`phoenix/v0.4-rc.1\`. Exit and re-entry on \`phoenix/v0.3-rc.1\` keep working meanwhile.
+- The primary's Market Registry (0.5.0) holds **registered assets since 2026-09-23** (the owner's
+  four Safe transactions executed on both chains: 14 assets on Base, 17 on Arbitrum, with address-keyed
+  denominations and USD conversion feeds). A market on the primary can be created by any JIT fill or
+  \`create-pool\`; the nested fill path was rehearsed against a fork of that LIVE state the same day
+  (no owner impersonation) and passed. Read the current rows with \`registry-assets\`.
 - The \`phoenix/v0.4-rc.1\` set has **no CREATE2 attestation** (the Distribution records carry no
   salt or init-code hash). Its trust anchor is the approved-implementations allowlist compiled
   into this build: a prepare against code that is not on the list warns

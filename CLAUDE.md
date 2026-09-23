@@ -554,7 +554,7 @@ maker-order + nested jitMarket (`extraDataLayout: verified-on-chain`, the deploy
 `decodeExtraData` read our bytes back field for field) → ERC-2612 permit over the predicted cST →
 the real LOP fill deployed the NAV oracle with our salt, created the 10-field pool at the predicted
 id with fees 1e18/5e17 as identity, JIT-minted the cST → readback PASS. The 0.5.0 registry holds
-ZERO assets on chain, so the script registers USDC + baseUSD as the registry owner (fork-only).
+ZERO assets on chain until 2026-09-23 (the owner's Safe txs then registered 14 on Base / 17 on Arbitrum), so the script registers USDC + baseUSD as the registry owner ONLY when the fork lacks them (guarded by isDenomination/isRegistered reads); against a fork of live state it registers nothing and still PASSES (2026-09-23, block 51685256).
 Two lessons in its header: (a) 0.5.0's address-keyed denominations need a USD PATH before an asset
 row is accepted (`UnregisteredDenomination`, then `NoConversionPathToUsd`); (b) a 1.0 anchor on an
 undeployed NAV pair builds a market the FILL rejects (`RecipeRejectedConstraint` from the creator,
