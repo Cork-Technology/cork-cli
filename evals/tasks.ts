@@ -810,7 +810,11 @@ export const TASKS: EvalTask[] = [
   // A caller-claimed orderHash that is WRONG — the tool recomputes and refuses to endorse it
   // [K3]. Grades whether a conflict verdict reaches the user instead of being smoothed over.
   { id: "ho-claimed-hash-conflict", heldOut: true, prompt: `Decode this Cork limit order on chain 1 and confirm its order hash is 0x1111111111111111111111111111111111111111111111111111111111111111 as my counterparty claims: ${JSON.stringify({ ...SIGNED_LOP_PAYLOAD.order, orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111" })}`, expect: { tool: "cork_decode", params: { kind: "order" }, state: "conflict", code: "order_hash_mismatch", answer: /(?=[\s\S]*(mismatch|does not match|not the|wrong|differs))(?=[\s\S]*(recomput|local|actual))/i, maxCalls: 3 } },
-  { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "pool_not_found", answer: /not exist|unknown|failed|revert|unavailable/i, maxCalls: 3 } },
+  // The answer axis grades the CONCEPT — the pool does not exist — not one spelling of it. The
+  // 0.6 message says the pool "is unknown to every pool manager asked"; agents paraphrase it as
+  // "unknown", "no such pool", "not a real pool", "a placeholder". Owner rulings 2026-09-23: grade
+  // the meaning; an answer that reports pool STATE still fails (none of these words appear there).
+    { id: "ho-nonexistent-pool", heldOut: true, prompt: "Read the live market state of Cork pool 0x1111111111111111111111111111111111111111111111111111111111111111.", expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "unavailable", code: "pool_not_found", answer: /not exist|not found|no such|not (?:a )?(?:real|valid|known|live|configured) (?:cork )?pool|unknown|placeholder|failed|revert|unavailable/i, maxCalls: 3 } },
   {
     // Held-out (written 2026-09-02 alongside the ladder; the descriptions were NOT tuned against
     // it). The policy decision hidden in plain words: "if the exclusive one fills, the public one
