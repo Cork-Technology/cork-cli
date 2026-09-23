@@ -125,7 +125,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "mixed",
     contract:
       "the thing asked about does not exist where authority was consulted — a NORMAL outcome, not an error (order_not_found also rides ok as info when track's chain sweep reconstructs a venue-archived digest; unknown_target is decode's do-not-broadcast-unidentified caution)",
-    codes: ["order_not_found", "receipt_not_found", "rfq_not_found", "pool_not_found", "asset_not_found", "recipe_not_found", "denomination_not_found", "feed_not_found", "unknown_target", "unknown_topic"],
+    codes: ["order_not_found", "receipt_not_found", "rfq_not_found", "pool_not_found", "asset_not_found", "recipe_not_found", "denomination_not_found", "feed_not_found", "unknown_target", "foreign_extension_target", "unknown_topic"],
   },
   {
     family: "domain terms",

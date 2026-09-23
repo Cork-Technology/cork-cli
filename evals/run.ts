@@ -59,6 +59,8 @@ export interface TraceCall {
   invalid?: boolean | undefined;
 }
 interface TaskResult {
+  /** set when the model ended a turn with no tool use and no text — infrastructure, not the agent */
+  emptyTurn?: { stopReason: string; blocks: string };
   task: EvalTask;
   ok: boolean;
   toolPick: boolean;
@@ -223,6 +225,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
   let cacheReadTokens = 0;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task.prompt }];
   let finalText = "";
+  let emptyTurn: { stopReason: string; blocks: string } | undefined;
 
   for (let i = 0; i < MAX_LOOP; i++) {
     const response = await withCapacityRetry(() => client.messages.create({
@@ -241,6 +244,19 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
 
     const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
     finalText = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n");
+    // An EMPTY model turn — no tool use, no text — has two very different causes and the row
+    // must say which: `max_tokens` with only a thinking block means the model spent its whole
+    // output budget planning and never acted (2026-09-23: chain-derive-then-prepare t0, 16,000
+    // tokens of thinking, byte-identical across runs — a PROMPT that sends the model into an
+    // unbounded plan, fixed by tightening the prompt, never by raising the cap); any other stop
+    // with empty content is infrastructure (a gateway returning nothing, a truncated stream).
+    // Grading it as a silent miss hid the class; the grade still counts it, the row names it.
+    if (toolUses.length === 0 && finalText.trim() === "") {
+      const blocks = response.content.map((b) => b.type).join(",") || "none";
+      const why = response.stop_reason === "max_tokens" ? "the model exhausted its output budget without acting — a prompt that invites an unbounded plan" : "no content returned — infrastructure";
+      emptyTurn = { stopReason: String(response.stop_reason), blocks };
+      console.error(`      EMPTY MODEL TURN on ${task.id}: stop_reason=${emptyTurn.stopReason} content=[${blocks}] input_tokens=${String(u.input_tokens)} — ${why}`);
+    }
     if (response.stop_reason !== "tool_use" || toolUses.length === 0) break;
 
     messages.push({ role: "assistant", content: response.content });
@@ -262,7 +278,7 @@ async function runTask(client: Anthropic, task: EvalTask): Promise<TaskResult> {
     messages.push({ role: "user", content: results });
   }
 
-  return { task, ...gradeTask(task, trace, finalText), calls: trace.length, tokens, cacheReadTokens, finalText, trace };
+  return { task, ...gradeTask(task, trace, finalText), calls: trace.length, tokens, cacheReadTokens, finalText, trace, ...(emptyTurn ? { emptyTurn } : {}) };
 }
 
 function pct(n: number, d: number): string {
@@ -315,7 +331,7 @@ async function main() {
       results.push(r);
       const flag = r.ok ? "PASS" : "FAIL";
       console.log(
-        `${flag}  ${task.id}${task.heldOut ? " [held-out]" : ""}${TRIALS > 1 ? ` t${trial}` : ""}  tool:${r.toolPick ? "✓" : "✗"} params:${r.paramsOk ? "✓" : "✗"} state:${r.statePass ? "✓" : "✗"} answer:${r.answerPass ? "✓" : "✗"} calls:${r.calls}${r.efficient ? "" : "(over)"}${r.safe ? "" : " FORBIDDEN-CALL"}${r.stepsRan ? "" : " STEP-MISSING"} tokens:${r.tokens}${r.recovered !== undefined ? ` recovered:${r.recovered ? "✓" : "✗"}` : ""}`,
+        `${flag}  ${task.id}${task.heldOut ? " [held-out]" : ""}${TRIALS > 1 ? ` t${trial}` : ""}  tool:${r.toolPick ? "✓" : "✗"} params:${r.paramsOk ? "✓" : "✗"} state:${r.statePass ? "✓" : "✗"} answer:${r.answerPass ? "✓" : "✗"} calls:${r.calls}${r.efficient ? "" : "(over)"}${r.safe ? "" : " FORBIDDEN-CALL"}${r.stepsRan ? "" : " STEP-MISSING"} tokens:${r.tokens}${r.recovered !== undefined ? ` recovered:${r.recovered ? "✓" : "✗"}` : ""}${r.emptyTurn ? ` EMPTY-TURN(${r.emptyTurn.stopReason})` : ""}`,
       );
       if (!r.ok) console.log(`      trace: ${r.trace.map(traceCell).join(" , ")}\n      answer: ${r.finalText.slice(0, 160)}`);
     }

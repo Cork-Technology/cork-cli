@@ -16,6 +16,8 @@
 // The ranked view is computed over the rows it is GIVEN (one bounded venue walk); it does not
 // re-page. Group death is invisible to the venue: a rung whose sibling filled reads OPEN here
 // until the chain says otherwise, which is why the hybrid liveness leg runs before this.
+import { describeForeignTargets, extensionTargets, foreignExtensionTargets } from "./extension-targets.ts";
+import type { ResolvedGeneration } from "./generations.ts";
 import { decodeMakerTraits, hashLopOrder, isAllowedSender, type LopOrder, lopInvalidatorPlan } from "./orders.ts";
 import { auctionPhase, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "./fusion.ts";
 import { parseSignedLopOrder, type SignedLopOrder } from "./datasources/venue.ts";
@@ -50,7 +52,7 @@ export type RankedRow = BookRow & { rank: number; fillable: true; price: RankedP
  *  currently reverts or silently moves nothing (the maker's side cannot deliver), yet the maker
  *  can fix it without re-signing — so the row is excluded with the evidence, never dropped.
  *  The others describe an order that is dead or unreadable. */
-export type BookExclusion = "reserved-for-other" | "expired" | "venue-status" | "unparseable" | "zero-amount" | "maker-not-ready";
+export type BookExclusion = "reserved-for-other" | "expired" | "venue-status" | "unparseable" | "zero-amount" | "maker-not-ready" | "foreign-hook";
 export type ExcludedRow = BookRow & { fillable: false; exclusion: BookExclusion; whyNotFillable: string };
 
 export interface RankOptions {
@@ -61,6 +63,11 @@ export interface RankOptions {
    *  whether they are fillable. */
   account?: `0x${string}` | undefined;
   nowSeconds: bigint;
+  /** The chain's generations — every extension call target is classified against them (a hook
+   *  or getter that is neither a configured JIT adapter nor the pinned Fusion settlement excludes
+   *  the row as `foreign-hook`: a fill would run unknown code in the taker's transaction).
+   *  Omitted = no classification (offline callers), rows ranked on price alone. */
+  generations?: readonly ResolvedGeneration[] | undefined;
   /** Parse results the hybrid verifier already produced, keyed by lowercase order hash: a row
    *  found here is not parsed or hashed again (same bytes, same verdict), and its maker-side
    *  readiness verdict (when the verifier's chain leg produced one) drives the maker-not-ready
@@ -138,6 +145,13 @@ export function rankBookRows(rows: readonly BookRow[], opts: RankOptions): RankR
       continue;
     }
     const { order, extension } = parsed.value;
+    if (opts.generations !== undefined) {
+      const foreign = foreignExtensionTargets(extensionTargets(extension, opts.generations, opts.chainId));
+      if (foreign.length > 0) {
+        exclude(row, "foreign-hook", `the signed extension makes the LOP call ${String(foreign.length)} contract(s) matching no configured generation and not the pinned Fusion settlement (${describeForeignTargets(foreign)}) — a fill would execute unknown code inside the taker's transaction; not ranked, and taker-fill refuses it`);
+        continue;
+      }
+    }
     const hash = pre ? pre.localHash.toLowerCase() : hashLopOrder(opts.chainId, opts.lop, order).toLowerCase();
     const status = str(row.status)?.toUpperCase();
     if (status !== undefined && status !== "OPEN" && status !== "PARTIALLY_FILLED") {

@@ -5,6 +5,7 @@ import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "
 import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type DecodedMakerTraits, type LopOrder } from "../orders.ts";
 import { type decodeJitExtraData, jitExtensionTarget, type ResolvedConstraint } from "../market-registry.ts";
 import { decodeJitExtensionFor } from "../jit-extension.ts";
+import { type ExtensionTarget, extensionTargets, foreignExtensionTargets } from "../extension-targets.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
@@ -151,8 +152,12 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
  *  a Cork-native auction order composes both (amount getters + JIT preInteraction in one blob)
  *  and a taker needs to see both commitments. Shared by kind:"order" and by the fill legs of
  *  kind:"tx" / kind:"calldata", so a signed fill reads exactly like the order it fills. */
-export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | undefined, chainId: ChainId, jitTrust: JitTrustTargets = {}): { fusion?: FusionLabel; jit?: JitLabel } {
+export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | undefined, chainId: ChainId, jitTrust: JitTrustTargets = {}, generations?: readonly ResolvedGeneration[]): { fusion?: FusionLabel; jit?: JitLabel; targets?: ExtensionTarget[]; foreignTargets?: ExtensionTarget[] } {
   if (extension === undefined || extension === "0x") return {};
+  // Every call target, classified (2026-09-23): a taker reads WHICH contracts the fill will call
+  // and which of them nobody here has read.
+  const targets = generations ? extensionTargets(extension, generations, chainId) : [];
+  const foreignTargets = foreignExtensionTargets(targets);
   // Fusion: when the extension carries an auction amount-getter, summarize it.
   let fusion: FusionLabel | undefined;
   try {
@@ -254,7 +259,7 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
   } catch {
     /* not a JIT extension — no label */
   }
-  return { ...(fusion ? { fusion } : {}), ...(jit ? { jit } : {}) };
+  return { ...(fusion ? { fusion } : {}), ...(jit ? { jit } : {}), ...(targets.length > 0 ? { targets } : {}), ...(foreignTargets.length > 0 ? { foreignTargets } : {}) };
 }
 
 /** What the decode handler attaches to a 1inch fill/cancel leg once the chain is known: the
@@ -283,7 +288,7 @@ export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId, jitTrust: Jit
       label: {
         orderHash: lop ? hashLopOrder(chainId, lop, order) : null,
         makerTraits: decodeMakerTraits(order.makerTraits),
-        ...labelOrderExtension(order, args.extension, chainId, jitTrust),
+        ...labelOrderExtension(order, args.extension, chainId, jitTrust, jitTrust.generations),
       },
     };
   });
@@ -401,7 +406,7 @@ export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ct
     warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash is CHAIN-SPECIFIC (the same order bytes hash differently per chain); pass chainId if this order rests on another chain (e.g. 42161)" });
   }
   const { jitTrust } = await resolveDecodeTrust(ctx, chainId);
-  const { fusion, jit } = labelOrderExtension(order, extension, chainId, jitTrust);
+  const { fusion, jit, targets, foreignTargets } = labelOrderExtension(order, extension, chainId, jitTrust, jitTrust.generations);
   if (jit?.verification === "mismatch") {
     warnings.push({ code: "target_mismatch", message: `the JIT preInteraction targets adapter ${jit.adapter}, but no generation on this chain configures that adapter (the primary's is ${jit.expectedAdapter}) — a fill would run a maker-chosen hook that is NOT Cork's adapter, whatever the payload claims. Do not fill` });
   } else if (jit?.verification === "unverified") {
@@ -417,6 +422,8 @@ export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ct
     ...(extension !== undefined ? { extension } : {}),
     ...(fusion ? { fusion } : {}),
     ...(jit ? { jit } : {}),
+    ...(targets && targets.length > 0 ? { targets } : {}),
+    ...(foreignTargets && foreignTargets.length > 0 ? { foreignTargets } : {}),
   };
   // Extension binding: OrderLib enforces salt.low160 == keccak256(extension).low160 at fill.
   let saltBinding: { saltBoundToExtension: true } | undefined;

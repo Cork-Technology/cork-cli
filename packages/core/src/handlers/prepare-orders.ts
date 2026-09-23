@@ -1,5 +1,6 @@
 // Split from handlers.ts (2026-08-05): prepare-orders handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
+import { describeForeignTargets, extensionTargets, foreignExtensionTargets } from "../extension-targets.ts";
 import { isAddressEqual, zeroHash } from "viem";
 import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
@@ -1026,6 +1027,28 @@ async function buildTakerFillArtifact(a: {
     }
     if (action.interaction !== undefined || action.jitMarket !== undefined) {
       throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.interaction !== undefined ? "interaction" : "jitMarket"], message: "forSelf cannot carry a taker interaction — the wrapper zeroes the interaction-length bits by design (a mid-fill callee while it holds a live allowance would defeat its custody model). Lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path" }]);
+    }
+  }
+  // FOREIGN extension targets (owner requirement 2026-09-23): the signed extension names every
+  // contract the LOP will CALL inside the taker's transaction — the amount getters that set the
+  // price, the maker's pre- and post-interaction hooks. A target that is neither a configured
+  // generation's JIT adapter nor the release-pinned Fusion settlement is code nobody here has
+  // read, executing on the taker's gas with the taker's funds in motion. The venue is discovery,
+  // not authority, so such a row is REFUSED — no fill bytes, on the raw path and the ForSelf path
+  // alike (the wrapper still passes the extension to the LOP). Not build-and-warn: an explicit cap
+  // bounds an unknown GETTER's charge but says nothing about what an unknown HOOK does.
+  {
+    const targets = extensionTargets(signed.extension ?? "0x", (await resolveGenerations(chainId)).generations, chainId);
+    const foreign = foreignExtensionTargets(targets);
+    if (foreign.length > 0) {
+      return envelope({
+        state: "unavailable",
+        data: { orderHash: action.orderHash, extensionTargets: targets, foreign },
+        chainId,
+        source: "service",
+        warnings: [{ code: "foreign_extension_target", message: `the resting order's extension makes the LOP call ${String(foreign.length)} contract(s) that match no configured Cork generation and are not the pinned Fusion settlement: ${describeForeignTargets(foreign)}. Filling would execute unknown code inside YOUR transaction, so no fill bytes were built. Decode the order (cork_decode kind:"order") to inspect it; if the maker is trusted and the contract is known to you, fill through your own tooling — this tool will not build the bytes.` }],
+        ctx,
+      });
     }
   }
   // Taker-side JIT: build the interaction bytes with the full pre-flight ladder.

@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING } from "./stub.ts";
+import { CST, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -583,5 +583,35 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     );
     expect(env.state).toBe("ok");
     expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+  });
+});
+
+describe("eval task fixtures — coverage gaps closed 2026-09-23 (generation alias on a prepare, venue-free pledge, a chained flow, the conflict family, the foreign-hook refusal)", () => {
+  const T = (id: string) => TASKS.find((t) => t.id === id)!;
+  it("generation-previous-prepare: the authority op builds under `previous` and names phoenix/v0.3-rc.1", async () => {
+    const env = await runTool("cork_prepare_phoenix", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-gen-prev-0001", generation: "previous", action: { type: "authority-onboard", token: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", spender: MIGRATION_OLD_PM }, format: "concise" }, stubContext());
+    expect(env.state).toBe(T("generation-previous-prepare").expect.state);
+    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+  });
+  it("mode-venue-free-pools: cork-pools under full-decentralized serves from the stub's log source and says so", async () => {
+    const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, stubContext());
+    expect(env.state).toBe("ok");
+    expect(env.provenance.mode).toBe("full-decentralized");
+  });
+  it("conflict-finalize-bad-signature: the tampered signature is refused signature_or_reconstruction_mismatch", async () => {
+    const env = await runTool("cork_prepare_orders", { chainId: 1, account: DEMO_ACCOUNT, clientRequestId: FINALIZE_REQUEST_ID, action: { type: "finalize-maker-order", prepared: PREPARED_MAKER_ORDER as never, signature: TAMPERED_FINALIZE_SIGNATURE, listing: { side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: PREPARED_MAKER_ORDER.nonce, allowsPartialFills: true } }, format: "concise" }, stubContext());
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.map((w) => w.code)).toContain("signature_or_reconstruction_mismatch");
+  });
+  it("conflict-listing-nonce: a listing nonce contradicting the signed makerTraits is refused listing_traits_mismatch and never relayed", async () => {
+    const env = await runTool("cork_submit", { chainId: 1, clientRequestId: "eval-lopsub-0002", action: { type: "lop-order", ...SIGNED_LOP_PAYLOAD, side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: "7777", allowsPartialFills: true }, format: "concise" }, stubContext());
+    expect(env.state).toBe("conflict");
+    expect(env.warnings.map((w) => w.code)).toContain("listing_traits_mismatch");
+  });
+  it("safety-foreign-hook-fill: a stranger postInteraction hook is refused foreign_extension_target with no calldata", async () => {
+    const env = await runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-foreign-0001", action: { type: "taker-fill", orderHash: FOREIGN_HOOK_SIGNED_ORDER.orderHash, signedOrder: FOREIGN_HOOK_SIGNED_ORDER.signedOrder }, format: "concise" }, stubContext());
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("foreign_extension_target");
+    expect(env.data).not.toHaveProperty("calldata");
   });
 });

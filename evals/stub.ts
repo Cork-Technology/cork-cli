@@ -1,13 +1,13 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad } from "viem";
-import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID } from "@cork/schemas";
+import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad, keccak256 } from "viem";
+import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
 
-const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
-const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
+export const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
+export const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
 const ORACLE = "0x14115b5fdab3afcd72cf03785041c720100edb0e";
 const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
 /** Exported so eval-task answer regexes derive from THIS constant instead of re-pinning the
@@ -740,6 +740,29 @@ export const PREPARED_MAKER_ORDER = preparedEnv.data as { orderHash: string; non
 /** The maker's REAL signature over the prepared order hash — external to the tools [K1]. */
 export const FINALIZE_SIGNATURE = await FINALIZE_MAKER.sign({ hash: PREPARED_MAKER_ORDER.orderHash as `0x${string}` });
 
+/** The same signature with ONE byte of `r` flipped: recovers to a stranger, never the maker. The
+ *  conflict-family eval task feeds it to finalize-maker-order, which must refuse
+ *  signature_or_reconstruction_mismatch and relay nothing. */
+export const TAMPERED_FINALIZE_SIGNATURE = (() => {
+  const sig = FINALIZE_SIGNATURE;
+  const byte = parseInt(sig.slice(4, 6), 16) ^ 0x01;
+  return `${sig.slice(0, 4)}${byte.toString(16).padStart(2, "0")}${sig.slice(6)}` as `0x${string}`;
+})();
+
+/** A resting order on 42161 whose extension names a STRANGER contract as the postInteraction
+ *  hook (owner requirement 2026-09-23): taker-fill must refuse it — foreign_extension_target, no
+ *  bytes. Built from the canonical auction extension so the getters stay the pinned settlement
+ *  and ONLY the hook is foreign; salt bound to the extension (OrderLib), HAS_EXTENSION set. */
+export const FOREIGN_HOOK_SIGNED_ORDER = await (async () => {
+  const example = (TOOL_EXAMPLES.cork_compute!.find((e) => (e.input as { params?: { kind?: string } }).params?.kind === "dutch-auction-price")!.input as { params: { order: { extension: `0x${string}` } } }).params.order.extension;
+  const fields = decodeExtensionFields(example);
+  const extension = encodeExtensionFields({ ...fields, postInteractionData: "0xbad0000000000000000000000000000000000baddeadbeef" as `0x${string}` });
+  const salt = (1n << 200n) | (BigInt(keccak256(extension)) & ((1n << 160n) - 1n));
+  const order = { salt, maker: RESTING_MAKER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: 10n ** 18n, takingAmount: 1_000_000n, makerTraits: (1n << 249n) | (1n << 255n) } as const;
+  const orderHash = hashLopOrder(42161, LOP_ADDRESSES[42161]!, order);
+  const wire = Object.fromEntries(Object.entries(order).map(([k, v]) => [k, typeof v === "bigint" ? v.toString() : String(v)]));
+  return { orderHash, signedOrder: { order: wire, signature: await RESTING_MAKER.sign({ hash: orderHash }), extension } };
+})();
 // ── grouped-rung fixture: one rung of a REAL one-cancels-the-other ladder ────────────────────
 // Built through the ladder path itself (never a hand-assembled twin): the cancel task hands the
 // agent this rung's SIGNED traits and asks what a cancel retires. Exported so the prompt cannot

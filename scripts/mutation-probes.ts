@@ -81,6 +81,7 @@ const T = {
   poolgen: "packages/core/test/pool-generation.test.ts",
   migration: "packages/core/test/migration.test.ts",
   instant: "packages/schemas/test/instant.test.ts",
+  foreignHook: "packages/core/test/foreign-extension-targets.test.ts",
   predictReason: "packages/core/test/predict-shares-reason.test.ts",
   attribution: "packages/core/test/event-attribution.test.ts",
   selfUpdateIdentity: "packages/cli/test/self-update-identity.test.ts",
@@ -5574,9 +5575,52 @@ const CATALOG: Mutant[] = [
     // the cork-pools scan whose identity it claims to share.
     id: "mig-sweep-cache-stripped",
     file: "packages/core/src/handlers/query.ts",
-    find: "      const run = await runScanWithTail(ctx, chainId, hs, spec);\n      if (run.tail.status === \"error\") warnings.push({ code: \"live_tail_unavailable\", message: run.tail.message });\n      return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };",
-    replace: "      const { cache: _c, ...uncached } = spec;\n      const run = await runScanWithTail(ctx, chainId, hs, uncached);\n      if (run.tail.status === \"error\") warnings.push({ code: \"live_tail_unavailable\", message: run.tail.message });\n      return { rows: run.rows as unknown as MarketRow[], complete: run.complete, warnings, source };",
+    find: "        run = await runScanWithTail(ctx, chainId, hs, spec);\n      } catch (err) {",
+    replace: "        const { cache: _c, ...uncached } = spec;\n        run = await runScanWithTail(ctx, chainId, hs, uncached);\n      } catch (err) {",
     tests: [T.migration],
+  },
+  {
+    // The fill guard dropped: a stranger's postInteraction hook builds fill bytes — unknown code
+    // runs inside the taker's transaction (owner requirement 2026-09-23).
+    id: "foreign-hook-fill-guard-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "    if (foreign.length > 0) {\n      return envelope({\n        state: \"unavailable\",\n        data: { orderHash: action.orderHash, extensionTargets: targets, foreign },",
+    replace: "    if (false) {\n      return envelope({\n        state: \"unavailable\",\n        data: { orderHash: action.orderHash, extensionTargets: targets, foreign },",
+    tests: [T.foreignHook],
+  },
+  {
+    // Hooks no longer count as foreign (only getters would): the guard is silently hollow.
+    id: "foreign-hook-slots-not-hooks",
+    file: "packages/core/src/extension-targets.ts",
+    find: "  return targets.filter((t) => t.classification === \"unknown\" && (t.slot === \"preInteraction\" || t.slot === \"postInteraction\"));",
+    replace: "  return targets.filter((t) => t.classification === \"unknown\" && (t.slot === \"makingAmountGetter\" || t.slot === \"takingAmountGetter\"));",
+    tests: [T.foreignHook],
+  },
+  {
+    // Address-book membership instead of the jitAdapter ROLE: a pool manager named as a hook
+    // passes as known.
+    id: "foreign-hook-role-check-dropped",
+    file: "packages/core/src/extension-targets.ts",
+    find: "    const cork = classifyAddress(generations, address).filter((c) => c.role === \"jitAdapter\");",
+    replace: "    const cork = classifyAddress(generations, address);",
+    tests: [T.foreignHook],
+  },
+  {
+    // The case fold dropped: a mis-cased stranger hook fails viem's checksum and reads as NO
+    // target — the guard never sees it.
+    id: "foreign-hook-case-fold-dropped",
+    file: "packages/core/src/extension-targets.ts",
+    find: "  const raw = `0x${field.slice(2, 42).toLowerCase()}`;",
+    replace: "  const raw = `0x${field.slice(2, 42)}`;",
+    tests: [T.foreignHook],
+  },
+  {
+    // The ranked book stops excluding: a foreign-hook row is ranked as fillable.
+    id: "foreign-hook-book-exclusion-dropped",
+    file: "packages/core/src/orders-rank.ts",
+    find: "      if (foreign.length > 0) {\n        exclude(row, \"foreign-hook\",",
+    replace: "      if (false) {\n        exclude(row, \"foreign-hook\",",
+    tests: [T.foreignHook],
   },
   {
     // The zone made optional (an EMPTY alternative): a zone-less ISO string reaches Date.parse,
