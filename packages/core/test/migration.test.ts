@@ -13,7 +13,7 @@ import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
 import { BUNDLED_DEFAULTS, generationsOf, GENERATION_ALIASES, type HandlerContext, resolveGenerationAlias, runTool, selectGeneration, ToolInputError } from "@cork/core";
 import { stubResolved } from "./helpers.ts";
-import { venueExpirySeconds, venuePoolRowsToMarketRows } from "../src/handlers/query-positions.ts";
+import { expiryIsoOfSeconds, venueExpiry, venuePoolRowsToMarketRows } from "../src/handlers/query-positions.ts";
 
 const NOW = 1_753_000_000n;
 const CHAIN = 42161;
@@ -138,7 +138,7 @@ type PositionsData = {
   account: string;
   generations: Array<{ label: string; status: string }>;
   scanned: { managers: number; pools: number; complete: boolean; source: string };
-  positions: Array<{ generation: { label: string }; poolId: string; expired: boolean; balances: { corkSwapToken: string; corkPrincipalToken: string }; corkSwapToken: string; corkPrincipalToken: string; expiryTimestamp: string }>;
+  positions: Array<{ generation: { label: string }; poolId: string; expired: boolean; expiry: string; balances: { corkSwapToken: string; corkPrincipalToken: string }; corkSwapToken: string; corkPrincipalToken: string; expiryTimestamp: string }>;
   byGeneration: Array<{ label: string; pools: number; corkSwapTokenTotal: string; corkPrincipalTokenTotal: string }>;
   scales: Record<string, string>;
   generation?: unknown;
@@ -240,7 +240,7 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
       [P_EXPIRED, "phoenix/v0.3-rc.1", true],
       [P_NEW, "phoenix/v0.4-rc.1", false],
     ]);
-    expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString(), balances: { corkSwapToken: (5n * WAD).toString(), corkPrincipalToken: (5n * WAD).toString() } });
+    expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString(), expiry: expiryIsoOfSeconds(NOW + 86_400n), balances: { corkSwapToken: (5n * WAD).toString(), corkPrincipalToken: (5n * WAD).toString() } });
     expect(d.positions[1]!.balances).toEqual({ corkSwapToken: "0", corkPrincipalToken: (7n * WAD).toString() });
     const S = (n: bigint) => n.toString();
     expect(d.byGeneration).toEqual([
@@ -363,15 +363,18 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     expect(w?.message).toContain("pageSize");
     expect(w?.message).toContain("maxPages");
   });
-  it("a venue row whose expiry is neither seconds nor ISO-8601 is skipped and DISCLOSED, never thrown on; a digits-only expiry passes verbatim", async () => {
-    const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: (NOW - 3_600n).toString() }, VENUE_ROWS[2]!];
+  it("a venue row whose expiry is not strict ISO-8601 is skipped and DISCLOSED, never thrown on — bare digits included; an explicit offset is canonicalised", async () => {
+    // "next tuesday" and a BARE DIGIT string are both refused (seconds or milliseconds is
+    // undecidable); an explicit-offset ISO string is accepted and canonicalised.
+    const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: (NOW - 3_600n).toString() }, { ...VENUE_ROWS[2]!, expiry: new Date(Number(NOW + 86_400n) * 1000).toISOString().replace("Z", "+00:00") }];
     const env = await positions(ctxFor([], { venueFetch: venueOf([], rows) }), undefined, "hybrid");
     expect(env.state).toBe("ok");
     const d = env.data as PositionsData;
-    expect(d.scanned).toMatchObject({ pools: 2, complete: true });
-    expect(d.positions.map((p) => [p.poolId, p.expired])).toEqual([[P_EXPIRED, true], [P_NEW, false]]);
+    expect(d.scanned).toMatchObject({ pools: 1, complete: true });
+    expect(d.positions.map((p) => [p.poolId, p.expired, p.expiry])).toEqual([[P_NEW, false, expiryIsoOfSeconds(NOW + 86_400n)]]);
     const w = env.warnings.find((x) => x.code === "invalid_service_response");
-    expect(w?.message).toContain("1 venue pool row(s)");
+    expect(w?.message).toContain("2 venue pool row(s)");
+    expect(w?.message).toContain("strict ISO-8601");
   });
   it("the sweep shares the cork-pools scan's incremental cursor: a second read resumes past the watermark (minus the reorg overlap) and answers the same positions", async () => {
     // The scan cache is keyed by the CORK_SCAN_CACHE_FILE variable; point it at a private file
@@ -429,16 +432,43 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
     { poolManager: V03_PM, wire: "8-field" as const, label: "phoenix/v0.3-rc.1" },
     { poolManager: PRIMARY_PM, wire: "10-field" as const, label: "phoenix/v0.4-rc.1" },
   ];
-  it("venueExpirySeconds: ISO-8601 → floored seconds; digits verbatim; a finite number floored; anything else undefined", () => {
-    expect(venueExpirySeconds("2026-08-10T12:30:00.000Z")).toBe("1786365000");
-    expect(venueExpirySeconds("2026-08-10T12:30:00.999Z")).toBe("1786365000");
-    expect(venueExpirySeconds("1786365000")).toBe("1786365000");
-    expect(venueExpirySeconds(1786365000.7)).toBe("1786365000");
-    for (const bad of ["", "next tuesday", -1, Number.NaN, null, undefined, {}]) expect(venueExpirySeconds(bad)).toBeUndefined();
+  it("venueExpiry accepts ONLY strict ISO-8601 with an explicit zone, canonicalises to UTC second precision, and derives the seconds from the canonical instant", () => {
+    expect(venueExpiry("2026-08-10T12:30:00.000Z")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+    expect(venueExpiry("2026-08-10T12:30:00Z")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+    // A sub-second fraction is dropped (chain expiry is an integer second).
+    expect(venueExpiry("2026-08-10T12:30:00.999Z")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+    // An explicit offset is unambiguous and is canonicalised to Z: 14:30 at +02:00 IS 12:30Z.
+    expect(venueExpiry("2026-08-10T14:30:00+02:00")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+    expect(venueExpiry("2026-08-10T07:30:00-05:00")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
+  });
+  it("venueExpiry REFUSES every ambiguous or lenient shape Date.parse would have accepted", () => {
+    const refused: unknown[] = [
+      "2026-08-10T12:30:00", // no zone — Date.parse reads LOCAL time
+      "2026-08-10", // date only
+      "2026-08-10 12:30:00Z", // space separator
+      "2026-08-10T12:30Z", // no seconds
+      "1786365000", // bare digits: seconds or milliseconds? nobody can tell
+      "1786365000000",
+      1786365000, // a number
+      "Aug 10 2026 12:30:00 GMT", // natural-language / RFC-2822 forms
+      "next tuesday",
+      "2026-02-30T00:00:00Z", // invalid calendar date — refused, never rolled into March
+      "2026-13-01T00:00:00Z",
+      "2026-08-10T24:00:00Z",
+      "2026-08-10T12:60:00Z",
+      "", null, undefined, {},
+    ];
+    for (const v of refused) expect(venueExpiry(v), JSON.stringify(v)).toBeUndefined();
+  });
+  it("expiryIsoOfSeconds is the ONE canonical spelling both sources land on", () => {
+    expect(expiryIsoOfSeconds(1786365000n)).toBe("2026-08-10T12:30:00Z");
+    expect(expiryIsoOfSeconds(0n)).toBe("1970-01-01T00:00:00Z");
+    // A venue ISO string and the chain's seconds for the same instant produce the SAME text.
+    expect(venueExpiry("2026-08-10T14:30:00+02:00")!.iso).toBe(expiryIsoOfSeconds(1786365000n));
   });
   it("maps a live-shaped row (token OBJECTS, ISO expiry, string block number) and a bare-address row alike; attributes wire + generation from the emitter", () => {
     const live = { chainId: 8453, poolId: P_OLD, poolName: "x", expiry: "2026-08-10T12:30:00.000Z", deploymentBlockNumber: "49786153", deploymentTxHash: `0x${"ab".repeat(32)}`, poolManagerAddress: V03_PM.toLowerCase(), collateralToken: { address: COL, symbol: "sUSDe", decimals: 18 }, referenceToken: { address: REF, symbol: "mwUSDC", decimals: 18 }, principalToken: { address: SHARES[P_OLD]!.cpt, symbol: "cPT", decimals: 18 }, swapToken: { address: SHARES[P_OLD]!.cst, symbol: "cST", decimals: 18 }, rateOracleAddress: ORACLE };
-    const bare = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "1800000000" };
+    const bare = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "2027-01-15T08:00:00Z" };
     const { rows, unreadableExpiry } = venuePoolRowsToMarketRows([live, bare], emitters);
     expect(unreadableExpiry).toBe(0);
     expect(rows).toEqual([
@@ -446,14 +476,14 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
       { poolId: P_NEW, referenceAsset: REF, collateralAsset: COL, expiry: "1800000000", rateOracle: ZERO, corkPrincipalToken: SHARES[P_NEW]!.cpt, corkSwapToken: SHARES[P_NEW]!.cst, poolManager: PRIMARY_PM, wire: "10-field", generation: "phoenix/v0.4-rc.1", blockNumber: "", txHash: "", emitter: PRIMARY_PM },
     ]);
   });
-  it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry", () => {
-    const ok = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "1800000000" };
+  it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry — a bare digit string INCLUDED", () => {
+    const ok = { poolId: P_NEW, poolManagerAddress: PRIMARY_PM, swapToken: SHARES[P_NEW]!.cst, principalToken: SHARES[P_NEW]!.cpt, collateralToken: COL, referenceToken: REF, expiry: "2027-01-15T08:00:00Z" };
     const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(
-      [{ ...ok, poolManagerAddress: "0x9999999999999999999999999999999999999999" }, { ...ok, swapToken: undefined }, { ...ok, poolId: "0x1234" }, { ...ok, expiry: "someday" }, { ...ok, expiry: null }, ok],
+      [{ ...ok, poolManagerAddress: "0x9999999999999999999999999999999999999999" }, { ...ok, swapToken: undefined }, { ...ok, poolId: "0x1234" }, { ...ok, expiry: "someday" }, { ...ok, expiry: "1800000000" }, { ...ok, expiry: null }, ok],
       emitters,
     );
     expect(rows.map((r) => r.poolId)).toEqual([P_NEW]);
-    expect(unreadableExpiry).toBe(2);
+    expect(unreadableExpiry).toBe(3); // "someday", a bare digit string, null
   });
 });
 

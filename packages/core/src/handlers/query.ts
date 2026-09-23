@@ -840,7 +840,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       const traversal = await collectVenuePages({ maxPages: input.maxPages }, (cursor) => getPools(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       const { rows, unreadableExpiry } = venuePoolRowsToMarketRows(traversal.items, emitters);
       const warnings = venueNoticeWarnings(traversal);
-      if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is neither unix seconds nor an ISO-8601 timestamp — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });
+      if (unreadableExpiry > 0) warnings.push({ code: "invalid_service_response", message: `${String(unreadableExpiry)} venue pool row(s) carried an expiry that is not a strict ISO-8601 date-time with an explicit zone (YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)) — skipped from the sweep (a position on such a pool would be missing here; read it with filters.poolId)` });
       return { rows, complete: traversal.complete, warnings, source: "hybrid" as const };
     };
     const scanRows = async (emitters: readonly PositionsEmitter[]) => {

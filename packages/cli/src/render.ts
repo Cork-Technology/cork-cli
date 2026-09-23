@@ -128,9 +128,9 @@ function renderPositions(data: unknown, s: Style): string | undefined {
       const o = isPlainObject(r) ? r : {};
       const g = isPlainObject(o["generation"]) ? String(o["generation"]["label"] ?? "") : "";
       const b = isPlainObject(o["balances"]) ? o["balances"] : {};
-      return [g, String(o["poolId"] ?? ""), String(o["expiryTimestamp"] ?? ""), o["expired"] === true ? "expired" : "live", scalar(b["corkSwapToken"]), scalar(b["corkPrincipalToken"])];
+      return [g, String(o["poolId"] ?? ""), String(o["expiry"] ?? o["expiryTimestamp"] ?? ""), o["expired"] === true ? "expired" : "live", scalar(b["corkSwapToken"]), scalar(b["corkPrincipalToken"])];
     });
-    const header = ["generation", "poolId", "expiry", "state", "cST (18 dec)", "cPT (18 dec)"];
+    const header = ["generation", "poolId", "expiry (UTC)", "state", "cST (18 dec)", "cPT (18 dec)"];
     const widths = header.map((h, i) => Math.max(h.length, ...cells.map((c) => c[i]!.length)));
     const fmt = (c: string[]) => `  ${c.map((v, i) => v.padEnd(widths[i]!)).join("  ")}`.trimEnd();
     lines.push(s.dim(fmt(header)));

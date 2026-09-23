@@ -986,7 +986,8 @@ describe("ch --generation aliases and the positions read", () => {
     const r = await runCli(["query", "account-state", "--chain-id", "42161", "--account", DEMO_ACCOUNT], stubContext());
     expect(r.code).toBe(EXIT.ok);
     expect(r.stdout).toContain("positions (1)");
-    expect(r.stdout).toMatch(/generation\s+poolId\s+expiry\s+state\s+cST/);
+    expect(r.stdout).toMatch(/generation\s+poolId\s+expiry \(UTC\)\s+state\s+cST/);
+    expect(r.stdout).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/); // the canonical ISO form, not bare seconds
     expect(r.stdout).toContain("phoenix/v0.3-rc.1");
     expect(r.stdout).toContain(MIGRATION_OLD_POOL);
     expect(r.stdout).toContain("live");

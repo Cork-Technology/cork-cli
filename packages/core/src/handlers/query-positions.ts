@@ -49,18 +49,42 @@ export interface PositionsDeps {
   enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "lite-decentralized" | "hybrid" | "full-decentralized" }>;
 }
 
-/** The venue serves a pool's `expiry` as an ISO-8601 timestamp (`2026-08-10T12:30:00.000Z`,
- *  verified live 2026-09-22); the chain scan serves unix seconds. The sweep's rows are the scan's
- *  shape, so a venue expiry is normalised to decimal seconds here — an ISO string through
- *  Date.parse (floored to the second), a digits-only string or number verbatim, anything else
- *  undefined (the caller skips the row and discloses the count). The first live run against a real
- *  position threw `Failed to parse String to BigInt` on the ISO form. */
-export function venueExpirySeconds(v: unknown): string | undefined {
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return String(Math.floor(v));
-  if (typeof v !== "string" || v.length === 0) return undefined;
-  if (/^[0-9]+$/.test(v)) return v;
-  const ms = Date.parse(v);
-  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;
+/** Canonical expiry text: STRICT ISO-8601, UTC, second precision — `YYYY-MM-DDTHH:MM:SSZ`. One
+ *  spelling for every source (the chain's integer seconds, the venue's ISO strings), so two rows
+ *  naming the same instant compare equal as strings and a human reads a date beside the seconds. */
+export function expiryIsoOfSeconds(seconds: bigint): string {
+  return new Date(Number(seconds) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** The ONLY expiry shapes the venue boundary accepts (2026-09-23, owner ruling: normalise to a
+ *  strict, unambiguous ISO string): a full ISO-8601 date-time with a `T` separator, seconds, an
+ *  optional fraction, and an EXPLICIT zone — `Z` or `±HH:MM`. Everything else is refused as
+ *  unreadable: a date with no zone (`Date.parse` would read it as LOCAL time — the ambiguity),
+ *  a date-only string, a space separator, a bare digit string (seconds or milliseconds? — nobody
+ *  can tell), a number, or a natural-language date. The calendar is checked by round-trip: the
+ *  parsed instant must reproduce the date fields it was built from (`2026-02-30` is refused, not
+ *  rolled into March). A sub-second fraction is dropped: pool expiry is an integer second on
+ *  chain, and the venue's `.000` carries no information. */
+const STRICT_ISO = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
+export function venueExpiry(v: unknown): { iso: string; seconds: string } | undefined {
+  if (typeof v !== "string") return undefined;
+  const m = STRICT_ISO.exec(v);
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, sec, , zone] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string];
+  const canonicalInput = `${y}-${mo}-${d}T${h}:${mi}:${sec}${zone}`; // fraction dropped, zone kept
+  const ms = Date.parse(canonicalInput);
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  const date = new Date(ms);
+  // Round-trip the calendar fields in the INPUT's own zone by re-deriving the zone offset:
+  // an out-of-range field (month 13, day 30 of February, hour 24) parses to a shifted instant
+  // that no longer reproduces the fields — refuse, never roll over.
+  const offsetMin = zone === "Z" ? 0 : (zone.startsWith("-") ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
+  const local = new Date(ms + offsetMin * 60_000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  const rebuilt = `${String(local.getUTCFullYear()).padStart(4, "0")}-${two(local.getUTCMonth() + 1)}-${two(local.getUTCDate())}T${two(local.getUTCHours())}:${two(local.getUTCMinutes())}:${two(local.getUTCSeconds())}`;
+  if (rebuilt !== `${y}-${mo}-${d}T${h}:${mi}:${sec}`) return undefined;
+  const seconds = BigInt(Math.floor(date.getTime() / 1000));
+  return { iso: expiryIsoOfSeconds(seconds), seconds: seconds.toString() };
 }
 
 const Address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
@@ -99,7 +123,7 @@ export function venuePoolRowsToMarketRows(items: readonly Record<string, unknown
     const r = parsed.data;
     const e = byPm.get(r.poolManagerAddress.toLowerCase());
     if (!e) continue; // a manager no asked generation owns
-    const expiry = venueExpirySeconds(r.expiry);
+    const expiry = venueExpiry(r.expiry)?.seconds;
     if (expiry === undefined) {
       unreadableExpiry += 1;
       continue;
@@ -127,7 +151,10 @@ export interface AccountPosition {
   generation: GenerationRef;
   poolId: `0x${string}`;
   poolManager: `0x${string}`;
+  /** unix seconds, decimal — the chain's own integer */
   expiryTimestamp: string;
+  /** the same instant as strict ISO-8601 UTC, second precision (`YYYY-MM-DDTHH:MM:SSZ`) */
+  expiry: string;
   expired: boolean;
   collateralAsset: `0x${string}`;
   referenceAsset: `0x${string}`;
@@ -174,6 +201,7 @@ export async function sweepPositions(
       poolId: m.poolId as `0x${string}`,
       poolManager: m.poolManager as `0x${string}`,
       expiryTimestamp: m.expiry,
+      expiry: expiryIsoOfSeconds(expiry),
       // Phoenix's own gate is `block.timestamp >= expiry` for the post-expiry settles: AT the
       // boundary second the pool is expired.
       expired: nowSecs >= expiry,
@@ -271,6 +299,7 @@ export async function handleAccountPositions(
     const byGeneration = summarizeByGeneration(asked, positions);
     const scales = {
       balances: "cST / cPT share balances in 18-decimal share units (every generation's share tokens are 18 decimals) — collateral/reference balances are per-token, not per-position: read them with filters.poolId",
+      expiry: "expiryTimestamp is unix SECONDS (the chain's integer); expiry is the same instant as strict ISO-8601 UTC at second precision (YYYY-MM-DDTHH:MM:SSZ) — one spelling for every source",
       byGeneration: "corkSwapTokenTotal / corkPrincipalTokenTotal: exact sums of 18-decimal shares across the generation's pools",
       unitsTopic: UNITS_TOPIC_REFERENCE,
     };

@@ -5578,12 +5578,37 @@ const CATALOG: Mutant[] = [
     tests: [T.migration],
   },
   {
-    // The venue's ISO-8601 expiry passed through unparsed: the live shape (verified 2026-09-22)
-    // threw `Failed to parse String to BigInt` on the first account with a real position.
-    id: "mig-venue-iso-expiry-unparsed",
+    // The zone made optional (an EMPTY alternative): a zone-less ISO string reaches Date.parse,
+    // which reads it as LOCAL time — the ambiguity the strict parser exists to refuse.
+    id: "mig-venue-iso-zone-optional",
     file: "packages/core/src/handlers/query-positions.ts",
-    find: "  const ms = Date.parse(v);\n  return Number.isFinite(ms) ? String(Math.floor(ms / 1000)) : undefined;",
-    replace: "  return v;",
+    find: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})$/;",
+    replace: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2}|)$/;",
+    tests: [T.migration],
+  },
+  {
+    // The calendar round-trip dropped: 2026-02-30 rolls into March instead of being refused.
+    id: "mig-venue-iso-calendar-unchecked",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "  if (rebuilt !== `${y}-${mo}-${d}T${h}:${mi}:${sec}`) return undefined;",
+    replace: "",
+    tests: [T.migration],
+  },
+  {
+    // The canonical form loses its second-precision normalisation: two sources spell one instant
+    // two ways ("…:00.000Z" vs "…:00Z").
+    id: "mig-expiry-iso-not-canonical",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "  return new Date(Number(seconds) * 1000).toISOString().replace(/\\.\\d{3}Z$/, \"Z\");",
+    replace: "  return new Date(Number(seconds) * 1000).toISOString();",
+    tests: [T.migration],
+  },
+  {
+    // Bare digits accepted again as seconds — an ambiguous shape (seconds vs milliseconds).
+    id: "mig-venue-digits-accepted",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "  if (typeof v !== \"string\") return undefined;\n  const m = STRICT_ISO.exec(v);\n  if (!m) return undefined;",
+    replace: "  if (typeof v !== \"string\") return undefined;\n  if (/^[0-9]+$/.test(v)) return { iso: expiryIsoOfSeconds(BigInt(v)), seconds: v };\n  const m = STRICT_ISO.exec(v);\n  if (!m) return undefined;",
     tests: [T.migration],
   },
   {
