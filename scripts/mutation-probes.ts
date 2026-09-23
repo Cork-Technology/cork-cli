@@ -1208,6 +1208,34 @@ const CATALOG: Mutant[] = [
     tests: [T.scanCache],
   },
   {
+    // The first window is the floor instead of the whole remaining span: a permissive endpoint
+    // is walked 1,000 blocks at a time — 20,000 blocks per call on a 505M-block chain, the
+    // 2026-09-23 "pools: 0" defect in a new coat.
+    id: "windowed-start-not-full-span",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "      let window = Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, head - from + 1);",
+    replace: "      let window = WINDOWED_RPC_MIN_WINDOW_BLOCKS;",
+    tests: [T.hypersync],
+  },
+  {
+    // A refusal is not remembered: every accepted window doubles back into the refused size
+    // and one round trip per window is wasted on a strict endpoint.
+    id: "windowed-refusal-ceiling-forgotten",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "          window = Math.min(window * 2, Number.isFinite(ceiling) ? Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, Math.floor(ceiling / 2)) : Number.MAX_SAFE_INTEGER);",
+    replace: "          window = window * 2;",
+    tests: [T.hypersync],
+  },
+  {
+    // The floor above the strictest public cap (Base public RPC: 1,000): that endpoint can
+    // never be served — every walk throws.
+    id: "windowed-floor-above-public-cap",
+    file: "packages/core/src/datasources/hypersync.ts",
+    find: "export const WINDOWED_RPC_MIN_WINDOW_BLOCKS = 1_000;",
+    replace: "export const WINDOWED_RPC_MIN_WINDOW_BLOCKS = 2_000;",
+    tests: [T.hypersync],
+  },
+  {
     // The windowed walk stops disclosing its bound: a capped walk claims completeness.
     id: "windowed-partial-honesty-lost",
     file: "packages/core/src/datasources/hypersync.ts",
@@ -5494,6 +5522,32 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/query.ts",
     find: "      return { rows, complete: traversal.complete, warnings, source: \"hybrid\" as const };",
     replace: "      return { rows, complete: traversal.complete, warnings, source: \"full-decentralized\" as const };",
+    tests: [T.migration],
+  },
+  {
+    // The default enumeration routed to the VENUE: the read's silent dependency of 2026-09-22
+    // recreated — omitting mode must mean your RPC alone.
+    id: "mig-sweep-default-not-chain",
+    file: "packages/core/src/handlers/query.ts",
+    find: "{ enumeratePools: input.mode === \"hybrid\" ? venueRows : scanRows }",
+    replace: "{ enumeratePools: input.mode === \"lite-decentralized\" ? scanRows : venueRows }",
+    tests: [T.migration],
+  },
+  {
+    // The lite pledge labeled as a fallback: a read that did exactly what the mode promised
+    // carries a warning that says it did something else.
+    id: "mig-sweep-lite-labeled-fallback",
+    file: "packages/core/src/handlers/query.ts",
+    find: "        if (wantsArchive) warnings.push({ code: \"logs_windowed_fallback\",",
+    replace: "        warnings.push({ code: \"logs_windowed_fallback\",",
+    tests: [T.migration],
+  },
+  {
+    // full-decentralized ignores an injected HyperSync source and walks the RPC anyway.
+    id: "mig-sweep-hypersync-ignored",
+    file: "packages/core/src/handlers/query.ts",
+    find: "      if (wantsArchive && ctx.hyperSync) {",
+    replace: "      if (false) {",
     tests: [T.migration],
   },
   {

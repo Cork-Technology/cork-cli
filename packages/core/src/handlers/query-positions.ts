@@ -3,16 +3,18 @@
 // generation at once so users can move funds). A fund migration starts from "what do I hold
 // where": the venue's existing pools live on the older managers (453 on Arbitrum across three
 // managers, 466 on Base, 2026-09-22), the new set's pools on the 10-field primary, and nobody
-// wants to paste 450 poolIds into single-pool reads. This read takes the pools every configured pool manager
-// created — VENUE-DISCOVERED by default (the same /pools/v1 rows cork-pools serves, each row
-// attributed to the generation its poolManagerAddress belongs to; this is a HYBRID read: venue
-// rows, every balance read from YOUR RPC) or, under mode full-decentralized, the MarketCreated
-// scan (each log decoded with the ABI of its EMITTER's declared wire) — sweeps
-// `balanceOf(account)` on every pool's cST and cPT, and keeps the pools with a non-zero position,
-// each tagged with its generation. Why not the scan by default: the first live run (2026-09-22,
-// Arbitrum, 453 known pools) walked the windowed eth_getLogs budget out millions of blocks short
-// and answered `pools: 0, complete: false` — honest, and useless to someone deciding what to
-// exit. It is a sub-feature of the query handler and RE-ENTERS its venue/scan machinery through
+// wants to paste 450 poolIds into single-pool reads. This read takes the pools every configured
+// pool manager created — enumerated under the mode's connectivity pledge: YOUR RPC alone by
+// default (the MarketCreated scan through the adaptive-window eth_getLogs source, each log decoded
+// with the ABI of its EMITTER's declared wire; live 2026-09-23: 455 pools on Arbitrum, 470 on
+// Base, complete in ~3 s — more than the venue lists), HyperSync under full-decentralized, the
+// venue's pool list under hybrid (balances still from your RPC; the opt-in for an endpoint that
+// caps eth_getLogs so hard the walk cannot finish) — sweeps `balanceOf(account)` on every pool's
+// cST and cPT, and keeps the pools with a non-zero position, each tagged with its generation.
+// History: the read defaulted to the venue for one day (2026-09-22) because the scan answered
+// `pools: 0, complete: false` — the windowed source's fixed 50k window from block 0, not a
+// property of chain-only enumeration. It is a sub-feature of the query handler and RE-ENTERS its
+// scan/venue machinery through
 // an injected function (`deps.enumeratePools`), never an import back — the rule every query-*.ts
 // sibling follows so no import cycle exists.
 //
@@ -44,7 +46,7 @@ export interface PositionsEmitter {
  *  over the resolved RPC — this is a lite-decentralized read, RPC only) and runs its
  *  backfill+tail primitive; the rows come back decoded per emitter wire. */
 export interface PositionsDeps {
-  enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "hybrid" | "full-decentralized" }>;
+  enumeratePools(emitters: readonly PositionsEmitter[]): Promise<{ rows: MarketRow[]; complete: boolean; warnings: Array<{ code: string; message: string }>; /** which pledge served the enumeration — echoed as provenance.mode */ source: "lite-decentralized" | "hybrid" | "full-decentralized" }>;
 }
 
 /** The positions sweep walks the venue's pool list at the venue's MAXIMUM page (200 rows): the read
@@ -261,7 +263,7 @@ export async function handleAccountPositions(
     const scan = await deps.enumeratePools(emitters);
     w.push(...scan.warnings);
     if (!scan.complete) {
-      w.push({ code: "pagination_incomplete", message: scan.source === "hybrid" ? "the venue's pool list was not walked to the end (maxPages) — pools beyond the last page are missing from this sweep; raise maxPages or pageSize" : "the pool-creation scan hit its range bound — pools created later than the last scanned block are missing from this sweep; partial evidence (re-run with a HyperSync token for the archive index)" });
+      w.push({ code: "pagination_incomplete", message: scan.source === "hybrid" ? "the venue's pool list was not walked to the end (maxPages) — pools beyond the last page are missing from this sweep; raise maxPages" : "the pool-creation scan hit its per-call range budget on this RPC — pools created later than the last scanned block are missing from this sweep; partial evidence (this endpoint caps eth_getLogs hard: use one that serves address-filtered ranges, set ENVIO_HYPERSYNC_TOKEN with mode full-decentralized, or mode hybrid for the venue's list)" });
     }
     const generationOf = (l: string): GenerationRef | undefined => {
       const g = generations.find((x) => x.label === l);

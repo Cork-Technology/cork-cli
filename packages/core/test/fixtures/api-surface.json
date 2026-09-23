@@ -1353,7 +1353,7 @@
       "kind": "value"
     },
     {
-      "name": "WINDOWED_RPC_WINDOW_BLOCKS",
+      "name": "WINDOWED_RPC_MIN_WINDOW_BLOCKS",
       "kind": "value"
     },
     {
@@ -3533,7 +3533,7 @@
       "kind": "value"
     },
     {
-      "name": "WINDOWED_RPC_WINDOW_BLOCKS",
+      "name": "WINDOWED_RPC_MIN_WINDOW_BLOCKS",
       "kind": "value"
     },
     {

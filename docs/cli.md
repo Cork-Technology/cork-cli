@@ -33,7 +33,7 @@ ch query rfqs --chain-id <id>                            # open requests-for-quo
 ch query rfq --chain-id <id> --rfq-id <rfq_…>            # one RFQ with all its answers
 ch query rfqs --chain-id <id> --underwriter <0x…> --with-answers true   # the RFQs you answered (venue-side filter)
 ch query account-state --chain-id <id> --pool-id <0x…> --account <0x…>   # balances + funding allowances
-ch query account-state --chain-id <id> --account <0x…>   # NO pool id: the account's positions across every generation (venue-listed pools, balances from your RPC; --mode full-decentralized scans instead)
+ch query account-state --chain-id <id> --account <0x…>   # NO pool id: the account's positions across every generation (pools scanned over your RPC; --mode hybrid takes the venue's list)
 ch query pool-whitelist --chain-id <id> --pool-id <0x…> --account <0x…>  # is a gated pool open to you
 ch query whitelisted-addresses --chain-id <id> --pool-id <0x…>           # whitelist membership (HyperSync)
 ch query fills --chain-id <id>                           # executed trades

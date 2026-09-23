@@ -23,7 +23,7 @@ import {
   type HyperSyncSource,
 } from "@cork/core";
 import { stubRpc } from "./helpers.ts";
-import { hyperSyncBindingGap } from "../src/datasources/hypersync.ts";
+import { hyperSyncBindingGap, windowedRpcSource, WINDOWED_RPC_MIN_WINDOW_BLOCKS } from "../src/datasources/hypersync.ts";
 
 const NOW = 1_790_000_000n;
 const POOL = `0x${"cc".repeat(32)}`;
@@ -853,8 +853,14 @@ describe("tokenless windowed eth_getLogs fallback", () => {
           source: "explicit",
           url: "https://rpc.example",
           client: {
-            getBlockNumber: async () => 2_000_000n, // 20 windows x 50k = 1M < head
-            request: async () => [],
+            getBlockNumber: async () => 2_000_000n,
+            // A strict public endpoint (Base's public RPC shape): any range over 1,000 blocks is
+            // refused, so 20 windows cover at most 20,000 of the 2,000,000 blocks.
+            request: async (a: { params: Array<{ fromBlock: string; toBlock: string }> }) => {
+              const span = Number(a.params[0]!.toBlock) - Number(a.params[0]!.fromBlock) + 1;
+              if (span > 1_000) throw new Error("eth_getLogs is limited to a 1,000 range");
+              return [];
+            },
           },
         }) as never;
       const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, { nowSeconds: NOW, resolveRpc });
@@ -869,6 +875,67 @@ describe("tokenless windowed eth_getLogs fallback", () => {
       expect(env.state).toBe("unavailable");
       expect(env.warnings[0]?.code).toBe("hypersync_unavailable");
     }));
+});
+
+describe("windowedRpcSource — adaptive ranges (the fixed 50k window walked 1M blocks from block 0 and found nothing)", () => {
+  type Req = { from: number; to: number };
+  /** A fake endpoint that refuses any range wider than `cap` blocks (Infinity = accepts all) and
+   *  records every request. */
+  const endpoint = (head: number, cap: number, logsAt: number[] = []) => {
+    const requests: Req[] = [];
+    let refused = 0;
+    const client = {
+      getBlockNumber: async () => BigInt(head),
+      request: async (a: { params: Array<{ fromBlock: string; toBlock: string }> }) => {
+        const from = Number(a.params[0]!.fromBlock);
+        const to = Number(a.params[0]!.toBlock);
+        requests.push({ from, to });
+        if (to - from + 1 > cap) {
+          refused += 1;
+          throw new Error("eth_getLogs is limited to a range");
+        }
+        return logsAt.filter((b) => b >= from && b <= to).map((b) => ({ address: "0x02803bb52d2184f906f45b50c66aa969c2e37263", topics: [], data: "0x", blockNumber: `0x${b.toString(16)}`, transactionHash: `0x${b.toString(16).padStart(64, "0")}` }));
+      },
+    };
+    return { client: client as never, requests, refused: () => refused };
+  };
+  it("a permissive endpoint (both built-in gateways) is asked ONCE for the whole span, block 0 to head, and the walk is complete", async () => {
+    const e = endpoint(505_000_000, Number.POSITIVE_INFINITY, [12, 480_000_000]);
+    const r = await windowedRpcSource(e.client).queryLogs({ fromBlock: 0, address: ["0x02803bb52d2184f906f45b50c66aa969c2e37263"] });
+    expect(e.requests).toEqual([{ from: 0, to: 505_000_000 }]);
+    expect(r.complete).toBeUndefined(); // complete: the incomplete marker is absent
+    expect(r.logs.map((l) => l.blockNumber)).toEqual([12, 480_000_000]);
+    expect(r.archiveHeight).toBe(505_000_000);
+  });
+  it("a refused size is remembered as a ceiling: the walk shrinks to an accepted size, then grows only BELOW the ceiling — a strict endpoint is refused a bounded number of times, not once per window", async () => {
+    const e = endpoint(1_000_000, 100_000, [5, 250_000, 999_999]);
+    const r = await windowedRpcSource(e.client).queryLogs({ fromBlock: 0 });
+    // Ladder: 1,000,001 refused → 200,000 refused → 40,000 accepted → 80,000 → min(160,000,
+    // 100,000) = 100,000 accepted → stays at 100,000. Two refusals in total; a rule that doubled
+    // back into the refused size would be refused again on every growth step.
+    expect(e.refused()).toBe(2);
+    expect(e.requests.length).toBeLessThanOrEqual(2 + 3 + Math.ceil(1_000_000 / 100_000));
+    expect(Math.max(...e.requests.filter((q) => q.to - q.from + 1 <= 100_000).map((q) => q.to - q.from + 1))).toBeLessThanOrEqual(100_000);
+    expect(r.logs.map((l) => l.blockNumber)).toEqual([5, 250_000, 999_999]);
+    expect(r.complete).toBeUndefined();
+  });
+  it("the floor is the strictest public cap we know (1,000 blocks): a 1,000-cap endpoint is SERVED, 20 windows deep, and the capped walk is disclosed with the block to resume from", async () => {
+    const e = endpoint(2_000_000, 1_000);
+    const r = await windowedRpcSource(e.client).queryLogs({ fromBlock: 0 });
+    expect(r.complete).toBe(false);
+    expect(r.nextBlock).toBe(20_000);
+    expect(e.requests.filter((q) => q.to - q.from + 1 <= 1_000)).toHaveLength(20);
+    expect(WINDOWED_RPC_MIN_WINDOW_BLOCKS).toBe(1_000);
+  });
+  it("a refusal AT the floor is a real transport failure and propagates", async () => {
+    const e = endpoint(50_000, 500);
+    await expect(windowedRpcSource(e.client).queryLogs({ fromBlock: 0 })).rejects.toThrow("limited");
+  });
+  it("resuming from a watermark asks only the remaining span", async () => {
+    const e = endpoint(600_000, Number.POSITIVE_INFINITY);
+    await windowedRpcSource(e.client).queryLogs({ fromBlock: 400_000 });
+    expect(e.requests).toEqual([{ from: 400_000, to: 600_000 }]);
+  });
 });
 
 describe("hyperSyncBindingGap — a compiled target that cannot carry a binding says so", () => {

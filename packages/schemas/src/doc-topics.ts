@@ -691,11 +691,13 @@ provenance of a prepared artifact is exact.
 ## The recipe
 
 1. **Read your positions.** \`cork_query\` resource \`account-state\` with \`filters.account\` and
-   NO \`filters.poolId\`: the tool takes every pool each generation's pool manager created — the
-   venue's pool list by default (hybrid: venue-discovered rows, every balance read from YOUR RPC;
-   \`mode: "full-decentralized"\` enumerates from the pool-creation event scan instead, decoded per
-   emitter wire; \`lite-decentralized\` is refused because no RPC-only enumeration is complete),
-   sweeps the account's cST and cPT balances, and returns \`positions[]\` — one row per pool with a non-zero balance, each with
+   NO \`filters.poolId\`: the tool takes every pool each generation's pool manager created — by
+   default from the chain over YOUR RPC alone (the pool-creation event scan, decoded per emitter
+   wire; complete in one request on an endpoint that serves address-filtered ranges);
+   \`mode: "full-decentralized"\` uses HyperSync; \`mode: "hybrid"\` takes the venue's pool list
+   (balances still from your RPC) — the opt-in for an endpoint that caps eth_getLogs so hard the
+   walk cannot finish (disclosed as pagination_incomplete). It then sweeps the account's cST and
+   cPT balances and returns \`positions[]\` — one row per pool with a non-zero balance, each with
    its \`generation\`, \`poolId\`, \`expiryTimestamp\`, \`expired\`, share tokens and balances — plus
    \`byGeneration[]\` subtotals and \`generations[]\`. \`generation: "previous"\` narrows the sweep to
    the previous set. This result carries no \`provenance.generation\` (it spans generations).

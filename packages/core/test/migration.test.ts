@@ -1,14 +1,13 @@
 // Migration (0.6, 2026-09-22; owner requirement: v0.6.0 supports the previous AND the current
 // generation at once so users can move funds). Three surfaces: the `generation` ALIASES
 // (`primary` / `previous` / the refused `all`) resolved in ONE place to a label; account-state
-// WITHOUT a poolId = the account's positions across every generation (pool enumeration —
-// VENUE-DISCOVERED by default (hybrid), the MarketCreated scan under mode full-decentralized —
+// WITHOUT a poolId = the account's positions across every generation (pool enumeration under the
+// mode's pledge — the MarketCreated scan over your RPC by default, HyperSync under
+// full-decentralized, the venue's list under hybrid —
 // then a balance sweep, zero-position pools dropped, `expired` per pool, per-generation
 // subtotals); and the `migration` doc topic. Offline: a venueFetch stub serves /pools/v1 rows per
 // manager in two 200-row pages, a stub HyperSync source serves the same pools as MarketCreated
-// logs, and an address-aware `balanceOf` puts a position on two of three managers. The venue
-// default is the live finding of 2026-09-22: 453 pools on Arbitrum / 466 on Base, none of which a
-// windowed eth_getLogs scan from the seed blocks could enumerate (`pools: 0, complete: false`).
+// logs, and an address-aware `balanceOf` puts a position on two of three managers.
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
@@ -290,11 +289,38 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
   });
 });
 
-describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is venue-discovered (hybrid)", () => {
-  it("omitting mode walks the venue's /pools/v1 at the 200-row page until hasMore is false, attributes each row to its manager's generation, skips a row on a manager no generation owns, and sweeps balances over YOUR RPC — provenance.mode hybrid", async () => {
+describe("account-state WITHOUT filters.poolId — enumeration follows the mode's pledge; the venue is an OPT-IN", () => {
+  it("omitting mode is lite-decentralized: the scan runs over YOUR RPC alone (no venue call, no HyperSync, no fallback label) — provenance.mode lite-decentralized", async () => {
     const urls: string[] = [];
     const asked: string[][] = [];
-    const env = await positions(ctxFor(asked, { venueFetch: venueOf(urls) }), undefined, null);
+    // ctx.hyperSync is present here and must NOT be used: the default pledge is the RPC alone.
+    const rpcLogs: string[][] = [];
+    const ctx = ctxFor(asked, { venueFetch: venueOf(urls) });
+    const inner = ctx.resolveRpc!;
+    ctx.resolveRpc = async (...a: Parameters<typeof inner>) => {
+      const r = (await inner(...a))!;
+      const client = r.client as unknown as { request?: unknown };
+      client.request = async (q: { params: Array<{ address?: string[] }> }) => {
+        rpcLogs.push(q.params[0]!.address ?? []);
+        return LOGS.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: `0x${l.blockNumber.toString(16)}`, transactionHash: l.transactionHash }));
+      };
+      return r;
+    };
+    const env = await positions(ctx, undefined, null);
+    expect(env.state).toBe("ok");
+    expect(env.provenance.mode).toBe("lite-decentralized");
+    expect(urls).toEqual([]); // the venue was never contacted
+    expect(asked).toEqual([]); // HyperSync was never asked
+    expect(rpcLogs).toHaveLength(1); // one eth_getLogs over every manager
+    expect(env.warnings.map((w) => w.code)).not.toContain("logs_windowed_fallback");
+    const d = env.data as PositionsData;
+    expect(d.scanned).toEqual({ managers: 4, pools: 4, complete: true, source: "lite-decentralized" });
+    expect(d.positions.map((p) => p.poolId)).toEqual([P_OLD, P_EXPIRED, P_NEW]);
+  });
+  it("`mode: hybrid` walks the venue's /pools/v1 at the 200-row page until hasMore is false, attributes each row to its manager's generation, skips a row on a manager no generation owns, and sweeps balances over YOUR RPC — provenance.mode hybrid", async () => {
+    const urls: string[] = [];
+    const asked: string[][] = [];
+    const env = await positions(ctxFor(asked, { venueFetch: venueOf(urls) }), undefined, "hybrid");
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("hybrid");
     expect(asked).toEqual([]); // no log scan ran
@@ -329,7 +355,7 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
     expect(gated.warnings[0]?.code).toBe("mode_unavailable");
   });
   it("a venue walk cut short by maxPages is disclosed: complete false + pagination_incomplete naming maxPages", async () => {
-    const env = await runTool("cork_query", { resource: "account-state", chainId: CHAIN, pageSize: 25, maxPages: 1, format: "concise", filters: { account: ACCOUNT } }, ctxFor([], { venueFetch: venueOf([]) }));
+    const env = await runTool("cork_query", { resource: "account-state", chainId: CHAIN, pageSize: 25, maxPages: 1, mode: "hybrid", format: "concise", filters: { account: ACCOUNT } }, ctxFor([], { venueFetch: venueOf([]) }));
     expect(env.state).toBe("ok");
     const d = env.data as PositionsData;
     expect(d.scanned).toMatchObject({ pools: 3, complete: false, source: "hybrid" });
@@ -338,7 +364,7 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
   });
   it("a venue row whose expiry is neither seconds nor ISO-8601 is skipped and DISCLOSED, never thrown on; a digits-only expiry passes verbatim", async () => {
     const rows = [{ ...VENUE_ROWS[0]!, expiry: "next tuesday" }, { ...VENUE_ROWS[1]!, expiry: (NOW - 3_600n).toString() }, VENUE_ROWS[2]!];
-    const env = await positions(ctxFor([], { venueFetch: venueOf([], rows) }), undefined, null);
+    const env = await positions(ctxFor([], { venueFetch: venueOf([], rows) }), undefined, "hybrid");
     expect(env.state).toBe("ok");
     const d = env.data as PositionsData;
     expect(d.scanned).toMatchObject({ pools: 2, complete: true });
@@ -346,11 +372,24 @@ describe("account-state WITHOUT filters.poolId — the DEFAULT enumeration is ve
     const w = env.warnings.find((x) => x.code === "invalid_service_response");
     expect(w?.message).toContain("1 venue pool row(s)");
   });
-  it("`mode: lite-decentralized` is refused with teaching: no RPC-only enumeration is complete", async () => {
-    const env = await positions(ctxFor(), undefined, "lite-decentralized");
-    expect(env.state).toBe("unavailable");
-    expect(env.warnings[0]?.code).toBe("mode_unavailable");
-    expect(env.warnings[0]?.message).toContain("full-decentralized");
+  it("`mode: full-decentralized` WITHOUT a HyperSync source falls back to the windowed walk and SAYS so (cork-pools parity); with one, it uses it and stays silent", async () => {
+    const asked: string[][] = [];
+    const withHs = await positions(ctxFor(asked), undefined, "full-decentralized");
+    expect(asked).toHaveLength(1);
+    expect(withHs.warnings.map((w) => w.code)).not.toContain("logs_windowed_fallback");
+    const ctx = ctxFor([]);
+    delete (ctx as { hyperSync?: unknown }).hyperSync; // no archive source at all
+    const inner = ctx.resolveRpc!;
+    ctx.resolveRpc = async (...a: Parameters<typeof inner>) => {
+      const r = (await inner(...a))!;
+      (r.client as unknown as { request: unknown }).request = async () => LOGS.map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: `0x${l.blockNumber.toString(16)}`, transactionHash: l.transactionHash }));
+      return r;
+    };
+    const noHs = await positions(ctx, undefined, "full-decentralized");
+    expect(noHs.state).toBe("ok");
+    expect(noHs.provenance.mode).toBe("full-decentralized");
+    expect(noHs.warnings.map((w) => w.code)).toContain("logs_windowed_fallback");
+    expect((noHs.data as PositionsData).scanned).toMatchObject({ pools: 4, complete: true, source: "full-decentralized" });
   });
 });
 

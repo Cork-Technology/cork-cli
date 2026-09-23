@@ -689,6 +689,23 @@ export function stubContext(): HandlerContext {
         call: async () => ({ data: "0x" }),
         estimateGas: async () => 100_000n,
         getBlockNumber: async () => 23_000_000n,
+        // eth_getLogs — the tokenless MarketCreated scan (the positions sweep's DEFAULT
+        // enumeration, over the caller's RPC alone). Serves the two migration pools' creation
+        // logs on 42161, scoped by the requested address set and block range like a real node;
+        // every other chain answers an honestly empty log set.
+        request: async (a: { method: string; params: Array<{ fromBlock?: string; toBlock?: string; address?: string[]; topics?: Array<string[] | string | null> }> }) => {
+          if (a.method !== "eth_getLogs") throw new Error(`eval stub: unsupported request ${a.method}`);
+          if (chainId !== 42161) return [];
+          const q = a.params[0] ?? {};
+          const from = q.fromBlock ? Number(q.fromBlock) : 0;
+          const to = q.toBlock ? Number(q.toBlock) : Number.MAX_SAFE_INTEGER;
+          const scope = new Set((q.address ?? []).map((x) => x.toLowerCase()));
+          const t0 = q.topics?.[0];
+          const wanted = new Set(Array.isArray(t0) ? t0 : t0 ? [t0] : []);
+          return migrationMarketLogs()
+            .filter((l) => l.blockNumber >= from && l.blockNumber <= to && (scope.size === 0 || scope.has(l.address.toLowerCase())) && (wanted.size === 0 || wanted.has(l.topics[0]!)))
+            .map((l) => ({ address: l.address, topics: l.topics, data: l.data, blockNumber: `0x${l.blockNumber.toString(16)}`, transactionHash: l.transactionHash }));
+        },
         getBlock: async () => ({ timestamp: NOW }),
         getTransactionReceipt: async () => ({ status: "success", blockNumber: 23_000_000n, gasUsed: 21_000n, logs: [] }),
       } as never,

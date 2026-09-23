@@ -99,7 +99,12 @@ export type HyperSyncLoad = { source: HyperSyncSource } | { error: string };
  *  returns complete:false + nextBlock so the standard pagination_incomplete honesty applies.
  *  NOT a substitute where correctness needs FULL history in one answer (the whitelist replay
  *  derives membership from every event — a capped walk there would fabricate verdicts). */
-export const WINDOWED_RPC_WINDOW_BLOCKS = 50_000;
+/** The SMALLEST range the windowed walk will ask for — the cap the strictest public endpoint we
+ *  know enforces (Base's public RPC: "eth_getLogs is limited to a 1,000 range", verified live
+ *  2026-09-23). A refusal at this size is a real transport failure and propagates. */
+export const WINDOWED_RPC_MIN_WINDOW_BLOCKS = 1_000;
+/** The per-call request budget: a walk that needs more windows than this returns what it has,
+ *  labeled incomplete with the block to resume from (the scan cache carries the watermark). */
 export const WINDOWED_RPC_MAX_WINDOWS = 20;
 
 interface WindowedRpcClient {
@@ -107,6 +112,17 @@ interface WindowedRpcClient {
   request(args: { method: "eth_getLogs"; params: [Record<string, unknown>] }): Promise<Array<{ address: string; topics: string[]; data: string; blockNumber: string | null; transactionHash: string | null }>>;
 }
 
+/** Tokenless fallback: eth_getLogs over the resolved RPC with ADAPTIVE windows. The first window
+ *  is the WHOLE remaining span — an address-filtered query over the full chain is cheap for the
+ *  endpoint (it is an index lookup, not a block walk) and every endpoint this tool ships as a
+ *  default accepts it: both Tenderly gateways answered 505M blocks on Arbitrum and 52M on Base in
+ *  about 1.5 s (2026-09-23). A refused range shrinks by 5× (floor WINDOWED_RPC_MIN_WINDOW_BLOCKS)
+ *  and the refused size is remembered as a ceiling, so a strict endpoint is asked for a size it
+ *  accepts from then on; an accepted window grows 2× but never past half the ceiling. The fixed 50 000-block
+ *  window this replaces walked 1 000 000 blocks per call from block 0 and answered `pools: 0,
+ *  complete: false` on a chain whose pool managers hold 453 pools — honest, and useless. The
+ *  budget WINDOWED_RPC_MAX_WINDOWS still bounds one call; a capped walk says so (`complete:false`,
+ *  `nextBlock`). */
 export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
   return {
     async queryLogs(q) {
@@ -114,7 +130,8 @@ export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
       const toHex = (n: number): `0x${string}` => `0x${n.toString(16)}`;
       const logs: HyperSyncLog[] = [];
       let from = q.fromBlock;
-      let window = WINDOWED_RPC_WINDOW_BLOCKS;
+      let window = Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, head - from + 1);
+      let ceiling = Number.POSITIVE_INFINITY; // the smallest range the endpoint has refused
       let windows = 0;
       while (from <= head && windows < WINDOWED_RPC_MAX_WINDOWS) {
         const to = Math.min(from + window - 1, head);
@@ -129,11 +146,15 @@ export function windowedRpcSource(client: WindowedRpcClient): HyperSyncSource {
           }
           from = to + 1;
           windows += 1;
+          // Grow 2× — but once a size was refused, never past HALF of it: a strict endpoint is then
+          // refused a logarithmic number of times over the whole walk, not once per window.
+          window = Math.min(window * 2, Number.isFinite(ceiling) ? Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, Math.floor(ceiling / 2)) : Number.MAX_SAFE_INTEGER);
         } catch (err) {
           // Range refused: shrink and retry — public endpoints cap ranges differently. A window
           // already at the floor is a real failure and propagates (the handler attributes it).
-          if (window > 2_000) {
-            window = Math.max(2_000, Math.floor(window / 5));
+          if (window > WINDOWED_RPC_MIN_WINDOW_BLOCKS) {
+            ceiling = Math.min(ceiling, window);
+            window = Math.max(WINDOWED_RPC_MIN_WINDOW_BLOCKS, Math.floor(window / 5));
             continue;
           }
           throw err;
