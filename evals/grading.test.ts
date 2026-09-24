@@ -172,7 +172,11 @@ describe("capacity retry — a run survives an overloaded upstream, and never re
   });
   it("withCapacityRetry: retries with exponential delay until success, gives up after the bound, and rethrows a non-capacity error at once", async () => {
     const sleeps: number[] = [];
-    const sleep = async (ms: number) => { sleeps.push(ms); };
+    // The injected sleep resolves at once, so an UNBOUNDED retry would spin on resolved promises
+    // forever: the timer queue never runs, vitest's testTimeout never fires, and the worker dies
+    // of memory with no report (the catalogue then cannot call it a kill — INCONCL on
+    // eval-run-retry-unbounded, 2026-09-24). A retry past any sane bound fails as an assertion.
+    const sleep = async (ms: number) => { sleeps.push(ms); if (sleeps.length > 50) throw new Error("unbounded retry: more than 50 sleeps"); };
     let n = 0;
     const flaky = async () => { n++; if (n < 3) throw { status: 529, error: { type: "overloaded_error" } }; return "ok"; };
     await expect(withCapacityRetry(flaky, 5, 1000, sleep)).resolves.toBe("ok");
