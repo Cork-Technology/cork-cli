@@ -19,7 +19,7 @@ yet** — so the 0.3.3 outputs below are still what a live read of today's marke
 **post-first-market**: the JIT adapter's POOL_CREATOR + FEE_MANAGER roles were granted on both
 chains 2026-08-10, the first JIT market-creating fills landed the same day, and the venue has
 listed ~50 short-dated pilot pools on Base since — all on this doc's own sUSDe/mwUSDC pair.
-**Tool:** cork-cli `0.6.0-rc.1` (`v0.2.0-rc.2` at capture time). **Treat this doc as orientation
+**Tool:** cork-cli `0.6.0` (`v0.2.0-rc.2` at capture time). **Treat this doc as orientation
 and pull the authoritative values from the tool** (`ch query protocol-config` lists both
 generations with every address and wire), never hardcode them.
 

@@ -5,7 +5,7 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [0.6.0-rc.1] — 2026-09-23
+## [0.6.0] — 2026-09-24
 
 This release adds the Distribution `phoenix/v0.4-rc.1` contract set: Phoenix 1.4.0-rc.1, Market Registry 0.5.0, Rollover 0.2.0 and cork-periphery 0.2.0-rc.1, on Arbitrum One and Base. It keeps every older set. A chain now hosts a SET of contract generations, one of them primary. Prepares target the primary. Reads, decode and event attribution follow the generation a pool or contract belongs to. Nothing here retires an address.
 
@@ -75,6 +75,12 @@ The rollover config can name more than one ACTIVE generation. On 2026-09-11 the 
 - Registry-bound prepares never emit one wire's bytes at another wire's adapter: the selected generation's declared wire drives the codec, and a generation whose wire this build does not implement refuses `phase_gated`.
 - `share_prediction_unavailable` names the simulated revert (for example `InvalidRate`, `RecipeRejectedConstraint`) instead of a generic transport guess.
 - Pool-scoped reads and bundles for a pool on an older pool manager no longer route through the primary's addresses. Before this release every pool the venue serves read as absent (`chain_read_failed`) once the primary moved.
+
+### Deprecated
+
+- `additionalData` on every jitMarket input and on `create-pool`. It is an alias of `extraData` (the market-registry 0.5.0 word) and answers with `deprecation_notice`; both present and different refuse. Pass `extraData`.
+- `mode` names (`liquidity`, `nav`, `fixed`, `impairment`) on recipe inputs and the pre-2.1.0 registry flow (`legacy: true`, `CORK_ENABLE_DEPRECATED=1`) stay deprecated as in 0.5.1. The legacy lane is now the generation whose registry wire is `legacy`.
+- Schema 1 `cork-defaults.json` is frozen at its 0.5.1 contents for 0.5.x binaries. This version reads and fetches `cork-defaults.v2.json` only.
 
 ### Verified
 
