@@ -21,6 +21,7 @@
 // The catalog is append-only in spirit: when a survivor is killed, keep the probe.
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { baselineOk, verdictOf, type VitestJsonReport } from "./mutation-verdict.ts";
 import { dirname, join, resolve } from "node:path";
 
 interface Mutant {
@@ -5771,27 +5772,44 @@ process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 console.log(`sandbox: ${sandbox} (the working tree is never mutated — concurrent runs in the tree are safe)`);
 
-async function vitest(tests: string[]): Promise<boolean> {
+async function vitest(tests: string[]): Promise<{ exitCode: number; report: VitestJsonReport | undefined }> {
   // Every vitest child runs at the LOWEST CPU priority whatever launched the catalogue: a niced
   // parent does not reach these children (`bun x` re-execs through npm with a fresh scheduling
   // class — observed nice=0 children under a nice=19 parent, 2026-09-23), and a full run
   // saturates every core and starves the terminal (owner). `nice` is POSIX; the value is
   // clamped where the platform's range is narrower.
-  const proc = Bun.spawn(["nice", "-n", "19", "bun", "x", "vitest", "run", ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
-  return (await proc.exited) === 0;
+  //
+  // The verdict comes from the JSON REPORT, not the exit code: a suite that fails to LOAD also
+  // exits non-zero, and that faked 600 "caught" in nine minutes on a Node-less host
+  // (scripts/mutation-verdict.ts has the rule and the pinned cases).
+  const out = join(sandbox, `.vitest-report-${String(process.pid)}-${String(Date.now())}.json`);
+  const proc = Bun.spawn(["nice", "-n", "19", "bun", "x", "vitest", "run", "--reporter=json", `--outputFile=${out}`, ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
+  const exitCode = await proc.exited;
+  let report: VitestJsonReport | undefined;
+  try {
+    report = JSON.parse(readFileSync(out, "utf8")) as VitestJsonReport;
+    rmSync(out, { force: true });
+  } catch {
+    report = undefined;
+  }
+  return { exitCode, report };
 }
 
 // Baseline: the union of targeted test files must be green (IN THE SANDBOX) before mutating —
 // this also proves the sandbox copy itself is runnable, so a copy defect cannot fake "caught".
 const allTests = [...new Set(catalog.flatMap((m) => m.tests))];
 console.log(`baseline: ${allTests.length} test files clean-run…`);
-if (!(await vitest(allTests))) {
+const base = await vitest(allTests);
+const baseVerdict = baselineOk(base.report, base.exitCode);
+if (!baseVerdict.ok) {
+  console.error(`BASELINE RED (${baseVerdict.reason})`);
   console.error("BASELINE RED — fix the suite before running mutation probes (a red baseline would fake 'caught'). If the plain tree is green, the sandbox copy is the suspect: a test may depend on something git ls-files does not enumerate.");
   process.exit(1);
 }
 
 let survivors = 0;
 let rotted = 0;
+let inconclusive = 0;
 for (const m of catalog) {
   // Rot checks read the REAL file (the probe aims at the source of record); the mutant is
   // planted in the sandbox twin.
@@ -5815,10 +5833,14 @@ for (const m of catalog) {
   const twin = join(sandbox, m.file);
   writeFileSync(twin, original.split(m.find).join(m.replace));
   try {
-    const passed = await vitest(m.tests);
-    if (passed) {
+    const run = await vitest(m.tests);
+    const v = verdictOf(run.report, run.exitCode, m.file);
+    if (v.verdict === "survived") {
       console.log(`SURVIVED ${m.id} — the suite cannot see this defect; write a killer test`);
       survivors++;
+    } else if (v.verdict === "inconclusive") {
+      console.log(`INCONCL  ${m.id} — ${v.reason}; the run is broken, not the mutant caught`);
+      inconclusive++;
     } else {
       console.log(`caught   ${m.id}`);
     }
@@ -5827,5 +5849,5 @@ for (const m of catalog) {
   }
 }
 
-console.log(`\n${catalog.length} mutants: ${catalog.length - survivors - rotted} caught, ${survivors} survived, ${rotted} rotted`);
-if (survivors > 0 || rotted > 0) process.exit(1);
+console.log(`\n${catalog.length} mutants: ${catalog.length - survivors - rotted - inconclusive} caught, ${survivors} survived, ${rotted} rotted, ${inconclusive} inconclusive`);
+if (survivors > 0 || rotted > 0 || inconclusive > 0) process.exit(1);

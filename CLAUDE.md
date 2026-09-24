@@ -105,7 +105,11 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
   `CORK_RPC_LIVE=1`) · `bun run test:mutation` (scripts/mutation-probes.ts: applies catalogued
   semantic mutants — struct/tuple order, enum ordinals, bit flags, hash inputs, rounding,
   comparators, storage-slot math — FAILS unless the offline suite kills every one; also fails on
-  pattern rot. Surviving mutant: killer test, keep the probe. Since 2026-08-28 mutants run in a
+  pattern rot. A kill is a TEST THAT RAN AND FAILED, decided from vitest's JSON report
+  (`scripts/mutation-verdict.ts`), never from the exit code: a suite that fails to LOAD exits
+  non-zero too, and on a Node-less host that faked 600 "caught" in nine minutes (2026-09-23);
+  such a run is INCONCLUSIVE and fails the catalogue. The suite runs on Bun alone with
+  `deps.interopDefault: false` (vite-node's interop misreads Bun's ESM namespaces as CJS). Surviving mutant: killer test, keep the probe. Since 2026-08-28 mutants run in a
   DISPOSABLE SANDBOX COPY of the tree — git ls-files copy + symlinked node_modules, vitest cwd'd
   there — so the working tree is never mutated, concurrent test/eval/CLI runs are safe, and a
   kill strands only tmp garbage; rot checks still read the REAL files) · `bun run test:prop`
