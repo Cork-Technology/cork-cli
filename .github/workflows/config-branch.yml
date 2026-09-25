@@ -1,0 +1,129 @@
+# Publish config.default.json to the line's config branch (policy R5c, 2026-09-25).
+#
+# A released binary fetches `config.default.json` from `config/<major>.<minor>` — a branch that
+# holds ONLY that file, so its history is the address change log for every binary of the line.
+# This workflow is the one writer of those branches:
+#   - called by release.yml on every `v*` tag, BEFORE the release is published, so a fresh binary
+#     never fetches a 404 and falls back to its bundled copy silently;
+#   - dispatched by hand for an address hotfix: point `ref` at the main-branch commit that carries
+#     the new file and name the `line`; every installed binary of that line reads it within the hour.
+# Commits are created through the GitHub API with the run's token, so GitHub signs them (they show
+# as Verified from github-actions[bot]); nothing here needs a maintainer's key.
+#
+# The line invariant is enforced HERE, not only in the vitest tripwire: every generation set key the
+# branch's current file carries must still be present in the file being published (a binary of the
+# line resolves `generation` against those keys), and each chain's primary must be a known key. A
+# violation fails the job — and with it the release — instead of moving the branch.
+name: config-branch
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The commit or tag whose config.default.json is published"
+        required: true
+        type: string
+      line:
+        description: "The line branch suffix (<major>.<minor>); derived from the tag when empty"
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The commit or tag whose config.default.json is published (a main-branch commit for a hotfix)"
+        required: true
+        type: string
+      line:
+        description: "The line branch suffix (<major>.<minor>), e.g. 0.7"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Resolve the line
+        id: line
+        run: |
+          line="${{ inputs.line }}"
+          if [ -z "$line" ]; then
+            ref="${{ inputs.ref }}"
+            case "$ref" in
+              v[0-9]*.[0-9]*.*) line=$(printf '%s' "${ref#v}" | sed -E 's/^([0-9]+)\.([0-9]+)\..*/\1.\2/');;
+              *) echo "::error::cannot derive a line from ref '$ref' — pass `line`"; exit 1;;
+            esac
+          fi
+          printf '%s' "$line" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::line '$line' is not <major>.<minor>"; exit 1; }
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "branch=config/$line" >> "$GITHUB_OUTPUT"
+          echo "publishing config.default.json from ${{ inputs.ref }} to config/$line"
+      - name: The line invariant — no key a binary of the line knows may disappear
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.line.outputs.branch }}
+        run: |
+          jq -e '.schemaVersion == 2 and (.generations | type == "object")' config.default.json > /dev/null \
+            || { echo "::error::config.default.json is not a schema-2 document"; exit 1; }
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/config.default.json?ref=${BRANCH}" --jq .content 2>/dev/null | base64 -d > current.json; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            if cmp -s current.json config.default.json; then echo "unchanged=true" >> "$GITHUB_OUTPUT"; echo "branch already carries this file"; exit 0; fi
+            echo "unchanged=false" >> "$GITHUB_OUTPUT"
+            # every (chain, set key) on the branch must survive; every new primary must be a known key
+            lost=$(jq -r --slurpfile new config.default.json '
+              .generations | to_entries[] | .key as $c | .value.sets | keys[] as $k | select(($new[0].generations[$c].sets // {}) | has($k) | not) | "\($c)/\($k)"' current.json)
+            if [ -n "$lost" ]; then
+              echo "::error::config/${{ steps.line.outputs.line }} would lose set key(s) a released binary resolves against: $(echo "$lost" | tr '\n' ' ') — a key change is a new minor (policy R5c)"; exit 1
+            fi
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"; echo "unchanged=false" >> "$GITHUB_OUTPUT"
+            echo "branch ${BRANCH} does not exist yet — it is created"
+          fi
+          bad=$(jq -r '.generations | to_entries[] | .value.primary as $p | select(.value.sets | has($p) | not) | .key' config.default.json)
+          [ -z "$bad" ] || { echo "::error::chain(s) $bad name a primary that is not a set key"; exit 1; }
+          echo "line invariant holds"
+      - name: Publish (a GitHub-signed commit; the branch holds only this file)
+        if: steps.check.outputs.unchanged != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.line.outputs.branch }}
+          EXISTS: ${{ steps.check.outputs.exists }}
+          SRC: ${{ inputs.ref }}
+        run: |
+          set -e
+          headline="config/${{ steps.line.outputs.line }}: config.default.json from ${SRC} ($(git rev-parse --short HEAD))"
+          body="Published by the config-branch workflow (run ${GITHUB_RUN_ID}). This branch holds only config.default.json; every ${{ steps.line.outputs.line }}.x binary reads it. Policy R5c."
+          msg="$(printf '%s\n\n%s' "$headline" "$body")"
+          if [ "$EXISTS" = "true" ]; then
+            # An existing branch: createCommitOnBranch — GitHub signs the commit (Verified, github-actions[bot]).
+            head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" --jq .object.sha)
+            content=$(base64 -w0 config.default.json)
+            gh api graphql -f query='
+              mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }' \
+              -F input="{\"branch\":{\"repositoryNameWithOwner\":\"${GITHUB_REPOSITORY}\",\"branchName\":\"${BRANCH}\"},\"expectedHeadOid\":\"${head}\",\"message\":{\"headline\":$(printf '%s' "$headline" | jq -Rs .),\"body\":$(printf '%s' "$body" | jq -Rs .)},\"fileChanges\":{\"additions\":[{\"path\":\"config.default.json\",\"contents\":\"${content}\"}]}}" \
+              --jq '.data.createCommitOnBranch.commit | "published \(.oid) \(.url)"'
+          else
+            # First publication: an ORPHAN commit (no parent — nothing but this file may be on the branch).
+            blob=$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" -f encoding=base64 -f content="$(base64 -w0 config.default.json)" --jq .sha)
+            tree=$(gh api "repos/${GITHUB_REPOSITORY}/git/trees" --input <(jq -n --arg b "$blob" '{tree:[{path:"config.default.json",mode:"100644",type:"blob",sha:$b}]}') --jq .sha)
+            commit=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits" --input <(jq -n --arg t "$tree" --arg m "$msg" '{message:$m,tree:$t,parents:[]}') --jq .sha)
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${BRANCH}" -f sha="$commit" --jq '"created \(.ref) at \(.object.sha)"'
+          fi
+      - name: Read back
+        env:
+          BRANCH: ${{ steps.line.outputs.branch }}
+        run: |
+          sleep 5
+          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${BRANCH}/config.default.json?t=$(date +%s)"
+          curl -fsSL "$url" > served.json
+          cmp -s served.json config.default.json && echo "raw ${BRANCH} serves the published file" || { echo "::error::raw ${BRANCH} does not yet serve the published file (CDN lag or a failed push)"; exit 1; }

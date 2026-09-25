@@ -146,8 +146,22 @@ jobs:
             *)     ! printf '%s\n' "$out" | grep -E 'could not load|carries no HyperSync binding' >/dev/null ;;
           esac
 
-  publish:
+  # R5c: the line's config branch (config/<major>.<minor>, holding only config.default.json) is
+  # updated from THIS tag before the release is published, so a fresh binary never fetches a 404
+  # and falls back to its bundled copy silently. The job enforces the line invariant (no set key a
+  # released binary knows may disappear) and fails the release otherwise. Commits are GitHub-signed
+  # through the API. Hotfix path for an address change without a release: dispatch
+  # config-branch.yml by hand with the main-branch commit as `ref` and the line.
+  config-branch:
     needs: [determinism, smoke]
+    uses: ./.github/workflows/config-branch.yml
+    permissions:
+      contents: write
+    with:
+      ref: ${{ github.ref_name }}
+
+  publish:
+    needs: [determinism, smoke, config-branch]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

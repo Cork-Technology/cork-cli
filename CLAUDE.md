@@ -453,7 +453,7 @@ immutable releases carry the attestations); the branch may only receive changes 
 understands, guarded by the frozen-keys tripwire (`packages/core/test/config-frozen-keys.test.ts`:
 `RELEASED_LINE_KEYS` per line, offline against the tree + live against the public branch under
 CORK_RPC_LIVE=1). A KEY CHANGE IS A NEW MINOR: the label rename split 0.6.0 (frozen file) from
-what followed, so the next cut is 0.7.0-rc.1 on `config/0.7`, and 0.6.0 stays the only 0.6.x binary;
+what followed, so the next cut is 0.7.0-rc.1 on `config/0.7`, and 0.6.0 stays the only 0.6.x binary; the branch is WRITTEN ONLY BY `.github/workflows/config-branch.yml` (called by release.yml before `publish`, so a fresh binary never fetches a 404; dispatched by hand with a main-branch `ref` + `line` for an address hotfix) — it re-checks the line invariant with jq (no set key on the branch may disappear, every primary is a key) and FAILS THE RELEASE otherwise, commits through the GitHub API (Verified, github-actions[bot]; an orphan commit on first publication), and reads the raw URL back; the org ruleset for `config/*` must let the Actions app push;
 `cork-defaults.v2.json` stays on main FROZEN with the record-name keys (`phoenix/v0.4-rc.1`), because
 the released 0.6.0 fetches it from main by name — renaming its keys there broke `--generation
 phoenix/v0.4-rc.1` on 0.6.0 within the hour (the Distribution verifier caught it). Address updates
