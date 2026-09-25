@@ -434,7 +434,7 @@ describe("scan-cache identity carries the row-shape schema", () => {
     try {
       const spec = { chainId: CHAIN, name: "markets", fromBlock: 0, address: [V03_PM, PRIMARY_PM], topics: [[MARKET_CREATED_TOPIC, MARKET_CREATED_10_TOPIC]] };
       const id = scanCacheId(spec);
-      expect(SCAN_CACHE_SCHEMA).toBe(2);
+      expect(SCAN_CACHE_SCHEMA).toBe(3);
       expect(id.startsWith(`v${String(SCAN_CACHE_SCHEMA)}:${String(CHAIN)}:markets:0:`)).toBe(true);
       // The 0.5.x spelling had no schema prefix: identical spec fields, a different identity.
       const legacyId = id.slice(`v${String(SCAN_CACHE_SCHEMA)}:`.length);

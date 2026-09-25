@@ -64,8 +64,12 @@ function loadFile(): ScanCacheFile {
  *  2 (0.6, 2026-09-22): MarketCreated rows gained `wire` / `generation` / the 10-field fees and the
  *  scan asks for both MarketCreated topics; every 0.5.x entry (schema 1, 7-arg only) is ignored —
  *  and DROPPED at load (`loadFile`), so a stale cursor's ≤20k decoded rows do not sit in the file
- *  forever (review C6). */
-export const SCAN_CACHE_SCHEMA = 2;
+ *  forever (review C6).
+ *  3 (2026-09-25): the generation LABEL rides inside every decoded MarketCreated row, and the labels
+ *  were renamed (`phoenix/v0.4-rc.1` → `cork/v0.4`, `phoenix/v0.3-rc.1` → `cork/v0.3`); a schema-2
+ *  cursor served 486 rows under the old name beside 10 under the new one on the first read after
+ *  the rename. A label is part of the row shape: renaming one bumps this. */
+export const SCAN_CACHE_SCHEMA = 3;
 
 /** Stable identity for one scan: the row-shape schema plus the spec fields that define WHAT is
  *  being scanned. A changed address set / topic set / floor is a different scan and must not
