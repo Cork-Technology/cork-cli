@@ -214,6 +214,14 @@ ch prepare pool authority-onboard --chain-id <id> --account <0x…> --client-req
 ch prepare pool authority-revoke  … --token <0x…> --spender <0x…>                                                           # zero it
 ```
 
+**Burn-side actions need one allowance from you.** `withdraw`, `withdraw-other`, `redeem`,
+`unwind-deposit` and `unwind-mint` burn cST or cPT from `owner`. When `owner` is your account, the
+pool burns with the adapter as caller, so approve the cST and cPT to the **cork adapter** of the
+pool's generation first. The result says so under `owner_managed_funding` and names the adapter.
+An allowance to the pool manager is never spent. Without the allowance the bundle reverts
+`ERC20InsufficientAllowance`, and `ch track simulate` shows it before you sign. Verified on a Base
+fork on 2026-09-25.
+
 `--account` is the address that funds the bundle. It also receives the sweep-back of any unspent
 cap, so set it to the real payer. A bundle pulls, acts and sweeps in one transaction; a plan that
 cannot be atomic is refused. For a session-key wallet, `--for-self '{"adapter":"0x…"}'` emits a
@@ -274,7 +282,9 @@ ch decode receipt --chain-id <id> --data '{…}'
 ```
 
 `ch` reconstructs from the bytes. It never trusts a parse you hand it. A leg at the wrong contract
-is `TARGET MISMATCH — do not sign`.
+is `TARGET MISMATCH — do not sign`. Every configured generation's Cork adapter is a right contract:
+a bundle for a `cork/v0.3` pool runs at that generation's adapter, decodes as trusted, and its legs
+carry `generation: "cork/v0.3"`. Legs at the primary's adapter carry no label.
 
 ## 8. Verify, simulate, reconcile — `ch track`
 
