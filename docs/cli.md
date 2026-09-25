@@ -14,8 +14,12 @@ Common flags everywhere: `--chain-id <id|name>` (`mainnet`/`arbitrum`/`base` wor
 Retrying the same request? Reuse its `--client-request-id`; new intent, new id.
 
 **Generations.** A chain hosts a SET of contract generations, one of them primary
-(`cork/v0.4` on Arbitrum and Base). Every chain-backed command takes
-`--generation <label>`. Omit it and a prepare targets the primary; a pool-scoped read or bundle
+(`cork/v0.4` on Arbitrum and Base; the previous set is `cork/v0.3`). A label names the
+Distribution BUNDLE the contracts were cut in (`cork/<version>`), not the core protocol: Phoenix is
+one component of a bundle, and the bundle's own record name (`phoenix/v0.4-rc.1`) rides in every
+result's `generation.distribution`. The 0.6.0 spellings `phoenix/v0.4-rc.1` and
+`phoenix/v0.3-rc.1` are still accepted as input and resolve to the new labels; results carry the
+new label. Every chain-backed command takes `--generation <label>`. Omit it and a prepare targets the primary; a pool-scoped read or bundle
 (`--pool-id …`) follows the generation the POOL lives on, resolved from the chain, and reports it
 as `data.generation`. `ch query protocol-config` lists a chain's generations with each block's
 addresses and wire; `ch capabilities --topic generations` explains the model. A pool no generation
@@ -27,11 +31,14 @@ knows is `pool_not_found`; a label the chain does not configure is `generation_u
 ch query cork-pool --chain-id <id> --pool-id <0x…>       # one pool's full live state
 ch query cork-pools --chain-id <id>                      # all pools the venue lists
 ch query trading-pairs --chain-id <id>                   # tradable pair listings on the venue book
-ch query orderbook --chain-id <id> --pool-id <0x…>       # resting limit orders (--side, --status, --order-hash)
+ch query orderbook --chain-id <id> --pool-id <0x…>       # resting limit orders, RANKED for --account (the fill sender); --sort venue for the venue's order
+ch query orderbook --chain-id <id> --pool-id <0x…> --account <0x…> --watch [--interval <s>] [--iterations <n>]   # print only the ticks that changed (since/wait loop)
+ch query offers --chain-id <id> --pool-id <0x…> --account <0x…>   # live orders joined with the RFQ quotes they cite; firm vs indicative
 ch query rollover-orders --chain-id <id> --kind orders   # rollover feed (orders | fills | contracts)
 ch query rfqs --chain-id <id>                            # open requests-for-quote
 ch query rfq --chain-id <id> --rfq-id <rfq_…>            # one RFQ with all its answers
 ch query rfqs --chain-id <id> --underwriter <0x…> --with-answers true   # the RFQs you answered (venue-side filter)
+ch query rfqs --chain-id <id> --watch [--interval <s>]   # RFQ firmness loop: appeared/gone, version moved, accepted quotes nobody rested (unbacked)
 ch query account-state --chain-id <id> --pool-id <0x…> --account <0x…>   # balances + funding allowances
 ch query account-state --chain-id <id> --account <0x…>   # NO pool id: the account's positions across every generation (pools scanned over your RPC; --mode hybrid takes the venue's list)
 ch query pool-whitelist --chain-id <id> --pool-id <0x…> --account <0x…>  # is a gated pool open to you
