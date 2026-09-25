@@ -1,34 +1,33 @@
 # Anatomy of a Cork just-in-time (JIT) order
 
-The contract-level semantics of an order whose fill creates a Cork market: what the order
-carries, what the adapter does with it, and every way it can refuse. **Deliberately
-chain-agnostic and address-free** — nothing here goes stale on a redeploy. For live addresses,
-read the chain (`ch query protocol-config`, `ch query registry-recipes`); for the end-to-end
-demand-side walkthrough, see [zyfai-quickstart.md](zyfai-quickstart.md).
+This page gives the contract-level rules of an order whose fill creates a Cork market: what the
+order carries, what the adapter does with it, and every way the fill can refuse. It is
+**chain-agnostic and address-free on purpose**, so nothing here goes stale on a redeploy. For live
+addresses, read the chain: `ch query protocol-config` and `ch query registry-recipes`. For the
+end-to-end demand-side walkthrough, see [zyfai-quickstart.md](zyfai-quickstart.md).
 
-Audience: anyone authoring, filling, decoding, or auditing a JIT order outside the tool —
-the tool itself performs the checks below automatically and names its refusals with the
-warning codes noted throughout.
+Audience: anyone who writes, fills, decodes or audits a JIT order outside the tool. The tool runs
+every check below for you and names each refusal with the warning code given in the text.
 
 ---
 
 ## 1. The idea in one paragraph
 
-A Cork market is fully named by four choices (collateral asset, reference asset, expiry,
-recipe), so it can be created at the moment a trade needs it. A JIT order is a 1inch LOP v4
-order carrying the **CorkLimitOrderAdapter** as an interaction hook: when the order fills, the
-adapter resolves the market's rate oracle (deploying it if needed), re-checks the rate
-constraint the order carries, creates the pool if it does not exist, and — where it applies —
-mints the cST/cPT **inside the fill**, funded by the served party's collateral. One
-transaction: market, mint, and trade.
+Four choices name a Cork market in full: collateral asset, reference asset, expiry and recipe.
+So the market can be created at the moment a trade needs it. A JIT order is a 1inch LOP v4 order
+that carries the **CorkLimitOrderAdapter** as an interaction hook. When the order fills, the
+adapter resolves the market's rate oracle and deploys it if needed, re-checks the rate constraint
+the order carries, creates the pool if it does not exist, and, where it applies, mints the cST and
+cPT **inside the fill**, funded by the served party's collateral. One transaction does the
+market, the mint and the trade.
 
 ## 2. The hook payload (`extraData`)
 
-Two layouts of the payload are live, one per adapter generation. The wire a generation speaks is
-declared in the tool's config and never guessed from the bytes: `ch query protocol-config` names
-each generation's `marketRegistry.wire`, and `ch decode order` labels a JIT order with the
+Two layouts of the payload are live, one per adapter generation. The tool's config declares the
+wire each generation speaks. The tool never guesses it from the bytes. `ch query protocol-config`
+names each generation's `marketRegistry.wire`, and `ch decode order` labels a JIT order with the
 generation of the adapter it names (`jit.generation`, `jit.wire`). The tool builds the layout of
-the generation you select (`--generation <label>`; the primary when you name none).
+the generation you select with `--generation <label>`, the primary when you name none.
 
 ### 2a. The `flat` layout — Market Registry 0.3.x (`cork/v0.3`)
 
