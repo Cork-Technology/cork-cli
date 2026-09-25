@@ -247,6 +247,34 @@ const CATALOG: Mutant[] = [
     tests: [T.handlers],
   },
   {
+    // decode must trust EVERY generation's Cork adapter: dropping the per-generation book turns a
+    // bundle for a live cork/v0.3 pool into a false TARGET MISMATCH against the primary's adapter
+    // (the 2026-09-25 anvil-smoke finding).
+    id: "decode-adapter-book-dropped",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "corkAdapter: dep?.corkAdapter, corkAdapters, lop:",
+    replace: "corkAdapter: dep?.corkAdapter, corkAdapters: [], lop:",
+    tests: [T.decodeTrust],
+  },
+  {
+    // a matched non-primary adapter must be TRUSTED, not merely labeled — a verdict that falls
+    // through to the primary comparison accuses it again.
+    id: "decode-adapter-book-not-trusted",
+    file: "packages/core/src/bundle/decode.ts",
+    find: 'return { verification: "trusted", generation: other.label };',
+    replace: 'return { ...verifyAgainst(to, trust.corkAdapter), generation: other.label };',
+    tests: [T.decodeTrust],
+  },
+  {
+    // the burn-side note names the spender the owner must approve; "the pool manager" was the
+    // wrong contract (an allowance there is never spent — fork-verified 2026-09-25).
+    id: "funding-owner-note-wrong-spender",
+    file: "packages/core/src/bundle/funding.ts",
+    find: "so owner must have approved the cork adapter (${adapter})",
+    replace: "so owner must have approved the pool manager (${adapter})",
+    tests: [T.funding],
+  },
+  {
     // cancel's `retires` must come from the SIGNED traits' nonce, not a placeholder.
     id: "handler-cancel-retires-nonce",
     file: "packages/core/src/handlers/prepare-orders.ts",

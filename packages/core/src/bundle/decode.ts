@@ -28,8 +28,15 @@ import { decodeMulticall, isBundlerMulticall, ZERO_CALLBACK_HASH, type Call } fr
 export interface DecodeTrustTargets {
   /** The Bundler3 a nested multicall/reenter leg must target. */
   bundler3?: `0x${string}` | undefined;
-  /** The Cork adapter: every `safe*` action AND every GeneralAdapter fund/sweep leg runs here. */
+  /** The Cork adapter: every `safe*` action AND every GeneralAdapter fund/sweep leg runs here.
+   *  The PRIMARY generation's adapter — the address a mismatch verdict names as "Cork's". */
   corkAdapter?: `0x${string}` | undefined;
+  /** Every OTHER configured generation's Cork adapter, each with its generation label (2026-09-25):
+   *  a bundle built for a pool on an older generation runs at THAT generation's adapter, and a
+   *  genuine Cork adapter of any generation is trusted, never accused — the matched leg carries
+   *  `generation`. Without this list, every bundle for a live cork/v0.3 pool decoded as a
+   *  TARGET MISMATCH against the primary's adapter (found by the anvil smoke of the 0.6 docs). */
+  corkAdapters?: readonly { address: `0x${string}`; label: string }[] | undefined;
   /** The chain's 1inch LOP v4, for fill/cancel legs. */
   lop?: `0x${string}` | undefined;
   /** An integrator-deployed ForSelf adapter, once the caller has verified its bindings. */
@@ -56,6 +63,9 @@ type LegBase = {
   verification: LegVerification;
   /** For a `mismatch`: the configured address the leg was expected to target. */
   expectedTarget?: `0x${string}`;
+  /** For a trusted Cork/adapter leg matched through `corkAdapters`: the generation label of
+   *  the adapter it targets (absent when it targets the primary's, or nobody could vouch). */
+  generation?: string;
 };
 
 export type DecodedLeg =
@@ -138,6 +148,19 @@ function verifyToken(to: `0x${string}`, tokens: readonly `0x${string}`[] | undef
   return { verification: known ? "trusted" : "unverified" };
 }
 
+/** Verdict for the Cork-adapter role across generations: the primary's adapter is trusted
+ *  and unlabeled; any other configured generation's adapter is trusted AND labeled with its
+ *  generation; a contradiction names the PRIMARY's adapter as the expected target (one
+ *  address in the message, the same one the JIT verdict names); no configured adapter at
+ *  all is unverified. */
+function verifyAdapter(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBase, "verification" | "expectedTarget" | "generation"> {
+  const other = trust.corkAdapters?.find((a) => a.address.toLowerCase() === to.toLowerCase());
+  if (other !== undefined && (trust.corkAdapter === undefined || other.address.toLowerCase() !== trust.corkAdapter.toLowerCase())) {
+    return { verification: "trusted", generation: other.label };
+  }
+  return verifyAgainst(to, trust.corkAdapter);
+}
+
 const base = (c: Call): Omit<LegBase, "verification"> => ({ to: c.to, value: c.value, skipRevert: c.skipRevert, callbackHash: c.callbackHash });
 
 function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets): DecodedLeg {
@@ -153,12 +176,12 @@ function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets): DecodedL
     }
     if (CORK_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: corkAdapterAbi, data: c.data });
-      return { ...base(c), ...verifyAgainst(c.to, trust.corkAdapter), kind: "cork", action: functionName, params: args[0] };
+      return { ...base(c), ...verifyAdapter(c.to, trust), kind: "cork", action: functionName, params: args[0] };
     }
     if (LEG_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: bundlerLegAbi, data: c.data });
       const role = ADAPTER_LEG_FUNCTIONS.has(functionName) ? "adapter" : "erc20";
-      const verdict = role === "adapter" ? verifyAgainst(c.to, trust.corkAdapter) : verifyToken(c.to, trust.erc20);
+      const verdict = role === "adapter" ? verifyAdapter(c.to, trust) : verifyToken(c.to, trust.erc20);
       return { ...base(c), ...verdict, kind: "leg", role, fn: functionName, args: args as readonly unknown[] };
     }
     if (FORSELF_SELECTORS.has(selector)) {

@@ -201,7 +201,7 @@ export function fundingPlan(
   if (burnReqs) {
     const owner = "owner" in action ? action.owner : undefined;
     if (owner && owner.toLowerCase() !== adapter.toLowerCase()) {
-      return { legs: [], ...NONE, note: `owner (${owner}) is not the adapter; shares are burned from owner directly — ensure owner approved the pool manager for cPT/cST. No funding leg was built.` };
+      return { legs: [], ...NONE, note: `owner (${owner}) is not the adapter; the pool burns the shares from owner directly, with the ADAPTER as the caller — so owner must have approved the cork adapter (${adapter}) for the cPT/cST being burned, or the bundle reverts ERC20InsufficientAllowance naming the adapter (verified on a Base fork 2026-09-25; an allowance to the pool manager is never spent). No funding leg was built.` };
     }
     // owner == adapter: transfer shares in, unless a sentinel amount (uint256.max) is used.
     const hasSentinel = burnReqs.some((r) => BigInt(actionField(action, r.field) ?? "0") === MAX_UINT);
