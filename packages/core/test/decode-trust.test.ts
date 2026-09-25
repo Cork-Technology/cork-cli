@@ -98,6 +98,44 @@ describe("kind:tx — the documented validate-before-broadcast step", () => {
   });
 });
 
+describe("every generation's Cork adapter is trusted — a bundle for a pool on an older generation (2026-09-25)", () => {
+  // Found by the anvil smoke of the 0.6 docs: a deposit built for a live cork/v0.3 pool runs at
+  // cork/v0.3's adapter, and the decode accused it of a TARGET MISMATCH against the primary's.
+  const gens = generationsOf(BUNDLED_DEFAULTS, 8453);
+  const PRIMARY_ADAPTER = primaryOf(gens)!.phoenix!.corkAdapter as `0x${string}`;
+  const PREVIOUS = gens.find((g) => g.label === "cork/v0.3")!;
+  const PREVIOUS_ADAPTER = PREVIOUS.phoenix!.corkAdapter as `0x${string}`;
+  const BUNDLER3_8453 = primaryOf(gens)!.phoenix!.bundler3 as `0x${string}`;
+  const decodeAt = (adapter: `0x${string}`) =>
+    runTool("cork_decode", { kind: "calldata", chainId: 8453, to: BUNDLER3_8453, data: encodeMulticall([pullLeg(adapter), depositLeg(adapter)]) }, ctx);
+
+  it("the previous generation's adapter is trusted, silent, and the legs carry its generation label", async () => {
+    const env = await decodeAt(PREVIOUS_ADAPTER);
+    expect(env.state).toBe("ok");
+    expect(codes(env)).toEqual([]);
+    const legs = (env.data as { legs: Leg[] }).legs as Array<Leg & { generation?: string }>;
+    expect(legs.map((l) => [l.kind, l.verification, l.generation])).toEqual([
+      ["leg", "trusted", "cork/v0.3"],
+      ["cork", "trusted", "cork/v0.3"],
+    ]);
+    expect((env.data as { summary: string[] }).summary.join("\n")).not.toMatch(/MISMATCH|UNVERIFIED/);
+  });
+
+  it("the primary's adapter stays trusted with no label; a look-alike is still a conflict naming the PRIMARY's adapter", async () => {
+    const primary = await decodeAt(PRIMARY_ADAPTER);
+    expect(primary.state).toBe("ok");
+    expect(((primary.data as { legs: Leg[] }).legs as Array<Leg & { generation?: string }>).map((l) => [l.verification, l.generation])).toEqual([["trusted", undefined], ["trusted", undefined]]);
+
+    const bad = await decodeAt(FAKE);
+    expect(bad.state).toBe("conflict");
+    expect((bad.data as { legs: Leg[] }).legs.map((l) => [l.verification, l.expectedTarget?.toLowerCase()])).toEqual([
+      ["mismatch", PRIMARY_ADAPTER.toLowerCase()],
+      ["mismatch", PRIMARY_ADAPTER.toLowerCase()],
+    ]);
+    expect(PREVIOUS_ADAPTER.toLowerCase()).not.toBe(PRIMARY_ADAPTER.toLowerCase());
+  });
+});
+
 describe("kind:calldata — raw bytes with no target of their own", () => {
   it("a single call cannot be verified: OK, labeled, and the warning says to decode the signed tx to check the target", async () => {
     const env = await runTool("cork_decode", { kind: "calldata", chainId: 1, data: approveData }, ctx);

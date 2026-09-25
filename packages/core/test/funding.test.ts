@@ -62,6 +62,13 @@ describe("fundingPlan: share-burn actions", () => {
     const { legs, note } = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);
     expect(legs).toHaveLength(0);
     expect(note).toMatch(/owner/i);
+    // The pool burns from `owner` with the ADAPTER as caller, so the allowance the owner must
+    // hold is to the adapter — a Base fork (2026-09-25) reverted ERC20InsufficientAllowance
+    // naming the adapter without it. The note once said "the pool manager": an allowance
+    // there is never spent.
+    expect(note).toContain(ADP);
+    expect(note).toMatch(/approved the cork adapter/i);
+    expect(note).not.toMatch(/approved the pool manager/i);
   });
   it("owner==adapter with uint256.max sentinel -> REFUSAL: no exact amount to pull atomically", () => {
     const MAX = ((1n << 256n) - 1n).toString();

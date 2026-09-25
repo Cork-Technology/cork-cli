@@ -16,6 +16,11 @@ covered.
 - SDK (`@cork/core`, root and `/config`): `GENERATION_LABEL_RENAMES` and `renamedGenerationLabel(label)`; `resolveGenerationAlias` results carry `renamedFrom` when an old spelling was given.
 - `cork_capabilities topic:"generations"` states the naming rule and lists the accepted old spellings.
 
+### Fixed
+
+- `cork_decode` trusts every configured generation's Cork adapter, not only the primary's. A bundle built for a pool on an older generation runs at THAT generation's adapter (every pool the venue serves today lives on `cork/v0.3`), and the decode accused it of a `target_mismatch` against `cork/v0.4`'s adapter — a false "do not sign" on every live bundle. Found by the anvil smoke of the 0.6 docs. A matched leg carries `generation` (the adapter's label); the primary's adapter stays unlabeled; a look-alike still conflicts naming the primary's adapter. SDK: `DecodeTrustTargets.corkAdapters` (labeled list) beside `corkAdapter`.
+- The `owner_managed_funding` note on burn-side bundles (`withdraw`, `withdraw-other`, `redeem`, `unwind-deposit`, `unwind-mint` with `owner` ≠ adapter) named the wrong spender. The pool burns the shares from `owner` with the ADAPTER as caller, so the allowance the owner needs is to the cork adapter; an allowance to the pool manager is never spent. Verified on a Base fork: without it the bundle reverts `ERC20InsufficientAllowance` naming the adapter. The note now names the adapter address.
+
 ## [0.6.0] — 2026-09-24
 
 This release adds the Distribution `phoenix/v0.4-rc.1` contract set: Phoenix 1.4.0-rc.1, Market Registry 0.5.0, Rollover 0.2.0 and cork-periphery 0.2.0-rc.1, on Arbitrum One and Base. It keeps every older set. A chain now hosts a SET of contract generations, one of them primary. Prepares target the primary. Reads, decode and event attribution follow the generation a pool or contract belongs to. Nothing here retires an address.

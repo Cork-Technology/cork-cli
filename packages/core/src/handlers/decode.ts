@@ -312,9 +312,13 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   // wire, so the label dispatches its codec by classification (a nested payload at the nested
   // adapter, a flat one at the flat adapter, a mode-string one at the legacy adapter) instead of
   // trial-decoding — and a genuine Cork adapter of any generation is trusted, never accused.
+  const corkAdapters = generations.flatMap((g) => (g.phoenix?.corkAdapter ? [{ address: g.phoenix.corkAdapter as `0x${string}`, label: g.label }] : []));
   const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {
-    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
+    // The Phoenix adapter book is PER GENERATION too: a bundle built for a pool on an older
+    // generation runs at THAT generation's adapter (every pool the venue serves today), so each
+    // configured generation's corkAdapter is trusted and the matched leg carries its label.
+    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, corkAdapters, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
     jitTrust: { adapters, generations },
     dep,
     depWarn,
