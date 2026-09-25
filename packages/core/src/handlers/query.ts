@@ -756,7 +756,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   if (input.resource === "protocol-config") {
     if (refusal) return generationRefusal(chainId, refusal, generation, ctx, "cork_query");
     if (!dep) return unavailable(chainId, "unknown_deployment", `no known deployment for chainId ${chainId}`, ctx);
-    const { generations } = await resolveGenerations(chainId);
+    const { generations, source: configSource, configOverride } = await resolveGenerations(chainId);
     const selected = generations.find((g) => g.label === generation?.label) ?? generations.find((g) => g.primary);
     // `data.generation` is the SAME compact ref every other result carries (label/status/
     // distribution — generationRefOf), and `provenance.generation` rides too (review B3,
@@ -769,6 +769,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         resource: input.resource,
         chainId,
         deployment: dep,
+        // Which layers built this answer: the default document's source and, when one applied,
+        // the local `config.json` override with what it changed (config-override.ts).
+        config: { default: { file: "config.default.json", source: configSource }, ...(configOverride ? { override: configOverride } : {}) },
         ...(selected
           ? {
               generation: generationRefOf(selected),

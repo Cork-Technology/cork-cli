@@ -170,6 +170,7 @@ Warning codes:
 
 | Code | Meaning / what to do |
 |---|---|
+| `config_override_active` / `config_override_invalid` | Info on every result built while a LOCAL `config.json` override is in effect (`config-override.ts`, 2026-09-25): the operator layer that wins over `config.default.json` at WHOLE-SET granularity — a set under `generations.<chain>.sets` replaces or adds the set with that key (complete sets only, R5b), `primary` moves the primary, `only` keeps just the listed keys (a partner pinning what it integrated), LOP/Fusion entries replace per chain; `approvedImplementations` is never overridable (its presence refuses the file). Read from `CORK_CONFIG_FILE`, then `~/.config/cork-helper-cli/config.json`, then the source tree's root (the PRIVATE tree's own `config.json` — internal sets live there, never in the public default; the port excludes the file); `CORK_CONFIG_NO_OVERRIDE=1` disables the layer (the hermetic suite sets it). The message names the file and what it changed; `protocol-config` shows `data.config.{default,override}`. `_invalid`: a PRESENT file was refused whole (schema, a `primary` naming no set, `only` dropping the primary, `CORK_CONFIG_FILE` naming a missing file) and the default serves ALONE — never a partial application. |
 | `requires_rpc` | No RPC resolved (offline, or a chain outside defaults+fallback like vnet 49222). Set `CORK_RPC_URL`. |
 | `request_aborted` | unavailable: the caller's deadline or cancellation (`ctx.signal`, the HTTP ingress's 30 s budget) ended the call before the venue answered — no page fetched past the abort, NO breaker failure recorded (the venue did nothing wrong), and the message says whether the call never started (nothing sent) or was cancelled mid-flight (a relay MAY have reached the venue — retry with the same clientRequestId; the venue's idempotency answers). The HTTP caller sees a 504 at the deadline; the admission slot is held until the cancelled work settles. |
 | `unknown_deployment` | No/partial deployment config for this chainId; an RPC won't fix it. |
@@ -444,9 +445,14 @@ labels. The 0.6.0 spellings `phoenix/v0.4-rc.1`/`phoenix/v0.3-rc.1` stay accepte
 `GENERATION_LABEL_RENAMES` (resolved in `resolveGenerationAlias`, the one place an alias becomes a
 label — owner ruling 2026-09-25); every result carries the new label. TWO FILES, ONE SCHEMA
 (2026-09-25, after the released 0.6.0 broke): `config.default.json` (repo root) is the document
-THIS line bundles and fetches — keyed by bundle label, fetched from the binary's OWN RELEASE TAG
-(`corkDefaultsUrlFor(BUILD_VERSION)`: `…/v<version>/config.default.json`, `main` only for a "dev"
-source run) so the file a binary resolves `generation` against never changes under it;
+THIS line bundles and fetches — keyed by bundle label, fetched from the binary's RELEASE-LINE BRANCH
+(`corkDefaultsUrlFor(BUILD_VERSION)`: `…/release/<major>.<minor>/config.default.json`, `main` only for
+a "dev" source run): the branch is the ESCAPE HATCH — a compatible address change pushed there reaches
+every binary of the line within the hour without an upgrade, while the release TAG stays immutable (GitHub
+immutable releases carry the attestations); the branch may only receive changes every binary of the line
+understands, guarded by the frozen-keys tripwire (`packages/core/test/config-frozen-keys.test.ts`:
+`RELEASED_LINE_KEYS` per line, offline against the tree + live against the public branch under
+CORK_RPC_LIVE=1);
 `cork-defaults.v2.json` stays on main FROZEN with the record-name keys (`phoenix/v0.4-rc.1`), because
 the released 0.6.0 fetches it from main by name — renaming its keys there broke `--generation
 phoenix/v0.4-rc.1` on 0.6.0 within the hour (the Distribution verifier caught it). Address updates
@@ -608,8 +614,9 @@ Deployment addresses are NOT hardcoded in source. `config.default.json` (repo ro
 2`; bundle-label keys, 2026-09-25 — `cork-defaults.v2.json` is the same schema with record-name keys,
 FROZEN on main for the released 0.6.0, see "Per-chain coverage") is canonical;
 `packages/core/src/config-remote.ts` resolves **remote-first**: fetch from GitHub raw at the
-binary's OWN RELEASE TAG (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`; the env var
-overrides; a "dev" source run reads main) → strict zod validation (tampered content rejected;
+binary's RELEASE-LINE BRANCH `release/<major>.<minor>` (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`;
+the env var overrides; a "dev" source run reads main; a compatible address change pushed to the branch is the
+no-upgrade escape hatch, the frozen-keys tripwire keeps it compatible) → strict zod validation (tampered content rejected;
 `ChainGenerationsSchema` in generations.ts) → 1 h disk cache
 (`~/.cache/cork-helper-cli/config.default.json`, override `CORK_CONFIG_CACHE_FILE`). HTTP 404/410
 (not published) → bundled copy served silently; a transient failure → bundled copy + a

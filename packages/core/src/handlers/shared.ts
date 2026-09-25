@@ -168,7 +168,7 @@ export async function getDep(
   const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");
   if (aliased.refusal) return { dep: undefined, depWarn: [aliased.refusal], refusal: aliased.refusal };
   const r = await resolveDeploymentBuiltin(chainId, undefined, aliased.label);
-  const depWarn = r.warning ? [r.warning] : [];
+  const depWarn = [...r.warnings];
   if (r.refusal) return { dep: undefined, depWarn: [...depWarn, r.refusal], refusal: r.refusal };
   if (opts.purpose === "prepare" && r.generation && r.generation.status !== "active") {
     const refusal: GenerationRefusal = {
@@ -230,8 +230,8 @@ export async function getPoolDep(
   opts: { purpose?: "read" | "prepare"; generation?: string; tool: string },
 ): Promise<PoolDepResolution> {
   if (ctx.deployment) return { dep: ctx.deployment, depWarn: [] };
-  const { generations, warning } = await resolveGenerations(chainId);
-  const depWarn = warning ? [warning] : [];
+  const { generations, warnings } = await resolveGenerations(chainId);
+  const depWarn = [...warnings];
   // The alias resolves against the purpose HERE (a prepare's `all` teaching differs from a
   // read's); the resolver below then sees a label only.
   const aliased = resolveGenerationAlias(generations, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");

@@ -612,8 +612,9 @@ signing and reconcile after (`ch track reconcile`). The chain outranks the index
 of generations. `ch query protocol-config` lists them all with each block's addresses and wire.
 Every result names the generation it answered from (`data.generation`), and `--generation
 <label>` selects a non-primary set for a prepare. A released build reads its address file,
-`config.default.json`, from its own release tag, so the file never changes under a binary you
-already run. Redeployed addresses reach you with the next release.
+`config.default.json`, from its release-line branch (`release/0.6` for every 0.6.x build). Only
+compatible address changes land there, so a redeployed address reaches an installed copy within
+an hour, and the names your scripts use keep working.
 
 The primary set on Base and Arbitrum One (`cork/v0.4`, contracts release **0.5.0** on the Phoenix
 1.4.0-rc.1 pool manager; identical addresses on both chains):

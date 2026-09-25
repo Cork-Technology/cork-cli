@@ -339,6 +339,12 @@ ch self-update [--tag <vX.Y.Z>] [--dry-run] [--allow-downgrade]         # verifi
 Set `CORK_MCP_TOKEN` for bearer auth on the HTTP server. Pass `--trust-forwarded-for` only behind
 an ingress you control; without it every caller behind a proxy shares one client slot.
 `ENVIO_HYPERSYNC_TOKEN` enables `--mode full-decentralized` over the HyperSync archive.
+`CORK_CONFIG_FILE` points at a local `config.json` that overrides `config.default.json`: a whole
+deployment set per key, the primary, or an `only` list of the sets you want to see. `ch query
+protocol-config` shows both layers under `data.config`, and every result built with an override
+warns `config_override_active`. `CORK_CONFIG_NO_OVERRIDE=1` turns the layer off. A released build
+fetches `config.default.json` from its release-line branch (`release/0.6` for 0.6.x), so a
+redeployed address reaches you within an hour without an upgrade.
 
 Accepted synonyms, and the pre-rename names that answer with their new name, are listed in the
 README's synonym table.

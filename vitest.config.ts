@@ -26,7 +26,10 @@ export default defineConfig({
     // another's read — 2026-09-23); scan-cache.ts is a no-op under vitest when unset, so the
     // USER's real ~/.cache state is never touched either way. Tests needing per-test isolation
     // re-point the variable again themselves.
-    env: { CORK_CONFIG_NO_FETCH: "1" },
+    // CORK_CONFIG_NO_OVERRIDE: the private tree carries its own `config.json` at the repo root (the
+    // operator override, config-override.ts); the hermetic suite must never read it — override
+    // tests inject `loadOverride` through ConfigDeps.
+    env: { CORK_CONFIG_NO_FETCH: "1", CORK_CONFIG_NO_OVERRIDE: "1" },
     setupFiles: ["./vitest.setup.ts"],
     // The suite must run where only Bun is installed. With no `node` on PATH, vitest itself runs
     // on Bun, and Bun answers `"__esModule" in <ESM namespace>` with true (Node: false) although
