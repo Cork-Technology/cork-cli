@@ -103,6 +103,12 @@ describe("applyOverride / resolveConfig — the layer is disclosed, a refused fi
     expect(r.warnings[1]!.message).toContain("8453/cork/v0.5-staging");
     expect(Object.keys(r.defaults.generations["8453"]!.sets)).toContain("cork/v0.5-staging");
   });
+  it("a file that changes nothing is disclosed in provenance but does not warn (the private tree's empty placeholder)", () => {
+    const r = applyOverride({ defaults: base, source: "bundled" }, { kind: "ok", path: "/repo/config.json", override: parseOverride({ schemaVersion: 2, generations: {} }) });
+    expect(r.override).toEqual({ path: "/repo/config.json", sets: [], primaryMoved: [], filtered: [], chainEntries: [] });
+    expect(r.warnings).toEqual([]);
+    expect(r.defaults).toEqual(base);
+  });
   it("invalid (schema) and invalid (merge) → the default alone + config_override_invalid; nothing partial", async () => {
     const bad = applyOverride({ defaults: base, source: "bundled" }, { kind: "invalid", path: "/x/config.json", error: "boom" });
     expect(bad.defaults).toBe(base);

@@ -321,7 +321,10 @@ export function applyOverride(layer: DefaultLayer, loaded: LoadedOverride): Reso
     // the effective document, and the override schema refuses the key; the merge below carries
     // the default layer's block through untouched either way.
     const { merged, summary } = mergeConfig(layer.defaults, loaded.override);
-    return { ...layer, defaults: merged, override: { path: loaded.path, ...summary }, warnings: [...warnings, { code: "config_override_active", message: describeOverride(loaded.path, summary) }] };
+    // A file that changes nothing (the private tree's empty placeholder) is disclosed in
+    // provenance but does not warn: the warning marks results a local file actually shaped.
+    const effective = summary.sets.length + summary.primaryMoved.length + summary.filtered.length + summary.chainEntries.length > 0;
+    return { ...layer, defaults: merged, override: { path: loaded.path, ...summary }, warnings: effective ? [...warnings, { code: "config_override_active", message: describeOverride(loaded.path, summary) }] : warnings };
   } catch (err) {
     return { ...layer, warnings: [...warnings, { code: "config_override_invalid", message: `local configuration override ${loaded.path} was REFUSED whole and config.default.json serves alone: ${err instanceof Error ? err.message : String(err)}` }] };
   }
