@@ -6,7 +6,7 @@ import { hostOf, isTransportError, reportEndpointFailure, type ResolvedRpc, RpcC
 import { resolveRpc as resolveRpcBuiltin } from "../chain/rpc.ts";
 import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, resolveMarketRegistry, type CorkMarketRegistry } from "../config-remote.ts";
 import { type CorkDeployment } from "../config.ts";
-import { type GenerationBlockKind, type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, isGenerationAlias, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolveGenerationAlias, resolvePoolGeneration } from "../generations.ts";
+import { type GenerationBlockKind, type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, isGenerationAlias, renamedGenerationLabel, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolveGenerationAlias, resolvePoolGeneration } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
@@ -151,7 +151,9 @@ export async function resolveGenerationLabel(
   needs: readonly GenerationBlockKind[],
   purpose: "read" | "prepare",
 ): Promise<{ label: string | undefined; refusal?: GenerationRefusal }> {
-  if (!isGenerationAlias(label)) return { label };
+  // A plain current label needs no chain lookup; an alias or a RENAMED label (an old spelling
+  // from 0.6.0) resolves through the one resolver so the result carries today's label.
+  if (label === undefined || (!isGenerationAlias(label) && renamedGenerationLabel(label) === undefined)) return { label };
   const { generations } = await resolveGenerations(chainId);
   const a = resolveGenerationAlias(generations, label, needs, purpose);
   return a.ok ? { label: a.label } : { label, refusal: a.refusal };

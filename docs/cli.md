@@ -14,7 +14,7 @@ Common flags everywhere: `--chain-id <id|name>` (`mainnet`/`arbitrum`/`base` wor
 Retrying the same request? Reuse its `--client-request-id`; new intent, new id.
 
 **Generations.** A chain hosts a SET of contract generations, one of them primary
-(`phoenix/v0.4-rc.1` on Arbitrum and Base). Every chain-backed command takes
+(`cork/v0.4` on Arbitrum and Base). Every chain-backed command takes
 `--generation <label>`. Omit it and a prepare targets the primary; a pool-scoped read or bundle
 (`--pool-id …`) follows the generation the POOL lives on, resolved from the chain, and reports it
 as `data.generation`. `ch query protocol-config` lists a chain's generations with each block's
@@ -74,7 +74,7 @@ ch query derive-cork-pool --chain-id <id> \
   after registration. The 0.5.0 registry records no `feedDecimals`.
 - **Denominations are keyed by wire.** The 0.5.0 registry (`nested`, the primary) lists address
   units (`{ unit, symbol, name }`) and takes `--address` for a single lookup; the 0.3.3 registry
-  (`flat`, `--generation phoenix/v0.3-rc.1`) keys them by exact-bytes `--label`. Passing `--label`
+  (`flat`, `--generation cork/v0.3`) keys them by exact-bytes `--label`. Passing `--label`
   to a nested-wire registry is refused with teaching.
 - **Recipe values mix two scales by name.** In `registry-recipes` constants, anything ending
   `_PERCENTAGE` is on the 1e18-=-1% scale; `RATE_MIN`-style values are absolute rates
@@ -121,7 +121,7 @@ ch deposit --chain-id 42161 --pool-id <new> --collateral-assets-in 1000e18 --min
 ch track reconcile --tx-hash <0x…>
 ```
 
-`--generation` takes a label (`phoenix/v0.3-rc.1`), `previous` (the newest active non-primary set
+`--generation` takes a label (`cork/v0.3`), `previous` (the newest active non-primary set
 that carries the contracts the command needs) or `primary` (the default). Results always carry the
 resolved label, never the alias. `all` is refused on every command but the positions read, which
 spans generations by itself. `ch capabilities --topic migration` is the full recipe, including the
@@ -184,7 +184,7 @@ ch prepare market create-pool --chain-id <id> --client-request-id <id> \
 The JIT market block (`--jit-market '{…}'` on orders, the flags above on `create-pool`) names the
 recipe bytes `extraData`; `additionalData` is accepted as an alias with a deprecation notice. The
 bytes follow the selected generation's registry wire: nested (`MarketParams` + `oracleSalt`, a
-10-field pool id with the fees inside) on `phoenix/v0.4-rc.1`; flat on `phoenix/v0.3-rc.1`.
+10-field pool id with the fees inside) on `cork/v0.4`; flat on `cork/v0.3`.
 
 ## Inspect bytes — `ch decode`
 

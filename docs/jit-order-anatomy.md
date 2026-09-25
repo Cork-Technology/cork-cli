@@ -30,7 +30,7 @@ each generation's `marketRegistry.wire`, and `ch decode order` labels a JIT orde
 generation of the adapter it names (`jit.generation`, `jit.wire`). The tool builds the layout of
 the generation you select (`--generation <label>`; the primary when you name none).
 
-### 2a. The `flat` layout — Market Registry 0.3.x (`phoenix/v0.3-rc.1`)
+### 2a. The `flat` layout — Market Registry 0.3.x (`cork/v0.3`)
 
 The adapter's parameters ride in the order extension as:
 
@@ -69,7 +69,7 @@ encoded bytes, with the order salt committing to the extension. Taker-side, the 
 `adapter ++ extraData` bytes ride in the fill's `args`, with their length packed at takerTraits
 bits 200–223.
 
-### 2b. The `nested` layout — Market Registry 0.5.0 (`phoenix/v0.4-rc.1`, the primary)
+### 2b. The `nested` layout — Market Registry 0.5.0 (`cork/v0.4`, the primary)
 
 The 0.5.0 adapter wraps the market creator's own struct instead of flattening it:
 
@@ -242,8 +242,8 @@ market, added in the 0.3.x line):
 | Error | Cause |
 |---|---|
 | `ExpiryOutOfRange` | The market would live longer than the registry's `maxExpiryDuration` (inclusive bound; 30 days at deployment, governance-movable) |
-| `SwapFeeOutOfRange` | 8-field pool manager (`phoenix/v0.3-rc.1`): a fee field above the 5% cap (`5e18` on the 1e18-=-1% scale) |
-| `InvalidFees` | 10-field pool manager (`phoenix/v0.4-rc.1`): a fee field at or above 100% (`100e18`); there is no `MAX_FEE_PERCENTAGE` getter on this set |
+| `SwapFeeOutOfRange` | 8-field pool manager (`cork/v0.3`): a fee field above the 5% cap (`5e18` on the 1e18-=-1% scale) |
+| `InvalidFees` | 10-field pool manager (`cork/v0.4`): a fee field at or above 100% (`100e18`); there is no `MAX_FEE_PERCENTAGE` getter on this set |
 | `InvalidRate` | 10-field pool manager: the oracle's live rate falls outside the carried constraint at creation — the lesson of the first nested rehearsal: an anchor of 1.0 on an undeployed NAV pair whose vault rate is 1.09 builds a market the fill rejects |
 
 The tool's pre-flights surface most of these before anything is signed: `recipe_not_found`,
@@ -274,8 +274,8 @@ depends on the generation:
 
 | Generation | Role holder | Roles |
 |---|---|---|
-| `phoenix/v0.3-rc.1` (flat, v1.3 controller) | the adapter | `POOL_CREATOR_ROLE` + `FEE_MANAGER_ROLE` |
-| `phoenix/v0.4-rc.1` (nested, 1.4.0-rc.1 controller) | the **creator** — the adapter holds no role | `POOL_CREATOR_ROLE` only; the 1.4.0 controller has no `FEE_MANAGER_ROLE` |
+| `cork/v0.3` (flat, v1.3 controller) | the adapter | `POOL_CREATOR_ROLE` + `FEE_MANAGER_ROLE` |
+| `cork/v0.4` (nested, 1.4.0-rc.1 controller) | the **creator** — the adapter holds no role | `POOL_CREATOR_ROLE` only; the 1.4.0 controller has no `FEE_MANAGER_ROLE` |
 
 | Role | Hash |
 |---|---|

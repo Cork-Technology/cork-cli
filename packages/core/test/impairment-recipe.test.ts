@@ -78,7 +78,7 @@ describe("recipeAbi — the impairment recipe's typed reverts decode BY NAME", (
 describe("the generic read/resolve machinery serves the fourth recipe", () => {
   // The 0.4.0 impairment recipe is approved on the FLAT (0.3.3) registry — the ctx names that
   // generation (the primary's nested 0.5.0 set carries its own impairment recipe address).
-  const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_790_000_000n, generation: "phoenix/v0.3-rc.1", resolveRpc: stubRpc(handler) });
+  const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_790_000_000n, generation: "cork/v0.3", resolveRpc: stubRpc(handler) });
   const metaStub = (c: StubCall): unknown => {
     switch (c.functionName) {
       case "isRecipe":

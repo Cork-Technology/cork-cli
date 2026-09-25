@@ -58,7 +58,7 @@ describe("cork_decode order — JIT extension labeling", () => {
     );
     expect(env.state).toBe("ok");
     const jit = (env.data as { jit: Record<string, unknown> }).jit;
-    expect(jit["generation"]).toBe("phoenix/v0.3-rc.1"); // the flat-wire generation's label
+    expect(jit["generation"]).toBe("cork/v0.3"); // the flat-wire generation's label
     expect(jit["wire"]).toBe("flat");
     expect(String(jit["adapter"]).toLowerCase()).toBe(ADAPTER_210.toLowerCase());
     expect(String(jit["recipe"]).toLowerCase()).toBe(LIQ.toLowerCase());

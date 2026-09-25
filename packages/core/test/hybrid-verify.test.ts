@@ -291,8 +291,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const d = env.data as VerifiedData;
     expect(asked.sort()).toEqual([candidate.toLowerCase(), rc2.toLowerCase()].sort());
     const byDigest = new Map(d.items.map((i) => [String(i.orderDigest), i]));
-    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
-    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "phoenix/v0.3-rc.1", status: "active" } });
+    expect(byDigest.get(rows[0]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "cork/v0.4", status: "active" } });
+    expect(byDigest.get(rows[1]!.orderDigest)).toMatchObject({ verification: "confirmed", settlerGeneration: { label: "cork/v0.3", status: "active" } });
     expect(env.warnings.map((w) => w.code)).not.toContain("settler_not_recognized");
   });
 

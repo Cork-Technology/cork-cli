@@ -21,7 +21,7 @@ const NOW = 1_790_000_000n;
 // 0.3.3 redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found
 // 2026-08-10 only because the eval log made the misses identifiable). Same for the recipe hints.
 // The block is the one the registry-bound handlers BIND to (handlers/shared.ts
-// getMarketRegistry): the PRIMARY generation — the nested-wire phoenix/v0.4-rc.1 set on
+// getMarketRegistry): the PRIMARY generation — the nested-wire cork/v0.4 set on
 // 42161/8453 since stage 2a. The stub answers EVERY generation's getters address-aware (the
 // contract asked decides which set's addresses come back), so a test that names a flat-wire
 // generation sees a coherent flat stack and the default sees the nested one.
@@ -47,8 +47,8 @@ const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
 );
 // The rollover generations — read from config like the registry above (the pinned-literal rot
 // class): the retired-settler task's expected teaching and the sweep fixture's settler identity
-// must track config, not a copy. RC2_* name the rollover v0.1.0-rc.2 set (the phoenix/v0.3-rc.1
-// generation's block — active, no longer primary since phoenix/v0.4-rc.1); RETIRED_* the July
+// must track config, not a copy. RC2_* name the rollover v0.1.0-rc.2 set (the cork/v0.3
+// generation's block — active, no longer primary since cork/v0.4); RETIRED_* the July
 // 2026 set (arbitrum-v1.1's block).
 const ROLLOVERS_42161 = rolloverGenerationsOf(GENERATIONS_42161);
 const RC2_ROLLOVER = ROLLOVERS_42161.find((g) => g.wire === "rc.2" && g.status === "active")!;
@@ -57,7 +57,7 @@ export const RC2_FACTORY = RC2_ROLLOVER.factory;
 export const RETIRED_EXACT_SETTLER = ROLLOVERS_42161.find((g) => g.status === "retired")!.exactSettler;
 const REGISTRY_210 = MR_42161.registry;
 
-// ── Migration fixtures (2026-09-22): the account's OLD pool on the phoenix/v0.3-rc.1 manager and
+// ── Migration fixtures (2026-09-22): the account's OLD pool on the cork/v0.3 manager and
 //    the NEW pool on the 10-field primary, both on Arbitrum (42161). Address-aware like the rest
 //    of the stub: `shares`/`market` answer only on the manager each pool LIVES on (so a
 //    pool-scoped prepare resolves the v0.3 generation for the old pool and the primary for the
@@ -65,8 +65,8 @@ const REGISTRY_210 = MR_42161.registry;
 //    the live fact the migration topic states), and the HyperSync stub announces both pools
 //    under the MarketCreated topic of their emitter's wire.
 const PHOENIX_42161 = (label: string) => GENERATIONS_42161.find((g) => g.label === label)!.phoenix!;
-export const MIGRATION_OLD_PM = PHOENIX_42161("phoenix/v0.3-rc.1").poolManager;
-export const MIGRATION_NEW_PM = PHOENIX_42161("phoenix/v0.4-rc.1").poolManager;
+export const MIGRATION_OLD_PM = PHOENIX_42161("cork/v0.3").poolManager;
+export const MIGRATION_NEW_PM = PHOENIX_42161("cork/v0.4").poolManager;
 export const MIGRATION_OLD_POOL = `0x${"0d".repeat(32)}` as const;
 export const MIGRATION_NEW_POOL = `0x${"0e".repeat(32)}` as const;
 export const MIGRATION_OLD_CPT = "0x0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d01";
@@ -402,7 +402,7 @@ export const DERIVED_JIT_POOL = computeMarketId(
     rateChangeCapacityMax: BigInt(JIT_TASK_CONSTRAINT.rateChangeCapacityMax),
     rateOracle: ORACLE,
   },
-  // The JIT ROLLOVER task binds its market to the rc.2 settler's generation (phoenix/v0.3-rc.1,
+  // The JIT ROLLOVER task binds its market to the rc.2 settler's generation (cork/v0.3,
   // an 8-field pool manager) — the commitment's pool id follows the SETTLER's set, not the
   // chain primary's, so this stays the 8-field id (the 0.2 wire's 10-field twin is a stage-2b
   // fixture of its own).

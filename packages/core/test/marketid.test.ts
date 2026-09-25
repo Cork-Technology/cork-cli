@@ -13,7 +13,7 @@ const M8: Market8 = {
   rateOracle: "0x3333333333333333333333333333333333333333",
 };
 
-// The 10-field sample `pm.getId` was called with on the live phoenix/v0.4-rc.1 pool manager
+// The 10-field sample `pm.getId` was called with on the live cork/v0.4 pool manager
 // (0xcC17…0C2D, Arbitrum One), captured 2026-09-22 on 42161 (live-vectors.json): USDC / the
 // 0x9c68… reference, expiry 1800000000, constraint 1e18 / 2e18 / 1e16 / 5e16, the
 // LiquidityNavRecipe address standing in as rateOracle, fees 1e18 / 2e18.

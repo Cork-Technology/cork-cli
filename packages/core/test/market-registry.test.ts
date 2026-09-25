@@ -28,8 +28,8 @@ import { revertReason } from "../src/handlers/shared.ts";
 
 /** Every stub in this file mirrors the FLAT (0.3.3) stack — its addresses, its 8-field pool
  *  manager, its deploy(3)/verify(5) shapes — so every call names that generation; the primary on
- *  42161/8453 is the nested phoenix/v0.4-rc.1 set since stage 2a (test/market-registry-nested.test.ts). */
-const FLAT = "phoenix/v0.3-rc.1";
+ *  42161/8453 is the nested cork/v0.4 set since stage 2a (test/market-registry-nested.test.ts). */
+const FLAT = "cork/v0.3";
 
 const WAD = 10n ** 18n;
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on Arbitrum)

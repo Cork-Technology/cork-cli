@@ -74,8 +74,8 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     expected: "0xCCcCcCCCcccCBaD6F772a511B337d9CCc9570407",
     binds: { section: "phoenix", generation: "mainnet", chains: [1], path: "corkAdapter" },
   },
-  // Every entry below binds the phoenix/v0.3-rc.1 GENERATION (phoenix v1.3.0-rc.1 + market-
-  // registry 0.3.3). The phoenix/v0.4-rc.1 set (phoenix v1.4.0-rc.1, market-registry 0.5.0,
+  // Every entry below binds the cork/v0.3 GENERATION (phoenix v1.3.0-rc.1 + market-
+  // registry 0.3.3). The cork/v0.4 set (phoenix v1.4.0-rc.1, market-registry 0.5.0,
   // rollover v0.2.0, cork-periphery v0.2.0-rc.1) has NO attestation yet: its Distribution
   // component records pin commits, addresses and runtime code hashes but carry no CREATE2 salts
   // or init-code hashes, and an attestation that cannot be re-derived from recorded inputs
@@ -109,7 +109,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x121b40b3455d01ad785c7b53bc460fca873133a3b7498d62b09cf602d67ae732",
     expected: "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/MarketRegistry.sol:MarketRegistry" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "registry" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "registry" },
   },
   {
     name: "corkLimitOrderAdapter",
@@ -119,7 +119,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x9de5105f09a61a78b2441a2300094bd6b34c2759cbc10fda836396a579dd479d",
     expected: "0x8902a88912a334263fe3d731d03c267715b9374f",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/CorkLimitOrderAdapter.sol:CorkLimitOrderAdapter" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "adapter" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "adapter" },
   },
   {
     name: "wrapperRateConsumerFactory",
@@ -129,7 +129,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x9f7d017bc7ba9128c4ab4246dce99fd10de9611f0e0955a7247ab1e08afdb225",
     expected: "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/WrapperRateConsumerFactory.sol:WrapperRateConsumerFactory" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "wrapperFactory" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "wrapperFactory" },
   },
   {
     name: "fixedRateOracleFactory",
@@ -139,7 +139,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x2bc263ef45c96cfc64807511369b436baa56cdf256f32390564e6f33801dc02a",
     expected: "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/FixedRateOracleFactory.sol:FixedRateOracleFactory" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "fixedRateOracleFactory" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "fixedRateOracleFactory" },
   },
   {
     name: "aggregatorAdapterFactory",
@@ -149,7 +149,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x41055e120e8153a192624fc07ab38327cb481b814855b7b960a523de61f03224",
     expected: "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/adapters/AggregatorV2V3AdapterFactory.sol:AggregatorV2V3AdapterFactory" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "aggregatorAdapterFactory" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "aggregatorAdapterFactory" },
   },
   {
     name: "liquidityPriceRecipe",
@@ -159,7 +159,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0xfa87863e27b920b646e09222488f730d0fbbe0c9e3351f903a2c2f3908a26101",
     expected: "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/recipes/LiquidityPriceRecipe.sol:LiquidityPriceRecipe" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "recipes.liquidity" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "recipes.liquidity" },
   },
   {
     name: "liquidityNavRecipe",
@@ -169,7 +169,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x14743f20eee6d12d3e7bab21ab15561f1c94e5e952348ce3b1b4ca69183a2390",
     expected: "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/recipes/LiquidityNavRecipe.sol:LiquidityNavRecipe" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "recipes.nav" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "recipes.nav" },
   },
   {
     name: "fixedRateRecipe",
@@ -179,7 +179,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0xcc9718159b9bb14ef88d186874626dbc6dc762a8220b151e3a80ff39ea104c07",
     expected: "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
     source: { repo: "github.com/Cork-Technology/market-registry", tag: "0.3.3", contract: "src/recipes/FixedRateRecipe.sol:FixedRateRecipe" },
-    binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "recipes.fixed" },
+    binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "recipes.fixed" },
   },
   // Phoenix v1.3.0-rc.1 stack (42161 + 8453, identical addresses) — Safe-Singleton-Factory
   // CREATE2, provenance from the 2026-08-10 paired shadow-release manifest (salt + initCodeHash
@@ -196,7 +196,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0xfd364848e65936c62f65f6fee0f1be402b3ea5bfdb6c5154dc42d036648778fd",
     expected: "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
     source: { repo: "github.com/Cork-Technology/phoenix", tag: "v1.3.0-rc.1", contract: "lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy" },
-    binds: { section: "phoenix", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "poolManager" },
+    binds: { section: "phoenix", generation: "cork/v0.3", chains: [42161, 8453], path: "poolManager" },
   },
   {
     name: "constraintAdapterV13",
@@ -204,7 +204,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0xa3499bd6994240b6e768ad944472ee4eb9665767e140c711ba7892e3b6e20b1e",
     expected: "0xA880bc161F7c738d206E15c788b47a864558d5b7",
     source: { repo: "github.com/Cork-Technology/phoenix", tag: "v1.3.0-rc.1", contract: "lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy" },
-    binds: { section: "phoenix", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "constraintAdapter" },
+    binds: { section: "phoenix", generation: "cork/v0.3", chains: [42161, 8453], path: "constraintAdapter" },
   },
   {
     name: "whitelistManagerV13",
@@ -212,7 +212,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x38d321299fb27582fe0cf1f7dd47e615b2a0b59e2309a78c713f2866c7b6436b",
     expected: "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
     source: { repo: "github.com/Cork-Technology/phoenix", tag: "v1.3.0-rc.1", contract: "lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy" },
-    binds: { section: "phoenix", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "whitelistManager" },
+    binds: { section: "phoenix", generation: "cork/v0.3", chains: [42161, 8453], path: "whitelistManager" },
   },
   {
     name: "defaultCorkController",
@@ -220,7 +220,7 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x336b5eb8961397d4d36acf1278ffa251bbf248406a55547bf67e7881c2a22420",
     expected: "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
     source: { repo: "github.com/Cork-Technology/phoenix", tag: "v1.3.0-rc.1", contract: "contracts/core/DefaultCorkController.sol:DefaultCorkController" },
-    binds: { section: "phoenix", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "controller" },
+    binds: { section: "phoenix", generation: "cork/v0.3", chains: [42161, 8453], path: "controller" },
   },
   {
     name: "corkAdapterV13",
@@ -228,6 +228,6 @@ export const CREATE2_ATTESTATIONS: Create2Attestation[] = [
     initCodeHash: "0x01174f35f8be6540bec732c01ebf4286ad2d8462c79851f9750be31fcea4c222",
     expected: "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
     source: { repo: "github.com/Cork-Technology/phoenix", tag: "v1.3.0-rc.1", contract: "contracts/periphery/CorkAdapter.sol:CorkAdapter" },
-    binds: { section: "phoenix", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "corkAdapter" },
+    binds: { section: "phoenix", generation: "cork/v0.3", chains: [42161, 8453], path: "corkAdapter" },
   },
 ];

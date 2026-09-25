@@ -232,7 +232,7 @@ describe("target naming spans rollover settler generations", () => {
     const env = await runTool("cork_decode", { kind: "tx", data: signed, chainId: 42161 }, { nowSeconds: NOW });
     // The rc.2 set is ACTIVE but no longer primary since the Distribution 0.2 set landed
     // (2026-09-22) — named with its standing and chain-generation label, never plain.
-    expect((env.data as { toLabel: string | null }).toLabel).toBe("exactSettler (active phoenix/v0.3-rc.1 generation)");
+    expect((env.data as { toLabel: string | null }).toLabel).toBe("exactSettler (active cork/v0.3 generation)");
   });
 
   it("a tx to the second ACTIVE generation's settler is NAMED with its standing and label, never unknown_target", async () => {

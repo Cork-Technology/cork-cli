@@ -565,33 +565,33 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
   });
 
   // ── migration (2026-09-22) ──
-  it("migration-positions: account-state WITHOUT poolId sweeps every 42161 generation, finds the OLD pool's position on phoenix/v0.3-rc.1 and nothing on the primary, and carries no provenance.generation", async () => {
+  it("migration-positions: account-state WITHOUT poolId sweeps every 42161 generation, finds the OLD pool's position on cork/v0.3 and nothing on the primary, and carries no provenance.generation", async () => {
     const env = await runTool("cork_query", { resource: "account-state", chainId: 42161, filters: { account: DEMO_ACCOUNT } }, stubContext());
     expect(env.state).toBe("ok");
     expect(env.provenance).not.toHaveProperty("generation");
     const d = env.data as { positions: Array<{ poolId: string; generation: { label: string }; poolManager: string }>; byGeneration: Array<{ label: string; pools: number }>; scanned: { managers: number; pools: number } };
     expect(d.scanned.pools).toBe(2);
-    expect(d.positions.map((p) => [p.poolId, p.generation.label, p.poolManager])).toEqual([[MIGRATION_OLD_POOL, "phoenix/v0.3-rc.1", MIGRATION_OLD_PM]]);
-    expect(d.byGeneration.find((g) => g.label === "phoenix/v0.4-rc.1")).toMatchObject({ pools: 0 });
+    expect(d.positions.map((p) => [p.poolId, p.generation.label, p.poolManager])).toEqual([[MIGRATION_OLD_POOL, "cork/v0.3", MIGRATION_OLD_PM]]);
+    expect(d.byGeneration.find((g) => g.label === "cork/v0.4")).toMatchObject({ pools: 0 });
     expect(MIGRATION_NEW_PM).not.toBe(MIGRATION_OLD_PM);
   });
-  it("migration-exit-old-pool: the unwind-deposit on the OLD pool resolves phoenix/v0.3-rc.1 from the chain and builds against ITS adapter", async () => {
+  it("migration-exit-old-pool: the unwind-deposit on the OLD pool resolves cork/v0.3 from the chain and builds against ITS adapter", async () => {
     const env = await runTool(
       "cork_prepare_phoenix",
       { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-mig-exit-0001", fundingMode: "erc20-approve", action: { type: "unwind-deposit", poolId: MIGRATION_OLD_POOL, collateralAssetsOut: "1000000000000000000", owner: DEMO_ACCOUNT, receiver: DEMO_ACCOUNT, maxCptAndCstSharesIn: "2000000000000000000" } },
       stubContext(),
     );
     expect(env.state).toBe("ok");
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
 });
 
 describe("eval task fixtures — coverage gaps closed 2026-09-23 (generation alias on a prepare, venue-free pledge, a chained flow, the conflict family, the foreign-hook refusal)", () => {
   const T = (id: string) => TASKS.find((t) => t.id === id)!;
-  it("generation-previous-prepare: the authority op builds under `previous` and names phoenix/v0.3-rc.1", async () => {
+  it("generation-previous-prepare: the authority op builds under `previous` and names cork/v0.3", async () => {
     const env = await runTool("cork_prepare_phoenix", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-gen-prev-0001", generation: "previous", action: { type: "authority-onboard", token: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", spender: MIGRATION_OLD_PM }, format: "concise" }, stubContext());
     expect(env.state).toBe(T("generation-previous-prepare").expect.state);
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
   it("mode-venue-free-pools: cork-pools under full-decentralized serves from the stub's log source and says so", async () => {
     const env = await runTool("cork_query", { resource: "cork-pools", chainId: 42161, mode: "full-decentralized", pageSize: 25, format: "concise" }, stubContext());

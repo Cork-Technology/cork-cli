@@ -119,7 +119,7 @@ export function resolveJitBytesInput(
   const saltGiven = jm.oracleSalt !== undefined;
   const oracleSalt = (jm.oracleSalt ?? ZERO_ORACLE_SALT) as `0x${string}`;
   if (wire !== undefined && wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
-    throw new ToolInputError(site.tool, [{ path: [...site.path, "oracleSalt"], message: `oracleSalt ${oracleSalt} is non-zero, but generation '${generationLabel ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) / MarketParams carry NO oracle salt — the value would be dropped, not honoured. Omit it (or pass the zero salt), or target a nested-wire generation (the phoenix/v0.4-rc.1 primary)` }]);
+    throw new ToolInputError(site.tool, [{ path: [...site.path, "oracleSalt"], message: `oracleSalt ${oracleSalt} is non-zero, but generation '${generationLabel ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) / MarketParams carry NO oracle salt — the value would be dropped, not honoured. Omit it (or pass the zero salt), or target a nested-wire generation (the cork/v0.4 primary)` }]);
   }
   return { extraData, oracleSalt, saltGiven };
 }

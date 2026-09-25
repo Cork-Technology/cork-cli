@@ -273,7 +273,7 @@ describe("doc topic: generations", () => {
       const d = env.data as { topic: string; summary: string; body: string };
       expect(d.topic).toBe("generations");
       expect(d.summary).toBe(DOC_TOPICS.generations!.summary);
-      for (const needle of ["phoenix/v0.4-rc.1", "pool_not_found", "generation_unknown", "generation_read_only", "shares(poolId)", "`10-field`", "`nested`", "oracleSalt"]) {
+      for (const needle of ["cork/v0.4", "pool_not_found", "generation_unknown", "generation_read_only", "shares(poolId)", "`10-field`", "`nested`", "oracleSalt"]) {
         expect(d.body, `generations topic body must teach ${needle}`).toContain(needle);
       }
     }
@@ -292,7 +292,7 @@ describe("doc topic: generations", () => {
 
   it("names every configured generation label of the bundled config, so a relabel fails here before it ships", () => {
     const body = DOC_TOPICS.generations!.body;
-    for (const label of ["mainnet", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]) {
+    for (const label of ["mainnet", "cork/v0.4", "cork/v0.3", "arbitrum-v1.1", "arbitrum-legacy"]) {
       expect(body, `label ${label}`).toContain(`\`${label}\``);
     }
   });

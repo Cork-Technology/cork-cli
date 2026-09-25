@@ -227,7 +227,7 @@ describe("role scoping: each artifact path fingerprints only the contracts its b
 describe("roles resolve INSIDE the selected generation; the allowlist is the union of every generation's code", () => {
   const reader: CodeReader = { getCode: async () => "0x" };
   const primary = primaryOf(ARBITRUM)!;
-  const flat = ARBITRUM.find((g) => g.label === "phoenix/v0.3-rc.1")!;
+  const flat = ARBITRUM.find((g) => g.label === "cork/v0.3")!;
   const legacy = marketRegistryForWire(ARBITRUM, "legacy")!;
 
   it("implementationRoleAddress answers the generation it is given — phoenix roles from its phoenix block, registry roles from its marketRegistry block", () => {
@@ -247,7 +247,7 @@ describe("roles resolve INSIDE the selected generation; the allowlist is the uni
   it("the checker fingerprints the SELECTED generation's addresses (primary by default), and an unknown label fingerprints nothing", async () => {
     const byDefault = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES });
     expect(byDefault.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x3e01c558fc0854e92e6ef2a84c19d6bf9d82b104"], ["marketRegistry", "0xe1f569f152bdb6ebb2d49cfd9d4ab98ecee955c5"]]);
-    const flatChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "phoenix/v0.3-rc.1" });
+    const flatChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "cork/v0.3" });
     expect(flatChecks.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x8902a88912a334263fe3d731d03c267715b9374f"], ["marketRegistry", "0xa78d8137b01058dd23e545b6557209ebbc9611f1"]]);
     const legacyChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "arbitrum-v1.1" });
     expect(legacyChecks.map((c) => [c.role, c.verdict]).sort()).toEqual([["jitAdapter", "no_code"], ["marketRegistry", "no_code"]]);

@@ -316,7 +316,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as { extension: `0x${string}`; jit: { adapter: string; wire: string; generation: string; derivedPoolId: string; extraDataLayout: string; constraint: Record<string, string>; predictedCorkSwapToken?: string } };
     expect(d.jit.adapter.toLowerCase()).toBe((NESTED_MR.adapter as string).toLowerCase());
-    expect(d.jit).toMatchObject({ wire: "nested", generation: "phoenix/v0.4-rc.1" });
+    expect(d.jit).toMatchObject({ wire: "nested", generation: "cork/v0.4" });
     expect(d.jit.extraDataLayout).toContain("verified-on-chain");
     const back = decodeJitExtension("nested", d.extension);
     expect(back.adapter.toLowerCase()).toBe((NESTED_MR.adapter as string).toLowerCase());
@@ -334,7 +334,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: d.extension } }, stubContext());
     expect(decoded.state).toBe("ok");
     const jit = (decoded.data as { jit: Record<string, unknown> }).jit;
-    expect(jit).toMatchObject({ verification: "trusted", generation: "phoenix/v0.4-rc.1", wire: "nested", oracleSalt: SAMPLE.oracleSalt, extraData: "0x" });
+    expect(jit).toMatchObject({ verification: "trusted", generation: "cork/v0.4", wire: "nested", oracleSalt: SAMPLE.oracleSalt, extraData: "0x" });
     expect((jit["scales"] as Record<string, string>).swapFeePercentage).toContain("PART OF THE POOL ID");
   });
 
@@ -458,7 +458,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     const wrongPlace2 = await runTool("cork_decode", { kind: "order", chainId: 42161, data: await orderWith(buildJitExtension(NESTED_MR.adapter as `0x${string}`, flatBytes)) }, { nowSeconds: NOW });
     expect((wrongPlace2.data as { jit?: unknown }).jit).toBeUndefined();
     const rightPlace = await runTool("cork_decode", { kind: "order", chainId: 42161, data: await orderWith(buildJitExtension(NESTED_MR.adapter as `0x${string}`, nestedBytes)) }, { nowSeconds: NOW });
-    expect((rightPlace.data as { jit: { wire: string; generation: string; verification: string } }).jit).toMatchObject({ wire: "nested", generation: "phoenix/v0.4-rc.1", verification: "trusted" });
+    expect((rightPlace.data as { jit: { wire: string; generation: string; verification: string } }).jit).toMatchObject({ wire: "nested", generation: "cork/v0.4", verification: "trusted" });
   });
 });
 
@@ -472,7 +472,7 @@ describe("cork_prepare_market on the nested primary", () => {
     const d = env.data as { to: string; calldata: `0x${string}`; wire: string; phoenixWire: string; generation: string; oracleSalt: string; pool: { poolId: string; exists: boolean }; constraint: Record<string, string>; scales: Record<string, string> };
     expect(d.to.toLowerCase()).toBe((NESTED_MR.marketCreator as string).toLowerCase());
     expect(d.calldata.slice(0, 10)).toBe("0x59c8eb4c");
-    expect(d).toMatchObject({ wire: "nested", phoenixWire: "10-field", generation: "phoenix/v0.4-rc.1", oracleSalt: SAMPLE.oracleSalt });
+    expect(d).toMatchObject({ wire: "nested", phoenixWire: "10-field", generation: "cork/v0.4", oracleSalt: SAMPLE.oracleSalt });
     const decoded = decodeFunctionData({ abi: marketCreatorNestedAbi, data: d.calldata });
     expect(decoded.args[0]).toMatchObject({ oracleSalt: SAMPLE.oracleSalt, swapFeePercentage: WAD, unwindSwapFeePercentage: 0n, extraData: "0x" });
     const c = { rateMin: BigInt(d.constraint.rateMin!), rateMax: BigInt(d.constraint.rateMax!), rateChangePerDayMax: BigInt(d.constraint.rateChangePerDayMax!), rateChangeCapacityMax: BigInt(d.constraint.rateChangeCapacityMax!) };
@@ -540,7 +540,7 @@ describe("cork_query registry-* and derive-cork-pool on the nested primary", () 
     const plain = await runTool("cork_query", { resource: "derive-cork-pool", chainId: 42161, filters: { collateralAsset: CA, referenceAsset: REF, expiry: EXPIRY, recipe: LIQUIDITY_RECIPE } }, ctx);
     expect(plain.state, JSON.stringify(plain.warnings)).toBe("ok");
     const p = plain.data as { input: { wire: string; phoenixWire: string; generation: string; oracleSalt: string; swapFeePercentage: string }; pool: { poolId: string; wire: string; swapFeePercentage: string; constraint: Record<string, string> } };
-    expect(p.input).toMatchObject({ wire: "nested", phoenixWire: "10-field", generation: "phoenix/v0.4-rc.1", oracleSalt: ZERO_ORACLE_SALT, swapFeePercentage: "0" });
+    expect(p.input).toMatchObject({ wire: "nested", phoenixWire: "10-field", generation: "cork/v0.4", oracleSalt: ZERO_ORACLE_SALT, swapFeePercentage: "0" });
     expect(p.pool.wire).toBe("10-field");
     const c = { rateMin: BigInt(p.pool.constraint.rateMin!), rateMax: BigInt(p.pool.constraint.rateMax!), rateChangePerDayMax: BigInt(p.pool.constraint.rateChangePerDayMax!), rateChangeCapacityMax: BigInt(p.pool.constraint.rateChangeCapacityMax!) };
     expect(p.pool.poolId).toBe(deriveJitMarket({ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: BigInt(EXPIRY), constraint: c, oracle: STUB_ORACLE as `0x${string}`, wire: "10-field" }).poolId);

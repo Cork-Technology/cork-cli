@@ -20,8 +20,8 @@ const CHAIN = 42161;
 const ARBITRUM = generationsOf(BUNDLED_DEFAULTS, CHAIN);
 const MAINNET = generationsOf(BUNDLED_DEFAULTS, 1);
 const pmOf = (label: string) => ARBITRUM.find((g) => g.label === label)!.phoenix!.poolManager as `0x${string}`;
-const PRIMARY_PM = pmOf("phoenix/v0.4-rc.1");
-const V03_PM = pmOf("phoenix/v0.3-rc.1");
+const PRIMARY_PM = pmOf("cork/v0.4");
+const V03_PM = pmOf("cork/v0.3");
 const V11_PM = pmOf("arbitrum-v1.1");
 const LEGACY_PM = pmOf("arbitrum-legacy");
 
@@ -145,9 +145,9 @@ type PositionsData = {
 };
 
 describe("generation aliases resolve in ONE place, to a label", () => {
-  it("`previous` on 42161 for a phoenix call = phoenix/v0.3-rc.1 (the newest active non-primary set with a pool manager); `primary` = the primary; a plain label passes through", () => {
-    expect(resolveGenerationAlias(ARBITRUM, "previous", ["phoenix"])).toMatchObject({ ok: true, label: "phoenix/v0.3-rc.1", alias: "previous" });
-    expect(resolveGenerationAlias(ARBITRUM, "primary", ["phoenix"])).toMatchObject({ ok: true, label: "phoenix/v0.4-rc.1", alias: "primary" });
+  it("`previous` on 42161 for a phoenix call = cork/v0.3 (the newest active non-primary set with a pool manager); `primary` = the primary; a plain label passes through", () => {
+    expect(resolveGenerationAlias(ARBITRUM, "previous", ["phoenix"])).toMatchObject({ ok: true, label: "cork/v0.3", alias: "previous" });
+    expect(resolveGenerationAlias(ARBITRUM, "primary", ["phoenix"])).toMatchObject({ ok: true, label: "cork/v0.4", alias: "primary" });
     expect(resolveGenerationAlias(ARBITRUM, "arbitrum-v1.1", ["phoenix"])).toEqual({ ok: true, label: "arbitrum-v1.1" });
     expect(resolveGenerationAlias(ARBITRUM, undefined, ["phoenix"])).toEqual({ ok: true, label: undefined });
   });
@@ -171,7 +171,7 @@ describe("generation aliases resolve in ONE place, to a label", () => {
   it("selectGeneration resolves the alias and returns the SET — never the alias string", () => {
     const sel = selectGeneration(ARBITRUM, "previous", "prepare", ["phoenix"]);
     expect(sel.ok).toBe(true);
-    if (sel.ok) expect(sel.generation.label).toBe("phoenix/v0.3-rc.1");
+    if (sel.ok) expect(sel.generation.label).toBe("cork/v0.3");
     expect((GENERATION_ALIASES as readonly string[]).includes(sel.ok ? sel.generation.label : "")).toBe(false);
   });
   it("a chain with ONE generation (mainnet) refuses `previous` as generation_unknown and says there is nothing to migrate from", () => {
@@ -196,26 +196,26 @@ describe("generation aliases resolve in ONE place, to a label", () => {
     expect(sel.ok).toBe(false);
     if (!sel.ok) expect(sel.refusal.message).toContain("aliases: primary, previous");
   });
-  it("end to end: a prepare with generation 'previous' builds against phoenix/v0.3-rc.1 and CARRIES THE LABEL in provenance; 'all' on a prepare is invalid input", async () => {
+  it("end to end: a prepare with generation 'previous' builds against cork/v0.3 and CARRIES THE LABEL in provenance; 'all' on a prepare is invalid input", async () => {
     const ok = await runTool(
       "cork_prepare_phoenix",
       { chainId: CHAIN, account: ACCOUNT, clientRequestId: "mig-auth-0001", generation: "previous", action: { type: "authority-onboard", token: SHARES[P_OLD]!.cst, spender: V03_PM }, format: "concise" },
       { nowSeconds: NOW },
     );
     expect(ok.state).toBe("ok");
-    expect(ok.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", status: "active" });
+    expect(ok.provenance.generation).toMatchObject({ label: "cork/v0.3", status: "active" });
     await expect(
       runTool("cork_prepare_phoenix", { chainId: CHAIN, account: ACCOUNT, clientRequestId: "mig-auth-0002", generation: "all", action: { type: "authority-onboard", token: SHARES[P_OLD]!.cst, spender: V03_PM }, format: "concise" }, { nowSeconds: NOW }),
     ).rejects.toSatisfy((e: unknown) => e instanceof ToolInputError && JSON.stringify((e as { issues?: unknown }).issues ?? "").includes("ONE artifact"));
     // A pool-scoped read narrowed by the alias: the resolver asks ONLY the previous manager.
     const single = await runTool("cork_query", { resource: "account-state", chainId: CHAIN, pageSize: 25, format: "concise", generation: "previous", filters: { poolId: P_OLD, account: ACCOUNT } }, ctxFor());
     expect(single.state).toBe("ok");
-    expect(single.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(single.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
   it("`previous` on a registry read resolves against the marketRegistry block (v0.3's flat registry)", async () => {
     const env = await runTool("cork_query", { resource: "protocol-config", chainId: CHAIN, pageSize: 25, format: "concise", generation: "previous" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
 });
 
@@ -233,19 +233,19 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
     expect(env.provenance.mode).toBe("full-decentralized");
     expect(asked).toHaveLength(1);
     expect(new Set(asked[0]!.map((a) => a.toLowerCase()))).toEqual(new Set([PRIMARY_PM, V03_PM, V11_PM, LEGACY_PM].map((a) => a.toLowerCase())));
-    expect(d.generations.map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
+    expect(d.generations.map((g) => g.label)).toEqual(["cork/v0.4", "cork/v0.3", "arbitrum-v1.1", "arbitrum-legacy"]);
     // Three positions (P_EMPTY dropped), each tagged with ITS generation.
     expect(d.positions.map((p) => [p.poolId, p.generation.label, p.expired])).toEqual([
-      [P_OLD, "phoenix/v0.3-rc.1", false],
-      [P_EXPIRED, "phoenix/v0.3-rc.1", true],
-      [P_NEW, "phoenix/v0.4-rc.1", false],
+      [P_OLD, "cork/v0.3", false],
+      [P_EXPIRED, "cork/v0.3", true],
+      [P_NEW, "cork/v0.4", false],
     ]);
     expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString(), expiry: expiryIsoOfSeconds(NOW + 86_400n), balances: { corkSwapToken: (5n * WAD).toString(), corkPrincipalToken: (5n * WAD).toString() } });
     expect(d.positions[1]!.balances).toEqual({ corkSwapToken: "0", corkPrincipalToken: (7n * WAD).toString() });
     const S = (n: bigint) => n.toString();
     expect(d.byGeneration).toEqual([
-      { label: "phoenix/v0.4-rc.1", status: "active", pools: 1, corkSwapTokenTotal: S(3n * WAD), corkPrincipalTokenTotal: "0" },
-      { label: "phoenix/v0.3-rc.1", status: "active", pools: 2, corkSwapTokenTotal: S(5n * WAD), corkPrincipalTokenTotal: S(12n * WAD) },
+      { label: "cork/v0.4", status: "active", pools: 1, corkSwapTokenTotal: S(3n * WAD), corkPrincipalTokenTotal: "0" },
+      { label: "cork/v0.3", status: "active", pools: 2, corkSwapTokenTotal: S(5n * WAD), corkPrincipalTokenTotal: S(12n * WAD) },
       { label: "arbitrum-v1.1", status: "active", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
       { label: "arbitrum-legacy", status: "read-only", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
     ]);
@@ -260,7 +260,7 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
     expect(asked[0]!.map((a) => a.toLowerCase())).toEqual([V03_PM.toLowerCase()]);
     expect(d.scanned.managers).toBe(1);
     expect(d.generations).toHaveLength(1);
-    expect(d.generations[0]).toMatchObject({ label: "phoenix/v0.3-rc.1", status: "active" });
+    expect(d.generations[0]).toMatchObject({ label: "cork/v0.3", status: "active" });
     expect(d.positions.map((p) => p.poolId)).toEqual([P_OLD, P_EXPIRED]);
     const all = await positions(ctxFor(), "all");
     expect((all.data as PositionsData).scanned.managers).toBe(4);
@@ -280,7 +280,7 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
   it("the single-pool branch is UNCHANGED: with filters.poolId the read resolves the pool's generation, answers balances for all four tokens plus allowances, and carries provenance.generation", async () => {
     const env = await runTool("cork_query", { resource: "account-state", chainId: CHAIN, pageSize: 25, format: "concise", filters: { account: ACCOUNT, poolId: P_OLD } }, ctxFor());
     expect(env.state).toBe("ok");
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
     const d = env.data as { poolId: string; balances: Record<string, bigint>; allowances?: unknown; positions?: unknown; tokens: { corkSwapToken: string } };
     expect(d.poolId).toBe(P_OLD);
     expect(Object.keys(d.balances).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
@@ -332,9 +332,9 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     // The unlisted manager's row is skipped: 4 pools scanned of 5 served, sweep complete.
     expect(d.scanned).toEqual({ managers: 4, pools: 4, complete: true, source: "hybrid" });
     expect(d.positions.map((p) => [p.poolId, p.generation.label, p.expired])).toEqual([
-      [P_OLD, "phoenix/v0.3-rc.1", false],
-      [P_EXPIRED, "phoenix/v0.3-rc.1", true],
-      [P_NEW, "phoenix/v0.4-rc.1", false],
+      [P_OLD, "cork/v0.3", false],
+      [P_EXPIRED, "cork/v0.3", true],
+      [P_NEW, "cork/v0.4", false],
     ]);
     // Token addresses come through whether the venue serves a string or an { address } object;
     // the venue's ISO-8601 `expiry` is normalised to unix seconds (the shape the scan serves and
@@ -487,8 +487,8 @@ describe("an endpoint that refuses eth_getLogs at the floor (owner ruling 2026-0
 
 describe("the venue row → MarketRow mapping is pure and shape-checked", () => {
   const emitters = [
-    { poolManager: V03_PM, wire: "8-field" as const, label: "phoenix/v0.3-rc.1" },
-    { poolManager: PRIMARY_PM, wire: "10-field" as const, label: "phoenix/v0.4-rc.1" },
+    { poolManager: V03_PM, wire: "8-field" as const, label: "cork/v0.3" },
+    { poolManager: PRIMARY_PM, wire: "10-field" as const, label: "cork/v0.4" },
   ];
   it("venueExpiry accepts ONLY strict ISO-8601 with an explicit zone, canonicalises to UTC second precision, and derives the seconds from the canonical instant", () => {
     expect(venueExpiry("2026-08-10T12:30:00.000Z")).toEqual({ iso: "2026-08-10T12:30:00Z", seconds: "1786365000" });
@@ -534,8 +534,8 @@ describe("the venue row → MarketRow mapping is pure and shape-checked", () => 
     const { rows, unreadableExpiry } = venuePoolRowsToMarketRows([live, bare], emitters);
     expect(unreadableExpiry).toBe(0);
     expect(rows).toEqual([
-      { poolId: P_OLD, referenceAsset: REF, collateralAsset: COL, expiry: "1786365000", rateOracle: ORACLE, corkPrincipalToken: SHARES[P_OLD]!.cpt, corkSwapToken: SHARES[P_OLD]!.cst, poolManager: V03_PM, wire: "8-field", generation: "phoenix/v0.3-rc.1", blockNumber: "49786153", txHash: `0x${"ab".repeat(32)}`, emitter: V03_PM },
-      { poolId: P_NEW, referenceAsset: REF, collateralAsset: COL, expiry: "1800000000", rateOracle: ZERO, corkPrincipalToken: SHARES[P_NEW]!.cpt, corkSwapToken: SHARES[P_NEW]!.cst, poolManager: PRIMARY_PM, wire: "10-field", generation: "phoenix/v0.4-rc.1", blockNumber: "", txHash: "", emitter: PRIMARY_PM },
+      { poolId: P_OLD, referenceAsset: REF, collateralAsset: COL, expiry: "1786365000", rateOracle: ORACLE, corkPrincipalToken: SHARES[P_OLD]!.cpt, corkSwapToken: SHARES[P_OLD]!.cst, poolManager: V03_PM, wire: "8-field", generation: "cork/v0.3", blockNumber: "49786153", txHash: `0x${"ab".repeat(32)}`, emitter: V03_PM },
+      { poolId: P_NEW, referenceAsset: REF, collateralAsset: COL, expiry: "1800000000", rateOracle: ZERO, corkPrincipalToken: SHARES[P_NEW]!.cpt, corkSwapToken: SHARES[P_NEW]!.cst, poolManager: PRIMARY_PM, wire: "10-field", generation: "cork/v0.4", blockNumber: "", txHash: "", emitter: PRIMARY_PM },
     ]);
   });
   it("skips: a manager no emitter owns, a row missing a token leg, a malformed poolId; counts (does not skip silently) an unreadable expiry — a millisecond digit string INCLUDED", () => {

@@ -49,7 +49,7 @@ const revertingOracleStub = (over: Partial<Record<string, () => unknown>> = {}) 
   }
 };
 // The stubs mirror the FLAT (0.3.3) stack — the ctx names its generation (the primary is nested).
-const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_789_900_000n, generation: "phoenix/v0.3-rc.1", resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" } }) });
+const ctx = (handler: (c: StubCall) => unknown): HandlerContext => ({ nowSeconds: 1_789_900_000n, generation: "cork/v0.3", resolveRpc: stubRpc(handler, { code: { [ORACLE.toLowerCase()]: "0x6001" } }) });
 
 const TRANSPORT = () => {
   throw Object.assign(new Error("HTTP request failed. URL: https://rpc.example/ Request body: {...}"), { name: "HttpRequestError" });

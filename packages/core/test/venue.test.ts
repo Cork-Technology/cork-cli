@@ -1422,7 +1422,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0001", action: { type: "taker-fill", orderHash: (row["orderHash"] as string) ?? buyHash, jitMarket: { ...jm, ...extra } }, format: "concise" },
         // The stub mirrors the FLAT (0.3.3) JIT stack — name its generation (the primary is nested).
-        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, generation: "phoenix/v0.3-rc.1", resolveRpc: rpcStub(over, code) },
+        { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, generation: "cork/v0.3", resolveRpc: rpcStub(over, code) },
       );
 
     it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
@@ -1605,9 +1605,9 @@ describe("taker-fill of an auction-priced resting order", () => {
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-forself-0001", action: { type: "taker-fill", orderHash: built.orderHash, forSelf: { adapter: forSelfAdapter, poolId: `0x${"11".repeat(32)}` } }, format: "concise" },
       // The stubbed ForSelf adapter binds the v1.3.0-rc.1 pool manager: select that generation
-      // (phoenix/v0.3-rc.1) so the CORK() binding check compares against the right set — the
+      // (cork/v0.3) so the CORK() binding check compares against the right set — the
       // primary's 10-field manager would rightly read as a mismatch.
-      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain, generation: "phoenix/v0.3-rc.1" },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: chain, generation: "cork/v0.3" },
     );
     expect(env.state).toBe("ok");
     const d = env.data as { fillFunction: string; forSelf: { pullCap: string }; auction: Record<string, unknown> };

@@ -49,12 +49,12 @@ describe("CREATE2 attestations", () => {
     }
   });
 
-  it("the attested set is the phoenix/v0.3-rc.1 generation (+ mainnet); phoenix/v0.4-rc.1 has NO attestation because its Distribution records carry no CREATE2 inputs", () => {
+  it("the attested set is the cork/v0.3 generation (+ mainnet); cork/v0.4 has NO attestation because its Distribution records carry no CREATE2 inputs", () => {
     // An attestation that cannot be re-derived from recorded (deployer, salt, initCodeHash)
     // would be a hardcode dressed as evidence — the gap is stated, not papered over. The
     // moment the 0.5.0 / v1.4.0-rc.1 deploy broadcasts are published this roster grows.
     const generations = new Set(CREATE2_ATTESTATIONS.filter((a) => a.binds).map((a) => a.binds!.generation));
-    expect([...generations].sort()).toEqual(["mainnet", "phoenix/v0.3-rc.1"]);
+    expect([...generations].sort()).toEqual(["cork/v0.3", "mainnet"]);
     for (const a of CREATE2_ATTESTATIONS) expect(a.expected.toLowerCase()).not.toBe("0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5".toLowerCase());
   });
 

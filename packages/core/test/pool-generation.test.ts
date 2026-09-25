@@ -1,6 +1,6 @@
 // Stage 2c (0.6): pool-scoped reads, prepares and event scans follow the generation the POOL
 // lives on, not the primary. Every pool the venue serves today lives on an OLDER manager than
-// the 10-field primary (176 on arbitrum-v1.1, 3 on arbitrum-legacy, 6 on phoenix/v0.3-rc.1),
+// the 10-field primary (176 on arbitrum-v1.1, 3 on arbitrum-legacy, 6 on cork/v0.3),
 // so a read or bundle routed through the primary's addresses answers for the wrong contract.
 // Offline: one stub client answers `shares(poolId)` non-zero on exactly ONE manager and serves
 // that manager's wire-shaped `market()` tuple; everything else is fixed fixture state.
@@ -34,11 +34,11 @@ const NOW = 1_753_000_000n;
 const CHAIN = 42161;
 const ARBITRUM = generationsOf(BUNDLED_DEFAULTS, CHAIN);
 const pmOf = (label: string) => ARBITRUM.find((g) => g.label === label)!.phoenix!.poolManager as `0x${string}`;
-const PRIMARY_PM = pmOf("phoenix/v0.4-rc.1"); // 10-field
-const V03_PM = pmOf("phoenix/v0.3-rc.1"); // 8-field, active, not primary
+const PRIMARY_PM = pmOf("cork/v0.4"); // 10-field
+const V03_PM = pmOf("cork/v0.3"); // 8-field, active, not primary
 const LEGACY_PM = pmOf("arbitrum-legacy"); // 8-field, read-only
-const V03_ADAPTER = ARBITRUM.find((g) => g.label === "phoenix/v0.3-rc.1")!.phoenix!.corkAdapter!;
-const PRIMARY_ADAPTER = ARBITRUM.find((g) => g.label === "phoenix/v0.4-rc.1")!.phoenix!.corkAdapter!;
+const V03_ADAPTER = ARBITRUM.find((g) => g.label === "cork/v0.3")!.phoenix!.corkAdapter!;
+const PRIMARY_ADAPTER = ARBITRUM.find((g) => g.label === "cork/v0.4")!.phoenix!.corkAdapter!;
 
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 const COL = "0x1111111111111111111111111111111111111111" as const;
@@ -117,12 +117,12 @@ const deposit = (ctx: HandlerContext, type: "deposit" | "withdraw" = "deposit") 
 type Gen = { label: string; status: string };
 
 describe("pool-scoped generation resolution — the manager that HOLDS the pool answers", () => {
-  it("cork-pool on a phoenix/v0.3-rc.1 pool while the primary is 10-field: reads THAT manager, 8-field wire, label in data AND provenance", async () => {
+  it("cork-pool on a cork/v0.3 pool while the primary is 10-field: reads THAT manager, 8-field wire, label in data AND provenance", async () => {
     const env = await corkPool(ctxFor(V03_PM));
     expect(env.state).toBe("ok");
     const d = env.data as { generation: Gen; wire: string; market: Record<string, unknown>; swapFeePercentage: string; scales: Record<string, string> };
-    expect(d.generation).toEqual({ label: "phoenix/v0.3-rc.1", status: "active", distribution: "phoenix/v0.3-rc.1" });
-    expect(env.provenance.generation).toEqual({ label: "phoenix/v0.3-rc.1", status: "active", distribution: "phoenix/v0.3-rc.1" });
+    expect(d.generation).toEqual({ label: "cork/v0.3", status: "active", distribution: "phoenix/v0.3-rc.1" });
+    expect(env.provenance.generation).toEqual({ label: "cork/v0.3", status: "active", distribution: "phoenix/v0.3-rc.1" });
     expect(d.wire).toBe("8-field");
     // 8-field: the struct carries no fees — they come from the views, byte-identical to 0.5.x.
     expect(d.market).not.toHaveProperty("swapFeePercentage");
@@ -131,11 +131,11 @@ describe("pool-scoped generation resolution — the manager that HOLDS the pool 
     expect(env.warnings.map((w) => w.code)).not.toContain("fee_view_mismatch");
   });
   it("`generation` NARROWS the search to one manager: the pool on v0.3 is unknown to the primary alone → pool_not_found naming only the manager asked", async () => {
-    const env = await corkPool(ctxFor(V03_PM, {}, { generation: "phoenix/v0.4-rc.1" }));
+    const env = await corkPool(ctxFor(V03_PM, {}, { generation: "cork/v0.4" }));
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("pool_not_found");
-    expect(env.warnings[0]?.message).toContain(`phoenix/v0.4-rc.1 (${PRIMARY_PM})`);
-    expect(env.warnings[0]?.message).not.toContain("phoenix/v0.3-rc.1");
+    expect(env.warnings[0]?.message).toContain(`cork/v0.4 (${PRIMARY_PM})`);
+    expect(env.warnings[0]?.message).not.toContain("cork/v0.3");
   });
   it("no manager knows the pool → pool_not_found naming EVERY manager asked, with its label (read-only sets included)", async () => {
     const env = await corkPool(ctxFor(ZERO));
@@ -153,23 +153,23 @@ describe("pool-scoped generation resolution — the manager that HOLDS the pool 
     expect(d.corkAdapter).toBe(V03_ADAPTER);
     expect(d.corkAdapter).not.toBe(PRIMARY_ADAPTER);
     expect(d.multicall.toLowerCase()).toContain(V03_ADAPTER.slice(2).toLowerCase());
-    expect(d.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", status: "active" });
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(d.generation).toMatchObject({ label: "cork/v0.3", status: "active" });
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
   it("account-state and pool-whitelist ride the same resolver", async () => {
     const as = await runTool("cork_query", { resource: "account-state", chainId: CHAIN, pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } }, ctxFor(V03_PM));
     expect(as.state).toBe("ok");
-    expect((as.data as { generation: Gen; allowances: { spenders: { corkAdapter: string } } }).generation.label).toBe("phoenix/v0.3-rc.1");
+    expect((as.data as { generation: Gen; allowances: { spenders: { corkAdapter: string } } }).generation.label).toBe("cork/v0.3");
     expect((as.data as { allowances: { spenders: { corkAdapter: string } } }).allowances.spenders.corkAdapter).toBe(V03_ADAPTER);
     const wl = await runTool("cork_query", { resource: "pool-whitelist", chainId: CHAIN, pageSize: 25, format: "concise", filters: { poolId: POOL, account: RCV } }, ctxFor(V03_PM));
     expect(wl.state).toBe("ok");
-    expect(wl.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect(wl.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
   it("compute kinds run over the pool's manager and echo the generation", async () => {
     const env = await runTool("cork_compute", { chainId: CHAIN, params: { kind: "cst-swap-rate", poolId: POOL, collateralAssetsOut: "1000" }, format: "concise" }, ctxFor(V03_PM));
     expect(env.state).toBe("ok");
-    expect((env.data as { generation: Gen }).generation.label).toBe("phoenix/v0.3-rc.1");
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1" });
+    expect((env.data as { generation: Gen }).generation.label).toBe("cork/v0.3");
+    expect(env.provenance.generation).toMatchObject({ label: "cork/v0.3" });
   });
 });
 
@@ -178,7 +178,7 @@ describe("10-field reads: fees FROM the tuple, the views compared", () => {
     const env = await corkPool(ctxFor(PRIMARY_PM, { wire: "10-field" }));
     expect(env.state).toBe("ok");
     const d = env.data as { generation: Gen; wire: string; market: Record<string, string>; swapFeePercentage: string; scales: Record<string, string> };
-    expect(d.generation.label).toBe("phoenix/v0.4-rc.1");
+    expect(d.generation.label).toBe("cork/v0.4");
     expect(d.wire).toBe("10-field");
     expect(d.market["swapFeePercentage"]).toBe(FEE.toString());
     expect(d.market["unwindSwapFeePercentage"]).toBe(FEE.toString());
@@ -208,7 +208,7 @@ describe("10-field reads: fees FROM the tuple, the views compared", () => {
     expect(d.verified).toBe(true);
     expect(d.wire).toBe("10-field");
     expect(d.marketIdRecomputed).toBe(id10);
-    expect(d.generation.label).toBe("phoenix/v0.4-rc.1");
+    expect(d.generation.label).toBe("cork/v0.4");
     // And an 8-field pool on v0.3 verifies on the 8-field hash.
     const id8 = computeMarketId(MARKET8, "8-field");
     const env8 = await runTool("cork_track", { chainId: CHAIN, mode: "verify", subject: { kind: "marketRef", poolId: id8 }, format: "concise" }, ctxFor(V03_PM));
@@ -251,11 +251,11 @@ describe("read-only generations: reads and post-expiry settles yes, pre-expiry p
     // …and the same op against an ACTIVE non-primary set builds.
     const ok = await runTool(
       "cork_prepare_phoenix",
-      { chainId: CHAIN, account: RCV, clientRequestId: "gen-ro-auth-0002", generation: "phoenix/v0.3-rc.1", action: { type: "authority-onboard", token: CST, spender: V03_PM }, format: "concise" },
+      { chainId: CHAIN, account: RCV, clientRequestId: "gen-ro-auth-0002", generation: "cork/v0.3", action: { type: "authority-onboard", token: CST, spender: V03_PM }, format: "concise" },
       { nowSeconds: NOW },
     );
     expect(ok.state).toBe("ok");
-    expect(ok.provenance.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", status: "active" });
+    expect(ok.provenance.generation).toMatchObject({ label: "cork/v0.3", status: "active" });
   });
 
   it("getPoolDep: purpose read serves a read-only set; purpose prepare refuses it; the shares ride along", async () => {
@@ -300,9 +300,9 @@ describe("MarketCreated scans across generations", () => {
   it("decodes each log with the ABI of its EMITTER's wire: 8-field rows carry no fees, 10-field rows carry both, each tagged with wire + generation", () => {
     const rows = decodeMarketRows([log7(V03_PM), log9(PRIMARY_PM)], EMITTERS);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ poolId: POOL, poolManager: V03_PM, wire: "8-field", generation: "phoenix/v0.3-rc.1", corkSwapToken: CST });
+    expect(rows[0]).toMatchObject({ poolId: POOL, poolManager: V03_PM, wire: "8-field", generation: "cork/v0.3", corkSwapToken: CST });
     expect(rows[0]).not.toHaveProperty("swapFeePercentage");
-    expect(rows[1]).toMatchObject({ poolId: POOL, poolManager: PRIMARY_PM, wire: "10-field", generation: "phoenix/v0.4-rc.1", swapFeePercentage: FEE.toString(), unwindSwapFeePercentage: (2n * WAD).toString() });
+    expect(rows[1]).toMatchObject({ poolId: POOL, poolManager: PRIMARY_PM, wire: "10-field", generation: "cork/v0.4", swapFeePercentage: FEE.toString(), unwindSwapFeePercentage: (2n * WAD).toString() });
   });
   it("never guesses by topic: a 9-arg log claiming an 8-field emitter (and vice versa) is SKIPPED, as is a log from an unlisted address", () => {
     expect(decodeMarketRows([log9(V03_PM)], EMITTERS)).toEqual([]);
@@ -321,8 +321,8 @@ describe("MarketCreated scans across generations", () => {
     const emitters = await protocolEmittersFor(CHAIN);
     const ok = attributeLogs([asReceiptLog(log7(V03_PM)), asReceiptLog(log9(PRIMARY_PM))], emitters);
     expect(ok.corkEvents.map((e) => [e.event, e.emitter.generation.label])).toEqual([
-      ["MarketCreated (pool manager, 8-field)", "phoenix/v0.3-rc.1"],
-      ["MarketCreated (pool manager, 10-field)", "phoenix/v0.4-rc.1"],
+      ["MarketCreated (pool manager, 8-field)", "cork/v0.3"],
+      ["MarketCreated (pool manager, 10-field)", "cork/v0.4"],
     ]);
     const crossed = attributeLogs([asReceiptLog(log7(PRIMARY_PM)), asReceiptLog(log9(V03_PM))], emitters);
     expect(crossed.corkEvents).toEqual([]);
@@ -348,8 +348,8 @@ describe("full-decentralized cork-pools asks BOTH MarketCreated topics", () => {
     const d = env.data as { count: number; items: Array<Record<string, unknown>> };
     expect(d.count).toBe(2);
     expect(d.items.map((r) => [r["poolManager"], r["wire"], r["generation"]])).toEqual([
-      [V03_PM, "8-field", "phoenix/v0.3-rc.1"],
-      [PRIMARY_PM, "10-field", "phoenix/v0.4-rc.1"],
+      [V03_PM, "8-field", "cork/v0.3"],
+      [PRIMARY_PM, "10-field", "cork/v0.4"],
     ]);
     expect(d.items[1]).toMatchObject({ swapFeePercentage: FEE.toString() });
   });
@@ -478,12 +478,12 @@ describe("emitter roles ↔ verified events parity", () => {
   it("the BaseFiller JITMarketCreated (three args) is its own selector, emitted by the `baseFiller` role of the generation that records it", async () => {
     expect(BASE_FILLER_JIT_MARKET_CREATED_TOPIC).toBe("0xa42f9e5c6639673ffcad0a9dd20a3a0bb70cd67dd2c9e099d5d6c081dafca217");
     expect(PROTOCOL_EVENTS[BASE_FILLER_JIT_MARKET_CREATED_TOPIC.toLowerCase()]).toEqual({ event: "JITMarketCreated (BaseFiller)", roles: ["baseFiller"] });
-    expect(classifyAddress(ARBITRUM, "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "baseFiller" }]);
-    expect(classifyAddress(ARBITRUM, "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d")).toEqual([{ label: "phoenix/v0.3-rc.1", status: "active", primary: false, role: "baseFiller" }]);
+    expect(classifyAddress(ARBITRUM, "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224")).toEqual([{ label: "cork/v0.4", status: "active", primary: true, role: "baseFiller" }]);
+    expect(classifyAddress(ARBITRUM, "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d")).toEqual([{ label: "cork/v0.3", status: "active", primary: false, role: "baseFiller" }]);
     const emitters = await protocolEmittersFor(CHAIN);
     const log = { address: "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", topics: [BASE_FILLER_JIT_MARKET_CREATED_TOPIC, POOL, `0x${"00".repeat(12)}${ORACLE.slice(2)}`], data: encodeAbiParameters([{ type: "address" }], [RCV]) };
     const a = attributeLogs([log], emitters);
     expect(a.corkEvents).toHaveLength(1);
-    expect(a.corkEvents[0]).toMatchObject({ event: "JITMarketCreated (BaseFiller)", emitter: { role: "baseFiller", generation: { label: "phoenix/v0.4-rc.1", status: "active" } }, topic1: POOL });
+    expect(a.corkEvents[0]).toMatchObject({ event: "JITMarketCreated (BaseFiller)", emitter: { role: "baseFiller", generation: { label: "cork/v0.4", status: "active" } }, topic1: POOL });
   });
 });

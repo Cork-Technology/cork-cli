@@ -130,7 +130,7 @@ describe("consumers read the chain's value through the cache, with the compiled 
   });
 
   it("resolveFeeCap on an 8-field generation: cold cache → the compiled 5e18; warm cache → the chain's own value; on the 10-field primary the rule is < 100e18 and nothing is cached", async () => {
-    const flat = { generation: "phoenix/v0.3-rc.1" };
+    const flat = { generation: "cork/v0.3" };
     expect(await resolveFeeCap(42161, "adapter", flat)).toBe(5n * WAD);
     // Warm the adapter's entry (config resolves the flat generation's adapter address for 42161).
     const { marketRegistryForWire, resolveGenerations } = await import("@cork/core");
@@ -140,7 +140,7 @@ describe("consumers read the chain's value through the cache, with the compiled 
     expect(await resolveFeeCap(42161, "adapter", flat)).toBe(3n * WAD);
     // The creator's cap is keyed on the CREATOR address — the adapter's entry must not answer it.
     expect(await resolveFeeCap(42161, "creator", flat)).toBe(5n * WAD);
-    // The PRIMARY (phoenix/v0.4-rc.1) creates on a 10-field pool manager: Phoenix reverts
+    // The PRIMARY (cork/v0.4) creates on a 10-field pool manager: Phoenix reverts
     // InvalidFees at or above 100e18 and no contract exposes a cap view — the largest allowed
     // fee is 100e18 − 1, whatever any adapter entry in the cache says.
     const primaryMr = (await resolveGenerations(42161)).primary!.marketRegistry!;
@@ -172,7 +172,7 @@ describe("consumers read the chain's value through the cache, with the compiled 
       "cork_prepare_orders",
       {
         chainId: 42161,
-        generation: "phoenix/v0.3-rc.1",
+        generation: "cork/v0.3",
         account: "0xc0ffee0000000000000000000000000000000001",
         clientRequestId: "const-cache-e2e-01",
         action: {

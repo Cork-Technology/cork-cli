@@ -29,7 +29,7 @@ const NOW = 1_790_000_000n;
 const LOP = LOP_ADDRESSES[1]!;
 const ASSET = "0x00000000000000000000000000000000000000c5" as const;
 const MAKER = "0x00000000000000000000000000000000000000fa" as const;
-const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const; // the phoenix/v0.3-rc.1 (flat-wire) JIT adapter on 42161
+const ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const; // the cork/v0.3 (flat-wire) JIT adapter on 42161
 /** The chain generations the classified decoder dispatches on (jit-extension.ts, review A3). */
 const GENS = generationsOf(BUNDLED_DEFAULTS, 42161);
 const COLLATERAL = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" as const;

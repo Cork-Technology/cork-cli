@@ -988,13 +988,13 @@ describe("ch --generation aliases and the positions read", () => {
     expect(r.stdout).toContain("positions (1)");
     expect(r.stdout).toMatch(/generation\s+poolId\s+expiry \(UTC\)\s+state\s+cST/);
     expect(r.stdout).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/); // the canonical ISO form, not bare seconds
-    expect(r.stdout).toContain("phoenix/v0.3-rc.1");
+    expect(r.stdout).toContain("cork/v0.3");
     expect(r.stdout).toContain(MIGRATION_OLD_POOL);
     expect(r.stdout).toContain("live");
     const j = await runCli(["query", "account-state", "--chain-id", "arbitrum", "--account", DEMO_ACCOUNT, "--generation", "previous", "--json"], stubContext());
     expect(j.code).toBe(EXIT.ok);
     const env = JSON.parse(j.stdout) as { data: { generations: Array<{ label: string }>; positions: unknown[]; scanned: { managers: number } }; provenance: Record<string, unknown> };
-    expect(env.data.generations.map((g) => g.label)).toEqual(["phoenix/v0.3-rc.1"]);
+    expect(env.data.generations.map((g) => g.label)).toEqual(["cork/v0.3"]);
     expect(env.data.scanned.managers).toBe(1);
     expect(env.provenance["generation"]).toBeUndefined();
   });
@@ -1004,6 +1004,6 @@ describe("ch --generation aliases and the positions read", () => {
     expect(bad.stderr).toContain("ONE artifact");
     const ok = await runCli(["prepare", "phoenix", "authority-revoke", "--chain-id", "42161", "--account", RCV, "--client-request-id", "mig-cli-0002", "--token", RCV, "--spender", RCV, "--generation", "previous", "--json"], { nowSeconds: NOW });
     expect(ok.code).toBe(EXIT.ok);
-    expect((JSON.parse(ok.stdout) as { provenance: { generation: { label: string } } }).provenance.generation.label).toBe("phoenix/v0.3-rc.1");
+    expect((JSON.parse(ok.stdout) as { provenance: { generation: { label: string } } }).provenance.generation.label).toBe("cork/v0.3");
   });
 });

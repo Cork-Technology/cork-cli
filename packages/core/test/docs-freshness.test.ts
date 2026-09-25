@@ -11,7 +11,7 @@ const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8"
 const quickstart = read("../../../docs/zyfai-quickstart.md");
 const anatomy = read("../../../docs/jit-order-anatomy.md");
 // Schema 2 (0.6): a chain hosts a SET of generations, one primary. The quickstart's worked
-// examples are live captures against phoenix/v0.3-rc.1 (0.3.3), which stays ACTIVE — so the doc
+// examples are live captures against cork/v0.3 (0.3.3), which stays ACTIVE — so the doc
 // must name BOTH the primary set's addresses (what a new market uses) and the 0.3.3 set's (what
 // every listed pool still reads as), and no address from a retired or legacy set.
 type MarketRegistryBlock = { registry: string; adapter: string; contractsVersion: string; wire: string; recipes?: Record<string, string> };
@@ -51,7 +51,7 @@ describe("docs freshness: zyfai-quickstart.md tracks the configured registry gen
   it("the config pins a nested-wire primary and a flat-wire active set on Base (the two generations the doc describes)", () => {
     expect(PRIMARY.wire).toBe("nested");
     expect(FLAT, "an ACTIVE flat-wire (0.3.x) registry on Base — the set the worked examples were captured against").toBeDefined();
-    expect(BASE.primary).toBe("phoenix/v0.4-rc.1");
+    expect(BASE.primary).toBe("cork/v0.4");
   });
 
   it("names the PRIMARY generation: registry, adapter, market creator and all four recipes from cork-defaults.v2.json", () => {

@@ -381,9 +381,9 @@ plausible nonsense rather than failing.
 
 **The fee bound is a wire fact, not a constant.** Both fee fields stay \`D18{%}\` on every
 generation, but WHAT bounds them follows the pool manager's wire (\`cork_capabilities
-topic:"generations"\`): an 8-field manager (mainnet, \`phoenix/v0.3-rc.1\`, the older Arbitrum
+topic:"generations"\`): an 8-field manager (mainnet, \`cork/v0.3\`, the older Arbitrum
 eras) caps each fee at 5e18 inclusive through \`MAX_FEE_PERCENTAGE\`; a 10-field manager
-(\`phoenix/v0.4-rc.1\`, the primary) has NO such getter and reverts \`InvalidFees()\` at or above
+(\`cork/v0.4\`, the primary) has NO such getter and reverts \`InvalidFees()\` at or above
 100e18 — and folds both fees into the \`Market\` struct, so they are part of the pool id.
 \`derive-cork-pool\` takes them as filters (default 0) for that reason; a fee that changes the
 identity is a different market, not a parameter of the same one.
@@ -579,13 +579,17 @@ from bytes. A block can be absent (mainnet has only a phoenix block).
 
 ## Labels and statuses
 
-Labels are the Distribution's names where one exists and the tool's own for the eras before it:
+A label names a DISTRIBUTION BUNDLE (\`cork/<version>\`), not the core protocol: Phoenix is one component
+of a bundle. The bundle's own record name (\`phoenix/v0.4-rc.1\`) rides in each generation's
+\`distribution\` field. The eras before Distributions carry the tool's own labels. The 0.6.0 spellings
+\`phoenix/v0.4-rc.1\` and \`phoenix/v0.3-rc.1\` are still accepted as \`generation\` input and resolve to
+\`cork/v0.4\` and \`cork/v0.3\`; every result carries the new label.
 
 | Chain | Label | Status | Contents |
 |---|---|---|---|
 | 1 | \`mainnet\` (primary) | active | the original chain-1 stack (8-field) |
-| 42161, 8453 | \`phoenix/v0.4-rc.1\` (**primary**) | active | phoenix 1.4.0-rc.1 (10-field), market-registry 0.5.0 (nested), rollover 0.2.0 (0.2), cork-periphery 0.2.0-rc.1 |
-| 42161, 8453 | \`phoenix/v0.3-rc.1\` | active | phoenix v1.3.0-rc.1 (8-field), market-registry 0.3.3 (flat), rollover v0.1.0-rc.2 (rc.2) |
+| 42161, 8453 | \`cork/v0.4\` (**primary**) | active | phoenix 1.4.0-rc.1 (10-field), market-registry 0.5.0 (nested), rollover 0.2.0 (0.2), cork-periphery 0.2.0-rc.1 |
+| 42161, 8453 | \`cork/v0.3\` | active | phoenix v1.3.0-rc.1 (8-field), market-registry 0.3.3 (flat), rollover v0.1.0-rc.2 (rc.2) |
 | 42161 | \`arbitrum-v1.1\` | active | the previous production stack, where the venue's existing markets live (8-field; a pre-2.1.0 registry behind the deprecation gate; the retired July 2026 rollover set, rc.1) |
 | 42161 | \`arbitrum-legacy\` | read-only | the pre-launch calibration pools (8-field) |
 
@@ -638,7 +642,7 @@ the contract hashes.
 
 \`cork_capabilities topic:"verify"\` re-derives every attested address from (deployer, salt,
 initCodeHash); each attestation names the generation it binds. The \`mainnet\` and
-\`phoenix/v0.3-rc.1\` sets are attested. The \`phoenix/v0.4-rc.1\` set has NO CREATE2 attestation:
+\`cork/v0.3\` sets are attested. The \`cork/v0.4\` set has NO CREATE2 attestation:
 the Distribution component records carry no salt, initCodeHash or deployer, and nothing is
 fabricated. Its trust anchor is instead the approved-implementations allowlist — the live code
 hash of every role in every generation, captured on chain and cross-checked against the
@@ -652,7 +656,7 @@ would send a 0.5.x binary to a generation whose wire it does not speak — and a
 10-field \`market()\` return succeeds silently with a wrong pool id. Two files, two lines; older
 binaries keep the addresses they understand.`,
     searchText:
-      "generation generations which contracts primary set label phoenix/v0.4-rc.1 phoenix/v0.3-rc.1 arbitrum-v1.1 wire wires 8-field 10-field flat nested legacy rc.2 0.2 which registry which adapter which pool manager is this pool on old pool older generation redeploy retired read-only active pool_not_found generation_unknown generation_read_only select generation oracleSalt extraData additionalData market creator distribution",
+      "generation generations which contracts primary set label cork/v0.4 cork/v0.3 phoenix/v0.4-rc.1 phoenix/v0.3-rc.1 arbitrum-v1.1 wire wires 8-field 10-field flat nested legacy rc.2 0.2 which registry which adapter which pool manager is this pool on old pool older generation redeploy retired read-only active pool_not_found generation_unknown generation_read_only select generation oracleSalt extraData additionalData market creator distribution",
   },
   migration: {
     name: "migration",
@@ -671,13 +675,13 @@ exit from an old pool and an entry into a new one are therefore two ordinary cal
 
 ## The aliases on the \`generation\` input
 
-Every chain-backed input takes \`generation\`. Besides a label (\`phoenix/v0.4-rc.1\`,
-\`phoenix/v0.3-rc.1\`, \`arbitrum-v1.1\`) it takes two ALIASES:
+Every chain-backed input takes \`generation\`. Besides a label (\`cork/v0.4\`,
+\`cork/v0.3\`, \`arbitrum-v1.1\`) it takes two ALIASES:
 
 - \`primary\` — the same as omitting it: the chain's newest Distribution set.
 - \`previous\` — the newest ACTIVE non-primary generation that carries the contracts the call
   needs: a pool/phoenix call needs a pool manager, a registry call a market registry, a settler
-  call a rollover block. On Arbitrum and Base today that is \`phoenix/v0.3-rc.1\` for all three.
+  call a rollover block. On Arbitrum and Base today that is \`cork/v0.3\` for all three.
   A chain with a single generation (mainnet) refuses \`previous\` as \`generation_unknown\`.
 
 \`all\` is NOT a selector: a prepare builds one artifact and a registry read answers for one
@@ -731,7 +735,7 @@ provenance of a prepared artifact is exact.
   denominations and USD conversion feeds). A market on the primary can be created by any JIT fill or
   \`create-pool\`; the nested fill path was rehearsed against a fork of that LIVE state the same day
   (no owner impersonation) and passed. Read the current rows with \`registry-assets\`.
-- The \`phoenix/v0.4-rc.1\` set has **no CREATE2 attestation** (the Distribution records carry no
+- The \`cork/v0.4\` set has **no CREATE2 attestation** (the Distribution records carry no
   salt or init-code hash). Its trust anchor is the approved-implementations allowlist compiled
   into this build: a prepare against code that is not on the list warns
   \`implementation_not_approved\`.`,

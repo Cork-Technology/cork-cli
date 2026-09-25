@@ -8,8 +8,11 @@ import {
   BUNDLED_DEFAULTS,
   classifyAddress,
   ChainGenerationsSchema,
+  GENERATION_LABEL_RENAMES,
   GENERATION_ROLES,
   generationsOf,
+  renamedGenerationLabel,
+  resolveGenerationAlias,
   IMPLEMENTED_MARKET_REGISTRY_WIRES,
   MARKET_REGISTRY_WIRES,
   marketRegistryForWire,
@@ -96,8 +99,8 @@ describe("generationsOf — resolution order: primary, other active (config orde
     expect(generationsOf({}, 7)).toEqual([]);
   });
   it("the bundled document resolves the way the design pins it", () => {
-    expect(generationsOf(BUNDLED_DEFAULTS, 42161).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
-    expect(generationsOf(BUNDLED_DEFAULTS, 8453).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]);
+    expect(generationsOf(BUNDLED_DEFAULTS, 42161).map((g) => g.label)).toEqual(["cork/v0.4", "cork/v0.3", "arbitrum-v1.1", "arbitrum-legacy"]);
+    expect(generationsOf(BUNDLED_DEFAULTS, 8453).map((g) => g.label)).toEqual(["cork/v0.4", "cork/v0.3"]);
     expect(generationsOf(BUNDLED_DEFAULTS, 1).map((g) => g.label)).toEqual(["mainnet"]);
   });
 });
@@ -160,11 +163,11 @@ describe("classifyAddress — every role an address holds, per generation, in re
   });
   it("walks the bundled Arbitrum document: the shared 0.5.0 controller sits on both blocks of ONE generation; the 0.3.3 adapter is one generation's jitAdapter", () => {
     const arb = generationsOf(BUNDLED_DEFAULTS, 42161);
-    expect(classifyAddress(arb, "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "controller" }]);
-    expect(classifyAddress(arb, "0x8902a88912a334263fe3d731d03c267715b9374f")).toEqual([{ label: "phoenix/v0.3-rc.1", status: "active", primary: false, role: "jitAdapter" }]);
+    expect(classifyAddress(arb, "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5")).toEqual([{ label: "cork/v0.4", status: "active", primary: true, role: "controller" }]);
+    expect(classifyAddress(arb, "0x8902a88912a334263fe3d731d03c267715b9374f")).toEqual([{ label: "cork/v0.3", status: "active", primary: false, role: "jitAdapter" }]);
     expect(classifyAddress(arb, "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D")).toEqual([{ label: "arbitrum-v1.1", status: "active", primary: false, role: "exactSettler" }]);
     expect(classifyAddress(arb, "0xc2De56fb1C7a85250ce69C37B4773767C77954AE")).toEqual([{ label: "arbitrum-legacy", status: "read-only", primary: false, role: "poolManager" }]);
-    expect(classifyAddress(arb, "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "recipe", recipeName: "impairment" }]);
+    expect(classifyAddress(arb, "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9")).toEqual([{ label: "cork/v0.4", status: "active", primary: true, role: "recipe", recipeName: "impairment" }]);
   });
 });
 
@@ -255,5 +258,39 @@ describe("resolvePoolGeneration — one batched shares(poolId) read across every
     const c = { readContract: async (args: { blockNumber?: bigint }) => { seen = args.blockNumber; return [ZERO, ZERO]; } } as unknown as PoolGenerationClient;
     await resolvePoolGeneration(c, LIST.slice(0, 1) as ResolvedGeneration[], POOL, undefined, 123n);
     expect(seen).toBe(123n);
+  });
+});
+
+// The 0.6.0 labels (`phoenix/v0.4-rc.1`, `phoenix/v0.3-rc.1`) were renamed to the Distribution-bundle
+// spelling (`cork/v0.4`, `cork/v0.3`) on 2026-09-25: a label names the BUNDLE, Phoenix is one of its
+// components. Inputs keep accepting the old spelling; results carry the new one; the bundle's own
+// record name is untouched in `distribution`.
+
+describe("renamed generation labels (phoenix/… → cork/…)", () => {
+  const list = generationsOf(BUNDLED_DEFAULTS, 8453);
+  it("the map names exactly the two 0.6.0 labels and points at labels that exist on both chains", () => {
+    expect(Object.keys(GENERATION_LABEL_RENAMES).sort()).toEqual(["phoenix/v0.3-rc.1", "phoenix/v0.4-rc.1"]);
+    for (const chainId of [42161, 8453]) {
+      const labels = generationsOf(BUNDLED_DEFAULTS, chainId).map((g) => g.label);
+      for (const to of Object.values(GENERATION_LABEL_RENAMES)) expect(labels).toContain(to);
+    }
+    expect(renamedGenerationLabel("cork/v0.4")).toBeUndefined();
+    expect(renamedGenerationLabel(undefined)).toBeUndefined();
+  });
+  it("the resolver maps an old spelling to today's label and says where it came from", () => {
+    const r = resolveGenerationAlias(list, "phoenix/v0.4-rc.1");
+    expect(r).toEqual({ ok: true, label: "cork/v0.4", renamedFrom: "phoenix/v0.4-rc.1" });
+    const r3 = resolveGenerationAlias(list, "phoenix/v0.3-rc.1", ["phoenix"], "prepare");
+    expect(r3.ok && r3.label).toBe("cork/v0.3");
+  });
+  it("selectGeneration accepts the old spelling for reads AND prepares and returns the renamed set", () => {
+    const sel = selectGeneration(list, "phoenix/v0.3-rc.1", "prepare", ["phoenix"]);
+    expect(sel.ok && sel.generation.label).toBe("cork/v0.3");
+    expect(sel.ok && sel.generation.distribution).toBe("phoenix/v0.3-rc.1"); // the bundle's record name stays
+  });
+  it("the primary carries the bundle's record name under `distribution`, distinct from its label", () => {
+    const primary = list.find((g) => g.primary)!;
+    expect(primary.label).toBe("cork/v0.4");
+    expect(primary.distribution).toBe("phoenix/v0.4-rc.1");
   });
 });

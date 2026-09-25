@@ -594,7 +594,7 @@ describe("decode row helpers — direct, including the honest malformed-log skip
 
 // ── whitelisted-addresses: event replay + [K7] live-view verification ─────────────────────────
 
-const WLM_ARB = "0x8af6659d864cb632bcadf0744fb8b5ee78fbea51"; // Arbitrum whitelistManager of the PRIMARY generation (cork-defaults.v2, phoenix/v0.4-rc.1)
+const WLM_ARB = "0x8af6659d864cb632bcadf0744fb8b5ee78fbea51"; // Arbitrum whitelistManager of the PRIMARY generation (cork-defaults.v2, cork/v0.4)
 const wlAbi = parseAbi([
   "event GlobalWhitelistAdded(address indexed account)",
   "event GlobalWhitelistRemoved(address indexed account)",

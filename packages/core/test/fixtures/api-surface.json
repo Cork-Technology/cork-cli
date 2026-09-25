@@ -409,6 +409,10 @@
       "kind": "value"
     },
     {
+      "name": "GENERATION_LABEL_RENAMES",
+      "kind": "value"
+    },
+    {
       "name": "GENERATION_ROLES",
       "kind": "value"
     },
@@ -2393,6 +2397,10 @@
       "kind": "value"
     },
     {
+      "name": "renamedGenerationLabel",
+      "kind": "value"
+    },
+    {
       "name": "replayRtmr3",
       "kind": "value"
     },
@@ -3111,6 +3119,10 @@
       "kind": "value"
     },
     {
+      "name": "GENERATION_LABEL_RENAMES",
+      "kind": "value"
+    },
+    {
       "name": "GENERATION_ROLES",
       "kind": "value"
     },
@@ -3368,6 +3380,10 @@
     },
     {
       "name": "realConfigDeps",
+      "kind": "value"
+    },
+    {
+      "name": "renamedGenerationLabel",
       "kind": "value"
     },
     {

@@ -15,7 +15,7 @@ export interface Market8 {
 }
 
 /** phoenix IPoolManager.Market on the `10-field` wire (phoenix v1.4.0-rc.1, Distribution
- *  phoenix/v0.4-rc.1): the two fee percentages (1e18 = 1%, strictly below 100%) are the last two
+ *  cork/v0.4): the two fee percentages (1e18 = 1%, strictly below 100%) are the last two
  *  struct fields — fixed for the pool lifetime and PART OF THE POOL ID. Structurally a superset
  *  of Market8, which is exactly why `computeMarketId` takes the wire explicitly: TypeScript would
  *  otherwise let a 10-field market flow into an 8-field hash unnoticed. */

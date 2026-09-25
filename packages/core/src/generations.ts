@@ -11,7 +11,7 @@
 // `10-field`, `legacy` | `flat` | `nested`, `rc.2` | `0.2`) — the config declares, the code
 // implements; a codec that does not know a declared wire refuses rather than guessing. Per chain
 // the config records `{ primary: <label>, sets: { <label>: generation } }`; labels are the
-// Distribution names where one exists (`phoenix/v0.4-rc.1`) and our own for the eras before the
+// Distribution BUNDLE labels (`cork/v0.4` — the bundle's own record name, `phoenix/v0.4-rc.1`, rides in `distribution`) and our own for the eras before the
 // Distribution existed (`arbitrum-v1.1`, `mainnet`).
 //
 // Why a set and not a flat "current + historical" list (the PR #17 shape this supersedes): the
@@ -64,7 +64,7 @@ export type RolloverWire = (typeof ROLLOVER_WIRES)[number];
 export const GENERATION_STATUSES = ["active", "read-only"] as const;
 export type GenerationStatus = (typeof GENERATION_STATUSES)[number];
 
-/** A generation label: a Distribution name (`phoenix/v0.4-rc.1`) or one of ours (`mainnet`). */
+/** A generation label: a Distribution bundle label (`cork/v0.4`; the bundle's record name rides in `distribution`) or one of ours (`mainnet`). */
 export type GenerationLabel = string;
 
 // ── Schemas (the v2 config document's per-generation blocks) ────────────────────────────────────
@@ -232,6 +232,20 @@ export type GenerationBlockKind = (typeof GENERATION_BLOCK_KINDS)[number];
  *  LABEL in this one place and every result carries the label, never the alias, so provenance
  *  stays exact. */
 export const GENERATION_ALIASES = ["primary", "previous", "all"] as const;
+
+/** Former spellings of a generation label → the label it is called today. A label is the
+ *  DISTRIBUTION BUNDLE (`cork/<version>`), not the core protocol: 0.6.0 shipped the 0.4 and 0.3
+ *  sets under `phoenix/…` names (2026-09-25 owner ruling renamed them — Phoenix is one component
+ *  of a bundle, and the bundle's own record name stays in each generation's `distribution` field).
+ *  Resolved in `resolveGenerationAlias`, the one place an alias becomes a label, so every input
+ *  that takes `generation` keeps accepting the old spelling and every result carries the new one. */
+export const GENERATION_LABEL_RENAMES: Readonly<Record<string, GenerationLabel>> = {
+  "phoenix/v0.4-rc.1": "cork/v0.4",
+  "phoenix/v0.3-rc.1": "cork/v0.3",
+};
+export function renamedGenerationLabel(label: string | undefined): GenerationLabel | undefined {
+  return label === undefined ? undefined : GENERATION_LABEL_RENAMES[label];
+}
 export type GenerationAlias = (typeof GENERATION_ALIASES)[number];
 export function isGenerationAlias(label: string | undefined): label is GenerationAlias {
   return label !== undefined && (GENERATION_ALIASES as readonly string[]).includes(label);
@@ -250,7 +264,9 @@ export function resolveGenerationAlias(
   label: GenerationLabel | undefined,
   needs: readonly GenerationBlockKind[] = [],
   purpose: "read" | "prepare" = "read",
-): { ok: true; label: GenerationLabel | undefined; alias?: GenerationAlias } | { ok: false; refusal: GenerationRefusal } {
+): { ok: true; label: GenerationLabel | undefined; alias?: GenerationAlias; renamedFrom?: string } | { ok: false; refusal: GenerationRefusal } {
+  const renamed = renamedGenerationLabel(label);
+  if (renamed !== undefined && label !== undefined) return { ok: true, label: renamed, renamedFrom: label };
   if (!isGenerationAlias(label)) return { ok: true, label };
   if (label === "primary") return { ok: true, label: primaryOf(list)?.label, alias: label };
   if (label === "all") {

@@ -4,14 +4,14 @@
 EIP-712/ERC-1271, ERC-2612 permits, ERC-4626/7540, CREATE2. **Chain:** Base (8453).
 **Status:** the worked examples below were captured 2026-08-12 against MarketRegistry contracts
 release **0.3.3** (registry `0xa78d8137…11F1`) and the phoenix v1.3 pool-manager stack it binds —
-the generation the tool now labels **`phoenix/v0.3-rc.1`**. Since 2026-09-22 a chain hosts a SET
+the generation the tool now labels **`cork/v0.3`**. Since 2026-09-22 a chain hosts a SET
 of contract generations, one primary: the primary on Base and Arbitrum One is
-**`phoenix/v0.4-rc.1`** — contracts release **0.5.0** (registry `0xe1f569f1…55c5`, adapter
+**`cork/v0.4`** — contracts release **0.5.0** (registry `0xe1f569f1…55c5`, adapter
 `0x3E01C558…B104`, market creator `0x1A074F17…2DeA`; recipes liquidity `0x679Cbd01…964d`, nav
 `0xed6A6b04…87e3`, fixed `0xEC26bb7d…8C49`, impairment `0xd5e8F76A…0Ed9`) on the phoenix
 1.4.0-rc.1 pool manager (`0xcC17224A…0C2D`). Both sets are live at **identical addresses on Base
 and Arbitrum One**, so everything here transfers to 42161 by changing only the chain id and the
-asset addresses. A prepare targets the primary unless you pass `--generation phoenix/v0.3-rc.1`;
+asset addresses. A prepare targets the primary unless you pass `--generation cork/v0.3`;
 a read of an existing pool follows the generation the pool lives on. Every pool the venue has
 listed so far lives on the 0.3.3 / v1.3 set, and the 0.5.0 registry holds **no approved assets
 yet** — so the 0.3.3 outputs below are still what a live read of today's markets returns, and the
@@ -647,7 +647,7 @@ ch decode order --chain-id 8453 --input '{"data":{…the signed order row…}}' 
 ```
 ```jsonc
 { "state": "ok", "data": { "jit": {          // what a 0.3.3 (flat-wire) order decodes to
-  "generation": "phoenix/v0.3-rc.1", "wire": "flat", "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
+  "generation": "cork/v0.3", "wire": "flat", "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
   "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0xc1256Ae5…A2Ca",
   "recipe": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
   "constraint": { "rateMin": "1", "rateMax": "1745164538586574996", /* … */ },
@@ -656,8 +656,8 @@ ch decode order --chain-id 8453 --input '{"data":{…the signed order row…}}' 
 (Captured from a tool-prepared, permit-free order against the step-1c market — an underwriter's
 live row decodes identically and additionally shows `"permits": 1`. The `generation` label is the
 chain's label for the adapter the row names, and `wire` is the payload layout that generation
-speaks: `phoenix/v0.3-rc.1` / `flat` for `0x8902…374f` (the 0.3.3 stack, identical on both
-chains); `phoenix/v0.4-rc.1` / `nested` for the 0.5.0 adapter `0x3E01…B104`, whose payload wraps
+speaks: `cork/v0.3` / `flat` for `0x8902…374f` (the 0.3.3 stack, identical on both
+chains); `cork/v0.4` / `nested` for the 0.5.0 adapter `0x3E01…B104`, whose payload wraps
 the creator's `MarketParams` with `extraData` + `oracleSalt` and the two fees inside the pool id.
 The tool classifies the adapter FIRST and decodes on that generation's layout — it never
 trial-decodes. Rows naming an older adapter fill through a superseded deployment — fine for
@@ -1058,7 +1058,7 @@ fills/contracts.
 ### Migrating between generations
 
 Cork redeploys as a new **generation** of contracts; the previous generation keeps working. Since
-2026-09-22 the primary on Arbitrum and Base is `phoenix/v0.4-rc.1`, and `phoenix/v0.3-rc.1` stays
+2026-09-22 the primary on Arbitrum and Base is `cork/v0.4`, and `cork/v0.3` stays
 active. `cork-cli` supports both at the same time so you can move funds:
 
 - `ch query account-state --chain-id 42161 --account <you>` (no `--pool-id`) lists every pool where
@@ -1153,14 +1153,14 @@ from `ch query protocol-config` and the registry stack from `ch query registry-a
 whole registry stack (registry, adapter, all three recipes) was redeployed 2026-08-10 as
 contracts release **0.3.3** (identical addresses on Base and Arbitrum One), so anything cached
 before then is stale; and since 2026-09-22 the tool's primary is contracts release **0.5.0**
-(`phoenix/v0.4-rc.1`, a second set of addresses beside 0.3.3 — nothing was retired). A chain now
+(`cork/v0.4`, a second set of addresses beside 0.3.3 — nothing was retired). A chain now
 hosts a SET of generations: `ch query protocol-config` lists them all with each block's addresses
 and wire, every result names the generation it answered from (`data.generation`), and
 `--generation <label>` selects a non-primary set for a prepare. Installed copies of the tool pick
 up redeployed addresses automatically within an hour (remote config, `cork-defaults.v2.json`),
 so reads need no update from you. The current venue pool list is `api-phoenix.cork.tech/pools/v1/`.
 
-The primary set on Base and Arbitrum One (`phoenix/v0.4-rc.1`, contracts release **0.5.0** on the
+The primary set on Base and Arbitrum One (`cork/v0.4`, contracts release **0.5.0** on the
 phoenix 1.4.0-rc.1 pool manager; identical addresses on both chains, from `ch query protocol-config`
 2026-09-22):
 
@@ -1178,8 +1178,8 @@ phoenix 1.4.0-rc.1 pool manager; identical addresses on both chains, from `ch qu
 | CorkForSelfAdapter v0.2.0-rc.1 (reference) | `0x3864902695DC930Df406ef5dEB74c4DC249e23f1` |
 
 The 0.5.0 registry holds no approved assets yet, so no market exists on this set today; the 0.3.3
-addresses the worked examples show (`phoenix/v0.3-rc.1`) are what every listed pool still reads
-as. Pass `--generation phoenix/v0.3-rc.1` to build against that set on purpose.
+addresses the worked examples show (`cork/v0.3`) are what every listed pool still reads
+as. Pass `--generation cork/v0.3` to build against that set on purpose.
 
 Two rules make redeploys safe to live through:
 - **An abandoned generation does not go dark — it answers.** The interfaces are identical across

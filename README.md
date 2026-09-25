@@ -235,8 +235,8 @@ registry-recipes / registry-denominations / registry-feeds / derive-cork-pool, p
 predicts the pool a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved
 constraint, pool id, and cST/cPT tokens — before anything is deployed or signed.
 
-Each chain hosts a **set of contract generations**, one of them primary (`phoenix/v0.4-rc.1` on
-Arbitrum and Base since 2026-09-22; the previous `phoenix/v0.3-rc.1` set stays active). A prepare
+Each chain hosts a **set of contract generations**, one of them primary (`cork/v0.4` on
+Arbitrum and Base since 2026-09-22; the previous `cork/v0.3` set stays active). A prepare
 targets the primary unless you pass `generation: "<label>"`; a read of an existing pool follows
 the generation the pool lives on and reports it as `data.generation`. `protocol-config` lists a
 chain's generations; `cork_capabilities topic:"generations"` explains the model. To move funds

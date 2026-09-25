@@ -104,8 +104,8 @@ describe("settler provenance gate [STATE-003]: only a configured generation may 
   });
 
   it.each([
-    ["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", "phoenix/v0.3-rc.1"],
-    ["active", "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", "phoenix/v0.4-rc.1"], // the second active generation
+    ["active", "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", "cork/v0.3"],
+    ["active", "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", "cork/v0.4"], // the second active generation
     ["retired", EXACT, "arbitrum-v1.1"],
   ])(
     "a configured %s settler (%s) IS read, and its generation + label ride on the verification",
@@ -162,7 +162,7 @@ describe("status leg (settler orderStatus view)", () => {
     expect(env.warnings.some((w) => w.code === "venue_reported")).toBe(true);
   });
 
-  it("a venue row naming the 0.2 ExactSettler (phoenix/v0.4-rc.1, the primary) gets its orderStatus read on THAT settler and is attributed to its generation", async () => {
+  it("a venue row naming the 0.2 ExactSettler (cork/v0.4, the primary) gets its orderStatus read on THAT settler and is attributed to its generation", async () => {
     // The 0.2 settlers are configured generations like any other: the provenance gate admits
     // them, the read goes to the address the row named (not the primary's partner, not rc.2),
     // and the result carries the generation label — the same leg the rc.2 rows get.
@@ -173,7 +173,7 @@ describe("status leg (settler orderStatus view)", () => {
     expect(env.provenance.source).toBe("chain");
     expect(asked).toEqual([settler02.toLowerCase()]);
     const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
-    expect(v).toMatchObject({ chainStatus: "Settled", consistent: true, settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
+    expect(v).toMatchObject({ chainStatus: "Settled", consistent: true, settlerGeneration: { label: "cork/v0.4", status: "active" } });
     expect(String(v.settler).toLowerCase()).toBe(settler02.toLowerCase());
   });
 });
@@ -490,7 +490,7 @@ describe("reconcile venue-miss sweep [K7] — venue absence must not silence the
     expect(env.state).toBe("ok");
     const v = (env.data as { chainVerification: Record<string, unknown> }).chainVerification;
     expect(String(v.settler).toLowerCase()).toBe(candidatePartial.toLowerCase());
-    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: { label: "phoenix/v0.4-rc.1", status: "active" } });
+    expect(v).toMatchObject({ chainStatus: "Opened", settlerGeneration: { label: "cork/v0.4", status: "active" } });
   });
 
   it("all settlers answering None (and the venue empty) is an honest order_not_found", async () => {

@@ -430,7 +430,7 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
     constants: ["SECONDS_PER_YEAR", "CAPACITY_DAYS"],
     args: { type: "(uint256,uint256,uint256)", display: IMPAIRMENT_ARGS_DISPLAY },
   },
-  // market-registry 0.5.0 recipes (the nested-wire generation phoenix/v0.4-rc.1; identical
+  // market-registry 0.5.0 recipes (the nested-wire generation cork/v0.4; identical
   // addresses on 42161 + 8453; constant getters + encode/decodeExtraData read live 2026-09-22:
   // liquidity price/nav answer the five RATE_* views, the impairment recipe its five constants
   // incl. EXTRA_DATA_LENGTH = 96 and MAX_BAND_PERCENTAGE = 50e18, the fixed recipe WINDOW_WIDTH).

@@ -48,7 +48,7 @@ type JitVerification =
   | { verification: "unverified" };
 
 /** Best-effort JIT label on decoded orders, discriminated on the adapter generation's WIRE.
- *  `generation` is the chain generation's label ("phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1",
+ *  `generation` is the chain generation's label ("cork/v0.4", "cork/v0.3",
  *  "arbitrum-v1.1"), or `unconfigured` for a hook at an address no generation names. */
 type JitLabel = JitVerification & (
   | {

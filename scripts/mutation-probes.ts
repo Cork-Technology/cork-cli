@@ -1709,6 +1709,24 @@ const CATALOG: Mutant[] = [
     tests: [T.generations, T.configRemote, T.handlers],
   },
   {
+    // The 0.6.0 label spellings resolve to today's labels (2026-09-25 rename). A map that points an
+    // old spelling at the WRONG bundle would silently target the other generation's contracts.
+    id: "generations-rename-map-crossed",
+    file: "packages/core/src/generations.ts",
+    find: '  "phoenix/v0.4-rc.1": "cork/v0.4",',
+    replace: '  "phoenix/v0.4-rc.1": "cork/v0.3",',
+    tests: [T.generations],
+  },
+  {
+    // A renamed label must reach the resolver: the handler early-return that skips the chain
+    // lookup for a plain label must NOT swallow an old spelling (it would then be `generation_unknown`).
+    id: "generations-rename-not-routed-by-handler",
+    file: "packages/core/src/generations.ts",
+    find: "  if (renamed !== undefined && label !== undefined) return { ok: true, label: renamed, renamedFrom: label };",
+    replace: "  if (renamed !== undefined && label !== undefined && false) return { ok: true, label: renamed, renamedFrom: label };",
+    tests: [T.generations],
+  },
+  {
     // A read-only set must refuse a PREPARE (its contracts are kept for reads/decode only).
     id: "generations-select-readonly-prepare-allowed",
     file: "packages/core/src/generations.ts",
@@ -2114,8 +2132,8 @@ const CATALOG: Mutant[] = [
     // prevent (registry vs adapter are different addresses, so the swap must fail the test).
     id: "attestation-binds-path-swapped",
     file: "packages/core/src/config.ts",
-    find: 'binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "adapter" },',
-    replace: 'binds: { section: "marketRegistry", generation: "phoenix/v0.3-rc.1", chains: [42161, 8453], path: "registry" },',
+    find: 'binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "adapter" },',
+    replace: 'binds: { section: "marketRegistry", generation: "cork/v0.3", chains: [42161, 8453], path: "registry" },',
     tests: [T.attest],
   },
   {

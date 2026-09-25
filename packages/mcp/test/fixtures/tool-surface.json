@@ -53,7 +53,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "mode": {
             "type": "string",
@@ -515,7 +515,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "at": {
             "type": "object",
@@ -1168,7 +1168,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "account": {
             "description": "the initiating account. Funding legs pull from Bundler3's initiator at execution time, but this is ALSO the recipient of the sweep-back legs: for actions funded from a slippage CAP (any max* input), the bundle ends by returning the unspent remainder here, so it is not left on the adapter where anyone can take it. Set it to the address that actually funds the bundle",
@@ -1921,7 +1921,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "account": {
             "$ref": "#/$defs/Address"
@@ -2087,7 +2087,7 @@
                         "$ref": "#/$defs/Hex"
                       },
                       "oracleSalt": {
-                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                         "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
@@ -2133,13 +2133,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -2199,7 +2199,7 @@
                       "expiryTimestamp"
                     ],
                     "additionalProperties": false,
-                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the cork/v0.4 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
                   }
                 },
                 "required": [
@@ -2523,7 +2523,7 @@
                         "$ref": "#/$defs/Hex"
                       },
                       "oracleSalt": {
-                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                         "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
@@ -2569,13 +2569,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -2833,13 +2833,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       }
@@ -3004,7 +3004,7 @@
                         "$ref": "#/$defs/Hex"
                       },
                       "oracleSalt": {
-                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                         "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
@@ -3050,13 +3050,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -3116,7 +3116,7 @@
                       "expiryTimestamp"
                     ],
                     "additionalProperties": false,
-                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
+                    "description": "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the cork/v0.4 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool"
                   },
                   "rungs": {
                     "minItems": 2,
@@ -3308,7 +3308,7 @@
                         "$ref": "#/$defs/Hex"
                       },
                       "oracleSalt": {
-                        "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                        "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                         "$ref": "#/$defs/Bytes32"
                       },
                       "constraint": {
@@ -3354,13 +3354,13 @@
                       },
                       "swapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
                       "unwindSwapFeePercentage": {
                         "default": "0",
-                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                         "x-units": "D18{%}",
                         "$ref": "#/$defs/UintStr"
                       },
@@ -3707,7 +3707,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "clientRequestId": {
             "type": "string",
@@ -3739,7 +3739,7 @@
                     "description": "which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"
                   },
                   "oracleSalt": {
-                    "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                    "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                     "$ref": "#/$defs/Bytes32"
                   }
                 },
@@ -3749,7 +3749,7 @@
                   "referenceAsset"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned MarketRegistry.deploy(ca, ref, mode[, oracleSalt]) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). The nested-wire registry (0.5.0, the phoenix/v0.4-rc.1 primary) takes the salt; the flat one does not. Pair order matters: collateral first"
+                "description": "unsigned MarketRegistry.deploy(ca, ref, mode[, oracleSalt]) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). The nested-wire registry (0.5.0, the cork/v0.4 primary) takes the salt; the flat one does not. Pair order matters: collateral first"
               },
               {
                 "type": "object",
@@ -3814,7 +3814,7 @@
                     "$ref": "#/$defs/Hex"
                   },
                   "oracleSalt": {
-                    "description": "nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
+                    "description": "nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)",
                     "$ref": "#/$defs/Bytes32"
                   },
                   "constraint": {
@@ -3860,13 +3860,13 @@
                   },
                   "swapFeePercentage": {
                     "default": "0",
-                    "description": "PERCENTAGE, 1e18 = 1% — consumed only if this call creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                    "description": "PERCENTAGE, 1e18 = 1% — consumed only if this call creates the pool. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                     "x-units": "D18{%}",
                     "$ref": "#/$defs/UintStr"
                   },
                   "unwindSwapFeePercentage": {
                     "default": "0",
-                    "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                    "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
                     "x-units": "D18{%}",
                     "$ref": "#/$defs/UintStr"
                   }
@@ -3878,7 +3878,7 @@
                   "expiryTimestamp"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"
+                "description": "unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the cork/v0.4 primary; the periphery creator's 9-field struct on cork/v0.3). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"
               }
             ]
           },
@@ -4218,7 +4218,7 @@
           },
           "generation": {
             "type": "string",
-            "description": "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
+            "description": "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only"
           },
           "format": {
             "default": "concise",

@@ -752,7 +752,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
   const unwindFee = filters.unwindSwapFeePercentage ?? 0n;
   const oracleSalt = filters.oracleSalt ?? ZERO_ORACLE_SALT;
   if (wire !== "nested" && !/^0x0*$/i.test(oracleSalt)) {
-    return unavailable(chainId, "missing_filter", `filters.oracleSalt ${oracleSalt} is non-zero, but generation '${r.generation?.label ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) carries no salt — omit it, or name a nested-wire generation (the phoenix/v0.4-rc.1 primary)`, ctx);
+    return unavailable(chainId, "missing_filter", `filters.oracleSalt ${oracleSalt} is non-zero, but generation '${r.generation?.label ?? "?"}' speaks the '${wire}' registry wire, whose deploy(ca, ref, mode) carries no salt — omit it, or name a nested-wire generation (the cork/v0.4 primary)`, ctx);
   }
   const inputEcho = { collateralAsset: ca, referenceAsset: ref, expiry, ...(filters.recipe ? { recipe: filters.recipe } : {}), ...(filters.mode ? { mode: filters.mode } : {}), swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, ...(wire === "nested" ? { oracleSalt } : {}), wire, phoenixWire, ...(r.generation ? { generation: r.generation.label } : {}) };
   try {

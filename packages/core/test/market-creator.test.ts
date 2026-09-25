@@ -25,7 +25,7 @@ import { farFutureExpiryWarning, maxExpiryBoundWarning } from "../src/handlers/j
 const WAD = 10n ** 18n;
 /** This file pins the FLAT (cork-periphery 0.1.0) creator — every call names its generation; the
  *  primary is the nested 0.5.0 creator since stage 2a (test/market-registry-nested.test.ts). */
-const FLAT = "phoenix/v0.3-rc.1";
+const FLAT = "cork/v0.3";
 // The live parity fixture (Base, 2026-08-28): eth_call against the DEPLOYED creator returned
 // exactly the (poolId, cst, cpt) this tool predicted for these params.
 const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2";

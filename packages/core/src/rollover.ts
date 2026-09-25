@@ -542,7 +542,7 @@ export interface RolloverGenerationRecord {
 /** One normalized generation: the record plus its standing, a label that always exists and the
  *  EIP-712 domain its OrderData is signed under. */
 export interface RolloverGeneration extends RolloverGenerationRecord {
-  /** Always present: the chain generation's label (`phoenix/v0.4-rc.1`, `arbitrum-v1.1`, …). */
+  /** Always present: the chain generation's label (`cork/v0.4`, `arbitrum-v1.1`, …). */
   label: string;
   /** `retired` = the block carries a retired date: venue-inadmissible and wire-incompatible. */
   status: "active" | "retired";

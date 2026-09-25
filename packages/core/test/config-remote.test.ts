@@ -283,32 +283,32 @@ describe("resolveRollover", () => {
       seededAtBlock: 503918966,
       contractsVersion: "v0.2.0",
       wire: "0.2",
-      label: "phoenix/v0.4-rc.1",
+      label: "cork/v0.4",
       status: "active",
       primary: true,
     });
-    expect(arb.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "0.2" });
+    expect(arb.generation).toEqual({ label: "cork/v0.4", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "0.2" });
     const base = await resolveRollover(8453);
     expect(base.rollover).toMatchObject({ factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", seededAtBlock: 51153216, wire: "0.2" });
   });
-  it("the whole flattened list rides along: rc.2 (phoenix/v0.3-rc.1) stays ACTIVE beside the primary, and Arbitrum's July set is RETIRED", async () => {
+  it("the whole flattened list rides along: rc.2 (cork/v0.3) stays ACTIVE beside the primary, and Arbitrum's July set is RETIRED", async () => {
     const arb = (await resolveRollover(42161)).rollover!;
     expect(arb.generations.map((g) => [g.label, g.status, g.primary, g.wire])).toEqual([
-      ["phoenix/v0.4-rc.1", "active", true, "0.2"],
-      ["phoenix/v0.3-rc.1", "active", false, "rc.2"],
+      ["cork/v0.4", "active", true, "0.2"],
+      ["cork/v0.3", "active", false, "rc.2"],
       ["arbitrum-v1.1", "retired", false, "rc.1"],
     ]);
     expect(arb.generations[1]).toMatchObject({ factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", exactSettler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", partialSettler: "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e", seededAtBlock: 494104750, contractsVersion: "v0.1.0-rc.2" });
     expect(arb.generations[2]).toMatchObject({ factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", seededAtBlock: 484973917, retired: "2026-08-13" });
     // Base has never had a RETIRED generation.
     const base = (await resolveRollover(8453)).rollover!;
-    expect(base.generations.map((g) => [g.label, g.status])).toEqual([["phoenix/v0.4-rc.1", "active"], ["phoenix/v0.3-rc.1", "active"]]);
-    expect(rolloverGenerations(base).find((g) => g.label === "phoenix/v0.3-rc.1")?.seededAtBlock).toBe(49917191);
+    expect(base.generations.map((g) => [g.label, g.status])).toEqual([["cork/v0.4", "active"], ["cork/v0.3", "active"]]);
+    expect(rolloverGenerations(base).find((g) => g.label === "cork/v0.3")?.seededAtBlock).toBe(49917191);
   });
   it("a generation label selects THAT set's block as the top-level fields; the list is unchanged", async () => {
-    const r = await resolveRollover(42161, undefined, "phoenix/v0.3-rc.1");
-    expect(r.rollover).toMatchObject({ factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", wire: "rc.2", label: "phoenix/v0.3-rc.1", primary: false });
-    expect(r.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", wire: "rc.2" });
+    const r = await resolveRollover(42161, undefined, "cork/v0.3");
+    expect(r.rollover).toMatchObject({ factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", wire: "rc.2", label: "cork/v0.3", primary: false });
+    expect(r.generation).toMatchObject({ label: "cork/v0.3", wire: "rc.2" });
     expect(r.rollover!.generations).toHaveLength(3);
     // A generation without a rollover block answers undefined but still names itself.
     const ro = await resolveRollover(42161, undefined, "arbitrum-legacy");
@@ -318,7 +318,7 @@ describe("resolveRollover", () => {
     const bad = await resolveRollover(42161, undefined, "nope");
     expect(bad.rollover).toBeUndefined();
     expect(bad.refusal?.code).toBe("generation_unknown");
-    expect(bad.refusal?.message).toContain("phoenix/v0.4-rc.1 (active, primary)");
+    expect(bad.refusal?.message).toContain("cork/v0.4 (active, primary)");
   });
   it("is undefined for chains without a rollover deployment", async () => {
     const r = await resolveRollover(1);
@@ -335,7 +335,7 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
     const p = over.primary === null ? undefined : { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", settlerDomain: DOMAIN, seededAtBlock: 503918966, contractsVersion: "v0.2.0", wire: "0.2" as const, ...over.primary };
     const rc2 = over.rc2 === null ? undefined : { factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", exactSettler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", partialSettler: "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e", settlerDomain: DOMAIN, seededAtBlock: 494104750, contractsVersion: "v0.1.0-rc.2", wire: "rc.2" as const, ...over.rc2 };
     const july = over.july === null ? undefined : { factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", settlerDomain: DOMAIN, seededAtBlock: 484973917, retired: "2026-08-13", wire: "rc.1" as const, ...over.july };
-    return [set("phoenix/v0.4-rc.1", "active", true, p as never), set("phoenix/v0.3-rc.1", "active", false, rc2 as never), set("arbitrum-v1.1", "active", false, july as never), set("arbitrum-legacy", "read-only", false, undefined)];
+    return [set("cork/v0.4", "active", true, p as never), set("cork/v0.3", "active", false, rc2 as never), set("arbitrum-v1.1", "active", false, july as never), set("arbitrum-legacy", "read-only", false, undefined)];
   };
   const dep = (list = gens()): CorkRolloverDeployment => {
     const generations = rolloverGenerationsOf(list);
@@ -345,8 +345,8 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
   it("orders primary → other active → retired, with status, wire and the primary flag on exactly one entry; a set without a rollover block is absent", () => {
     const flat = rolloverGenerations(dep());
     expect(flat.map((g) => [g.label, g.status, g.primary, g.wire])).toEqual([
-      ["phoenix/v0.4-rc.1", "active", true, "0.2"],
-      ["phoenix/v0.3-rc.1", "active", false, "rc.2"],
+      ["cork/v0.4", "active", true, "0.2"],
+      ["cork/v0.3", "active", false, "rc.2"],
       ["arbitrum-v1.1", "retired", false, "rc.1"],
     ]);
     expect(flat[0]).toMatchObject({ factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", seededAtBlock: 503918966, contractsVersion: "v0.2.0", settlerDomain: DOMAIN });
@@ -360,10 +360,10 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
     // Primary generation without a rollover block: the next live block (rc.2) becomes the
     // rollover primary — consumers always have exactly one when any active rollover exists.
     const noPrimary = rolloverGenerationsOf(gens({ primary: null }));
-    expect(noPrimary.map((g) => [g.label, g.primary])).toEqual([["phoenix/v0.3-rc.1", true], ["arbitrum-v1.1", false]]);
+    expect(noPrimary.map((g) => [g.label, g.primary])).toEqual([["cork/v0.3", true], ["arbitrum-v1.1", false]]);
     // A retired block on the primary generation never takes the flag.
     const retiredPrimary = rolloverGenerationsOf(gens({ primary: { retired: "2099-01-01" } }));
-    expect(retiredPrimary.map((g) => [g.label, g.status, g.primary])).toEqual([["phoenix/v0.3-rc.1", "active", true], ["phoenix/v0.4-rc.1", "retired", false], ["arbitrum-v1.1", "retired", false]]);
+    expect(retiredPrimary.map((g) => [g.label, g.status, g.primary])).toEqual([["cork/v0.3", "active", true], ["cork/v0.4", "retired", false], ["arbitrum-v1.1", "retired", false]]);
     // No rollover anywhere: an empty list, no invented primary.
     expect(rolloverGenerationsOf(gens({ primary: null, rc2: null, july: null }))).toEqual([]);
   });
@@ -401,18 +401,18 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
 
 describe("generations in the bundled defaults", () => {
   // 2026-09-22: the Distribution phoenix/v0.4-rc.1 set (phoenix v1.4.0-rc.1, 10-field wire) is
-  // the primary on 42161 + 8453; phoenix/v0.3-rc.1 (the 0.5 line's primary, 8-field) stays
+  // the primary on 42161 + 8453; cork/v0.3 (the 0.5 line's primary, 8-field) stays
   // ACTIVE beside it; arbitrum-v1.1 (the venue's existing markets, the legacy registry, the
   // retired July rollover) stays active; arbitrum-legacy (the pre-launch pair) is read-only.
   it("42161: four generations in resolution order (primary, other active in config order, read-only last), each block declaring its wire", async () => {
     const { generations, primary } = await resolveGenerations(42161);
     expect(generations.map((g) => [g.label, g.status, g.primary])).toEqual([
-      ["phoenix/v0.4-rc.1", "active", true],
-      ["phoenix/v0.3-rc.1", "active", false],
+      ["cork/v0.4", "active", true],
+      ["cork/v0.3", "active", false],
       ["arbitrum-v1.1", "active", false],
       ["arbitrum-legacy", "read-only", false],
     ]);
-    expect(primary?.label).toBe("phoenix/v0.4-rc.1");
+    expect(primary?.label).toBe("cork/v0.4");
     expect(generations.map((g) => [g.phoenix?.wire, g.marketRegistry?.wire, g.rollover?.wire])).toEqual([
       ["10-field", "nested", "0.2"],
       ["8-field", "flat", "rc.2"],
@@ -431,17 +431,17 @@ describe("generations in the bundled defaults", () => {
       controller: "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
       wire: "10-field",
     });
-    expect(r.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "10-field" });
+    expect(r.generation).toEqual({ label: "cork/v0.4", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "10-field" });
     // Base carries the SAME set except bundler3 (Morpho's per-chain deployment, read from the
     // adapter's own BUNDLER3() immutable on Base).
     expect((await resolveDeployment(8453)).deployment).toMatchObject({ poolManager: "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D", bundler3: "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4", wire: "10-field" });
   });
-  it("the phoenix/v0.3-rc.1 generation keeps the v1.3.0-rc.1 stack + the 0.3.3 registry fully reachable by label", async () => {
-    const r = await resolveDeployment(42161, undefined, "phoenix/v0.3-rc.1");
+  it("the cork/v0.3 generation keeps the v1.3.0-rc.1 stack + the 0.3.3 registry fully reachable by label", async () => {
+    const r = await resolveDeployment(42161, undefined, "cork/v0.3");
     expect(r.deployment).toMatchObject({ poolManager: "0x02803Bb52D2184f906F45B50C66AA969C2E37263", corkAdapter: "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD", controller: "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1", wire: "8-field" });
-    const mr = await resolveMarketRegistry(42161, undefined, "phoenix/v0.3-rc.1");
+    const mr = await resolveMarketRegistry(42161, undefined, "cork/v0.3");
     expect(mr.marketRegistry).toMatchObject({ registry: "0xa78d8137B01058dD23e545b6557209eBBc9611F1", adapter: "0x8902a88912a334263fe3d731d03c267715b9374f", marketCreator: "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C", contractsVersion: "0.3.3", wire: "flat" });
-    expect(mr.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", wire: "flat" });
+    expect(mr.generation).toMatchObject({ label: "cork/v0.3", wire: "flat" });
     // The primary registry is the 0.5.0 nested-wire set.
     expect((await resolveMarketRegistry(42161)).marketRegistry).toMatchObject({ registry: "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", adapter: "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104", marketCreator: "0x1A074F17647504D1c50B436074a74d051D502dEa", contractsVersion: "0.5.0", deployedAtBlock: 503851928, wire: "nested" });
     expect((await resolveMarketRegistry(8453)).marketRegistry).toMatchObject({ deployedAtBlock: 51145039, wire: "nested" });

@@ -156,7 +156,7 @@ export const poolManagerAbi = [
   },
 ] as const;
 
-/** The 10-field `market()` view (phoenix v1.4.0-rc.1, the phoenix/v0.4-rc.1 generation): the
+/** The 10-field `market()` view (phoenix v1.4.0-rc.1, the cork/v0.4 generation): the
  *  same eight words plus the two fee percentages that are now PART of the Market struct and its
  *  id. Kept as its own ABI beside the 8-field entry on `poolManagerAbi` on purpose — viem decodes
  *  a 10-word return through the 8-field ABI SILENTLY (the trailing words are dropped, no error),

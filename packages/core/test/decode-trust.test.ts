@@ -166,7 +166,7 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
     expect(good.state).toBe("ok");
     // The flat-wire generation's adapter is a configured Cork adapter (not the primary, but
     // Cork's): trusted, classified to its generation, decoded on ITS wire.
-    expect((good.data as { jit: { verification: string; generation: string; wire: string } }).jit).toMatchObject({ verification: "trusted", generation: "phoenix/v0.3-rc.1", wire: "flat" });
+    expect((good.data as { jit: { verification: string; generation: string; wire: string } }).jit).toMatchObject({ verification: "trusted", generation: "cork/v0.3", wire: "flat" });
     expect(codes(good)).toEqual([]);
     // Mainnet has no MarketRegistry stack, so there is nothing to compare the adapter against.
     const elsewhere = await runTool("cork_decode", { kind: "order", chainId: 1, data: orderWith(extensionAt(FAKE)) }, ctx);

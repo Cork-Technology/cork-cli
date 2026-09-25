@@ -162,7 +162,7 @@ derivation the contracts run:
 ```ts
 import { computeMarketId, type Market8, type Market10 } from "@cork/core/math";
 
-// An 8-field market — the phoenix/v0.3-rc.1 pool manager and mainnet. The fees live outside the id.
+// An 8-field market — the cork/v0.3 pool manager and mainnet. The fees live outside the id.
 const market8: Market8 = {
   collateralAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
   referenceAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e",
@@ -175,7 +175,7 @@ const market8: Market8 = {
 };
 const poolId8 = computeMarketId(market8, "8-field");   // `0x…` — bit-exact vs the chain
 
-// A 10-field market — the phoenix/v0.4-rc.1 pool manager (the primary on Arbitrum and Base).
+// A 10-field market — the cork/v0.4 pool manager (the primary on Arbitrum and Base).
 // The two fees are part of the struct AND the id: two markets that differ only in a fee are two pools.
 const market10: Market10 = {
   ...market8,

@@ -23,7 +23,7 @@ const RETIRED_PARTIAL = "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a" as const;
 const CANDIDATE_EXACT = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E" as const;
 const CANDIDATE_PARTIAL = "0x5E19Be0743fE521d8BF85b5A558356675499bE9e" as const;
 const JIT_ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const;
-// The 0.5.0 (nested-wire) adapter of the primary phoenix/v0.4-rc.1 generation.
+// The 0.5.0 (nested-wire) adapter of the primary cork/v0.4 generation.
 const NESTED_JIT_ADAPTER = "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104" as const;
 const LEGACY_JIT_ADAPTER = "0xea15BF1E5565181Ed8678CcFf39D797272858505" as const;
 
@@ -42,40 +42,40 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
   it("Arbitrum: every rollover generation's settlers (two active, one retired) and every generation's JIT adapter, each with its role and chain-generation label", async () => {
     const emitters = await protocolEmittersFor(42161);
     const byAddress = Object.fromEntries(emitters.map((e) => [e.address.toLowerCase(), e]));
-    expect(byAddress[ACTIVE_EXACT.toLowerCase()]).toEqual({ address: ACTIVE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } });
-    expect(byAddress[ACTIVE_PARTIAL.toLowerCase()]).toEqual({ address: ACTIVE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } });
-    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
-    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
+    expect(byAddress[ACTIVE_EXACT.toLowerCase()]).toEqual({ address: ACTIVE_EXACT, role: "exactSettler", generation: { label: "cork/v0.3", status: "active" } });
+    expect(byAddress[ACTIVE_PARTIAL.toLowerCase()]).toEqual({ address: ACTIVE_PARTIAL, role: "partialSettler", generation: { label: "cork/v0.3", status: "active" } });
+    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: { label: "cork/v0.4", status: "active" } });
+    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: { label: "cork/v0.4", status: "active" } });
     // The July settlers: their ROLLOVER block is retired (venue-inadmissible, `retired` date), while
     // the chain generation arbitrum-v1.1 they belong to is ACTIVE — two facts, two fields (review B4).
     expect(byAddress[RETIRED_EXACT.toLowerCase()]).toMatchObject({ role: "exactSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" });
     expect(byAddress[RETIRED_PARTIAL.toLowerCase()]).toMatchObject({ role: "partialSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" });
     expect(byAddress[ACTIVE_EXACT.toLowerCase()]).not.toHaveProperty("retired");
-    expect(byAddress[JIT_ADAPTER.toLowerCase()]).toEqual({ address: JIT_ADAPTER, role: "jitAdapter", generation: { label: "phoenix/v0.3-rc.1", status: "active" }, wire: "flat" });
-    expect(byAddress[NESTED_JIT_ADAPTER.toLowerCase()]).toEqual({ address: NESTED_JIT_ADAPTER, role: "jitAdapter", generation: { label: "phoenix/v0.4-rc.1", status: "active" }, wire: "nested" });
+    expect(byAddress[JIT_ADAPTER.toLowerCase()]).toEqual({ address: JIT_ADAPTER, role: "jitAdapter", generation: { label: "cork/v0.3", status: "active" }, wire: "flat" });
+    expect(byAddress[NESTED_JIT_ADAPTER.toLowerCase()]).toEqual({ address: NESTED_JIT_ADAPTER, role: "jitAdapter", generation: { label: "cork/v0.4", status: "active" }, wire: "nested" });
     // The pre-2.1.0 adapter is a `jitAdapter` of an ACTIVE generation on the `legacy` wire — the
     // signature difference is a wire fact, gated at attribution, not a role of its own (review B4).
     expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toEqual({ address: LEGACY_JIT_ADAPTER, role: "jitAdapter", generation: { label: "arbitrum-v1.1", status: "active" }, wire: "legacy" });
     // The nested wire's creation emitters: the 0.5.0 creator and the 10-field pool manager of
-    // phoenix/v0.4-rc.1 — and ONLY that generation's (a periphery creator / 8-field manager never
+    // cork/v0.4 — and ONLY that generation's (a periphery creator / 8-field manager never
     // emits those topics).
-    const nested = ARBITRUM.find((g) => g.label === "phoenix/v0.4-rc.1")!;
-    expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
-    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: { label: "phoenix/v0.4-rc.1", status: "active" }, wire: "10-field" });
+    const nested = ARBITRUM.find((g) => g.label === "cork/v0.4")!;
+    expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: { label: "cork/v0.4", status: "active" } });
+    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: { label: "cork/v0.4", status: "active" }, wire: "10-field" });
     // Since stage 2c EVERY pool manager is a poolManager emitter (each tagged with its wire, so
     // attribution admits only its own MarketCreated topic): four managers on Arbitrum, one creator.
     expect(emitters.filter((e) => e.role === "marketCreator")).toHaveLength(1);
     expect(emitters.filter((e) => e.role === "poolManager").map((e) => [e.generation.label, e.wire])).toEqual([
-      ["phoenix/v0.4-rc.1", "10-field"],
-      ["phoenix/v0.3-rc.1", "8-field"],
+      ["cork/v0.4", "10-field"],
+      ["cork/v0.3", "8-field"],
       ["arbitrum-v1.1", "8-field"],
       ["arbitrum-legacy", "8-field"],
     ]);
     // The rollover BaseFillers (the 0.2 and rc.2 records; the July rc.1 record predates the
     // component baselines and names none) and every rollover factory ride along.
     expect(emitters.filter((e) => e.role === "baseFiller").map((e) => [e.address, e.generation.label])).toEqual([
-      ["0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", "phoenix/v0.4-rc.1"],
-      ["0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d", "phoenix/v0.3-rc.1"],
+      ["0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", "cork/v0.4"],
+      ["0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d", "cork/v0.3"],
     ]);
     expect(emitters.filter((e) => e.role === "factory")).toHaveLength(3);
     // 3 rollover generations × (2 settlers + factory) + 2 BaseFillers + the three registry
@@ -126,7 +126,7 @@ describe("attributeLogs — evidence only from the configured emitter for that e
       emitters,
     );
     expect(a.corkEvents.map((e) => [e.event, e.emitter.role, e.emitter.generation])).toEqual([
-      ["JITMarketCreated", "jitAdapter", { label: "phoenix/v0.3-rc.1", status: "active" }],
+      ["JITMarketCreated", "jitAdapter", { label: "cork/v0.3", status: "active" }],
       ["JITMarketCreated (legacy pre-2.1.0)", "jitAdapter", { label: "arbitrum-v1.1", status: "active" }],
     ]);
     // The NESTED adapter emits no JITMarketCreated of either shape: creation is announced by the
@@ -149,7 +149,7 @@ describe("attributeLogs — evidence only from the configured emitter for that e
         { address: ACTIVE_EXACT, topics: [UNKNOWN_TOPIC, DIGEST], data: "0xcafebabe", blockNumber: 494_104_800n, transactionHash: TX_HASH, logIndex: 3 },
         { address: ATTACKER, topics: [], data: "0x" },
       ],
-      [{ address: ACTIVE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } }],
+      [{ address: ACTIVE_EXACT, role: "exactSettler", generation: { label: "cork/v0.3", status: "active" } }],
     );
     expect(a.corkEvents).toEqual([]);
     expect(a.unattributedEvents).toEqual([]);
@@ -205,11 +205,11 @@ describe("cork_track txHash — receipt events are attributed by emitter, not by
     ]);
     const data = env.data as ReceiptData;
     expect(data.corkEvents).toEqual([
-      expect.objectContaining({ event: "OrderSettled", address: ACTIVE_EXACT, emitter: { role: "exactSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } } }),
-      expect.objectContaining({ event: "RolloverLegFilled", address: ACTIVE_PARTIAL, emitter: { role: "partialSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } } }),
+      expect.objectContaining({ event: "OrderSettled", address: ACTIVE_EXACT, emitter: { role: "exactSettler", generation: { label: "cork/v0.3", status: "active" } } }),
+      expect.objectContaining({ event: "RolloverLegFilled", address: ACTIVE_PARTIAL, emitter: { role: "partialSettler", generation: { label: "cork/v0.3", status: "active" } } }),
       expect.objectContaining({ event: "OrderSettled", address: RETIRED_EXACT, emitter: { role: "exactSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" } }),
       expect.objectContaining({ event: "RolloverLegFilled", address: RETIRED_PARTIAL, emitter: { role: "partialSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" } }),
-      expect.objectContaining({ event: "JITMarketCreated", address: JIT_ADAPTER, emitter: { role: "jitAdapter", generation: { label: "phoenix/v0.3-rc.1", status: "active" } } }),
+      expect.objectContaining({ event: "JITMarketCreated", address: JIT_ADAPTER, emitter: { role: "jitAdapter", generation: { label: "cork/v0.3", status: "active" } } }),
       expect.objectContaining({ event: "JITMarketCreated (legacy pre-2.1.0)", address: LEGACY_JIT_ADAPTER, emitter: { role: "jitAdapter", generation: { label: "arbitrum-v1.1", status: "active" } } }),
     ]);
     expect(data.unattributedEvents).toBeUndefined();

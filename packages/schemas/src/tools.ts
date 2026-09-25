@@ -56,7 +56,7 @@ export type Envelope = z.infer<typeof Envelope>;
 /** ONE description for the optional `generation` label every chain-backed input takes (query,
  *  compute, prepare_phoenix, prepare_orders, prepare_market, track) — the primary rule stated
  *  once, so the six tools cannot describe the same selector six ways. */
-export const GENERATION_DESCRIPTION = "a contract GENERATION: a label ('phoenix/v0.3-rc.1'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only";
+export const GENERATION_DESCRIPTION = "a contract GENERATION: a label ('cork/v0.3'), 'previous' (the older active set) or 'primary' (= omitted). cork_query protocol-config lists the chain's generations; 'previous' = the newest ACTIVE non-primary generation, resolved against the contracts THIS call needs (a pool manager, a market registry, a rollover settler) and is the set a migration moves funds FROM (cork_capabilities topic:\"migration\"). Every chain-backed read and prepare in this call binds that set's contracts and speaks its declared wires (8-field|10-field Market, flat|nested registry); results carry the resolved LABEL, never the alias. An unknown label refuses generation_unknown with the list; 'all' is refused (a call answers for one generation — account-state without filters.poolId is the multi-generation read); a read-only set refuses a PREPARE with generation_read_only";
 const GenerationWire = z.string().optional().describe(GENERATION_DESCRIPTION);
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -127,10 +127,10 @@ const PremiumPerShareRate = TokenAmount.describe(
 // see an omission — it checks that emitted values agree, and a site emitting nothing is
 // invisible). One const per field closes the omission class structurally.
 // The fee bound is a fact about the target GENERATION's pool manager: 8-field managers cap at
-// MAX_FEE_PERCENTAGE (5e18 = 5%, inclusive); the 10-field manager (phoenix/v0.4-rc.1, the
+// MAX_FEE_PERCENTAGE (5e18 = 5%, inclusive); the 10-field manager (cork/v0.4, the
 // primary on 42161/8453) accepts any value strictly below 100e18 and makes the two fees part of
 // the pool id. One sentence states both so neither wire's caller is misled.
-const FEE_BOUND = "8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID";
+const FEE_BOUND = "8-field generations (cork/v0.3 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (cork/v0.4) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID";
 const JitSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 const JitUnwindSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — creation only. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 // The creator twins: same unit story, same bound, but a direct tx creates the pool — "this fill"
@@ -145,7 +145,7 @@ const CreatorUnwindSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18
  *  purpose (the handler applies the zero salt): a schema default is structural on the MCP wire. */
 const ExtraDataWire = Hex.optional().describe("the recipe-specific bytes the constraint is derived from and re-checked against (e.g. abi.encode(uint256 anchorRate) for the liquidity recipe while its oracle is undeployed; abi.encode(anchorRate, durationSeconds, apySpreadPercentage) for the impairment recipe; the fixed-rate recipe rejects any payload). Defaults to 0x. This is the market-registry 0.5.0 name; `additionalData` is the deprecated alias");
 const AdditionalDataAliasWire = Hex.optional().describe("DEPRECATED alias of `extraData` (the 0.3.x wire's name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData");
-const OracleSaltWire = Bytes32.optional().describe("nested-wire generations (market-registry 0.5.0, the phoenix/v0.4-rc.1 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)");
+const OracleSaltWire = Bytes32.optional().describe("nested-wire generations (market-registry 0.5.0, the cork/v0.4 primary) only: the salt mixed into the CREATE2 salt of the pair's FIRST rate-oracle wrapper — defaults to the zero salt (the pair's default wrapper) and matters ONLY on a pair's first oracle deploy: an existing (ca, ref, mode) wrapper is returned whatever salt rides along. Refused non-zero on a flat/legacy generation (its deploy has no salt field)");
 // Rollover teaching strings shared between the prepare (rollover-intent) and submit
 // (rollover-order) shapes — three of them were maintained as identical copies at both sites.
 const RolloverOrderSizeWire = TokenAmount.describe("src cST shares to roll — cST is always 18 decimals");
@@ -511,7 +511,7 @@ const MakerJitMarketWire = z
       })
       .optional()
       .describe(
-        "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool",
+        "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the cork/v0.4 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool",
       );
 
 export const OrdersAction = z.discriminatedUnion("type", [
@@ -709,7 +709,7 @@ export const PrepareMarketInput = z.object({
       mode: z.enum(["price", "nav"]).optional().describe("which wrapper to deploy — oracles are MODE-KEYED in 2.1.0 (one pair can hold a price AND a nav wrapper at different addresses). Defaults to 'price' with a note"),
       oracleSalt: OracleSaltWire,
     })
-      .describe("unsigned MarketRegistry.deploy(ca, ref, mode[, oracleSalt]) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). The nested-wire registry (0.5.0, the phoenix/v0.4-rc.1 primary) takes the salt; the flat one does not. Pair order matters: collateral first"),
+      .describe("unsigned MarketRegistry.deploy(ca, ref, mode[, oracleSalt]) tx: create the pair's mode-keyed rate-oracle wrapper — permissionless and IDEMPOTENT (an existing pair/mode just returns the recorded wrapper). The nested-wire registry (0.5.0, the cork/v0.4 primary) takes the salt; the flat one does not. Pair order matters: collateral first"),
     A("deploy-fixed-oracle", {
       rate: UintStr.describe("the fixed rate the oracle reports, ABSOLUTE 1e18 = 1.0 — CREATE2-salted by this rate, so a given rate has ONE oracle per chain; zero reverts").meta({ "x-units": X_UNITS.wad }),
     })
@@ -730,7 +730,7 @@ export const PrepareMarketInput = z.object({
       swapFeePercentage: CreatorSwapFeeWire,
       unwindSwapFeePercentage: CreatorUnwindSwapFeeWire,
     })
-      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
+      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the cork/v0.4 primary; the periphery creator's 9-field struct on cork/v0.3). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
   ]),
   format: Format,
 });

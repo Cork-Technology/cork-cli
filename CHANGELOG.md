@@ -5,6 +5,17 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+### Breaking
+
+- Generation labels name the DISTRIBUTION BUNDLE, not the core protocol: `phoenix/v0.4-rc.1` is now `cork/v0.4` and `phoenix/v0.3-rc.1` is `cork/v0.3`, on both chains, in every result (`data.generation.label`, `provenance.generation.label`, decode `jit.generation`, event and settler attribution, `protocol-config`) and in `cork-defaults.v2.json` (the set keys and `primary`). The bundle's own record name is unchanged in each generation's `distribution` field (`phoenix/v0.4-rc.1`). Scripts that match on the old label strings must update. The old spellings stay accepted as `generation` INPUT and resolve to the new labels (`GENERATION_LABEL_RENAMES`, resolved in `resolveGenerationAlias` — the one place an alias becomes a label), so no call breaks; only the echoed label changes.
+
+### Added
+
+- SDK (`@cork/core`, root and `/config`): `GENERATION_LABEL_RENAMES` and `renamedGenerationLabel(label)`; `resolveGenerationAlias` results carry `renamedFrom` when an old spelling was given.
+- `cork_capabilities topic:"generations"` states the naming rule and lists the accepted old spellings.
+
 ## [0.6.0] — 2026-09-24
 
 This release adds the Distribution `phoenix/v0.4-rc.1` contract set: Phoenix 1.4.0-rc.1, Market Registry 0.5.0, Rollover 0.2.0 and cork-periphery 0.2.0-rc.1, on Arbitrum One and Base. It keeps every older set. A chain now hosts a SET of contract generations, one of them primary. Prepares target the primary. Reads, decode and event attribution follow the generation a pool or contract belongs to. Nothing here retires an address.
