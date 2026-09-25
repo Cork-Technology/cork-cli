@@ -20,7 +20,7 @@ import {
 import { computeT, calculateGrossAmountBeforeFee, calculateTimeDecayFee, resetConfigMemo } from "@cork/core";
 import { UnixSeconds } from "@cork/schemas";
 import { encodeFunctionData, parseAbi } from "viem";
-import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
+import bundledDefaults from "../../../config.default.json" with { type: "json" };
 
 const A = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" as const;
 const B = "0x53E82ABbb12638F09d9e624578ccB666217a765e" as const;

@@ -1,5 +1,5 @@
 // Remote-first config sourcing [R6/§8]: deployment addresses are fetched from this repo's
-// canonical GitHub `cork-defaults.v2.json` (TTL-cached in memory + on disk), with the committed
+// canonical GitHub `config.default.json` at the binary's release tag (TTL-cached in memory + on disk), with the committed
 // copy bundled in the distribution as the fallback. Never bare hardcodes: the single source of
 // truth is the JSON file, remote copy preferred, and every result can say which one served it.
 //
@@ -26,7 +26,8 @@ import { atomicWriteFileSync } from "./atomic-file.ts";
 import { fetchWithTimeout } from "./fetch-timeout.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
+import bundledDefaults from "../../../config.default.json" with { type: "json" };
+import { BUILD_VERSION } from "./version.ts";
 import type { CorkDeployment } from "./config.ts";
 import {
   ChainGenerationsSchema,
@@ -45,10 +46,21 @@ import {
 } from "./generations.ts";
 import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
 
-/** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. The
- *  v2 path: the schema-1 file at the sibling path stays frozen for 0.5.x binaries. */
-export const CORK_DEFAULTS_URL =
-  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";
+/** The repository a released binary fetches its defaults from. */
+export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";
+
+/** The defaults file a binary reads: `config.default.json` at ITS OWN RELEASE TAG (2026-09-25
+ *  owner ruling). A release tag is immutable, so the file a binary resolves `generation` against
+ *  never changes under it — the day the keys of the main-branch file were renamed, the released
+ *  0.6.0 (which fetched main by name) stopped accepting its documented generation names. A
+ *  source run (`BUILD_VERSION` "dev") reads main. The `CORK_DEFAULTS_URL` env var overrides both.
+ *  `cork-defaults.v2.json` on main stays frozen for the 0.6.0 binary; `cork-defaults.json` (schema
+ *  1) for 0.5.x. */
+export function corkDefaultsUrlFor(version: string): string {
+  const ref = version === "dev" || version === "" ? "main" : `v${version}`;
+  return `${CORK_DEFAULTS_REPO}/${ref}/config.default.json`;
+}
+export const CORK_DEFAULTS_URL = corkDefaultsUrlFor(BUILD_VERSION);
 
 /** A generation's market-registry block as consumers receive it (the block plus its wire). */
 export type CorkMarketRegistry = MarketRegistryBlock;
@@ -192,10 +204,11 @@ export interface ConfigDeps {
 const TTL_MS = 3_600_000; // success: re-check GitHub at most hourly
 const FAILURE_TTL_MS = 600_000; // negative outcome: don't re-attempt for 10 min (shared across CLI processes via disk)
 
-// The v2 document caches under its own file name: a 0.5.x binary sharing the cache dir keeps
-// its v1 copy at `cork-defaults.json`, and neither line can serve the other's shape.
+// The document caches under its own file name: a 0.5.x binary sharing the cache dir keeps its
+// v1 copy at `cork-defaults.json`, a 0.6.0 binary its `cork-defaults.v2.json`, and neither line
+// can serve another's shape or keys.
 function cachePath(): string {
-  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "cork-defaults.v2.json");
+  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "config.default.json");
 }
 
 async function realFetchRemote(): Promise<RemoteFetchResult> {
@@ -230,13 +243,13 @@ export function realConfigDeps(): ConfigDeps {
 export const STALE_CACHE_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not refresh cork-defaults.v2.json from GitHub — serving the last successfully fetched copy (may be up to a refresh cycle stale); will retry after the failure back-off",
+    "could not refresh config.default.json from GitHub — serving the last successfully fetched copy (may be up to a refresh cycle stale); will retry after the failure back-off",
 } as const;
 
 export const FETCH_FAILED_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale if Cork has redeployed (private repo? check for updates with an authenticated `gh`/GitHub MCP)",
+    "could not fetch the latest config.default.json from GitHub — serving the bundled copy; addresses may be stale if Cork has redeployed (private repo? check for updates with an authenticated `gh`/GitHub MCP)",
 } as const;
 
 let memo: { at: number; ttl: number; resolved: ResolvedConfig } | null = null;

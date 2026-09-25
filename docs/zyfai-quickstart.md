@@ -611,8 +611,9 @@ signing and reconcile after (`ch track reconcile`). The chain outranks the index
 **G. Addresses drift; read them live, and know which generation answered.** A chain hosts a set
 of generations. `ch query protocol-config` lists them all with each block's addresses and wire.
 Every result names the generation it answered from (`data.generation`), and `--generation
-<label>` selects a non-primary set for a prepare. Installed copies of the tool pick up redeployed
-addresses within an hour (remote config, `cork-defaults.v2.json`).
+<label>` selects a non-primary set for a prepare. A released build reads its address file,
+`config.default.json`, from its own release tag, so the file never changes under a binary you
+already run. Redeployed addresses reach you with the next release.
 
 The primary set on Base and Arbitrum One (`cork/v0.4`, contracts release **0.5.0** on the Phoenix
 1.4.0-rc.1 pool manager; identical addresses on both chains):

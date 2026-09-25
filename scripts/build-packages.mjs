@@ -44,7 +44,7 @@ for await (const rel of glob("**/*.d.ts", { cwd: staging })) {
 }
 
 // Give each package a self-contained dist subtree so it publishes independently; core also carries
-// the bundled defaults its relative JSON imports resolve to (../../../cork-defaults.v2.json — the
+// the bundled defaults its relative JSON imports resolve to (../../../config.default.json — the
 // schema-2 document this line reads; the frozen schema-1 file rides along for the 0.5.x tooling
 // that still inspects a published dist).
 for (const name of packages) {
@@ -54,7 +54,7 @@ for (const name of packages) {
   await cp(source, dest, { recursive: true });
   if (name === "core") {
     await cp(resolve(root, "cork-defaults.json"), resolve(root, "packages", name, "dist", "cork-defaults.json"));
-    await cp(resolve(root, "cork-defaults.v2.json"), resolve(root, "packages", name, "dist", "cork-defaults.v2.json"));
+    await cp(resolve(root, "config.default.json"), resolve(root, "packages", name, "dist", "config.default.json"));
   }
 }
 

@@ -64,9 +64,13 @@ export const REPOINTS: ReadonlyArray<Repoint> = [
   },
   {
     file: "packages/core/src/config-remote.ts",
-    from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";',
-    to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";',
+    from: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli";',
+    to: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";',
     history: [
+      {
+        from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";',
+        to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";',
+      },
       {
         from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";',
         to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";',

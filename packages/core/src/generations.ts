@@ -175,7 +175,14 @@ export type ChainGenerations = z.infer<typeof ChainGenerationsSchema>;
 
 /** A generation as consumers see it: the record plus its label and whether it is the primary. */
 export interface ResolvedGeneration extends Generation {
+  /** The label consumers see and pass as `generation` (`cork/v0.4`). */
   label: GenerationLabel;
+  /** The key the set is recorded under in `cork-defaults.v2.json` — the Distribution record
+   *  name (`phoenix/v0.4-rc.1`) where one exists. The FILE keeps this spelling because every
+   *  released binary that fetches the file resolves `generation` against its keys (2026-09-25:
+   *  renaming the keys on main broke `--generation phoenix/v0.4-rc.1` on the released 0.6.0);
+   *  `GENERATION_DISPLAY_LABELS` turns it into `label` here, in code. */
+  configKey: string;
   primary: boolean;
 }
 
@@ -195,7 +202,7 @@ export interface GenerationRef {
 export function generationsOf(defaults: { generations?: Record<string, ChainGenerations> | undefined }, chainId: number): ResolvedGeneration[] {
   const chain = defaults.generations?.[String(chainId)];
   if (!chain) return [];
-  const entries = Object.entries(chain.sets).map(([label, g]): ResolvedGeneration => ({ ...g, label, primary: label === chain.primary }));
+  const entries = Object.entries(chain.sets).map(([key, g]): ResolvedGeneration => ({ ...g, label: displayGenerationLabel(key), configKey: key, primary: key === chain.primary }));
   const primary = entries.filter((g) => g.primary);
   const active = entries.filter((g) => !g.primary && g.status === "active");
   const readOnly = entries.filter((g) => !g.primary && g.status !== "active");
@@ -233,16 +240,27 @@ export type GenerationBlockKind = (typeof GENERATION_BLOCK_KINDS)[number];
  *  stays exact. */
 export const GENERATION_ALIASES = ["primary", "previous", "all"] as const;
 
-/** Former spellings of a generation label → the label it is called today. A label is the
- *  DISTRIBUTION BUNDLE (`cork/<version>`), not the core protocol: 0.6.0 shipped the 0.4 and 0.3
- *  sets under `phoenix/…` names (2026-09-25 owner ruling renamed them — Phoenix is one component
- *  of a bundle, and the bundle's own record name stays in each generation's `distribution` field).
- *  Resolved in `resolveGenerationAlias`, the one place an alias becomes a label, so every input
- *  that takes `generation` keeps accepting the old spelling and every result carries the new one. */
-export const GENERATION_LABEL_RENAMES: Readonly<Record<string, GenerationLabel>> = {
+/** Config key (the Distribution BUNDLE record name a set is stored under in `cork-defaults.v2.json`)
+ *  → the label consumers see. A label names the bundle (`cork/<version>`), not the core protocol
+ *  (2026-09-25 owner ruling: Phoenix is one component of a bundle). The FILE keeps the record
+ *  names as keys because every released binary fetches that file at start-up and resolves
+ *  `generation` against its keys — renaming the keys on main broke `--generation
+ *  phoenix/v0.4-rc.1` on the released 0.6.0 (reported by the Distribution verifier the same day).
+ *  So the rename lives HERE: `generationsOf` maps key → label, and `resolveGenerationAlias`
+ *  maps an old spelling given as INPUT to the label, so both spellings keep working and every
+ *  result carries `cork/…`. Adding a set to the file needs no code change unless its label should
+ *  differ from its key. */
+export const GENERATION_DISPLAY_LABELS: Readonly<Record<string, GenerationLabel>> = {
   "phoenix/v0.4-rc.1": "cork/v0.4",
   "phoenix/v0.3-rc.1": "cork/v0.3",
 };
+/** The label a config key is shown as (the key itself when no display label is registered). */
+export function displayGenerationLabel(key: string): GenerationLabel {
+  return GENERATION_DISPLAY_LABELS[key] ?? key;
+}
+/** Former spellings accepted as `generation` INPUT → today's label. The record names double as
+ *  the old spellings, so this is the same table read the other way; kept under its 0.6.x name. */
+export const GENERATION_LABEL_RENAMES: Readonly<Record<string, GenerationLabel>> = GENERATION_DISPLAY_LABELS;
 export function renamedGenerationLabel(label: string | undefined): GenerationLabel | undefined {
   return label === undefined ? undefined : GENERATION_LABEL_RENAMES[label];
 }

@@ -15,7 +15,7 @@ const CPT = "0xc37d9aCe13C63806c6fA475aD507E94c70b6e110";
 export const CST = "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69";
 const NOW = 1_790_000_000n;
 
-// MarketRegistry fixture — READ FROM the bundled cork-defaults.v2.json rather than pinned: the
+// MarketRegistry fixture — READ FROM the bundled config.default.json rather than pinned: the
 // binding guard compares the stub's MARKET_REGISTRY() answer against the live config, so a
 // hardcoded address here rots on every registry redeploy (the pinned 0.3.2 literal survived the
 // 0.3.3 redeploy and silently turned two eval tasks red via adapter_binding_mismatch — found

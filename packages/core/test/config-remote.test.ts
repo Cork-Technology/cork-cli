@@ -27,6 +27,9 @@ import {
   type CorkRolloverDeployment,
   type ResolvedGeneration,
   type StoredCache,
+  corkDefaultsUrlFor,
+  CORK_DEFAULTS_URL,
+  BUILD_VERSION,
 } from "@cork/core";
 
 const MAINNET_PHOENIX = {
@@ -331,7 +334,7 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
   const DOMAIN = { name: "CorkSettler", version: "1.0.0" };
   /** A hand-built chain: the same three sets the bundled 42161 config carries, as generations. */
   const gens = (over: Partial<Record<"primary" | "rc2" | "july", Partial<ResolvedGeneration["rollover"]> | null>> = {}): ResolvedGeneration[] => {
-    const set = (label: string, status: "active" | "read-only", primary: boolean, rollover: NonNullable<ResolvedGeneration["rollover"]> | undefined): ResolvedGeneration => ({ label, status, primary, ...(rollover ? { rollover } : {}) });
+    const set = (label: string, status: "active" | "read-only", primary: boolean, rollover: NonNullable<ResolvedGeneration["rollover"]> | undefined): ResolvedGeneration => ({ label, configKey: label, status, primary, ...(rollover ? { rollover } : {}) });
     const p = over.primary === null ? undefined : { factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", exactSettler: "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E", partialSettler: "0x5E19Be0743fE521d8BF85b5A558356675499bE9e", settlerDomain: DOMAIN, seededAtBlock: 503918966, contractsVersion: "v0.2.0", wire: "0.2" as const, ...over.primary };
     const rc2 = over.rc2 === null ? undefined : { factory: "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82", exactSettler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", partialSettler: "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e", settlerDomain: DOMAIN, seededAtBlock: 494104750, contractsVersion: "v0.1.0-rc.2", wire: "rc.2" as const, ...over.rc2 };
     const july = over.july === null ? undefined : { factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", settlerDomain: DOMAIN, seededAtBlock: 484973917, retired: "2026-08-13", wire: "rc.1" as const, ...over.july };
@@ -512,5 +515,16 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
     const r = await resolveConfig(d);
     expect(r.source).toBe("github"); // fell through to the (successful) fetch
     expect(d.fetches()).toBe(1);
+  });
+});
+
+describe("corkDefaultsUrlFor — a released binary reads config.default.json from ITS OWN release tag (2026-09-25)", () => {
+  it("a stamped version pins the tag; a source run reads main; the file name never varies", () => {
+    expect(corkDefaultsUrlFor("0.6.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/v0.6.1/config.default.json");
+    expect(corkDefaultsUrlFor("0.7.0-rc.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/v0.7.0-rc.1/config.default.json");
+    expect(corkDefaultsUrlFor("dev")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/config.default.json");
+    expect(corkDefaultsUrlFor("")).toMatch(/\/main\/config\.default\.json$/u);
+    expect(CORK_DEFAULTS_URL).toBe(corkDefaultsUrlFor(BUILD_VERSION));
+    expect(CORK_DEFAULTS_URL).not.toContain("cork-defaults");
   });
 });

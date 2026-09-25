@@ -9,12 +9,14 @@ covered.
 
 ### Breaking
 
-- Generation labels name the DISTRIBUTION BUNDLE, not the core protocol: `phoenix/v0.4-rc.1` is now `cork/v0.4` and `phoenix/v0.3-rc.1` is `cork/v0.3`, on both chains, in every result (`data.generation.label`, `provenance.generation.label`, decode `jit.generation`, event and settler attribution, `protocol-config`) and in `cork-defaults.v2.json` (the set keys and `primary`). The bundle's own record name is unchanged in each generation's `distribution` field (`phoenix/v0.4-rc.1`). Scripts that match on the old label strings must update. The old spellings stay accepted as `generation` INPUT and resolve to the new labels (`GENERATION_LABEL_RENAMES`, resolved in `resolveGenerationAlias` — the one place an alias becomes a label), so no call breaks; only the echoed label changes.
+- Generation labels name the DISTRIBUTION BUNDLE, not the core protocol: `phoenix/v0.4-rc.1` is now `cork/v0.4` and `phoenix/v0.3-rc.1` is `cork/v0.3`, on both chains (owner ruling 2026-09-25). Every result carries the new label (`data.generation.label`, `provenance.generation`, decode/attribution labels, position rows). The old spellings stay accepted as `generation` INPUT for this minor (`GENERATION_LABEL_RENAMES`, resolved in `resolveGenerationAlias`; the result carries `renamedFrom`).
+- The address document is `config.default.json`, fetched from the binary's OWN RELEASE TAG (`https://raw.githubusercontent.com/Cork-Technology/cork-cli/v<version>/config.default.json`; a source run reads `main`; `CORK_DEFAULTS_URL` still overrides). `cork-defaults.v2.json` stays on `main` FROZEN for the released 0.6.0, whose binary fetches it from `main` by name: on 2026-09-25 the label rename moved that file's keys on `main`, and `--generation phoenix/v0.4-rc.1` stopped working on 0.6.0 within the hour (reported by the Distribution verifier). A tag is immutable, so the file a binary resolves `generation` against never changes under it again; address updates now reach a released binary with the next release. The disk cache is `~/.cache/cork-helper-cli/config.default.json`. Policy: cork-knowledge `versioning-and-release.md` R5c.
 
 ### Added
 
-- SDK (`@cork/core`, root and `/config`): `GENERATION_LABEL_RENAMES` and `renamedGenerationLabel(label)`; `resolveGenerationAlias` results carry `renamedFrom` when an old spelling was given.
+- SDK (`@cork/core`, root and `/config`): `GENERATION_LABEL_RENAMES` and `renamedGenerationLabel(label)`; `GENERATION_DISPLAY_LABELS` and `displayGenerationLabel(key)` (a record-name key → its bundle label, so a file keyed either way resolves to the same labels); `ResolvedGeneration.configKey` (the key a set is stored under); `CORK_DEFAULTS_REPO` and `corkDefaultsUrlFor(version)`; `resolveGenerationAlias` results carry `renamedFrom` when an old spelling was given.
 - `cork_capabilities topic:"generations"` states the naming rule and lists the accepted old spellings.
+- `cork_decode`: every trusted Cork/adapter leg carries `generation` when it targets a non-primary generation's adapter.
 
 ### Fixed
 

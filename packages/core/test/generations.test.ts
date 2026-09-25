@@ -3,6 +3,7 @@
 // stubbed client — every ordering, selection and classification rule the handlers lean on is
 // pinned here, and the bundled v2 document is walked through the same functions so the config
 // and the code cannot disagree about which set is primary or what each block speaks.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BUNDLED_DEFAULTS,
@@ -24,6 +25,7 @@ import {
   selectGeneration,
   type PoolGenerationClient,
   type ResolvedGeneration,
+  displayGenerationLabel,
 } from "@cork/core";
 
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as `0x${string}`;
@@ -292,5 +294,63 @@ describe("renamed generation labels (phoenix/… → cork/…)", () => {
     const primary = list.find((g) => g.primary)!;
     expect(primary.label).toBe("cork/v0.4");
     expect(primary.distribution).toBe("phoenix/v0.4-rc.1");
+  });
+});
+
+// 2026-09-25: the FILE keeps the Distribution record names as set keys; the label is a code-side
+// display mapping. Renaming the keys on main broke `--generation phoenix/v0.4-rc.1` on the released
+// 0.6.0, whose binary fetches the file and knows no other spelling — so a key must never move.
+describe("config keys are record names; labels are display (a released binary reads the file)", () => {
+  it("the bundled config.default.json keys every Distribution set by its bundle label; the FROZEN cork-defaults.v2.json keeps the record names for the 0.6.0 binary", () => {
+    const frozen = JSON.parse(readFileSync(new URL("../../../cork-defaults.v2.json", import.meta.url), "utf8")) as { generations: Record<string, { primary: string; sets: Record<string, unknown> }> };
+    for (const chainId of ["42161", "8453"]) {
+      const chain = BUNDLED_DEFAULTS.generations![chainId]!;
+      expect(Object.keys(chain.sets)).toEqual(expect.arrayContaining(["cork/v0.4", "cork/v0.3"]));
+      expect(chain.primary).toBe("cork/v0.4");
+      const old = frozen.generations[chainId]!;
+      expect(Object.keys(old.sets)).toEqual(expect.arrayContaining(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]));
+      expect(Object.keys(old.sets)).not.toContain("cork/v0.4");
+      expect(old.primary).toBe("phoenix/v0.4-rc.1");
+    }
+  });
+  it("the two files agree on every address: only the keys, the primary and the generations comment differ", () => {
+    const frozen = JSON.parse(readFileSync(new URL("../../../cork-defaults.v2.json", import.meta.url), "utf8")) as Record<string, unknown>;
+    const strip = (doc: Record<string, unknown>) => {
+      const d = JSON.parse(JSON.stringify(doc)) as { generations: Record<string, { primary: string; sets: Record<string, unknown> }>; $generationsComment?: string };
+      delete d.$generationsComment;
+      for (const chain of Object.values(d.generations)) {
+        chain.primary = displayGenerationLabel(chain.primary);
+        chain.sets = Object.fromEntries(Object.entries(chain.sets).map(([k, v]) => [displayGenerationLabel(k), v]));
+      }
+      return d;
+    };
+    // Both RAW files: BUNDLED_DEFAULTS is the parsed document, and the schema strips the
+    // `$…Comment` keys the frozen file still carries.
+    const current = JSON.parse(readFileSync(new URL("../../../config.default.json", import.meta.url), "utf8")) as Record<string, unknown>;
+    expect(strip(frozen)).toEqual(strip(current));
+  });
+  it("generationsOf shows the display label and keeps the key beside it; a record-name key maps to its label", () => {
+    const list = generationsOf(BUNDLED_DEFAULTS, 8453);
+    expect(list.map((g) => [g.label, g.configKey, g.primary])).toEqual([
+      ["cork/v0.4", "cork/v0.4", true],
+      ["cork/v0.3", "cork/v0.3", false],
+    ]);
+    const frozen = JSON.parse(readFileSync(new URL("../../../cork-defaults.v2.json", import.meta.url), "utf8")) as Parameters<typeof generationsOf>[0];
+    expect(generationsOf(frozen, 8453).map((g) => [g.label, g.configKey])).toEqual([["cork/v0.4", "phoenix/v0.4-rc.1"], ["cork/v0.3", "phoenix/v0.3-rc.1"]]);
+    // a set with no display label registered shows its key
+    expect(generationsOf(BUNDLED_DEFAULTS, 42161).find((g) => g.configKey === "arbitrum-v1.1")!.label).toBe("arbitrum-v1.1");
+    expect(displayGenerationLabel("mainnet")).toBe("mainnet");
+    expect(displayGenerationLabel("phoenix/v0.4-rc.1")).toBe("cork/v0.4");
+  });
+  it("both spellings select the same set; the result carries the display label", () => {
+    const list = generationsOf(BUNDLED_DEFAULTS, 8453);
+    const byLabel = selectGeneration(list, "cork/v0.3", "prepare", ["phoenix"]);
+    const byKey = selectGeneration(list, "phoenix/v0.3-rc.1", "prepare", ["phoenix"]);
+    expect(byLabel.ok && byKey.ok).toBe(true);
+    if (byLabel.ok && byKey.ok) {
+      expect(byKey.generation.configKey).toBe("cork/v0.3");
+      expect(byKey.generation.label).toBe("cork/v0.3");
+      expect(byKey.generation).toEqual(byLabel.generation);
+    }
   });
 });

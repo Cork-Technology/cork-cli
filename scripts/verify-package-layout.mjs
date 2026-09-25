@@ -59,6 +59,6 @@ const mcp = JSON.parse(await readFile(resolve(root, "packages/mcp/package.json")
 assert(String(mcp.bin?.["cork-mcp"]).startsWith("./dist/"), "mcp: cork-mcp bin must resolve from dist");
 await access(resolve(root, "packages/mcp", mcp.bin["cork-mcp"]));
 await access(resolve(root, "packages/core/dist/cork-defaults.json"));
-await access(resolve(root, "packages/core/dist/cork-defaults.v2.json")); // the schema-2 document this line's JSON imports resolve to
+await access(resolve(root, "packages/core/dist/config.default.json")); // the schema-2 document this line's JSON imports resolve to
 
 process.stdout.write("Verified compiled package layouts (dist-only, declarations present, no raw .ts).\n");

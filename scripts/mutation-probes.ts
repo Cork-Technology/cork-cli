@@ -247,6 +247,15 @@ const CATALOG: Mutant[] = [
     tests: [T.handlers],
   },
   {
+    // a released binary must read its defaults from ITS OWN release tag — falling back to main
+    // re-creates the 2026-09-25 regression (a key rename on main broke the released 0.6.0).
+    id: "config-url-not-tag-pinned",
+    file: "packages/core/src/config-remote.ts",
+    find: 'const ref = version === "dev" || version === "" ? "main" : `v${version}`;',
+    replace: 'const ref = "main";',
+    tests: [T.configRemote],
+  },
+  {
     // decode must trust EVERY generation's Cork adapter: dropping the per-generation book turns a
     // bundle for a live cork/v0.3 pool into a false TARGET MISMATCH against the primary's adapter
     // (the 2026-09-25 anvil-smoke finding).
@@ -4962,7 +4971,7 @@ const CATALOG: Mutant[] = [
     // ONE chain's hint map (8453 — anchored by its chain-unique deployedAtBlock) drops the
     // recipe: the mode sugar silently diverges across chains.
     id: "impairment-hint-dropped-one-chain",
-    file: "cork-defaults.v2.json",
+    file: "config.default.json",
     find: '              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",\n              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"\n            },\n            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n            "contractsVersion": "0.3.3",\n            "deployedAtBlock": 49775886',
     replace: '              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1"\n            },\n            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",\n            "contractsVersion": "0.3.3",\n            "deployedAtBlock": 49775886',
     tests: [T.impairment],

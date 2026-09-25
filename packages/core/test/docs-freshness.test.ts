@@ -15,7 +15,7 @@ const anatomy = read("../../../docs/jit-order-anatomy.md");
 // must name BOTH the primary set's addresses (what a new market uses) and the 0.3.3 set's (what
 // every listed pool still reads as), and no address from a retired or legacy set.
 type MarketRegistryBlock = { registry: string; adapter: string; contractsVersion: string; wire: string; recipes?: Record<string, string> };
-const config = JSON.parse(read("../../../cork-defaults.v2.json")) as {
+const config = JSON.parse(read("../../../config.default.json")) as {
   generations: Record<string, { primary: string; sets: Record<string, { status: string; marketRegistry?: MarketRegistryBlock & Record<string, unknown> }> }>;
 };
 
@@ -54,7 +54,7 @@ describe("docs freshness: zyfai-quickstart.md tracks the configured registry gen
     expect(BASE.primary).toBe("cork/v0.4");
   });
 
-  it("names the PRIMARY generation: registry, adapter, market creator and all four recipes from cork-defaults.v2.json", () => {
+  it("names the PRIMARY generation: registry, adapter, market creator and all four recipes from config.default.json", () => {
     const r = PRIMARY.recipes!;
     for (const addr of [PRIMARY.registry, PRIMARY.adapter, PRIMARY["marketCreator"] as string, r.liquidity!, r.nav!, r.fixed!, r.impairment!]) {
       expect(has(quickstart, addr), `quickstart must show the primary-generation address ${addr}`).toBe(true);

@@ -109,7 +109,7 @@ describe("teaching builder: defensive branches", () => {
   });
 });
 
-describe("example address literals ↔ cork-defaults.v2.json (offline drift gate)", () => {
+describe("example address literals ↔ config.default.json (offline drift gate)", () => {
   // The worked examples pin recipe CONTRACT addresses inline (schema-layer files cannot import
   // core's config resolution without inverting the package layering). Nothing else bound them:
   // a recipe redeploy that updates the config would leave the SHIPPED wire examples advertising
@@ -118,7 +118,7 @@ describe("example address literals ↔ cork-defaults.v2.json (offline drift gate
   // 0.3.3 set an example may name under `generation` as much as the nested 0.5.0 primary's);
   // the schema-1 cork-defaults.json is frozen for the 0.5 line and not read by this build.
   it("every 0x address in an example that looks like a recipe matches a configured recipe", async () => {
-    const { default: corkDefaults } = await import("../../../cork-defaults.v2.json");
+    const { default: corkDefaults } = await import("../../../config.default.json");
     const configured = new Set<string>();
     type Generations = Record<string, { sets: Record<string, { marketRegistry?: { recipes?: Record<string, string> } }> }>;
     for (const chain of Object.values((corkDefaults as { generations: Generations }).generations)) {
@@ -133,7 +133,7 @@ describe("example address literals ↔ cork-defaults.v2.json (offline drift gate
     for (const examples of Object.values(TOOL_EXAMPLES)) for (const e of examples ?? []) walk(e.input, "");
     expect(recipeRefs.length).toBeGreaterThan(0);
     for (const addr of recipeRefs) {
-      expect(configured.has(addr.toLowerCase()), `example recipe ${addr} is not a configured recipe address in cork-defaults.v2.json — the redeploy updated the config but not the shipped examples`).toBe(true);
+      expect(configured.has(addr.toLowerCase()), `example recipe ${addr} is not a configured recipe address in config.default.json — the redeploy updated the config but not the shipped examples`).toBe(true);
     }
   });
 });

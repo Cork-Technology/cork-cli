@@ -432,7 +432,7 @@ alone. ForSelf prepares and the taker-fill liveness/ERC-1271 checks use it too �
 run whenever any endpoint resolves.)
 
 **Per-chain coverage — a chain hosts a SET of contract generations, one primary (0.6, 2026-09-22;
-`packages/core/src/generations.ts`, `cork-defaults.v2.json`).** Owner ruling: v0.5.1 was the last
+`packages/core/src/generations.ts`, `config.default.json`).** Owner ruling: v0.5.1 was the last
 release of the previous generation; the 0.6 line ADDS the Distribution `phoenix/v0.4-rc.1` set and
 KEEPS every older set readable, decodable and — while `status: active` — preparable on explicit
 request. Nothing retires an address. A generation = the contracts deployed to work together plus
@@ -442,7 +442,18 @@ protocol — Phoenix is one component of a bundle; the bundle's own record name 
 rides in the generation's `distribution` field, and the eras before Distributions carry our own
 labels. The 0.6.0 spellings `phoenix/v0.4-rc.1`/`phoenix/v0.3-rc.1` stay accepted as INPUT through
 `GENERATION_LABEL_RENAMES` (resolved in `resolveGenerationAlias`, the one place an alias becomes a
-label — owner ruling 2026-09-25); every result carries the new label. Per chain:
+label — owner ruling 2026-09-25); every result carries the new label. TWO FILES, ONE SCHEMA
+(2026-09-25, after the released 0.6.0 broke): `config.default.json` (repo root) is the document
+THIS line bundles and fetches — keyed by bundle label, fetched from the binary's OWN RELEASE TAG
+(`corkDefaultsUrlFor(BUILD_VERSION)`: `…/v<version>/config.default.json`, `main` only for a "dev"
+source run) so the file a binary resolves `generation` against never changes under it;
+`cork-defaults.v2.json` stays on main FROZEN with the record-name keys (`phoenix/v0.4-rc.1`), because
+the released 0.6.0 fetches it from main by name — renaming its keys there broke `--generation
+phoenix/v0.4-rc.1` on 0.6.0 within the hour (the Distribution verifier caught it). Address updates
+land in BOTH files (a parity test holds them equal modulo keys/primary/comment); a released 0.6.x
+binary only ever sees a key spelling it knows. `ResolvedGeneration.configKey` keeps the key a set
+is stored under; `GENERATION_DISPLAY_LABELS`/`displayGenerationLabel` map a record-name key to its
+label, so either file resolves to the same labels. Policy: cork-knowledge R5c. Per chain:
 
 | Chain | Label | Status | phoenix (wire) | marketRegistry (wire) | rollover (wire) |
 |---|---|---|---|---|---|
@@ -593,14 +604,17 @@ vnet — chainId 1 without a vnet RPC yields `pool_not_found`, by design.
 
 ## Address config: remote-first with a bundled fallback — schema 2, the generation model
 
-Deployment addresses are NOT hardcoded in source. `cork-defaults.v2.json` (repo root, `schemaVersion:
-2`, 2026-09-22) is canonical; `packages/core/src/config-remote.ts` resolves **remote-first**: fetch
-from GitHub raw (`CORK_DEFAULTS_URL`, default the v2 path) → strict zod validation (tampered
-content rejected; `ChainGenerationsSchema` in generations.ts) → 1 h disk cache
-(`~/.cache/cork-helper-cli/cork-defaults.v2.json`, override `CORK_CONFIG_CACHE_FILE`). HTTP 404/410
+Deployment addresses are NOT hardcoded in source. `config.default.json` (repo root, `schemaVersion:
+2`; bundle-label keys, 2026-09-25 — `cork-defaults.v2.json` is the same schema with record-name keys,
+FROZEN on main for the released 0.6.0, see "Per-chain coverage") is canonical;
+`packages/core/src/config-remote.ts` resolves **remote-first**: fetch from GitHub raw at the
+binary's OWN RELEASE TAG (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`; the env var
+overrides; a "dev" source run reads main) → strict zod validation (tampered content rejected;
+`ChainGenerationsSchema` in generations.ts) → 1 h disk cache
+(`~/.cache/cork-helper-cli/config.default.json`, override `CORK_CONFIG_CACHE_FILE`). HTTP 404/410
 (not published) → bundled copy served silently; a transient failure → bundled copy + a
 `config_fetch_failed` warning. Either outcome is negative-cached 10 min. `CORK_CONFIG_NO_FETCH=1`
-skips fetching (tests set it). Never hand-edit addresses in TS — edit `cork-defaults.v2.json`.
+skips fetching (tests set it). Never hand-edit addresses in TS — edit `config.default.json` AND the frozen `cork-defaults.v2.json` (the parity test fails otherwise).
 
 The shape: `generations[chainId] = { primary: <label>, sets: { <label>: generation } }`; a
 generation = `{ status: active|read-only, distribution?, phoenix?, marketRegistry?, rollover?,
