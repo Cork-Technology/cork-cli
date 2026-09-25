@@ -284,7 +284,7 @@ const CATALOG: Mutant[] = [
     // re-creates the 2026-09-25 regression (a key rename on main broke the released 0.6.0).
     id: "config-url-not-line-pinned",
     file: "packages/core/src/config-remote.ts",
-    find: 'const ref = line === undefined ? "main" : `release/${line}`;',
+    find: 'const ref = line === undefined ? "main" : `config/${line}`;',
     replace: 'const ref = "main";',
     tests: [T.configRemote],
   },

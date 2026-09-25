@@ -519,11 +519,11 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
   });
 });
 
-describe("corkDefaultsUrlFor — a released binary reads config.default.json from ITS RELEASE-LINE branch (2026-09-25)", () => {
-  it("a stamped version pins release/<major>.<minor>; a pre-release shares its line; a source run reads main", () => {
-    expect(corkDefaultsUrlFor("0.6.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/release/0.6/config.default.json");
+describe("corkDefaultsUrlFor — a released binary reads config.default.json from ITS LINE'S CONFIG branch (2026-09-25)", () => {
+  it("a stamped version pins config/<major>.<minor>; a pre-release shares its line; a source run reads main", () => {
+    expect(corkDefaultsUrlFor("0.6.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/config/0.6/config.default.json");
     expect(corkDefaultsUrlFor("0.6.2")).toBe(corkDefaultsUrlFor("0.6.1"));
-    expect(corkDefaultsUrlFor("0.7.0-rc.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/release/0.7/config.default.json");
+    expect(corkDefaultsUrlFor("0.7.0-rc.1")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/config/0.7/config.default.json");
     expect(corkDefaultsUrlFor("dev")).toBe("https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/config.default.json");
     expect(corkDefaultsUrlFor("")).toMatch(/\/main\/config\.default\.json$/u);
     expect(releaseLineOf("1.12.3")).toBe("1.12");

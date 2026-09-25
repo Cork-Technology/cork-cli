@@ -50,23 +50,25 @@ import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
 /** The repository a released binary fetches its defaults from. */
 export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";
 
-/** The defaults file a binary reads: `config.default.json` on ITS RELEASE-LINE BRANCH
- *  (`release/<major>.<minor>`, 2026-09-25 owner ruling). The branch is the escape hatch: a
- *  compatible address change pushed there reaches every binary of that line within the hour,
- *  without an upgrade; the release TAG stays immutable (GitHub immutable releases carry our
- *  attestations). The branch may only receive changes every binary of the line understands —
- *  a key rename is not one (the frozen-keys tripwire, config-frozen-keys.test.ts, guards it;
- *  the day the main-branch file's keys were renamed, the released 0.6.0 stopped accepting its
- *  documented generation names). A source run (`BUILD_VERSION` "dev") reads main. The
- *  `CORK_DEFAULTS_URL` env var overrides both. `cork-defaults.v2.json` on main stays frozen for
- *  the 0.6.0 binary; `cork-defaults.json` (schema 1) for 0.5.x. */
+/** The defaults file a binary reads: `config.default.json` on ITS LINE'S CONFIG BRANCH
+ *  (`config/<major>.<minor>`, 2026-09-25 owner ruling). The branch holds ONLY that file — no
+ *  source — so its history is the address change log and nothing else can ride on it. It is
+ *  the escape hatch: a compatible address change pushed there reaches every binary of that
+ *  line within the hour, without an upgrade; the release TAG stays immutable (GitHub immutable
+ *  releases carry our attestations). Every binary of a line can share the file because a key
+ *  change is BREAKING and therefore a new minor (the label rename that split 0.6.0 from what
+ *  followed is why the next cut is 0.7.0, not 0.6.1); the frozen-keys tripwire
+ *  (config-frozen-keys.test.ts) holds each line's file to the keys its binaries know. A source
+ *  run (`BUILD_VERSION` "dev") reads main. The `CORK_DEFAULTS_URL` env var overrides both.
+ *  `cork-defaults.v2.json` on main stays frozen for the 0.6.0 binary; `cork-defaults.json`
+ *  (schema 1) for 0.5.x. */
 export function releaseLineOf(version: string): string | undefined {
   const m = /^(\d+)\.(\d+)\./u.exec(version);
   return m ? `${m[1]}.${m[2]}` : undefined;
 }
 export function corkDefaultsUrlFor(version: string): string {
   const line = releaseLineOf(version);
-  const ref = line === undefined ? "main" : `release/${line}`;
+  const ref = line === undefined ? "main" : `config/${line}`;
   return `${CORK_DEFAULTS_REPO}/${ref}/config.default.json`;
 }
 export const CORK_DEFAULTS_URL = corkDefaultsUrlFor(BUILD_VERSION);

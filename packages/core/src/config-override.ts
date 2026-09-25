@@ -3,7 +3,7 @@
 //
 // Two layers, two owners:
 //   - `config.default.json` is the RELEASED public document: bundled into the build and fetched
-//     from the binary's release-line branch (config-remote.ts). Partners read it; it never carries a
+//     from the binary's line's config branch (config-remote.ts). Partners read it; it never carries a
 //     non-canonical deployment set (policy R5b: a public file is a partner-facing projection).
 //   - `config.json` is the OPERATOR's local document, never fetched from GitHub. Internal sets
 //     (staging, dark-launch, a vnet), an internal RPC book, or an emergency address fix live here

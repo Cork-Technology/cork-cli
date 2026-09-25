@@ -1,5 +1,5 @@
 // The frozen-keys tripwire (policy R5c, 2026-09-25). A released line fetches its address document
-// from its RELEASE-LINE branch and resolves `generation` against the document's set KEYS, so a
+// from its line's CONFIG branch (config/<major>.<minor>, holding only that file) and resolves `generation` against the document's set KEYS, so a
 // key a released line knows may never disappear from the file that line reads. This test holds
 // the tree's files to that, and — under CORK_RPC_LIVE=1 — the PUBLIC branches too (the file a
 // released binary actually fetches). It exists because on 2026-09-25 the keys of the main-branch
@@ -26,10 +26,12 @@ export const RELEASED_LINE_KEYS: ReadonlyArray<{ line: string; file: string; ref
     },
   },
   {
-    // 0.6.1+ fetches config.default.json from release/0.6 and knows the bundle labels (+ the old spellings as INPUT, in code).
-    line: "0.6",
+    // 0.7.x (first cut 0.7.0-rc.1) fetches config.default.json from the config-only branch config/0.7
+    // and knows the bundle labels (+ the old spellings as INPUT, in code). The label rename is a
+    // covered breaking change, so it opened a new line: 0.6.0 stays the only 0.6.x binary.
+    line: "0.7",
     file: "config.default.json",
-    ref: "release/0.6",
+    ref: "config/0.7",
     keys: {
       "1": ["mainnet"],
       "42161": ["cork/v0.4", "cork/v0.3", "arbitrum-v1.1", "arbitrum-legacy"],
@@ -56,9 +58,9 @@ describe("frozen keys — the file a released line reads keeps every set key tha
     }
   });
 
-  it("the URL a 0.6.x binary builds names the release/0.6 branch and config.default.json", () => {
-    expect(releaseLineOf("0.6.1")).toBe("0.6");
-    expect(corkDefaultsUrlFor("0.6.1")).toMatch(/\/release\/0\.6\/config\.default\.json$/u);
+  it("the URL a 0.7.x binary builds names the config/0.7 branch and config.default.json", () => {
+    expect(releaseLineOf("0.7.0-rc.1")).toBe("0.7");
+    expect(corkDefaultsUrlFor("0.7.0-rc.1")).toMatch(/\/config\/0\.7\/config\.default\.json$/u);
   });
 
   it.skipIf(!process.env.CORK_RPC_LIVE)("LIVE: the public branches serve the keys each line knows", async () => {

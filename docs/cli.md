@@ -343,8 +343,9 @@ an ingress you control; without it every caller behind a proxy shares one client
 deployment set per key, the primary, or an `only` list of the sets you want to see. `ch query
 protocol-config` shows both layers under `data.config`, and every result an override actually shaped
 warns `config_override_active`. `CORK_CONFIG_NO_OVERRIDE=1` turns the layer off. A released build
-fetches `config.default.json` from its release-line branch (`release/0.6` for 0.6.x), so a
-redeployed address reaches you within an hour without an upgrade.
+fetches `config.default.json` from its line's config branch (`config/0.7` for every 0.7.x build),
+a branch that holds only that file, so a redeployed address reaches you within an hour without an
+upgrade.
 
 Accepted synonyms, and the pre-rename names that answer with their new name, are listed in the
 README's synonym table.

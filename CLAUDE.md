@@ -445,14 +445,15 @@ labels. The 0.6.0 spellings `phoenix/v0.4-rc.1`/`phoenix/v0.3-rc.1` stay accepte
 `GENERATION_LABEL_RENAMES` (resolved in `resolveGenerationAlias`, the one place an alias becomes a
 label — owner ruling 2026-09-25); every result carries the new label. TWO FILES, ONE SCHEMA
 (2026-09-25, after the released 0.6.0 broke): `config.default.json` (repo root) is the document
-THIS line bundles and fetches — keyed by bundle label, fetched from the binary's RELEASE-LINE BRANCH
-(`corkDefaultsUrlFor(BUILD_VERSION)`: `…/release/<major>.<minor>/config.default.json`, `main` only for
-a "dev" source run): the branch is the ESCAPE HATCH — a compatible address change pushed there reaches
+THIS line bundles and fetches — keyed by bundle label, fetched from the binary's LINE CONFIG BRANCH
+(`corkDefaultsUrlFor(BUILD_VERSION)`: `…/config/<major>.<minor>/config.default.json`, `main` only for
+a "dev" source run; the branch holds ONLY that file — its history is the address change log): the branch is the ESCAPE HATCH — a compatible address change pushed there reaches
 every binary of the line within the hour without an upgrade, while the release TAG stays immutable (GitHub
 immutable releases carry the attestations); the branch may only receive changes every binary of the line
 understands, guarded by the frozen-keys tripwire (`packages/core/test/config-frozen-keys.test.ts`:
 `RELEASED_LINE_KEYS` per line, offline against the tree + live against the public branch under
-CORK_RPC_LIVE=1);
+CORK_RPC_LIVE=1). A KEY CHANGE IS A NEW MINOR: the label rename split 0.6.0 (frozen file) from
+what followed, so the next cut is 0.7.0-rc.1 on `config/0.7`, and 0.6.0 stays the only 0.6.x binary;
 `cork-defaults.v2.json` stays on main FROZEN with the record-name keys (`phoenix/v0.4-rc.1`), because
 the released 0.6.0 fetches it from main by name — renaming its keys there broke `--generation
 phoenix/v0.4-rc.1` on 0.6.0 within the hour (the Distribution verifier caught it). Address updates
@@ -614,7 +615,7 @@ Deployment addresses are NOT hardcoded in source. `config.default.json` (repo ro
 2`; bundle-label keys, 2026-09-25 — `cork-defaults.v2.json` is the same schema with record-name keys,
 FROZEN on main for the released 0.6.0, see "Per-chain coverage") is canonical;
 `packages/core/src/config-remote.ts` resolves **remote-first**: fetch from GitHub raw at the
-binary's RELEASE-LINE BRANCH `release/<major>.<minor>` (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`;
+binary's LINE CONFIG BRANCH `config/<major>.<minor>` (config.default.json only) (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`;
 the env var overrides; a "dev" source run reads main; a compatible address change pushed to the branch is the
 no-upgrade escape hatch, the frozen-keys tripwire keeps it compatible) → strict zod validation (tampered content rejected;
 `ChainGenerationsSchema` in generations.ts) → 1 h disk cache
