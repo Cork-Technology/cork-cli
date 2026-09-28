@@ -30,6 +30,7 @@ import {
   corkDefaultsUrlFor,
   releaseLineOf,
   CORK_DEFAULTS_URL,
+  CORK_DEFAULTS_REPO,
   BUILD_VERSION,
 } from "@cork/core";
 
@@ -521,7 +522,9 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
 
 describe("corkDefaultsUrlFor — a released binary reads cork-defaults.v2.json from ITS LINE'S CONFIG branch (policy R5c)", () => {
   it("the tag the release pipeline stamps pins config/<major>.<minor>; a source run reads main", () => {
-    const repo = "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli";
+    // The repository differs between the private and the public tree (the port repoints it).
+    const repo = CORK_DEFAULTS_REPO;
+    expect(repo).toMatch(/^https:\/\/raw\.githubusercontent\.com\/Cork-Technology\/cork-[a-z-]+$/u);
     // compile-binaries.mjs stamps the TAG name (v-prefixed): the parser must read it, or a released
     // binary silently falls back to main.
     expect(corkDefaultsUrlFor("v0.6.1-rc.1")).toBe(`${repo}/config/0.6/cork-defaults.v2.json`);
