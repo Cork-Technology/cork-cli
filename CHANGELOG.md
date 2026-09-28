@@ -5,7 +5,9 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [Unreleased]
+## [0.6.1-rc.1] — 2026-09-28
+
+A patch candidate of the 0.6 line. It fixes two defects that a dry run of v0.6.0 found against live chain state, and it moves the address fetch to the line's config branch. The covered surface is unchanged, apart from additive SDK exports.
 
 ### Changed
 

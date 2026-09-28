@@ -11,7 +11,7 @@ primary on Base and Arbitrum One is **`phoenix/v0.4-rc.1`**: Market Registry con
 registry holds registered assets since 2026-09-23 (14 on Base). No pool exists on it yet: every
 pool the venue lists today lives on the previous set, **`phoenix/v0.3-rc.1`**, contracts release **0.3.3**
 (registry `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. The
-worked examples below were run live on Base on 2026-09-25 with cork-cli `0.6.0`: the registry
+worked examples below were run live on Base on 2026-09-25 and are shown as cork-cli `0.6.1-rc.1` reports them: the registry
 reads, the derivation and the order build against the primary, and the exercise against a live
 pool on the previous set. A prepare targets the primary unless you pass `--generation phoenix/v0.3-rc.1`.
 A read of an existing pool follows the generation the pool lives on. Treat this page as
