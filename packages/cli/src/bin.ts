@@ -46,8 +46,8 @@ if (argv[0] === "mcp") {
         "                   without it every caller behind a proxy shares one per-client slot set.\n" +
         "Bearer auth: set CORK_MCP_TOKEN (unset = open, which is the public deployment's shape).\n" +
         "Admission (always on): 1 MiB body, JSON depth 32, batch 50, 8 in-flight per client, 64 per\n" +
-        "server, 30 s deadline. Per-client accounting uses X-Forwarded-For only on a non-loopback\n" +
-        "bind (an ingress is assumed to front it); the ingress still owns rate and connection limits.\n",
+        "server, 30 s deadline. Per-client accounting keys on the socket peer unless --trust-forwarded-for\n" +
+        "is set (then on the LAST X-Forwarded-For hop); the ingress still owns rate and connection limits.\n",
     );
     process.exit(0);
   }
