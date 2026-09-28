@@ -44,11 +44,35 @@ import {
   selectGeneration,
 } from "./generations.ts";
 import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
+import { BUILD_VERSION } from "./version.ts";
 
-/** Canonical source of the latest defaults; the `CORK_DEFAULTS_URL` env var overrides it. The
- *  v2 path: the schema-1 file at the sibling path stays frozen for 0.5.x binaries. */
-export const CORK_DEFAULTS_URL =
-  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";
+/** The repository a released binary fetches its defaults from. */
+export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";
+
+/** The release line of a build version: `<major>.<minor>`. Accepts the tag spelling the release
+ *  pipeline stamps (`v0.6.1-rc.1`) and the bare one (`0.6.1`); anything else ("dev", "") has no
+ *  line. */
+export function releaseLineOf(version: string): string | undefined {
+  const m = /^v?(\d+)\.(\d+)\.\d+/u.exec(version);
+  return m ? `${m[1]}.${m[2]}` : undefined;
+}
+
+/** The defaults file a binary reads (policy R5c): `cork-defaults.v2.json` on ITS LINE'S CONFIG
+ *  BRANCH, `config/<major>.<minor>`. The branch holds only that file, so its history is the
+ *  address change log of the line. It is the escape hatch: a compatible address change pushed
+ *  there reaches every binary of the line without an upgrade, while the release tag stays
+ *  immutable. The release workflow is its one writer (config-branch.yml) and refuses a change
+ *  that drops a set key; the frozen-keys tripwire (config-frozen-keys.test.ts) holds the file to
+ *  the keys the line knows. A source run (`BUILD_VERSION` "dev") reads main. The
+ *  `CORK_DEFAULTS_URL` env var overrides both. 0.6.0 predates the branch and reads
+ *  `cork-defaults.v2.json` from main, which therefore stays frozen; `cork-defaults.json`
+ *  (schema 1) stays frozen for 0.5.x. */
+export function corkDefaultsUrlFor(version: string): string {
+  const line = releaseLineOf(version);
+  const ref = line === undefined ? "main" : `config/${line}`;
+  return `${CORK_DEFAULTS_REPO}/${ref}/cork-defaults.v2.json`;
+}
+export const CORK_DEFAULTS_URL = corkDefaultsUrlFor(BUILD_VERSION);
 
 /** A generation's market-registry block as consumers receive it (the block plus its wire). */
 export type CorkMarketRegistry = MarketRegistryBlock;

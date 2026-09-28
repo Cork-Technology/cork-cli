@@ -120,6 +120,7 @@ const T = {
   impairment: "packages/core/test/impairment-recipe.test.ts",
   generations: "packages/core/test/generations.test.ts",
   configRemote: "packages/core/test/config-remote.test.ts",
+  configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
 };
 
@@ -229,6 +230,23 @@ const CATALOG: Mutant[] = [
     find: "...(action.ocoGroup !== undefined ? { ocoGroup: action.ocoGroup } : {}),",
     replace: "",
     tests: [T.handlers],
+  },
+  {
+    // R5c: a released binary reads its line's config branch, never main (the development branch).
+    id: "config-url-not-line-pinned",
+    file: "packages/core/src/config-remote.ts",
+    find: 'const ref = line === undefined ? "main" : `config/${line}`;',
+    replace: 'const ref = "main";',
+    tests: [T.configRemote, T.configFrozenKeys],
+  },
+  {
+    // The release pipeline stamps the TAG (v0.6.1-rc.1). A parser that needs a bare version reads
+    // no line from it, and every released binary silently falls back to main.
+    id: "config-line-rejects-tag-spelling",
+    file: "packages/core/src/config-remote.ts",
+    find: "const m = /^v?(\\d+)\\.(\\d+)\\.\\d+/u.exec(version);",
+    replace: "const m = /^(\\d+)\\.(\\d+)\\.\\d+/u.exec(version);",
+    tests: [T.configRemote, T.configFrozenKeys],
   },
   {
     // The result must echo the group it built for, never a constant.

@@ -27,6 +27,10 @@ import {
   type CorkRolloverDeployment,
   type ResolvedGeneration,
   type StoredCache,
+  corkDefaultsUrlFor,
+  releaseLineOf,
+  CORK_DEFAULTS_URL,
+  BUILD_VERSION,
 } from "@cork/core";
 
 const MAINNET_PHOENIX = {
@@ -512,5 +516,21 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
     const r = await resolveConfig(d);
     expect(r.source).toBe("github"); // fell through to the (successful) fetch
     expect(d.fetches()).toBe(1);
+  });
+});
+
+describe("corkDefaultsUrlFor — a released binary reads cork-defaults.v2.json from ITS LINE'S CONFIG branch (policy R5c)", () => {
+  it("the tag the release pipeline stamps pins config/<major>.<minor>; a source run reads main", () => {
+    const repo = "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli";
+    // compile-binaries.mjs stamps the TAG name (v-prefixed): the parser must read it, or a released
+    // binary silently falls back to main.
+    expect(corkDefaultsUrlFor("v0.6.1-rc.1")).toBe(`${repo}/config/0.6/cork-defaults.v2.json`);
+    expect(corkDefaultsUrlFor("0.6.1")).toBe(corkDefaultsUrlFor("v0.6.1-rc.1"));
+    expect(corkDefaultsUrlFor("v0.6.2")).toBe(corkDefaultsUrlFor("v0.6.1"));
+    expect(corkDefaultsUrlFor("dev")).toBe(`${repo}/main/cork-defaults.v2.json`);
+    expect(corkDefaultsUrlFor("")).toMatch(/\/main\/cork-defaults\.v2\.json$/u);
+    expect(releaseLineOf("v1.12.3")).toBe("1.12");
+    expect(releaseLineOf("version-1.2.3")).toBeUndefined();
+    expect(CORK_DEFAULTS_URL).toBe(corkDefaultsUrlFor(BUILD_VERSION));
   });
 });

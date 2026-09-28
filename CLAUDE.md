@@ -591,7 +591,13 @@ vnet — chainId 1 without a vnet RPC yields `pool_not_found`, by design.
 
 Deployment addresses are NOT hardcoded in source. `cork-defaults.v2.json` (repo root, `schemaVersion:
 2`, 2026-09-22) is canonical; `packages/core/src/config-remote.ts` resolves **remote-first**: fetch
-from GitHub raw (`CORK_DEFAULTS_URL`, default the v2 path) → strict zod validation (tampered
+from GitHub raw (`CORK_DEFAULTS_URL` = `corkDefaultsUrlFor(BUILD_VERSION)`: a released binary
+reads `cork-defaults.v2.json` from its LINE CONFIG BRANCH `config/<major>.<minor>` — policy R5c,
+since 0.6.1; the branch holds only that file and is written only by `config-branch.yml`, called
+by release.yml before publish or dispatched by hand for an address hotfix; `releaseLineOf` reads
+the v-prefixed tag the pipeline stamps; a "dev" source run reads main; 0.6.0 predates the branch
+and reads main, so main's copy stays frozen; `config-frozen-keys.test.ts` holds both refs to the
+line's keys) → strict zod validation (tampered
 content rejected; `ChainGenerationsSchema` in generations.ts) → 1 h disk cache
 (`~/.cache/cork-helper-cli/cork-defaults.v2.json`, override `CORK_CONFIG_CACHE_FILE`). HTTP 404/410
 (not published) → bundled copy served silently; a transient failure → bundled copy + a

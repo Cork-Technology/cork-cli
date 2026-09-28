@@ -7,6 +7,15 @@ covered.
 
 ## [Unreleased]
 
+### Changed
+
+- A released binary reads its addresses from its line's config branch (policy R5c). From 0.6.1, the binary fetches `cork-defaults.v2.json` from `config/0.6`, a branch that holds only that file, instead of from `main`. The branch is the escape hatch for an address change: a compatible change pushed there reaches every installed 0.6 binary within the hour, without an upgrade. A source run still reads `main`, and `CORK_DEFAULTS_URL` still overrides both. The release workflow is the one writer of the branch (`config-branch.yml`, called before publish). It refuses a file that drops a set key a 0.6 binary resolves against. A frozen-keys test holds the tree and, in the live suite, the public refs to the same keys. `cork-defaults.v2.json` on `main` stays frozen for 0.6.0, which predates the branch.
+- The CLI reference, the SDK guide, the SDK roadmap, the JIT order anatomy and the Zyfai quickstart are rewritten for completeness and flow.
+
+### Added
+
+- SDK (`/config`): `releaseLineOf`, `corkDefaultsUrlFor` and `CORK_DEFAULTS_REPO`. `releaseLineOf` reads the tag spelling the release pipeline stamps (`v0.6.1-rc.1`) as well as a bare version.
+
 ### Fixed
 
 - An EIP-7702 delegated EOA can make orders. Such an account carries code (the `0xef0100 ++ delegate` designator) but signs with its key, and the 1inch LOP's `fillOrder` verifies the maker by ECDSA recovery alone. The maker-signature check behind `finalize-maker-order`, `taker-fill` and `refresh-order` branched on code first, so it refused the valid signature (`signature_or_reconstruction_mismatch`) and would have routed the fill to `fillContractOrder`, which reverts `BadSignature` when the delegate does not implement ERC-1271. ecrecover now decides first; only a signature that does not recover to the maker goes to the ERC-1271 check, so a Safe is verified exactly as before. Proven on a Base fork: the order the tool refused filled through `fillOrder`, and `fillContractOrder` reverted.

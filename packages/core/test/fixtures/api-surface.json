@@ -117,6 +117,10 @@
       "kind": "value"
     },
     {
+      "name": "CORK_DEFAULTS_REPO",
+      "kind": "value"
+    },
+    {
       "name": "CORK_DEFAULTS_URL",
       "kind": "value"
     },
@@ -1681,6 +1685,10 @@
       "kind": "value"
     },
     {
+      "name": "corkDefaultsUrlFor",
+      "kind": "value"
+    },
+    {
       "name": "corkSettlerDomain",
       "kind": "value"
     },
@@ -2393,6 +2401,10 @@
       "kind": "value"
     },
     {
+      "name": "releaseLineOf",
+      "kind": "value"
+    },
+    {
       "name": "replayRtmr3",
       "kind": "value"
     },
@@ -3031,6 +3043,10 @@
       "kind": "value"
     },
     {
+      "name": "CORK_DEFAULTS_REPO",
+      "kind": "value"
+    },
+    {
       "name": "CORK_DEFAULTS_URL",
       "kind": "value"
     },
@@ -3327,6 +3343,10 @@
       "kind": "value"
     },
     {
+      "name": "corkDefaultsUrlFor",
+      "kind": "value"
+    },
+    {
       "name": "extractDockerComposeFile",
       "kind": "value"
     },
@@ -3368,6 +3388,10 @@
     },
     {
       "name": "realConfigDeps",
+      "kind": "value"
+    },
+    {
+      "name": "releaseLineOf",
       "kind": "value"
     },
     {
