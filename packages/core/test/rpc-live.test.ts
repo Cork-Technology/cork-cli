@@ -11,6 +11,15 @@ import { generationsOf, resolveRpc, runTool } from "@cork/core";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
+// The independent reference below re-declares the FLAT (market-registry 0.3.3) ABI: `deploy(ca, ref,
+// mode)`, label-keyed denominations, `feedDecimals`. Since the 0.6 generation cutover the primary
+// registry speaks the NESTED 0.5.0 wire (`deploy` takes an oracleSalt, address-keyed denominations),
+// so this suite pins the generation its ABI speaks; resolving the primary sent 3-argument calls to
+// the 0.5.0 registry, which reverted (every live-smoke run since 2026-09-24). The nested registry is
+// proven by the fork rehearsal (nested-fill-rehearsal); a nested-wire raw reference here is an open
+// follow-up.
+const FLAT_GEN = "phoenix/v0.3-rc.1";
+
 describe.skipIf(!LIVE)("resolveRpc — live", () => {
   it("chain 1 uses the committed default and the client answers eth_chainId=1", async () => {
     const r = await resolveRpc(1, undefined);
@@ -95,7 +104,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
 
   const ref42161 = async () => {
     const { resolveMarketRegistry } = await import("@cork/core");
-    const { marketRegistry: mr } = await resolveMarketRegistry(42161);
+    const { marketRegistry: mr } = await resolveMarketRegistry(42161, undefined, FLAT_GEN);
     expect(mr?.registry).toBeDefined();
     const r = await resolveRpc(42161, undefined);
     expect(r).not.toBeNull();
@@ -126,7 +135,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   }, 30_000);
 
   it("registry-assets matches a raw one-shot getAssets read (same address set)", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-assets", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-assets", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const ourAddrs = ((ours.data as { items: Array<{ address: string }> }).items.map((i) => i.address.toLowerCase())).sort();
     const { registry, client } = await ref42161();
@@ -136,7 +145,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   }, 60_000);
 
   it("registry-recipes matches raw getRecipes + per-recipe source()/constant reads", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const ourItems = (ours.data as { items: Array<{ address: string; source: string; constants: Record<string, string> }> }).items;
     const { registry, client } = await ref42161();
@@ -157,7 +166,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   }, 90_000);
 
   it("registry-denominations matches raw getDenominations; labels re-hash to their labelHash", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-denominations", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const ourItems = (ours.data as { items: Array<{ labelHash: string; unit: string; label: string | null }> }).items;
     const { registry, client } = await ref42161();
@@ -175,7 +184,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   }, 60_000);
 
   it("registry-feeds matches raw getConversionFeeds; live decimals match the aggregator's own", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-feeds", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-feeds", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const ourItems = (ours.data as { items: Array<{ base: string; quote: string; aggregator: string; feedDecimals: number; live: { decimals: number } | null }> }).items;
     const { registry, client } = await ref42161();
@@ -197,7 +206,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
 
   it("fixed-rate oracle prediction matches the registry's own predictFixedRateOracle view", async () => {
     const RATE = (10n ** 18n).toString();
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { rate: RATE }, format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-oracle", filters: { rate: RATE }, format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
     const { registry, client } = await ref42161();
@@ -210,7 +219,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
   }, 60_000);
 
   it("pair oracle prediction (price mode) matches raw lookupWrapper / a raw deploy simulation", async () => {
-    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const ours = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(ours.state).toBe("ok");
     const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
     const { registry, client } = await ref42161();
@@ -230,7 +239,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
    *  live state instead of pinning it: unapproved → assert the honest recipe_not_found gate;
    *  approved (the moment the contracts team's approval txs land) → full wei-for-wei parity, no edit needed. */
   const liqApprovedOn42161 = async (): Promise<boolean> => {
-    const r = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
+    const r = await runTool("cork_query", { chainId: 42161, generation: FLAT_GEN, resource: "registry-recipes", format: "concise" }, { nowSeconds: 1_790_000_000n });
     expect(r.state).toBe("ok");
     return (r.data as { items: Array<{ address: string }> }).items.some((i) => i.address.toLowerCase() === LIQ.toLowerCase());
   };
@@ -239,7 +248,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
     const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_compute",
-      { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, generation: FLAT_GEN, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     if (!approved) {
@@ -275,7 +284,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
     const approved = await liqApprovedOn42161();
     const ours = await runTool(
       "cork_query",
-      { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CLEAN_CA, referenceAsset: CLEAN_REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
+      { chainId: 42161, generation: FLAT_GEN, resource: "derive-cork-pool", filters: { collateralAsset: CLEAN_CA, referenceAsset: CLEAN_REF, expiry: "1900000000", recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     if (!approved) {
@@ -344,7 +353,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
     // leg stays green whether or not the 42161 recipe approvals have landed.
     const ours = await runTool(
       "cork_query",
-      { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" },
+      { chainId: 42161, generation: FLAT_GEN, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" },
       { nowSeconds: 1_790_000_000n },
     );
     expect(ours.state).toBe("ok");
@@ -392,7 +401,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
 
   it("the configured creator answers its views, matches the config wiring, and holds POOL_CREATOR_ROLE", async () => {
     const { resolveMarketRegistry, resolveConfig } = await import("@cork/core");
-    const { marketRegistry: mr } = await resolveMarketRegistry(8453);
+    const { marketRegistry: mr } = await resolveMarketRegistry(8453, undefined, FLAT_GEN);
     expect(mr?.marketCreator).toBeDefined();
     expect(mr?.controller).toBeDefined();
     const cfg = await resolveConfig();
@@ -419,7 +428,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
     const expiry = BigInt(Math.floor(Date.now() / 1000) + 20 * 86_400);
     const env = await runTool(
       "cork_prepare_market",
-      { chainId: 8453, clientRequestId: `live-creator-${expiry}`, action: { type: "create-pool", collateralAsset: MW_USDC, referenceAsset: USDC, expiryTimestamp: expiry.toString(), recipe: NAV_RECIPE, additionalData: ANCHOR } },
+      { chainId: 8453, generation: FLAT_GEN, clientRequestId: `live-creator-${expiry}`, action: { type: "create-pool", collateralAsset: MW_USDC, referenceAsset: USDC, expiryTimestamp: expiry.toString(), recipe: NAV_RECIPE, additionalData: ANCHOR } },
       { nowSeconds: expiry - 20n * 86_400n },
     );
     expect(env.state).toBe("ok");
