@@ -67,7 +67,7 @@ export type MakerCodeProbe = "has-code" | "no-code" | "no-rpc" | "read-failed";
  *  its meaning depends on it: with "no-code" it is DEFINITIVE (an EOA that did not sign);
  *  with "no-rpc"/"read-failed" the maker might be a contract nobody could ask — indeterminate. */
 export type MakerSignatureVerdict =
-  | { kind: "eoa"; recoveredSigner: `0x${string}`; codeProbe: Exclude<MakerCodeProbe, "has-code"> }
+  | { kind: "eoa"; recoveredSigner: `0x${string}`; codeProbe: MakerCodeProbe }
   | { kind: "erc1271" }
   | { kind: "erc1271_transport"; reason: string }
   | { kind: "erc1271_rejected"; isValidSignatureAnswer: string | null }
@@ -104,9 +104,10 @@ export async function checkContractMakerSignature(client: MakerCodeClient, a: { 
 }
 
 /** Maker-signature verification ladder, shared by finalize-maker-order, both taker-fill
- *  acquisition paths and refresh-order. Code detection decides the branch: a CONTRACT maker
- *  (a Safe, the Zyfai shape) cannot be ecrecovered — verification performs the SAME
- *  isValidSignature staticcall the fill performs; an EOA maker verifies offline by ecrecover.
+ *  acquisition paths and refresh-order. ecrecover decides first, as the fill's ECDSA path does:
+ *  a signature that recovers to the maker is an EOA order even when the maker has code (an
+ *  EIP-7702 delegated account). Otherwise a CONTRACT maker (a Safe, the Zyfai shape) is
+ *  verified with the SAME isValidSignature staticcall the fill performs.
  *  Composes the two primitives above; the ranked book composes them differently (it settles
  *  ecrecover chain-free for every row first, then asks only about the rows that did not
  *  recover — see authenticateBookRowSignature). */
@@ -121,11 +122,17 @@ export async function verifyMakerSignatureLadder(a: {
 }): Promise<MakerSignatureVerdict> {
   const client: MakerCodeClient | null = a.client ?? (await getRpc(a.ctx, a.chainId))?.client ?? null;
   const probe = await probeMakerCode(client, a.maker);
-  if (probe === "has-code") return checkContractMakerSignature(client!, a);
+  // ecrecover decides FIRST, exactly as the 1inch LOP's fillOrder does (OrderMixin verifies the
+  // maker by ECDSA.recover alone, whatever code the maker has). An EIP-7702 delegated EOA carries
+  // code (0xef0100 ++ delegate) yet signs with its key: branching on code first refused its valid
+  // signature and routed its fill to fillContractOrder, which reverts BadSignature when the
+  // delegate does not implement ERC-1271 (proven on a Base fork, 2026-09-28). Only a signature
+  // that does NOT recover to the maker — a Safe's, say — goes to the ERC-1271 staticcall.
   const recovered = await recoverEoaSigner(a.orderHash, a.signature);
+  if (recovered.signer !== null && isAddressEqual(recovered.signer, a.maker)) return { kind: "eoa", recoveredSigner: recovered.signer, codeProbe: probe };
+  if (probe === "has-code") return checkContractMakerSignature(client!, a);
   if (recovered.signer === null) return { kind: "unparseable", reason: recovered.reason };
-  if (!isAddressEqual(recovered.signer, a.maker)) return { kind: "eoa_mismatch", recoveredSigner: recovered.signer, codeProbe: probe };
-  return { kind: "eoa", recoveredSigner: recovered.signer, codeProbe: probe };
+  return { kind: "eoa_mismatch", recoveredSigner: recovered.signer, codeProbe: probe };
 }
 
 /** The chain-free half of authenticity: ecrecover, never throwing. A signer equal to the maker
@@ -142,8 +149,10 @@ export async function recoverEoaSigner(orderHash: `0x${string}`, signature: `0x$
 /** The disclosure an EOA verdict carries when the account type could not be established —
  *  one sentence per cause, shared by every consumer. `consequence` names what the caller did
  *  with the order anyway. */
-export function makerCodeUnknownWarning(probe: Exclude<MakerCodeProbe, "has-code">, consequence: string): Warning | null {
-  if (probe === "no-code") return null;
+export function makerCodeUnknownWarning(probe: MakerCodeProbe, consequence: string): Warning | null {
+  // "has-code" with a signature that ecrecovers to the maker is an EIP-7702 delegated EOA: the
+  // fill accepts it by ECDSA.recover, so there is nothing left to disclose.
+  if (probe === "no-code" || probe === "has-code") return null;
   const cause = probe === "no-rpc" ? "no RPC resolved to check whether the maker has code" : "the maker's code could not be read (the RPC call failed)";
   return { code: "chain_read_failed", message: `${cause} — the signature ecrecovers to the maker, so ${consequence}; if the maker is actually a contract account, retry with an RPC available` };
 }

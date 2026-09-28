@@ -50,6 +50,7 @@ const T = {
   bundle: "packages/core/test/bundle.test.ts",
   encoders: "packages/core/test/action-encoders.test.ts",
   funding: "packages/core/test/funding.test.ts",
+  makerCodeProbe: "packages/core/test/maker-code-probe.test.ts",
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
@@ -245,6 +246,16 @@ const CATALOG: Mutant[] = [
     find: "if (action.ocoGroup !== undefined) {",
     replace: "if (action.ocoGroup !== undefined || true) {",
     tests: [T.handlers],
+  },
+  {
+    // ecrecover must decide BEFORE the code probe: an EIP-7702 delegated EOA has code but signs
+    // with its key, and 1inch fillOrder accepts it (fork-proven 2026-09-28). Restoring the
+    // code-first branch refuses its valid signature again.
+    id: "order-auth-code-before-ecrecover",
+    file: "packages/core/src/handlers/order-auth.ts",
+    find: "  if (recovered.signer !== null && isAddressEqual(recovered.signer, a.maker)) return { kind: \"eoa\", recoveredSigner: recovered.signer, codeProbe: probe };\n  if (probe === \"has-code\") return checkContractMakerSignature(client!, a);",
+    replace: "  if (probe === \"has-code\") return checkContractMakerSignature(client!, a);\n  if (recovered.signer !== null && isAddressEqual(recovered.signer, a.maker)) return { kind: \"eoa\", recoveredSigner: recovered.signer, codeProbe: probe };",
+    tests: [T.makerCodeProbe],
   },
   {
     // decode must trust EVERY generation's Cork adapter: dropping the per-generation book turns a

@@ -88,3 +88,51 @@ describe("maker-code probe: no code is an answer, not a failure", () => {
     expect(failed.warnings.find((x) => x.code === "chain_read_failed")?.message).toMatch(/could not be read/);
   });
 });
+
+// EIP-7702 (2026-09-28 dry-run, proven on a Base fork): an upgraded EOA carries code — the 23-byte
+// designator 0xef0100 ++ delegate — yet signs with its key, and the 1inch LOP's fillOrder verifies
+// the maker by ECDSA.recover alone (OrderMixin), whatever code the maker has. The ladder once
+// branched on code FIRST, so such a maker's valid signature was refused at finalize and taker-fill,
+// and a fill would have been routed to fillContractOrder, which reverts BadSignature (the delegate's
+// isValidSignature does not answer the magic value). ecrecover now decides first; only a signature
+// that does NOT recover to the maker goes to the ERC-1271 staticcall.
+describe("EIP-7702: a delegated EOA maker is verified by ecrecover, like 1inch fillOrder", () => {
+  const DESIGNATOR = `0xef0100${"8a67b5020ee254ef48e3b6a04927f39baf7e408a"}`;
+  const noErc1271 = () => chainWithGetCode(async () => DESIGNATOR); // the stub THROWS on isValidSignature
+
+  it("finalize: a valid key signature from a delegated account is an EOA order, with no ERC-1271 call and no warning", async () => {
+    const signature = await maker.sign({ hash: orderHash });
+    const env = await finalize({ resolveRpc: noErc1271() }, signature);
+    expect(env.state).toBe("ok");
+    expect((env.data as { makerAccountType: string }).makerAccountType).toBe("EOA");
+    expect(env.warnings.map((w) => w.code)).not.toContain("chain_read_failed");
+  });
+
+  it("taker-fill: the same order builds fillOrder (the ECDSA path), never fillContractOrder", async () => {
+    const signature = await maker.sign({ hash: orderHash });
+    const env = await fill({ resolveRpc: noErc1271() }, signature);
+    expect(env.state).toBe("ok");
+    expect((env.data as { fillFunction: string }).fillFunction).toMatch(/^fillOrder/);
+  });
+
+  it("a signature that does NOT recover to a maker with code still goes to ERC-1271 (the Safe path is unchanged)", async () => {
+    const other = privateKeyToAccount(`0x${"04".repeat(32)}`);
+    const signature = await other.sign({ hash: orderHash });
+    let asked = false;
+    const ctx: HandlerContext = {
+      resolveRpc: async () =>
+        stubResolved({
+          getCode: async () => "0x6080604052",
+          readContract: async (c: { functionName: string }) => {
+            if (c.functionName === "isValidSignature") { asked = true; return "0x1626ba7e"; }
+            if (c.functionName === "bitInvalidatorForOrder") return 0n;
+            throw new Error(`no stub for ${c.functionName}`);
+          },
+        } as Record<string, (...args: never[]) => unknown>),
+    };
+    const env = await finalize(ctx, signature);
+    expect(asked).toBe(true);
+    expect(env.state).toBe("ok");
+    expect((env.data as { makerAccountType: string }).makerAccountType).toBe("ERC1271");
+  });
+});
