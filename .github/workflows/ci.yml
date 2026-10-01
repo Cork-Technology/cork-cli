@@ -83,6 +83,20 @@ jobs:
   # green; a FAILURE here means real behavioral drift (e.g. the 2026-08-06 contracts_version
   # relabel) or resolver breakage. Deliberately NOT `-t`-filtered: a vitest name filter that
   # matches nothing exits 0 with everything skipped — the same green-no-op class test:prop closed.
+  # The release workflow's toolchain installs, run in the image that workflow pins. A tag
+  # cannot be fixed after the fact, and a release that fails here fails AFTER the GitHub
+  # Release is published (v0.6.1-rc.3, 2026-10-01) — so main learns it first. No secrets, no
+  # environment: it only asks Wolfi's repository whether the pinned image can still install
+  # what the release needs. scripts/release-toolchain-preflight.sh reads the image and the
+  # lines from apk-repo.yml itself.
+  release-toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every `apk add` of apk-repo.yml installs in its pinned image
+        run: sh scripts/release-toolchain-preflight.sh
+
   live-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10

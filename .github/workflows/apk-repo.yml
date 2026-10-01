@@ -131,9 +131,16 @@ jobs:
     # both edges this container shape exists to avoid, so we did not adopt those actions.)
     # Bump the digest deliberately: Chainguard's free tier tags only :latest, so
     # re-resolve and edit the pin here by hand (Dependabot's github-actions ecosystem does not
-    # bump job-container images).
+    # bump job-container images). All three job containers carry the SAME digest.
+    # The pin AGES, and age is a fault here: the image's /etc/apk/world pins every base
+    # package to the version it was built with, while `apk add` below installs from Wolfi's
+    # rolling repository. The older the image, the older the tool builds the solver must
+    # fall back to, until one collides (v0.6.1-rc.3, 2026-10-01, a six-week-old pin). CI on
+    # main runs scripts/release-toolchain-preflight.sh — every install line below, in this
+    # image — so a stale pin fails there and not after a release is published.
+    # Pinned 2026-10-01: the image built 2026-09-29T20:55:55Z.
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
+      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
       # melange's documented in-docker shape (its own docs run the melange image with
       # --privileged): bubblewrap needs mount + namespace privileges, and the default
       # seccomp/AppArmor container profile blocks those even for in-container root. Scope
@@ -151,14 +158,14 @@ jobs:
       # own node24 into the container to execute the JS actions (checkout, upload-artifact),
       # and that binary dynamically links libstdc++.so.6, which minimal wolfi-base does not
       # ship (checkout died on exactly that, run 32225158751).
-      # openssl-4.0, not `openssl`: the base image is digest-pinned but Wolfi's repository
-      # rolls. On 2026-10-01 git's dependencies moved to libcrypto.so.4, and the unversioned
-      # `openssl` name resolved to a 3.x CLI whose /etc/ssl/openssl.cnf collides with
-      # openssl-4.0-libcrypto (run 36909569737: v0.6.1-rc.3 published, then this step failed).
-      # The versioned CLI links the libcrypto that is already there and owns no config file.
-      # The tripwire's three commands were run on Wolfi's own 4.0.3 binary: same SPKI PEM,
-      # and the committed public key canonicalizes to itself. When this name stops resolving,
-      # pick the CLI that matches the libcrypto git pulls in — never two majors at once.
+      # openssl-4.0, not `openssl`: the image's world file pins libcrypto3 to the image's own
+      # build (see the pin note above), and every newer `openssl` 3.x needs a newer libcrypto3
+      # — so on an aged image the unversioned name falls back to an old CLI that owns
+      # /etc/ssl/openssl.cnf, the file openssl-4.0-libcrypto (a git dependency since
+      # 2026-10-01) also owns (run 36909569737). The versioned CLI needs only libcrypto.so.4,
+      # which no world pin holds back, and owns no config file. The tripwire's three commands
+      # were run on Wolfi's own 4.0.3 binary: same SPKI PEM, and the committed public key
+      # canonicalizes to itself.
       - name: Install the build toolchain (Wolfi signed apk repo)
         shell: sh
         run: |
@@ -371,7 +378,7 @@ jobs:
     # (it assembles the OCI image from apks and pushes over HTTPS). Tools come from Wolfi's
     # signed repo; nothing here has a config file to resolve.
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
+      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
     timeout-minutes: 45
     permissions:
       contents: write # gh-pages push — the production step; a candidate run never reaches it
@@ -577,7 +584,7 @@ jobs:
     environment: release # PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:8e8fe4b9b989b03daaa4305dba54a1b480f63716c56dc6bb074e5a6057bf3c73
+      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
     timeout-minutes: 20
     permissions:
       contents: read

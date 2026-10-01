@@ -81,6 +81,7 @@ const T = {
   cliWatchRfqs: "packages/cli/test/watch-rfqs.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
+  toolchainPreflight: "packages/cli/test/release-toolchain-preflight.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
   migration: "packages/core/test/migration.test.ts",
   instant: "packages/schemas/test/instant.test.ts",
@@ -7012,6 +7013,86 @@ const CATALOG: Mutant[] = [
     find: '  const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], opts.purpose ?? "read");',
     replace: '  const aliased = await resolveGenerationLabel(chainId, opts.generation ?? ctx.generation, ["phoenix"], "read");',
     tests: [T.migration, T.cli],
+  },
+  {
+    // Two different image pins must refuse: jobs that age apart hide a stale pin behind a fresh one.
+    id: "toolchain-preflight-many-images-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "if [ \"$count\" != 1 ]; then",
+    replace: "if [ \"$count\" = 0 ]; then",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A tag or a short digest is not a pin: the preflight would test another image than the release runs.
+    id: "toolchain-preflight-unpinned-image-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "  *) echo \"release-toolchain: the job-container image is not digest-pinned: $images\" >&2; exit 1 ;;",
+    replace: "  *) ;;",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A failed install must fail the script: a green preflight over a red install is the incident again.
+    id: "toolchain-preflight-failure-swallowed",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "done || failed=1",
+    replace: "done || failed=0",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The first failing line stops the run and is the one named.
+    id: "toolchain-preflight-continues-after-failure",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Re-resolve the wolfi-base digest (the image is older than the repository it installs from) or fix the package name, then re-run.\"\n    exit 1",
+    replace: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Re-resolve the wolfi-base digest (the image is older than the repository it installs from) or fix the package name, then re-run.\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Each line runs in a FRESH container of the pinned image: --rm and the image argument are the faithfulness of the check.
+    id: "toolchain-preflight-container-reused",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "  if \"$runtime\" run --rm \"$images\" sh -ec \"$line\"; then",
+    replace: "  if \"$runtime\" run \"$images\" sh -ec \"$line\"; then",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // --list prints and runs nothing (the offline tests and a human both rely on it).
+    id: "toolchain-preflight-list-runs-installs",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "  printf '%s\\n' \"$lines\"\n  exit 0",
+    replace: "  printf '%s\\n' \"$lines\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A workflow whose install lines the pattern no longer finds must refuse, not pass with nothing checked.
+    id: "toolchain-preflight-no-lines-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "test -n \"$lines\" || { echo \"release-toolchain: no \\`apk add --no-cache\\` line found in $workflow\" >&2; exit 1; }",
+    replace: "test -n \"$lines\" || true",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A missing workflow file is a refusal with its own message.
+    id: "toolchain-preflight-missing-workflow-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "test -f \"$workflow\" || { echo \"release-toolchain: $workflow not found\" >&2; exit 1; }",
+    replace: "test -f \"$workflow\" || true",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The unversioned openssl name is what an aged image's world pin turns into an old, colliding CLI build (v0.6.1-rc.3).
+    id: "toolchain-workflow-openssl-unversioned",
+    file: ".github/workflows/apk-repo.yml",
+    find: "apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl-4.0 yq",
+    replace: "apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl yq",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // CI must actually run the preflight on main; a job that lists is a job that checks nothing.
+    id: "toolchain-ci-preflight-list-only",
+    file: ".github/workflows/ci.yml",
+    find: "        run: sh scripts/release-toolchain-preflight.sh",
+    replace: "        run: sh scripts/release-toolchain-preflight.sh --list",
+    tests: [T.toolchainPreflight],
   },
 ];
 
