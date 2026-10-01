@@ -2,8 +2,9 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope, QueryInput } from "@cork/schemas";
 import { type ResolvedRpc } from "../chain/rpc.ts";
+import { decodeFunctionResult, encodeFunctionData } from "viem";
 import { rateOracleAbi } from "../chain/abis.ts";
-import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, erc20MetadataAbi, jitAdapterAbi, jitAdapterNestedAbi, marketCreatorNestedAbi, marketRegistryAbi, marketRegistryNestedAbi, ORACLE_MODE, type OracleModeName, predictShares, type PredictSharesResult, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, recipeNestedAbi, type RecipeSourceName, type ResolvedConstraint, SOURCE_INTERFACE, SOURCE_TYPE, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
+import { aggregatorV3Abi, ASSET_KIND, buildDeployFixedRateOracleCall, constantGetterAbi, DENOMINATION_PSEUDO_UNITS, deriveJitMarket, erc20MetadataAbi, jitAdapterAbi, jitAdapterNestedAbi, marketCreatorNestedAbi, marketRegistryAbi, marketRegistryNestedAbi, ORACLE_MODE, type OracleModeName, predictShares, type PredictSharesResult, recipeVerify, RECIPE_CATALOG, RECIPE_SOURCE, recipeAbi, recipeNestedAbi, simulateLegFailure, type RecipeSourceName, type ResolvedConstraint, SOURCE_INTERFACE, SOURCE_TYPE, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveGenerations } from "../config-remote.ts";
@@ -561,7 +562,22 @@ interface RecipeResolution {
   gate?: Envelope;
   recipe: `0x${string}`;
   source: RecipeSourceName;
-  oracle: { address: `0x${string}` | null; deployed: boolean; deployable: boolean; mode: OracleModeName | null; rate: bigint | null; rateError?: string; rateReadFailure?: OracleRateReadFailure; reason?: string };
+  oracle: {
+    address: `0x${string}` | null;
+    deployed: boolean;
+    deployable: boolean;
+    mode: OracleModeName | null;
+    rate: bigint | null;
+    rateError?: string;
+    rateReadFailure?: OracleRateReadFailure;
+    reason?: string;
+    /** The permissionless deploy the fill runs FIRST, for an oracle a recipe can only resolve
+     *  against once it has code. Set for a predicted, undeployed FixedRateOracle: the fixed
+     *  recipe reverts RateOracleNotDeployed until the oracle exists (read live on Base
+     *  2026-10-01), so its constraint is resolved in a simulation that runs this deploy and
+     *  then recipe.resolve — the same two steps, in the same order, as the fill. */
+    pendingDeploy?: { to: `0x${string}`; data: `0x${string}` };
+  };
   constraint?: ResolvedConstraint;
   warnings: Array<{ code: string; message: string }>;
 }
@@ -596,6 +612,46 @@ export function oracleRateEcho(r: { rate: bigint | null; rateError?: string; rat
 /** The chain_read_failed message for a rate() read that failed in TRANSPORT — indeterminate. */
 export function oracleRateTransportMessage(oracle: `0x${string}` | null, rateError: string, tail: string): string {
   return `the pair's oracle ${oracle} is DEPLOYED but its rate() read failed in transport: ${rateError}. ${tail} This says nothing about the oracle — the RPC did not answer; retry (or set CORK_RPC_URL to a working endpoint)`;
+}
+
+/** The reference's rate TODAY for a pair, from the registry's own deployed wrapper — the NAV
+ *  wrapper when the pair has one, else the price wrapper. Three answers that are never merged:
+ *  `read` (the rate, and which wrapper said it), `none` (the pair has no deployed wrapper — a
+ *  predicted one has no rate yet), and `unreadable` (a wrapper IS deployed and its `rate()`
+ *  failed or answered zero: a revert is a fact about the oracle, a transport fault is not).
+ *  A deployed NAV wrapper that fails is NOT replaced by the price wrapper: the two measure
+ *  different things, and a silent switch would change what "the reference's rate" means. */
+export type PairLiveRate =
+  | { status: "read"; rate: bigint; source: OracleModeName; oracle: `0x${string}` }
+  | { status: "none" }
+  | { status: "unreadable"; source: OracleModeName; oracle: `0x${string}`; reason: string; failure: OracleRateReadFailure | "zero" };
+
+export async function readPairLiveRate(client: RegistryClient, registry: `0x${string}`, collateralAsset: `0x${string}`, referenceAsset: `0x${string}`): Promise<PairLiveRate> {
+  for (const mode of ["nav", "price"] as const) {
+    const wrapper = (await client.readContract({ address: registry, abi: marketRegistryAbi, functionName: "lookupWrapper", args: [collateralAsset, referenceAsset, ORACLE_MODE[mode]] })) as `0x${string}`;
+    if (wrapper === ZERO_ADDR) continue;
+    const read = await readOracleRate(client, wrapper);
+    if (read.rate === null) return { status: "unreadable", source: mode, oracle: wrapper, reason: read.rateError ?? "the read failed", failure: read.rateReadFailure ?? "revert" };
+    if (read.rate === 0n) return { status: "unreadable", source: mode, oracle: wrapper, reason: "rate() answers zero", failure: "zero" };
+    return { status: "read", rate: read.rate, source: mode, oracle: wrapper };
+  }
+  return { status: "none" };
+}
+
+/** recipe.verify for a constraint, as the fill (or createNewPool) runs it — and what a failure
+ *  MEANS, which the three callers used to flatten into one "pre-flight read failed": `false` is
+ *  the recipe rejecting the constraint (the fill's RecipeRejectedConstraint — the nested
+ *  impairment recipe answers false, at creation, for a duration beyond the pool's remaining
+ *  life: verify is the call that takes the pool expiry); a REVERT is the recipe's own error,
+ *  kept with its name; a transport fault says nothing about the recipe. */
+export type RecipeVerifyPreview = { status: "accepted" } | { status: "rejected" } | { status: "reverted"; reason: string } | { status: "unread"; reason: string };
+
+export async function previewRecipeVerify(client: RegistryClient, wire: MarketRegistryWire, a: Parameters<typeof recipeVerify>[2]): Promise<RecipeVerifyPreview> {
+  try {
+    return (await recipeVerify(wire, client, a)) ? { status: "accepted" } : { status: "rejected" };
+  } catch (err) {
+    return isTransportFailure(err) ? { status: "unread", reason: revertReason(err) } : { status: "reverted", reason: revertReason(err) };
+  }
 }
 
 /** The oracle_rate_unreadable message, shared by the resolve gate and the verify pre-flights. */
@@ -660,7 +716,7 @@ export async function resolveRecipeOracleConstraint(args: {
       oracle = { address: null, deployed: false, deployable: true, mode: null, rate: null, reason: "a FIXED recipe's oracle is keyed on the RATE — pass the rate (rateOverride) to predict it" };
     } else {
       const fixed = await probeFixedOracle(client, mr.registry, args.fixedRate);
-      oracle = { address: fixed.address, deployed: fixed.deployed, deployable: true, mode: null, rate: fixed.deployed ? args.fixedRate : null };
+      oracle = { address: fixed.address, deployed: fixed.deployed, deployable: true, mode: null, rate: fixed.deployed ? args.fixedRate : null, ...(fixed.deployed ? {} : { pendingDeploy: { to: mr.registry, data: buildDeployFixedRateOracleCall(args.fixedRate) } }) };
     }
   } else {
     const modeName: OracleModeName = source;
@@ -698,6 +754,8 @@ export async function staticResolveConstraint(
   // so a revert decodes to that generation's typed error names (MalformedExtraData vs
   // MalformedAdditionalData, UnexpectedExtraData, …) in recipe_refused.
   const abi = args.wire === "nested" ? recipeNestedAbi : recipeAbi;
+  const pending = !args.oracle.deployed && args.oracle.address !== null ? args.oracle.pendingDeploy : undefined;
+  if (pending) return resolveAfterDeploy(client, ctx, chainId, { ...args, abi, oracleAddress: args.oracle.address!, pending });
   try {
     const c = (await client.readContract({ address: args.recipe, abi, functionName: "resolve", args: [args.collateralAsset, args.referenceAsset, oracleForCall, args.extraData ?? "0x"] })) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
     return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
@@ -720,6 +778,36 @@ export async function staticResolveConstraint(
       : "Typical causes: the liquidity recipe needs extraData = abi.encode(uint256 anchorRate) while the pair's oracle is not deployed; the impairment recipe needs exactly 96 bytes — abi.encode(uint256 anchorRate, uint256 durationSeconds, uint256 apySpreadPercentage), spread on the 1e18 = 1% scale (encodeImpairmentArgs builds it); the fixed-rate recipe needs its FixedRateOracle DEPLOYED (cork_prepare_market deploy-fixed-oracle) and rejects any extraData";
     return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint for this input: ${revertReason(err)}. ${cause}`, ctx) };
   }
+}
+
+/** recipe.resolve against an oracle that does not exist YET: one simulation runs the deploy the
+ *  fill performs and then the resolve, so the answer is the constraint the fill itself will
+ *  read — never a local reconstruction of the recipe's rule. Each leg is judged on its own: a
+ *  failed deploy is a fact about the oracle (`oracle_not_deployable`), a failed resolve is the
+ *  recipe's refusal (`recipe_refused`), and an endpoint that cannot simulate is indeterminate
+ *  (`chain_read_failed`, with the deploy-first recipe that needs no simulation). */
+async function resolveAfterDeploy(
+  client: RegistryClient,
+  ctx: HandlerContext,
+  chainId: ChainId,
+  a: { recipe: `0x${string}`; collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; extraData?: `0x${string}` | undefined; abi: typeof recipeAbi | typeof recipeNestedAbi; oracleAddress: `0x${string}`; pending: { to: `0x${string}`; data: `0x${string}` } },
+): Promise<{ constraint: ResolvedConstraint } | { gate: Envelope }> {
+  const resolveArgs = [a.collateralAsset, a.referenceAsset, a.oracleAddress, a.extraData ?? "0x"] as const;
+  let results: readonly { status: string; data?: `0x${string}` | undefined; error?: unknown }[];
+  try {
+    ({ results } = await client.simulateCalls({ calls: [a.pending, { to: a.recipe, data: encodeFunctionData({ abi: a.abi, functionName: "resolve", args: resolveArgs }) }] }));
+  } catch (err) {
+    return { gate: unavailable(chainId, "chain_read_failed", `the oracle ${a.oracleAddress} is not deployed, and the recipe resolves only against a deployed one; the deploy-then-resolve simulation could not run on this endpoint (${revertReason(err)}), so the constraint was NOT resolved. Use an endpoint that serves eth_simulateV1, or deploy the oracle first (cork_prepare_market deploy-fixed-oracle — permissionless and idempotent) and retry`, ctx) };
+  }
+  const [deployLeg, resolveLeg] = results;
+  if (deployLeg?.status !== "success") {
+    return { gate: unavailable(chainId, "oracle_not_deployable", `the oracle ${a.oracleAddress} is not deployed and its deploy would revert: ${simulateLegFailure(deployLeg, "the registry's oracle deploy")} — a fill that needs this oracle reverts the same way`, ctx) };
+  }
+  if (resolveLeg?.status !== "success" || !resolveLeg.data) {
+    return { gate: unavailable(chainId, "recipe_refused", `the recipe refused to resolve a constraint against the oracle its fill would deploy (${a.oracleAddress}): ${simulateLegFailure(resolveLeg, "recipe.resolve")}. The fixed-rate recipe takes NO extraData; check the rate and the payload against the recipe's own description (cork_query registry-recipes)`, ctx) };
+  }
+  const c = decodeFunctionResult({ abi: a.abi, functionName: "resolve", data: resolveLeg.data }) as { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+  return { constraint: { rateMin: c.rateMin, rateMax: c.rateMax, rateChangePerDayMax: c.rateChangePerDayMax, rateChangeCapacityMax: c.rateChangeCapacityMax } };
 }
 
 /** derive-cork-pool: derive the pool a JIT LOP fill would produce for (collateralAsset,
@@ -804,7 +892,12 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     const extra: Array<{ code: string; message: string }> = [];
     if (shares.status === "unavailable") extra.push({ code: "share_prediction_unavailable", message: `could not predict the pool's cST/cPT — ${shares.reason ?? "config missing"}. The pool id, oracle, and constraint above are still valid; a REVERT named here is a fact about the market (the fill would fail the same way), a transport failure is about the endpoint` });
     if (!shares.exists && !oracle.deployed) {
-      extra.push({ code: "oracle_not_deployed", message: "the oracle is not deployed and does not need to be: the fill deploys it (permissionless, idempotent) at this PREDICTED address inside the same transaction, and the pool id's only oracle-derived input is that address. The identity above is stable unless the pair's registered sources change before the fill (a re-registration shifts the predicted address → OrderNotForPool)" });
+      extra.push({
+        code: "oracle_not_deployed",
+        message: source === "fixed"
+          ? "the FixedRateOracle for this rate is not deployed and does not need to be: the fill deploys it (permissionless, idempotent) at this PREDICTED address inside the same transaction. The address is keyed on the rate alone, so the identity above holds for this rate"
+          : "the oracle is not deployed and does not need to be: the fill deploys it (permissionless, idempotent) at this PREDICTED address inside the same transaction, and the pool id's only oracle-derived input is that address. The identity above is stable unless the pair's registered sources change before the fill (a re-registration shifts the predicted address → OrderNotForPool)",
+      });
     } else if (!shares.exists) {
       extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so this prediction is conditioned on TODAY's oracle rate and drifts stepwise until pinned. In 2.1.0 the pinning moment is EARLIER than pool creation: an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves (staleness then guards via recipe.verify, not a moving id)" });
     }
@@ -821,6 +914,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
       data: {
         resource: input.resource,
         chainId,
+        registry: mr.registry,
         input: inputEcho,
         recipe,
         source,

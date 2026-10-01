@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.4.3"
+  "version": "0.4.4"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -928,7 +928,7 @@
           "type": "string"
          },
          "premium_annualized": {
-          "description": "Annualized premium as a decimal fraction string, \"0.041\" = 4.1% (COR-35). Same convention as the RFQ surface. Replaced the percent-number `premium` field, removed 2026-08-17.",
+          "description": "Annualized premium as a decimal fraction string, \"0.041\" = 4.1%. Same convention as the RFQ surface. Replaced the percent-number `premium` field, removed 2026-08-17.",
           "pattern": "^\\d{1,3}(\\.\\d{1,18})?$",
           "type": "string"
          },
@@ -2069,7 +2069,7 @@
               "type": "string"
              },
              "premium_annualized": {
-              "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1% (COR-35 ratified units). Same convention and name as the RFQ surface. Successor to `premium`. Informational only - authoritative pricing lives in the order's amount-getter extension data.",
+              "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. Same convention and name as the RFQ surface. Successor to `premium`. Informational only - authoritative pricing lives in the order's amount-getter extension data.",
               "type": "string"
              },
              "quoteRef": {
@@ -15546,17 +15546,19 @@
             ],
             "type": "object"
            }
-          ]
+          ],
+          "description": "When modes includes fixed_rate, require an inline template with oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). In mixed-mode requests it specifies the fixed-rate alternative; each answer option carries its own template. This is the order rateOverride, not recipe additionalData."
          },
          "modes": {
           "items": {
            "enum": [
             "liquidity_only",
-            "liquidity_impairment"
+            "liquidity_impairment",
+            "fixed_rate"
            ],
            "type": "string"
           },
-          "maxItems": 2,
+          "maxItems": 3,
           "minItems": 1,
           "type": "array"
          },
@@ -16238,12 +16240,14 @@
                ],
                "type": "object"
               }
-             ]
+             ],
+             "description": "For fixed_rate, require inline.oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). Map it to the order rateOverride, with empty recipe additionalData. Each option declares its own proposed rate; answers remain non-committal counter-proposals."
             },
             "mode": {
              "enum": [
               "liquidity_only",
-              "liquidity_impairment"
+              "liquidity_impairment",
+              "fixed_rate"
              ],
              "type": "string"
             },
@@ -16262,7 +16266,7 @@
              "type": "string"
             },
             "premium_annualized": {
-             "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1% (COR-35 ratified units). The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
+             "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
              "pattern": "^(0|0\\.[0-9]{1,18})$",
              "type": "string"
             },
@@ -16766,7 +16770,7 @@
           "type": "object"
          },
          "premium_annualized": {
-          "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1% (COR-35 ratified units). The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
+          "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
           "pattern": "^(0|0\\.[0-9]{1,18})$",
           "type": "string"
          },

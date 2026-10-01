@@ -137,6 +137,10 @@
       "kind": "value"
     },
     {
+      "name": "COVER_RFQ_MODE",
+      "kind": "value"
+    },
+    {
       "name": "CREATE2_ATTESTATIONS",
       "kind": "value"
     },
@@ -573,14 +577,6 @@
       "kind": "type"
     },
     {
-      "name": "IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE",
-      "kind": "value"
-    },
-    {
-      "name": "IMPAIRMENT_MAX_BAND_PERCENTAGE",
-      "kind": "value"
-    },
-    {
       "name": "IMPLEMENTATION_ROLES",
       "kind": "value"
     },
@@ -589,11 +585,19 @@
       "kind": "value"
     },
     {
+      "name": "INLINE_FIXED_SCHEMA",
+      "kind": "value"
+    },
+    {
       "name": "INLINE_IMPAIRMENT_SCHEMA",
       "kind": "value"
     },
     {
       "name": "INLINE_LIQUIDITY_SCHEMA",
+      "kind": "value"
+    },
+    {
+      "name": "INLINE_SCHEMA_COVER",
       "kind": "value"
     },
     {
@@ -621,11 +625,19 @@
       "kind": "type"
     },
     {
+      "name": "InlineFixedParams",
+      "kind": "type"
+    },
+    {
       "name": "InlineImpairmentParams",
       "kind": "type"
     },
     {
       "name": "InlineLiquidityParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineRecipe",
       "kind": "type"
     },
     {
@@ -1133,10 +1145,6 @@
       "kind": "type"
     },
     {
-      "name": "RfqMode",
-      "kind": "type"
-    },
-    {
       "name": "RolloverBlock",
       "kind": "type"
     },
@@ -1393,15 +1401,15 @@
       "kind": "value"
     },
     {
-      "name": "UNREDEEMABLE_HOLDER",
-      "kind": "value"
-    },
-    {
       "name": "UnattributedEvent",
       "kind": "type"
     },
     {
       "name": "UnreportedLoss",
+      "kind": "type"
+    },
+    {
+      "name": "UnreportedLossRead",
       "kind": "type"
     },
     {
@@ -2113,6 +2121,26 @@
       "kind": "value"
     },
     {
+      "name": "firstLine",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateInTheMoneyWarning",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateMoneyness",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateOverrideOfTemplate",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateOverrideViolation",
+      "kind": "value"
+    },
+    {
       "name": "fixedToTokenNativeDecimals",
       "kind": "value"
     },
@@ -2261,11 +2289,11 @@
       "kind": "value"
     },
     {
-      "name": "impairmentFloor",
+      "name": "impairmentDurationOfArgs",
       "kind": "value"
     },
     {
-      "name": "impairmentWindow",
+      "name": "impairmentFloor",
       "kind": "value"
     },
     {
@@ -2286,6 +2314,14 @@
     },
     {
       "name": "inlineAdditionalData",
+      "kind": "value"
+    },
+    {
+      "name": "inlineBlockWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "inlineOfTemplate",
       "kind": "value"
     },
     {
@@ -2310,6 +2346,10 @@
     },
     {
       "name": "isBurnAction",
+      "kind": "value"
+    },
+    {
+      "name": "isContractRevert",
       "kind": "value"
     },
     {
@@ -2474,6 +2514,10 @@
     },
     {
       "name": "oracleModeForSource",
+      "kind": "value"
+    },
+    {
+      "name": "oracleParamsOf",
       "kind": "value"
     },
     {
@@ -2669,6 +2713,10 @@
       "kind": "value"
     },
     {
+      "name": "recipeAddressOfTemplate",
+      "kind": "value"
+    },
+    {
       "name": "recipeNestedAbi",
       "kind": "value"
     },
@@ -2686,6 +2734,10 @@
     },
     {
       "name": "redactUrlIn",
+      "kind": "value"
+    },
+    {
+      "name": "referenceLossReading",
       "kind": "value"
     },
     {
@@ -2853,6 +2905,10 @@
       "kind": "value"
     },
     {
+      "name": "simulateLegFailure",
+      "kind": "value"
+    },
+    {
       "name": "spenderRoleOf",
       "kind": "value"
     },
@@ -2893,6 +2949,10 @@
       "kind": "value"
     },
     {
+      "name": "unreportedLossState",
+      "kind": "value"
+    },
+    {
       "name": "unreportedLossWarning",
       "kind": "value"
     },
@@ -2930,6 +2990,14 @@
     },
     {
       "name": "wireCodec",
+      "kind": "value"
+    },
+    {
+      "name": "withFixedRateLiveRate",
+      "kind": "value"
+    },
+    {
+      "name": "withResolvedConstraint",
       "kind": "value"
     }
   ],
@@ -3345,11 +3413,11 @@
       "kind": "type"
     },
     {
-      "name": "UNREDEEMABLE_HOLDER",
-      "kind": "value"
+      "name": "UnreportedLoss",
+      "kind": "type"
     },
     {
-      "name": "UnreportedLoss",
+      "name": "UnreportedLossRead",
       "kind": "type"
     },
     {
@@ -3373,7 +3441,15 @@
       "kind": "value"
     },
     {
+      "name": "firstLine",
+      "kind": "value"
+    },
+    {
       "name": "hostOf",
+      "kind": "value"
+    },
+    {
+      "name": "isContractRevert",
       "kind": "value"
     },
     {
@@ -3425,6 +3501,10 @@
       "kind": "value"
     },
     {
+      "name": "referenceLossReading",
+      "kind": "value"
+    },
+    {
       "name": "reportEndpointFailure",
       "kind": "value"
     },
@@ -3450,6 +3530,10 @@
     },
     {
       "name": "unreportedLossShare",
+      "kind": "value"
+    },
+    {
+      "name": "unreportedLossState",
       "kind": "value"
     },
     {
@@ -4469,6 +4553,10 @@
       "kind": "value"
     },
     {
+      "name": "COVER_RFQ_MODE",
+      "kind": "value"
+    },
+    {
       "name": "ChainOrderStatus",
       "kind": "type"
     },
@@ -4597,11 +4685,7 @@
       "kind": "type"
     },
     {
-      "name": "IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE",
-      "kind": "value"
-    },
-    {
-      "name": "IMPAIRMENT_MAX_BAND_PERCENTAGE",
+      "name": "INLINE_FIXED_SCHEMA",
       "kind": "value"
     },
     {
@@ -4613,8 +4697,16 @@
       "kind": "value"
     },
     {
+      "name": "INLINE_SCHEMA_COVER",
+      "kind": "value"
+    },
+    {
       "name": "INLINE_TEMPLATE_SCHEMAS",
       "kind": "value"
+    },
+    {
+      "name": "InlineFixedParams",
+      "kind": "type"
     },
     {
       "name": "InlineImpairmentParams",
@@ -4622,6 +4714,10 @@
     },
     {
       "name": "InlineLiquidityParams",
+      "kind": "type"
+    },
+    {
+      "name": "InlineRecipe",
       "kind": "type"
     },
     {
@@ -4798,10 +4894,6 @@
     },
     {
       "name": "RawLog",
-      "kind": "type"
-    },
-    {
-      "name": "RfqMode",
       "kind": "type"
     },
     {
@@ -5153,6 +5245,22 @@
       "kind": "value"
     },
     {
+      "name": "fixedRateInTheMoneyWarning",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateMoneyness",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateOverrideOfTemplate",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateOverrideViolation",
+      "kind": "value"
+    },
+    {
       "name": "forSelfAbi",
       "kind": "value"
     },
@@ -5209,15 +5317,19 @@
       "kind": "value"
     },
     {
-      "name": "impairmentWindow",
-      "kind": "value"
-    },
-    {
       "name": "impliedPremiumWad",
       "kind": "value"
     },
     {
       "name": "inlineAdditionalData",
+      "kind": "value"
+    },
+    {
+      "name": "inlineBlockWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "inlineOfTemplate",
       "kind": "value"
     },
     {
@@ -5285,6 +5397,10 @@
       "kind": "value"
     },
     {
+      "name": "oracleParamsOf",
+      "kind": "value"
+    },
+    {
       "name": "orderFromUintTuple",
       "kind": "value"
     },
@@ -5338,6 +5454,10 @@
     },
     {
       "name": "readRfqCover",
+      "kind": "value"
+    },
+    {
+      "name": "recipeAddressOfTemplate",
       "kind": "value"
     },
     {
@@ -5398,6 +5518,14 @@
     },
     {
       "name": "verificationDigest",
+      "kind": "value"
+    },
+    {
+      "name": "withFixedRateLiveRate",
+      "kind": "value"
+    },
+    {
+      "name": "withResolvedConstraint",
       "kind": "value"
     }
   ],
@@ -5627,6 +5755,10 @@
       "kind": "value"
     },
     {
+      "name": "impairmentDurationOfArgs",
+      "kind": "value"
+    },
+    {
       "name": "jitAdapterAbi",
       "kind": "value"
     },
@@ -5700,6 +5832,10 @@
     },
     {
       "name": "sharePoolIdAbi",
+      "kind": "value"
+    },
+    {
+      "name": "simulateLegFailure",
       "kind": "value"
     },
     {

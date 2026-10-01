@@ -3,7 +3,7 @@
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
 import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeAbiParameters, encodeEventTopics, parseAbiItem, pad, keccak256 } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
 
 export const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
@@ -137,7 +137,13 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       if (migration) return [migration.cpt, migration.cst];
       return known ? [CPT, CST] : ["0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"];
     case "rate":
-      return 800_000_000_000_000_000n;
+      // A FixedRateOracle answers the rate it was deployed at; every pair oracle answers 0.8.
+      return args.address.toLowerCase() === predictedFixedOracle(DEPLOYED_FIXED_RATE).toLowerCase() ? DEPLOYED_FIXED_RATE : 800_000_000_000_000_000n;
+    case "lostAssets":
+      // The fixture reference is a vault of a family WITHOUT the MetaMorpho v1.1 counter: the
+      // call reverts, as it does on the live vaults that lack the view (tests wrap the client
+      // to answer it).
+      throw new Error('execution reverted: the contract function "lostAssets" reverted');
     case "decimals":
       return args.address.toLowerCase() === VBUSDC.toLowerCase() ? 6 : 18;
     case "issuedAt":
@@ -261,7 +267,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // (the pre-flight adapts) — serving it proves that branch instead of the happy one.
       throw Object.assign(new Error("execution reverted"), { shortMessage: 'The contract function "WHITELIST" reverted.' });
     case "predictFixedRateOracle":
-      return "0xF10000000000000000000000000000000000000d"; // CREATE2-predicted, not yet deployed (getCode answers "0x")
+      return predictedFixedOracle(BigInt(String(args.args?.[0] ?? 0))); // CREATE2-salted on the RATE; not yet deployed (getCode answers "0x")
     case "lookupWrapper":
       return ORACLE; // pair oracle deployed; its rate() is served above
     case "resolve": {
@@ -292,11 +298,33 @@ function readContract(args: { address: string; functionName: string; args?: unkn
           rateChangeCapacityMax: (anchor * 7n * perDayPct) / D,
         };
       }
+      // The fixed recipe resolves only against a DEPLOYED FixedRateOracle. ONE rate has its
+      // oracle deployed in this world (DEPLOYED_FIXED_RATE); for every other rate a plain read
+      // refuses, as the live recipe does, and the constraint comes from the deploy-then-resolve
+      // simulation below (simulateCalls).
+      if (args.address.toLowerCase() === FIXED_RECIPE.toLowerCase()) {
+        const r = fixedResolve(args.args as unknown as FixedResolveArgs, deployedFixedOracles());
+        if ("error" in r) throw new Error(`execution reverted: ${r.error.text}`);
+        return r.constraint;
+      }
       // The liquidity shape at rate 0.8e18: floor 1 wei, ceiling 2×rate, per-day rate, capacity 3×rate.
       return { rateMin: 1n, rateMax: 1_600_000_000_000_000_000n, rateChangePerDayMax: 800_000_000_000_000_000n, rateChangeCapacityMax: 2_400_000_000_000_000_000n };
     }
-    case "verify":
+    case "verify": {
+      // The nested impairment recipe's verify takes the pool expiry and, on the call that
+      // CREATES the pool, REJECTS — returns false, it does not revert — a duration beyond the
+      // market's remaining life; the boundary is inclusive, and with `creating` false it
+      // accepts (measured on the live recipe at one block, Base, 2026-10-01: 10 days of life,
+      // durations of 10 d exact → true, 10 d + 1 h → false, the same with creating false →
+      // true). The creator turns that false into RecipeRejectedConstraint. Nested arg order:
+      // (ca, ref, oracle, expiryTimestamp, creating, constraint, extraData).
+      const v = args.args ?? [];
+      if (args.address.toLowerCase() === IMPAIRMENT_RECIPE.toLowerCase() && v.length === 7 && v[4] === true) {
+        const data = String(v[6] ?? "0x");
+        if ((data.length - 2) / 2 === 96 && BigInt(`0x${data.slice(2 + 64, 2 + 128)}`) > BigInt(String(v[3])) - NOW) return false;
+      }
       return true;
+    }
     case "symbol":
       return "sUSDe";
     case "name":
@@ -304,6 +332,68 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     default:
       throw new Error(`stub has no fixture for ${args.functionName}`);
   }
+}
+
+// ── The fixed recipe and its oracle, as the chain behaves (read live on Base 2026-10-01) ──────
+//    resolve checks the payload FIRST (UnexpectedExtraData(length)), then the oracle
+//    (RateOracleNotDeployed(ca, ref)); against a deployed FixedRateOracle it answers
+//    { rate, rate + 1, 0, 0 } — WINDOW_WIDTH 1, both allowances zero — and overflows (Panic 0x11)
+//    at uint256's maximum. The oracle address is CREATE2-salted on the rate alone. The stub keeps
+//    its OWN ABI: it plays the chain, and must not share an encoder with the code under test.
+const FIXED_CHAIN_ABI = parseAbi([
+  "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
+  "function resolve(address collateralAsset, address referenceAsset, address rateOracle, bytes extraData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax))",
+  "error UnexpectedExtraData(uint256 length)",
+  "error RateOracleNotDeployed(address ca, address ref)",
+  "error Panic(uint256 code)",
+]);
+type FixedResolveArgs = readonly [`0x${string}`, `0x${string}`, `0x${string}`, `0x${string}`];
+/** The ONE rate whose FixedRateOracle is already deployed in this world (0.5): the fixture for
+ *  the plain-resolve path. Every other rate's oracle has no code. */
+export const DEPLOYED_FIXED_RATE = 500_000_000_000_000_000n;
+const deployedFixedOracles = (): Map<string, bigint> => new Map([[predictedFixedOracle(DEPLOYED_FIXED_RATE).toLowerCase(), DEPLOYED_FIXED_RATE]]);
+/** One address per rate, like the registry's CREATE2 prediction. */
+export const predictedFixedOracle = (rate: bigint): `0x${string}` => getAddress(`0x${keccak256(encodeAbiParameters([{ type: "string" }, { type: "uint256" }], ["eval-stub-fixed-rate-oracle", rate])).slice(-40)}`);
+/** recipe.resolve on the fixed recipe. `deployed` maps each oracle address that has code in the
+ *  simulation so far to the rate it was deployed at. */
+function fixedResolve(a: FixedResolveArgs, deployed: Map<string, bigint>): { constraint: { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint } } | { error: { text: string; data: `0x${string}` } } {
+  const [ca, ref, oracle, extraData] = a;
+  const length = BigInt((extraData.length - 2) / 2);
+  if (length > 0n) return { error: { text: `UnexpectedExtraData(${length})`, data: encodeErrorResult({ abi: FIXED_CHAIN_ABI, errorName: "UnexpectedExtraData", args: [length] }) } };
+  const rate = deployed.get(oracle.toLowerCase());
+  if (rate === undefined) return { error: { text: `RateOracleNotDeployed(${ca}, ${ref})`, data: encodeErrorResult({ abi: FIXED_CHAIN_ABI, errorName: "RateOracleNotDeployed", args: [ca, ref] }) } };
+  if (rate === 2n ** 256n - 1n) return { error: { text: "Panic(17)", data: encodeErrorResult({ abi: FIXED_CHAIN_ABI, errorName: "Panic", args: [17n] }) } };
+  return { constraint: { rateMin: rate, rateMax: rate + 1n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n } };
+}
+type SimCall = { to?: string; data?: string };
+type SimResult = { status: "success" | "failure"; data: `0x${string}` };
+/** eth_simulateV1 over the stub chain: the calls run IN ORDER and share state, so an oracle a
+ *  call deploys has code for the calls after it. Fixed-oracle deploys and fixed-recipe resolves
+ *  are executed; every other call stays green, and the LAST call of a share prediction answers
+ *  the shares read ([cPT, cST]) — production reads them from the pool the simulation created. */
+function simulateCalls(a: { calls: SimCall[] }): { results: SimResult[] } {
+  const deployed = deployedFixedOracles();
+  const fixedLeg = (c: SimCall): SimResult | undefined => {
+    const data = (c.data ?? "0x") as `0x${string}`;
+    try {
+      const d = decodeFunctionData({ abi: FIXED_CHAIN_ABI, data });
+      if (d.functionName === "deployFixedRateOracle") {
+        const oracle = predictedFixedOracle(d.args[0]);
+        deployed.set(oracle.toLowerCase(), d.args[0]);
+        return { status: "success", data: encodeFunctionResult({ abi: FIXED_CHAIN_ABI, functionName: "deployFixedRateOracle", result: oracle }) };
+      }
+      if (String(c.to).toLowerCase() !== FIXED_RECIPE.toLowerCase()) return undefined;
+      const r = fixedResolve(d.args as FixedResolveArgs, deployed);
+      return "error" in r ? { status: "failure", data: r.error.data } : { status: "success", data: encodeFunctionResult({ abi: FIXED_CHAIN_ABI, functionName: "resolve", result: r.constraint }) };
+    } catch {
+      return undefined; // not a fixed-oracle call
+    }
+  };
+  const shares = `0x${CPT.slice(2).toLowerCase().padStart(64, "0")}${CST.slice(2).toLowerCase().padStart(64, "0")}` as const;
+  const results = a.calls.map((c) => fixedLeg(c) ?? ({ status: "success", data: "0x" } as SimResult));
+  const last = a.calls.length - 1;
+  if (last >= 0 && fixedLeg(a.calls[last]!) === undefined) results[last] = { status: "success", data: shares };
+  return { results };
 }
 
 /** A rollover orderDigest the venue no longer serves (its generation is archived) but whose
@@ -338,6 +428,18 @@ export const RFQ_IMPAIRMENT_SPREAD = "10000000000000000000";
  *  years-out fixture) and coherent with duration_seconds, so a well-formed answer carries no
  *  would_revert and no window-vs-life note. Tests that want those pass their own expiry. */
 export const RFQ_IMPAIRMENT_EXPIRY = (NOW + 604_800n + 3_600n).toString();
+/** Two RFQs for FIXED-RATE cover (cork-api 0.4.4: mode `fixed_rate`, the frozen rate in
+ *  `oracle_params.rate_override`). BELOW freezes 0.75 under the stub oracle's 0.8 — the reference
+ *  must lose 6.25% before the cover pays; ABOVE freezes 0.9 — the cover pays 12.5% at once, the
+ *  case answer-rfq must name to the underwriter. Served on the single-record read only. */
+export const RFQ_FIXED_ID = "rfq_open12fixed";
+export const RFQ_FIXED_ABOVE_ID = "rfq_open13fixedabove";
+export const RFQ_FIXED_RATE = "750000000000000000";
+/** The resting maker's posted answer on RFQ_FIXED_ID: one fixed_rate option that proposes
+ *  ANOTHER rate (0.74) in its own template — the 0.4.4 counter-proposal a cited answer builds. */
+export const RFQ_FIXED_ANSWER_ID = "ans_fixed1";
+export const RFQ_FIXED_OPTION_RATE = "740000000000000000";
+export const RFQ_FIXED_ABOVE_RATE = "900000000000000000";
 /** The id the venue assigns an underwriter's answer (the rfq-answer task's ground truth). */
 export const RFQ_ANSWER_ID = "ans_eval1";
 
@@ -632,6 +734,12 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
         const window = { not_before: Number(RFQ_IMPAIRMENT_EXPIRY) - 86_400, not_after: Number(RFQ_IMPAIRMENT_EXPIRY) + 86_400 };
         return r(200, { ...row, rfq_id: id, request: { ...request, modes: ["liquidity_impairment"], expiry_window: window, market_template: { inline: { oracle_recipe: IMPAIRMENT_RECIPE, oracle_params: params } } }, answers: [], answer_count: 0 });
       }
+      if (id === RFQ_FIXED_ID || id === RFQ_FIXED_ABOVE_ID) {
+        const fixedTemplate = (rate: string) => ({ inline: { oracle_recipe: FIXED_RECIPE, oracle_params: { schema: "cork-inline-fixed/1", rate_override: rate, expiry: RFQ_IMPAIRMENT_EXPIRY, swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } });
+        const window = { not_before: Number(RFQ_IMPAIRMENT_EXPIRY) - 86_400, not_after: Number(RFQ_IMPAIRMENT_EXPIRY) + 86_400 };
+        const fixedAnswers = id === RFQ_FIXED_ID ? [{ answer_id: RFQ_FIXED_ANSWER_ID, underwriter: RESTING_MAKER.address, answer: { status: "quoted", options: [{ option_id: "opt1", mode: "fixed_rate", premium_annualized: "0.05", expiry: Number(RFQ_IMPAIRMENT_EXPIRY), market_template: fixedTemplate(RFQ_FIXED_OPTION_RATE) }] } }] : [];
+        return r(200, { ...row, rfq_id: id, request: { ...request, modes: ["fixed_rate"], expiry_window: window, market_template: fixedTemplate(id === RFQ_FIXED_ID ? RFQ_FIXED_RATE : RFQ_FIXED_ABOVE_RATE) }, answers: fixedAnswers, answer_count: fixedAnswers.length });
+      }
       return r(404, { message: `unknown rfq ${single}` });
     }
     const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()));
@@ -654,17 +762,10 @@ export function stubContext(): HandlerContext {
       client: {
         readContract: async (a: never) => readContract(a, chainId),
         // Share PREDICTION for a pool that does not exist: production simulates the JIT
-        // creation via eth_simulateV1 and reads shares from the in-memory pool. The stub
-        // answers that simulation with every leg green and the final shares read encoding
-        // [cPT, cST] — so derive-cork-pool reports exists:false with shares "simulated",
-        // matching the JIT tasks' premise.
-        simulateCalls: async (a: { calls: Array<{ to?: string; data?: string }> }) => ({
-          results: a.calls.map((_, i) =>
-            i === a.calls.length - 1
-              ? { status: "success", data: `0x${CPT.slice(2).toLowerCase().padStart(64, "0")}${CST.slice(2).toLowerCase().padStart(64, "0")}` }
-              : { status: "success", data: "0x" },
-          ),
-        }),
+        // creation via eth_simulateV1 and reads shares from the in-memory pool — so
+        // derive-cork-pool reports exists:false with shares "simulated", matching the JIT
+        // tasks' premise. The fixed recipe's deploy-then-resolve runs through the same call.
+        simulateCalls: async (a: { calls: SimCall[] }) => simulateCalls(a),
         // Code is ADDRESS-AWARE, not blanket: the ForSelf adapter is a CONTRACT (its bindings
         // are verified before a caller grants it an allowance, and a codeless address is
         // correctly refused adapter_binding_mismatch), while every other fixture account stays
@@ -672,6 +773,7 @@ export function stubContext(): HandlerContext {
         getCode: async (a: { address?: string } | undefined) => {
           const address = String(a?.address ?? "").toLowerCase();
           if (address === FORSELF_ADAPTER.toLowerCase()) return FORSELF_ADAPTER_CODE;
+          if (address === predictedFixedOracle(DEPLOYED_FIXED_RATE).toLowerCase()) return "0x6080604052";
           // The fixture TOKENS are deployed contracts in this world: the maker-readiness probe
           // reads eth_getCode on the makerAsset, and a code-less token is the silent-noop class
           // the ranked book excludes — healthy fixture rows must not be that.

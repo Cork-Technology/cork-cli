@@ -204,7 +204,9 @@ export const recipeNestedAbi = parseAbi([
   "error MalformedExtraData(uint256 length)",
   "error RateOracleNotDeployed(address ca, address ref)",
   "error SpreadTooHigh(uint256 apySpreadPercentage, uint256 maxSpreadPercentage)",
-  "error UnexpectedExtraData()",
+  // The FixedRateRecipe's refusal of any payload carries the offending LENGTH (selector
+  // 0xf9b6c2a2, read from a live Base revert 2026-10-01; the argument-less form was a guess).
+  "error UnexpectedExtraData(uint256 length)",
   "error WindowCollapsed(uint256 rateMin, uint256 rateMax)",
   "error ZeroAnchorRate()",
   "error ZeroDuration()",
@@ -471,6 +473,12 @@ export function encodeUintWords(words: readonly bigint[]): `0x${string}` {
  *  rejects a band of 100% or more). */
 export function encodeImpairmentArgs(a: { anchorRate: bigint; durationSeconds: bigint; apySpreadPercentage: bigint }): `0x${string}` {
   return encodeUintWords([a.anchorRate, a.durationSeconds, a.apySpreadPercentage]);
+}
+
+/** The duration word of an impairment recipe payload (`abi.encode(anchorRate, durationSeconds,
+ *  apySpreadPercentage)`, exactly 96 bytes) — undefined for bytes of any other length. */
+export function impairmentDurationOfArgs(bytes: `0x${string}`): bigint | undefined {
+  return bytes.length === 2 + 3 * 64 ? BigInt(`0x${bytes.slice(2 + 64, 2 + 128)}`) : undefined;
 }
 
 /** One-getter ABI synthesized from a constant name alone (`RATE_MIN()` style, uint256 out).
@@ -1070,7 +1078,7 @@ const poolManagerRevertAbi = parseAbi([
 
 /** Name a simulate leg's failure: the decoded custom error when the bytes match a known Cork error
  *  set, else the raw selector — never a guess at what the contract meant. */
-function simulateLegFailure(leg: { status: string; error?: unknown; data?: `0x${string}` | undefined } | undefined, label: string): string {
+export function simulateLegFailure(leg: { status: string; error?: unknown; data?: `0x${string}` | undefined } | undefined, label: string): string {
   if (!leg) return `${label}: no result returned by eth_simulateV1`;
   const raw = leg.data;
   if (raw && raw.length >= 10) {

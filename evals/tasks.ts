@@ -1,11 +1,11 @@
 // Agent-eval task set [v2 §5.7 / RFC §13]: realistic tasks with programmatically verifiable
 // outcomes, graded on the tool-call TRACE (selection, variant, parameters, call count) rather
-// than free-text — per Anthropic's tool-eval guidance. 62 active + 8 HELD OUT (the held-out set
+// than free-text — per Anthropic's tool-eval guidance. 79 active + 8 HELD OUT (the held-out set
 // catches description overfitting; include with EVAL_HELD_OUT=1 and never tune against it).
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
+import { predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
 import corkDefaults from "../cork-defaults.v2.json";
 
 // The mainnet adapter, read from the SAME schema-2 config the stub resolves (the pinned-literal
@@ -531,7 +531,8 @@ export const TASKS: EvalTask[] = [
       prelude: ["cork_capabilities", "cork_query"],
       params: { action: { type: "deploy-fixed-oracle", rate: "950000000000000000" } },
       state: "ok",
-      answer: /0xF10000000000000000000000000000000000000d|f1000000/i,
+      // The stub's registry predicts ONE address per rate (like the CREATE2 salt): derived, never re-pinned.
+      answer: new RegExp(predictedFixedOracle(950_000_000_000_000_000n), "i"),
       maxCalls: 3,
     },
   },
@@ -682,6 +683,40 @@ export const TASKS: EvalTask[] = [
     },
   },
   {
+    // FIXED-RATE cover through an RFQ (cork-api 0.4.4): the request freezes the rate ABOVE the
+    // reference's rate, so the cover would pay 12.5% at once. The sugar builds the order (the
+    // rate rides as rateOverride, no jitMarket needed) and warns fixed_rate_in_the_money; the
+    // trap is to hand the underwriter the artifact without the one fact that decides whether
+    // to sign it. Graded on the sugar AND on surfacing that warning.
+    id: "answer-rfq-fixed-in-the-money",
+    prompt: `I am underwriter ${A}. Answer the open RFQ ${RFQ_FIXED_ABOVE_ID} on Arbitrum with a firm cover offer at 4% annualized at the pool expiry the RFQ itself asks for. Build from the RFQ's own template. Prepare what I need to sign, tell me the rate the pool would freeze at, and tell me anything about that rate I should know before I sign.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { chainId: 42161, action: { type: "answer-rfq", rfqId: RFQ_FIXED_ABOVE_ID, premiumAnnualized: "0.04" } },
+      state: "ok",
+      forbid: ["cork_submit"],
+      answer: new RegExp(`(?=[\\s\\S]*(${RFQ_FIXED_ABOVE_RATE}|0\\.9\\b))(?=[\\s\\S]*(above|in[- ]the[- ]money|at once|immediately|out of pocket|from the first block|12\\.5))`, "i"),
+      maxCalls: 5,
+    },
+  },
+  {
+    // Asking for fixed-rate cover (cork-api 0.4.4): mode fixed_rate needs an INLINE template whose
+    // oracle_params.rate_override is the frozen rate as a decimal string on the 1e18 = 1.0 scale.
+    // The traps: a number instead of a string, the percent scale, a template id, or the rate in
+    // a field of the agent's own invention. Graded on the relayed body.
+    id: "submit-rfq-open-fixed",
+    prompt: `Open a Cork request-for-quote on Arbitrum (chain 42161) for FIXED-RATE cover as requester 0xc0ffee0000000000000000000000000000000001: reference asset ${JIT_TASK_PAIR.referenceAsset}, collateral exactly ${JIT_TASK_PAIR.collateralAsset}, the fixed-rate recipe ${FIXED_RECIPE}, the rate frozen at 0.75 collateral per reference, package "pkg_default", pool expiry exactly ${RFQ_IMPAIRMENT_EXPIRY} (unix seconds), zero fees, notional 1000 units of the 6-decimal collateral, valid until 1790086400, my signature is 0x${"ab".repeat(65)}, request id "eval-rfq-fixed-0001". Report the RFQ id the venue assigned and how the frozen rate compares with the reference's rate today.`,
+    expect: {
+      tool: "cork_submit",
+      prelude: ["cork_capabilities", "cork_query"],
+      params: { action: { type: "rfq-open", modes: ["fixed_rate"], marketTemplate: { inline: { oracle_recipe: FIXED_RECIPE, oracle_params: { rate_override: RFQ_FIXED_RATE } } } } },
+      state: "ok",
+      answer: /(?=[\s\S]*rfq_eval1)(?=[\s\S]*(below|6\.25|deductible|under))/i,
+      maxCalls: 4,
+    },
+  },
+  {
     // The underwriter's every-RFQ move as one call (2026-09-02): answer an open RFQ at a chosen
     // premium with a firm offer reserved for the requester. The trap: hand-assembling a
     // maker-order (guessing the cST, the amounts, the reach) instead of the sugar, or relaying
@@ -734,7 +769,7 @@ export const TASKS: EvalTask[] = [
     },
   },
   {
-    // WHICH COVER a request buys (2026-10-01, planning#88): the first live partner trade asked
+    // WHICH COVER a request buys (the 2026-10-01 cover-kind finding): the first live partner trade asked
     // for downside protection and bought exit-only cover, because nothing on the request path
     // said the RECIPE decides the cover and the RFQ mode is only a pricing label. An agent
     // answering from priors says "liquidity cover protects the position" — the surface must

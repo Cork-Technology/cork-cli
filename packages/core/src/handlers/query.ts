@@ -1,5 +1,6 @@
 // Split from handlers.ts (2026-08-05): query handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
+import { COVER_LABELS, COVER_PROTECTION, type CoverKind, coverKindOfConstraint } from "../cover.ts";
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { rankBookRows } from "../orders-rank.ts";
 import { bookWatermarkOf, decodeBookWatermark, diffBook, encodeBookWatermark, WatermarkError } from "../orders-watch.ts";
@@ -929,6 +930,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           corkSwapToken: s.cstToken, // cST
           corkPrincipalToken: s.cptToken, // cPT
           issuedAt: s.issuedAt,
+          // WHICH cover this pool's cST is — the Market struct does not store the recipe, so the
+          // limits the pool was created with are the chain's own answer (topic "cover").
+          cover: poolCover(s.market),
           // Unit labels on the most-read resource (footgun audit R1: swapFeePercentage at
           // 1e18=1% beside WAD rates was the single highest-risk unlabeled output — the two are
           // identically shaped and 100x apart). Same convention as the compute kinds.
@@ -1144,4 +1148,10 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
   } catch (err) {
     return unavailable(chainId, "hypersync_unavailable", `HyperSync query failed: ${firstLine(err)}`, ctx);
   }
+}
+
+/** The cover a live pool gives, read from its creation limits (cover.ts#coverKindOfConstraint). */
+function poolCover(market: { rateMin: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint }): { kind: CoverKind; label: string; protection: string; readFrom: string } {
+  const kind = coverKindOfConstraint(market);
+  return { kind, label: COVER_LABELS[kind], protection: COVER_PROTECTION[kind], readFrom: "an INFERENCE from the pool's four rate limits — the pool does not record its recipe, and a pool created before recipes existed is read the same way: both rate-change allowances zero = fixed-rate; else a floor of at most 1 wei = liquidity; else the rate is held in a band (impairment)" };
 }

@@ -159,38 +159,47 @@ ch query registry-feeds --chain-id 8453 --json
 #### 1b. Pick the cover, and with it the recipe
 
 Decide first what you want the cover to pay. The recipe decides that, not the RFQ `modes`: the
-modes are pricing labels for the underwriter's model, and nothing on chain reads them.
+modes name the alternatives you accept, and nothing on chain reads them. A request carries one
+market template, so it describes one cover. Open one request per cover.
 
 | Cover | Recipe | The pool's rate | A loss in the reference | RFQ mode to name |
 |---|---|---|---|---|
 | **Liquidity (duration-risk) cover**: an exit | LiquidityPriceRecipe, LiquidityNavRecipe | follows the oracle: window 1 wei to 2x the anchor, one whole anchor of movement a day | **not paid**. The rate falls with the reference, so you hand in more reference for the same collateral | `liquidity_only` |
-| **Impairment (credit-risk) cover**: downside, with a deductible | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **paid beyond the band**. The band is your deductible | `liquidity_impairment` |
-| **Fixed-rate cover**: downside, frozen | FixedRateRecipe | never moves | paid below the frozen rate | none: the venue has no fixed-rate mode, so it cannot be requested through an RFQ today |
+| **Impairment (credit-risk) cover**: downside, with a deductible | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **covered beyond the part of the band the rate has given up**. The whole band is your worst-case deductible | `liquidity_impairment` |
+| **Fixed-rate cover**: downside, frozen | FixedRateRecipe | never moves: the window is the rate to the rate plus 1 wei | **covered in full below the frozen rate**. The yield of the reference after creation is not tracked | `fixed_rate` (venue 0.4.4) |
 
 We measured the difference on a Base fork against the deployed `phoenix/v0.4-rc.1` contracts
-(2026-10-01): two pools over USDC and baseUSD with the same expiry and the same NAV oracle, one per
-recipe. The reference vault took a real 10% loss. One hour later the holder exercised 100 cST on
-each pool:
+(2026-10-01): three pools over USDC and baseUSD with the same expiry, one per recipe. The fixed
+pool froze the oracle's rate at creation. The reference vault took a real 10% loss. One hour
+later the holder exercised 100 cST on each pool:
 
-| | Reference handed in | Its value after the loss | Collateral received | Paid by the cover |
+| | Reference handed in | Its value after the loss | Collateral received | Payout of the cover |
 |---|---|---|---|---|
-| Liquidity cover | 101.836 baseUSD | 100.000 USDC | 100.000 USDC | **0.000 USDC** |
-| Impairment cover (10% a year over 14.5 days: a 0.397% band) | 91.829 baseUSD | 90.173 USDC | 100.000 USDC | **9.827 USDC** |
+| Liquidity cover | 101.835 baseUSD | 100.000 USDC | 100.000 USDC | **0.000 USDC** |
+| Impairment cover (10% a year over 14.4 days: a 0.394% band) | 91.828 baseUSD | 90.173 USDC | 100.000 USDC | **9.827 USDC** |
+| Fixed-rate cover (frozen at the rate at creation) | 91.652 baseUSD | 90.001 USDC | 100.000 USDC | **9.999 USDC** |
+
+The band is the worst-case deductible, not the deductible on every day. The rate of the impairment
+pool walks toward its floor at one day of the spread per day. One hour after the loss it had given
+up only the burst capacity (0.19% of the anchor), so the payout was 9.827. When the rate reaches
+the floor, the payout is the loss less the whole band.
 
 Liquidity cover answers duration risk: you cannot sell or redeem the reference at its book value
 in time. It is not protection against the reference losing value. Impairment cover answers credit
 risk: the reference loses value. The cover bought in the first live trade (Base, 2026-09-10) was
 liquidity cover.
 
-**A loss the share price does not report moves no rate.** Both recipes read the rate oracle, and
-a NAV oracle reads the vault's reported share price. MetaMorpho v1.1 vaults keep realized bad
+**A loss the share price does not report moves no rate.** The liquidity and impairment recipes
+read the rate oracle, and a NAV oracle reads the vault's reported share price. A fixed-rate pool
+reads no feed. MetaMorpho v1.1 vaults keep realized bad
 debt out of that price (they add it to `lostAssets`), so on those vaults the pool's rate does not
 move on bad debt under either recipe. You can still swap at the reported price while the pool has
 collateral, and the underwriter carries any open shortfall, so expect it to price that risk or
 to pass. YCSUSDC and sparkUSDC are such vaults on Base today. Neither has an open shortfall: the
 `lostAssets` counter never decreases, and the owner of YCSUSDC covered its 131.38 USDC loss
-through `address(1)` (read 2026-10-01). `ch submit rfq-open` reads `lostAssets()` and that cover,
-and warns `reference_loss_unreported` with the open shortfall when the reference has the counter.
+through `address(1)` (read 2026-10-01). For a NAV-sourced recipe `ch submit rfq-open` reads
+`lostAssets()` and that cover, and warns `reference_loss_unreported` with the open shortfall when
+the reference has the counter. What the tool could not read is listed in `data.cover.notRead`.
 
 A recipe is an approved contract address. Copy it from the registry, never from a chat message:
 
@@ -214,9 +223,14 @@ had tracked the whole 10% loss within the hour.
 
 The impairment policy: you choose a duration and an annual spread. The band is
 `apy_spread × duration / 365 d`, the rate may move one day of the spread per day, with seven days
-of it available as a burst. The recipe caps the spread at 100% a year and the band at 50%, and
-the duration may not exceed the pool's remaining life at the fill that creates the pool. Ask the
-recipe what a choice commits you to. Pass three words: the anchor, the duration in seconds, and
+of it available as a burst. Each recipe states its own limits, and they differ per generation: the
+`phoenix/v0.4-rc.1` recipe caps the spread at 100% a year and the duration at 30 days, and the
+duration must fit inside the pool's remaining life at the fill that creates the pool. The tool
+restates none of these: `rfq-open` asks the recipe (`resolve`, then `verify` with the pool expiry
+your block names) and returns its answer in `data.cover.resolved`, or a warning. A duration above
+the pool's remaining life is rejected when the pool is created, and the fill then reverts
+`RecipeRejectedConstraint`: `rfq-open` warns `would_revert` and names that cause. Ask the recipe
+what a choice commits you to. Pass three words: the anchor, the duration in seconds, and
 the spread on the percentage scale (1e18 = 1%, so 10% a year is `10000000000000000000`):
 
 ```sh
@@ -236,7 +250,25 @@ ch compute recipe-rate-constraint --chain-id 8453 --json \
 
 `rateMin` is the worst rate you would ever swap at. For a pool that exists, `ch compute
 impairment-floor --pool-id …` returns the worst rate over a horizon, and `ch query cork-pool`
-shows the four limits: a `rateMin` of 1 wei means the pool is liquidity cover.
+returns `data.cover`, read from the pool's four limits: both rate-change allowances at zero is
+fixed-rate cover; else a `rateMin` of at most 1 wei is liquidity cover; else the pool holds a band.
+
+The fixed-rate policy: you choose one rate (1e18 = 1.0), and one reference swaps for that much
+collateral for the pool's whole life. Read the reference's rate first (`ch query registry-oracle`).
+At that rate you lock in today's value. Below it, the gap is your deductible. Above it, the cover
+pays the gap at once with no loss at all: `rfq-open` warns `fixed_rate_in_the_money`, and an
+underwriter prices that gap as a certain payout or passes. The rate is part of pool identity:
+another rate is another oracle and another pool. To ask, name `modes: ["fixed_rate"]` and an inline
+template with the fixed recipe and a `cork-inline-fixed/1` block:
+
+```jsonc
+{ "inline": { "oracle_recipe": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "oracle_params": { "schema": "cork-inline-fixed/1", "rate_override": "1075000000000000000",
+                                 "expiry": "1796256000", "swap_fee_wad": "0", "unwind_swap_fee_wad": "0" } } }
+```
+
+The venue refuses a fixed-rate request without a valid `rate_override` (a decimal string, no
+leading zero), and the tool refuses it first with the reason.
 
 #### 1c. Check the pair's oracle, then derive the market
 
@@ -350,10 +382,12 @@ ch submit rfq-open --chain-id 8453 --client-request-id rfq-0001 --json \
 Conventions the live flow uses:
 
 - `modes` must match the recipe (step 1b): `["liquidity_only"]` with a liquidity recipe,
-  `["liquidity_impairment"]` with the impairment recipe. The result carries `data.cover`: the
-  kind of cover the request buys and, for impairment, the band and the rate floor. A request
-  whose mode and recipe disagree is relayed with a `cover_mode_mismatch` warning; an impairment
-  mode on a liquidity recipe is priced as downside cover and creates an exit-only pool.
+  `["liquidity_impairment"]` with the impairment recipe, `["fixed_rate"]` with the fixed recipe.
+  The result carries `data.cover`: the kind of cover the request buys, the recipe's own rate
+  limits for it (`resolved`), for impairment the band, and for fixed-rate the position of the
+  frozen rate against the reference's rate today. A request whose mode and recipe disagree is
+  relayed with a `cover_mode_mismatch` warning; an impairment mode on a liquidity recipe is
+  priced as downside cover and creates an exit-only pool.
 - `packageIds: ["balanced-v1"]` is the live package. Confirm the catalog and the
   `notionalAssets` units with your Cork contact before your first post.
 - Pin an exact expiry with `notBefore = notAfter - 1`.

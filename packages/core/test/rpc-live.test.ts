@@ -651,3 +651,249 @@ describe.skipIf(!LIVE)("0.5.0 registry (nested wire, the primary) — live parit
     expect((zeroFees.data as { pool: { poolId: string } }).pool.poolId).not.toBe(od.pool!.poolId);
   }, 90_000);
 });
+
+// ── which cover a request buys: the chain's side, against independent raw reads (2026-10-01) ──
+// The cover readings ASK the chain (recipe.resolve, the registry's wrapper, the vault's loss
+// counter) instead of restating recipe rules locally. This suite holds each of those asks to a
+// raw read made here with its own ABI — on Base, the primary generation, the pair the fork
+// rehearsals trade (USDC / baseUSD) — so a recipe redeploy that changes a rule shows up as a
+// parity failure, not as a stale constant.
+describe.skipIf(!LIVE)("cover readings — live parity vs raw reads (Base, the primary)", () => {
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+  const BASEUSD = "0x9c6864105AEC23388C89600046213a44C384c831" as const; // Tokemak autopool: no lostAssets() view
+  const YCSUSDC = "0xE74c499fA461AF1844fCa84204490877787cED56" as const; // MetaMorpho v1.1: lostAssets() counter
+  const NAV_MODE = 1; // OracleMode.NAV
+  const ctx = {};
+  const rawAbi = parseAbi([
+    "function predictFixedRateOracle(uint256 rate) view returns (address oracle)",
+    "function deployFixedRateOracle(uint256 rate) returns (address oracle)",
+    "function lookupWrapper(address ca, address ref, uint8 mode) view returns (address wrapper)",
+    "function rate() view returns (uint256)",
+    "function resolve(address ca, address ref, address rateOracle, bytes extraData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
+    "function lostAssets() view returns (uint256)",
+    "function totalAssets() view returns (uint256)",
+    "function balanceOf(address) view returns (uint256)",
+    "function convertToAssets(uint256) view returns (uint256)",
+  ]);
+  const primaryBase = async () => {
+    const { resolveMarketRegistry } = await import("@cork/core");
+    const { marketRegistry: mr, generation } = await resolveMarketRegistry(8453);
+    expect(generation?.label).toBe("phoenix/v0.4-rc.1");
+    const r = await resolveRpc(8453, undefined);
+    expect(r).not.toBeNull();
+    return { registry: mr!.registry as `0x${string}`, recipes: mr!.recipes as Record<string, `0x${string}`>, client: r!.client };
+  };
+  const constraintOf = (c: { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint }) => ({ rateMin: c.rateMin.toString(), rateMax: c.rateMax.toString(), rateChangePerDayMax: c.rateChangePerDayMax.toString(), rateChangeCapacityMax: c.rateChangeCapacityMax.toString() });
+
+  it("the fixed recipe: our constraint for a rate whose oracle does not exist equals a RAW deploy-then-resolve simulation — rate .. rate + 1, zero allowances", async () => {
+    const { registry, recipes, client } = await primaryBase();
+    const { decodeFunctionResult, encodeFunctionData } = await import("viem");
+    // A rate nobody has a reason to deploy: the undeployed path is the one under test.
+    const rate = 1_075_000_000_000_000_007n;
+    const predicted = await client.readContract({ address: registry, abi: rawAbi, functionName: "predictFixedRateOracle", args: [rate] });
+    const deployed = ((await client.getCode({ address: predicted })) ?? "0x") !== "0x";
+    const ours = await runTool("cork_query", { chainId: 8453, resource: "derive-cork-pool", filters: { collateralAsset: USDC, referenceAsset: BASEUSD, expiry: String(Math.floor(Date.now() / 1000) + 7 * 86_400), recipe: recipes["fixed"]!, rate: rate.toString() } }, ctx);
+    expect(ours.state, JSON.stringify(ours.warnings)).toBe("ok");
+    const od = ours.data as { source: string; oracle: { address: string; deployed: boolean }; pool: { constraint: Record<string, string> } };
+    expect(od.source).toBe("fixed");
+    expect(od.oracle.address.toLowerCase()).toBe(predicted.toLowerCase());
+    expect(od.oracle.deployed).toBe(deployed);
+    let raw: { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
+    if (deployed) {
+      raw = await client.readContract({ address: recipes["fixed"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, predicted, "0x"] });
+    } else {
+      // The recipe refuses an oracle without code — the reason a plain staticcall cannot answer.
+      await expect(client.readContract({ address: recipes["fixed"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, predicted, "0x"] })).rejects.toThrow();
+      const sim = await client.simulateCalls({ calls: [{ to: registry, data: encodeFunctionData({ abi: rawAbi, functionName: "deployFixedRateOracle", args: [rate] }) }, { to: recipes["fixed"]!, data: encodeFunctionData({ abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, predicted, "0x"] }) }] });
+      expect(sim.results.map((x) => x.status)).toEqual(["success", "success"]);
+      raw = decodeFunctionResult({ abi: rawAbi, functionName: "resolve", data: sim.results[1]!.data! });
+    }
+    expect(od.pool.constraint).toEqual(constraintOf(raw));
+    // The property the cover table states, read from the chain and not from our own code.
+    expect(raw).toEqual({ rateMin: rate, rateMax: rate + 1n, rateChangePerDayMax: 0n, rateChangeCapacityMax: 0n });
+    // Any payload is the recipe's refusal, by its own error name.
+    const payload = await runTool("cork_query", { chainId: 8453, resource: "derive-cork-pool", filters: { collateralAsset: USDC, referenceAsset: BASEUSD, expiry: String(Math.floor(Date.now() / 1000) + 7 * 86_400), recipe: recipes["fixed"]!, rate: rate.toString(), args: "0x01" } }, ctx);
+    expect(payload.state).toBe("unavailable");
+    expect(payload.warnings[0]!.code).toBe("recipe_refused");
+    expect(payload.warnings[0]!.message).toMatch(/UnexpectedExtraData\(1\)/u);
+  }, 120_000);
+
+  it("the impairment recipe: our window equals a raw recipe.resolve against the pair's NAV wrapper, and a duration past the registry's pool lifetime is the recipe's own refusal", async () => {
+    const { registry, recipes, client } = await primaryBase();
+    const wrapper = await client.readContract({ address: registry, abi: rawAbi, functionName: "lookupWrapper", args: [USDC, BASEUSD, NAV_MODE] });
+    if (wrapper === zeroAddress) {
+      console.log("cover readings live: the USDC/baseUSD NAV wrapper is not deployed on Base — nothing to compare; skipping");
+      return;
+    }
+    const anchor = await client.readContract({ address: wrapper, abi: rawAbi, functionName: "rate" });
+    const words = [anchor, 604_800n, 10n * 10n ** 18n] as const; // the live anchor, 7 days, 10% a year
+    const bytes = encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }], words);
+    const ours = await runTool("cork_compute", { chainId: 8453, params: { kind: "recipe-rate-constraint", recipe: recipes["impairment"]!, collateralAsset: USDC, referenceAsset: BASEUSD, argsUints: words.map(String) } }, ctx);
+    expect(ours.state, JSON.stringify(ours.warnings)).toBe("ok");
+    const raw = await client.readContract({ address: recipes["impairment"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, wrapper, bytes] });
+    const oc = (ours.data as { constraint: Record<string, string | bigint> }).constraint;
+    for (const k of ["rateMin", "rateMax", "rateChangePerDayMax", "rateChangeCapacityMax"] as const) expect(String(oc[k])).toBe(raw[k].toString());
+    // A band around the live rate — and so read as impairment cover from the limits alone.
+    expect(raw.rateMin < anchor && anchor < raw.rateMax).toBe(true);
+    const { coverKindOfConstraint } = await import("@cork/core");
+    expect(coverKindOfConstraint(raw)).toBe("impairment");
+    // 31 days: this generation's recipe refuses at resolve. We restate no cap; the refusal is the recipe's.
+    const long = [anchor, 31n * 86_400n, 10n * 10n ** 18n] as const;
+    await expect(client.readContract({ address: recipes["impairment"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, wrapper, encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }], long)] })).rejects.toThrow();
+    const refused = await runTool("cork_compute", { chainId: 8453, params: { kind: "recipe-rate-constraint", recipe: recipes["impairment"]!, collateralAsset: USDC, referenceAsset: BASEUSD, argsUints: long.map(String) } }, ctx);
+    expect(refused.state).toBe("unavailable");
+    expect(refused.warnings[0]!.code).toBe("recipe_refused");
+    expect(refused.warnings[0]!.message).toMatch(/DurationTooLong/u);
+  }, 120_000);
+
+  it("the reference's rate today (readPairLiveRate's source): the registry's NAV wrapper answers the vault's own share price", async () => {
+    const { registry, client } = await primaryBase();
+    const wrapper = await client.readContract({ address: registry, abi: rawAbi, functionName: "lookupWrapper", args: [USDC, BASEUSD, NAV_MODE] });
+    if (wrapper === zeroAddress) return;
+    const ours = await runTool("cork_query", { chainId: 8453, resource: "registry-oracle", filters: { collateralAsset: USDC, referenceAsset: BASEUSD, mode: "nav" } }, ctx);
+    expect(ours.state).toBe("ok");
+    const od = (ours.data as { oracle: { address: string; deployed: boolean; rate: string | bigint } }).oracle;
+    expect(od.address.toLowerCase()).toBe(wrapper.toLowerCase());
+    expect(od.deployed).toBe(true);
+    // Two reads a block apart may differ by accrual: equal, or within one part in a million.
+    const rawRate = await client.readContract({ address: wrapper, abi: rawAbi, functionName: "rate" });
+    const mine = BigInt(od.rate);
+    const gap = mine > rawRate ? mine - rawRate : rawRate - mine;
+    expect(gap * 1_000_000n).toBeLessThan(rawRate);
+  }, 60_000);
+
+  // rfq-open against the LIVE chain: the venue is answered by a local 201 (the venue is not the
+  // subject here — nothing is posted to production), every chain read is real.
+  const openLive = async (action: Record<string, unknown>) => {
+    const { DEMO_ACCOUNT } = await import("@cork/schemas");
+    const now = Math.floor(Date.now() / 1000);
+    return runTool(
+      "cork_submit",
+      { chainId: 8453, clientRequestId: `live-cover-${now}-${Math.random().toString(36).slice(2, 8)}`, action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: BASEUSD, collateralAsset: { exact: USDC }, packageIds: ["balanced-v1"], notionalAssets: "1000000000", validUntil: now + 86_400, signature: "0x", ...action } },
+      { venueFetch: async () => new Response(JSON.stringify({ rfq_id: "rfq_live_local", state: "open" }), { status: 201 }) },
+    );
+  };
+  type LiveCover = { kind: string; notRead?: string[]; resolved?: { source: string; oracle: { address: string; deployed: boolean; rate: string | null }; constraint: Record<string, string> }; fixed?: { rateOverride: string; liveRate?: string; liveRateSource?: string; position?: string; gapPercentage?: string }; referenceLoss?: { state: string; lostAssets: string; coveredAssets: string | null; openShortfall: string } };
+  const liveCover = (env: { data: unknown }) => (env.data as { cover: LiveCover }).cover;
+
+  it("rfq-open, fixed-rate, against the live chain: the constraint is the raw simulation's, the position follows the registry's NAV wrapper, and a rate above it warns", async () => {
+    const { registry, recipes, client } = await primaryBase();
+    const { decodeFunctionResult, encodeFunctionData } = await import("viem");
+    const { readPairLiveRate } = await import("../src/handlers/registry.ts");
+    const live = await readPairLiveRate(client as never, registry, USDC, BASEUSD);
+    if (live.status !== "read") {
+      console.log(`cover readings live: the USDC/baseUSD pair has no readable oracle (${live.status}); skipping`);
+      return;
+    }
+    // readPairLiveRate itself: the NAV wrapper, and the rate it reports.
+    const wrapper = await client.readContract({ address: registry, abi: rawAbi, functionName: "lookupWrapper", args: [USDC, BASEUSD, NAV_MODE] });
+    expect(live.source).toBe("nav");
+    expect(live.oracle.toLowerCase()).toBe(wrapper.toLowerCase());
+    const now = Math.floor(Date.now() / 1000);
+    const expiry = now + 7 * 86_400;
+    const template = (rate: bigint) => ({ inline: { oracle_recipe: recipes["fixed"]!, oracle_params: { schema: "cork-inline-fixed/1", rate_override: rate.toString(), expiry: String(expiry), swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } });
+    const window = { notBefore: expiry - 1, notAfter: expiry };
+    const below = (live.rate * 99n) / 100n + 7n; // an odd rate: its oracle is not deployed
+    const env = await openLive({ modes: ["fixed_rate"], expiryWindow: window, marketTemplate: template(below) });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const cover = liveCover(env);
+    expect(cover.kind).toBe("fixed-rate");
+    expect(cover.notRead).toBeUndefined();
+    const predicted = await client.readContract({ address: registry, abi: rawAbi, functionName: "predictFixedRateOracle", args: [below] });
+    expect(cover.resolved!.oracle.address.toLowerCase()).toBe(predicted.toLowerCase());
+    if (!cover.resolved!.oracle.deployed) {
+      const sim = await client.simulateCalls({ calls: [{ to: registry, data: encodeFunctionData({ abi: rawAbi, functionName: "deployFixedRateOracle", args: [below] }) }, { to: recipes["fixed"]!, data: encodeFunctionData({ abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, predicted, "0x"] }) }] });
+      expect(cover.resolved!.constraint).toEqual(constraintOf(decodeFunctionResult({ abi: rawAbi, functionName: "resolve", data: sim.results[1]!.data! })));
+    }
+    expect(cover.resolved!.constraint).toEqual({ rateMin: below.toString(), rateMax: (below + 1n).toString(), rateChangePerDayMax: "0", rateChangeCapacityMax: "0" });
+    expect(cover.fixed).toMatchObject({ rateOverride: below.toString(), liveRateSource: "nav", position: "below" });
+    // ~1% below (the rate may have ticked between the two reads).
+    expect(BigInt(cover.fixed!.gapPercentage!) > 9n * 10n ** 17n && BigInt(cover.fixed!.gapPercentage!) < 11n * 10n ** 17n).toBe(true);
+    expect(env.warnings.map((w) => w.code)).not.toContain("fixed_rate_in_the_money");
+    const above = await openLive({ modes: ["fixed_rate"], expiryWindow: window, marketTemplate: template((live.rate * 105n) / 100n + 7n) });
+    expect(liveCover(above).fixed!.position).toBe("above");
+    expect(above.warnings.map((w) => w.code)).toContain("fixed_rate_in_the_money");
+  }, 180_000);
+
+  it("rfq-open, impairment, against the live chain: the window is the raw resolve's; a duration beyond the block's own pool life is REJECTED by the live recipe.verify (it answers false at creation)", async () => {
+    const { registry, recipes, client } = await primaryBase();
+    const wrapper = await client.readContract({ address: registry, abi: rawAbi, functionName: "lookupWrapper", args: [USDC, BASEUSD, NAV_MODE] });
+    if (wrapper === zeroAddress) return;
+    const anchor = await client.readContract({ address: wrapper, abi: rawAbi, functionName: "rate" });
+    const now = Math.floor(Date.now() / 1000);
+    const expiry = now + 10 * 86_400;
+    const block = (duration: number) => ({ inline: { oracle_recipe: recipes["impairment"]!, oracle_params: { schema: "cork-inline-impairment/1", anchor_rate: anchor.toString(), expiry: String(expiry), swap_fee_wad: "0", unwind_swap_fee_wad: "0", duration_seconds: String(duration), apy_spread_percentage: (10n * 10n ** 18n).toString() } } });
+    const window = { notBefore: expiry - 1, notAfter: expiry };
+    const fits = await openLive({ modes: ["liquidity_impairment"], expiryWindow: window, marketTemplate: block(7 * 86_400) });
+    expect(fits.state, JSON.stringify(fits.warnings)).toBe("ok");
+    const cover = liveCover(fits);
+    const raw = await client.readContract({ address: recipes["impairment"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, wrapper, encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [anchor, 7n * 86_400n, 10n * 10n ** 18n])] });
+    // The window is a function of the live rate, which may tick between the two reads: equal, or within one part in a million.
+    for (const k of ["rateMin", "rateMax", "rateChangePerDayMax", "rateChangeCapacityMax"] as const) {
+      const mine = BigInt(cover.resolved!.constraint[k]!), theirs = raw[k];
+      expect((mine > theirs ? mine - theirs : theirs - mine) * 1_000_000n <= theirs, `${k}: ${mine} vs ${theirs}`).toBe(true);
+    }
+    expect(cover.resolved!.source).toBe("nav");
+    expect(fits.warnings.map((w) => w.code)).not.toContain("would_revert");
+    // baseUSD is not a MetaMorpho v1.1 vault: no loss view, nothing listed as unread.
+    expect(cover.referenceLoss).toBeUndefined();
+    expect(cover.notRead).toBeUndefined();
+    // 20 days of window on a pool that lives 10: resolve answers, verify — the call with the expiry — rejects.
+    const tooLong = await openLive({ modes: ["liquidity_impairment"], expiryWindow: window, marketTemplate: block(20 * 86_400) });
+    expect(tooLong.state).toBe("ok");
+    expect(liveCover(tooLong).resolved).toBeDefined();
+    const w = tooLong.warnings.find((x) => x.code === "would_revert");
+    expect(w, JSON.stringify(tooLong.warnings.map((x) => x.code))).toBeDefined();
+    expect(w!.message).toMatch(/recipe\.verify REJECTS the constraint it resolved.*RecipeRejectedConstraint.*The carried duration 1728000 s exceeds the market's remaining life/u);
+    // The rule the diagnosis names, read RAW from the live recipe at one block: with `creating`
+    // true verify answers false above the remaining life and true at it; with `creating` false
+    // it accepts. (The stub's verify and durationBeyondLifeNote both rest on this measurement.)
+    const verifyAbi = parseAbi(["function verify(address ca, address ref, address rateOracle, uint256 expiryTimestamp, bool creating, (uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint, bytes extraData) view returns (bool)"]);
+    const blk = await client.getBlock();
+    const life = 10n * 86_400n;
+    const at = { blockNumber: blk.number };
+    const pinnedAnchor = await client.readContract({ address: wrapper, abi: rawAbi, functionName: "rate", ...at });
+    const verdict = async (duration: bigint, creating: boolean) => {
+      const bytes = encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }], [pinnedAnchor, duration, 10n * 10n ** 18n]);
+      const c = await client.readContract({ address: recipes["impairment"]!, abi: rawAbi, functionName: "resolve", args: [USDC, BASEUSD, wrapper, bytes], ...at });
+      return client.readContract({ address: recipes["impairment"]!, abi: verifyAbi, functionName: "verify", args: [USDC, BASEUSD, wrapper, blk.timestamp + life, creating, c, bytes], ...at });
+    };
+    expect(await verdict(life, true)).toBe(true);
+    expect(await verdict(life + 3_600n, true)).toBe(false);
+    expect(await verdict(life + 3_600n, false)).toBe(true);
+  }, 240_000);
+
+  it("rfq-open on a NAV-read MetaMorpho v1.1 reference: the loss reading rides the result with the state the raw reads give", async () => {
+    const { recipes, client } = await primaryBase();
+    const now = Math.floor(Date.now() / 1000);
+    const expiry = now + 7 * 86_400;
+    const env = await openLive({ referenceAsset: YCSUSDC, modes: ["liquidity_only"], expiryWindow: { notBefore: expiry - 1, notAfter: expiry }, marketTemplate: { inline: { oracle_recipe: recipes["nav"]!, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: "1000000000000000000", expiry: String(expiry), swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } } });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const cover = liveCover(env);
+    expect(cover.kind).toBe("liquidity");
+    expect(cover.referenceLoss).toBeDefined();
+    const lost = await client.readContract({ address: YCSUSDC, abi: rawAbi, functionName: "lostAssets" });
+    expect(BigInt(cover.referenceLoss!.lostAssets)).toBe(lost); // the counter only moves on a new loss
+    expect(["covered", "open"]).toContain(cover.referenceLoss!.state);
+    expect(BigInt(cover.referenceLoss!.openShortfall)).toBe(cover.referenceLoss!.state === "covered" ? 0n : BigInt(cover.referenceLoss!.openShortfall));
+    expect(env.warnings.map((w) => w.code)).toContain("reference_loss_unreported");
+  }, 180_000);
+
+  it("the unreported-loss reading: a MetaMorpho v1.1 vault reads back counter, cover and open shortfall as raw reads at the SAME block give them; a vault without the view is `absent`", async () => {
+    const { client } = await primaryBase();
+    const { readUnreportedLoss } = await import("@cork/core");
+    const got = await readUnreportedLoss(client, YCSUSDC);
+    expect(got.status).toBe("read");
+    if (got.status !== "read") return;
+    const at = { blockNumber: got.loss.blockNumber };
+    const lost = await client.readContract({ address: YCSUSDC, abi: rawAbi, functionName: "lostAssets", ...at });
+    const total = await client.readContract({ address: YCSUSDC, abi: rawAbi, functionName: "totalAssets", ...at });
+    const shares = await client.readContract({ address: YCSUSDC, abi: rawAbi, functionName: "balanceOf", args: ["0x0000000000000000000000000000000000000001"], ...at });
+    const covered = shares === 0n ? 0n : await client.readContract({ address: YCSUSDC, abi: rawAbi, functionName: "convertToAssets", args: [shares], ...at });
+    expect(got.loss).toEqual({ lostAssets: lost, totalAssets: total, coveredAssets: lost === 0n ? 0n : covered, openShortfall: lost > covered ? lost - covered : 0n, blockNumber: got.loss.blockNumber });
+    // The counter never decreases: the 131.38 USDC booked 2025-11-19 is still there.
+    expect(lost).toBeGreaterThanOrEqual(131_382_052n);
+    // A vault of another family has no such view: absent, never a clean bill and never "unread".
+    expect(await readUnreportedLoss(client, BASEUSD)).toEqual({ status: "absent" });
+  }, 120_000);
+});

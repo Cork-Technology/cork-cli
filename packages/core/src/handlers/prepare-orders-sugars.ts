@@ -7,8 +7,11 @@ import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrd
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
-import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, INLINE_IMPAIRMENT_SCHEMA, inlineAdditionalData, inlineParamsOfTemplate, premiumAmount, premiumFraction, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
-import { readUnreportedLoss, unreportedLossWarning } from "../chain/nav-loss.ts";
+import { answerOcoGroup, coverMakingAmount, fixedRateOverrideOfTemplate, impliedPremiumWad, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, inlineParamsOfTemplate, premiumAmount, premiumFraction, recipeAddressOfTemplate, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
+import { type CoverKind, coverKindOfRecipeName, inlineBlockWarnings } from "../cover.ts";
+import { impairmentDurationOfArgs } from "../market-registry.ts";
+import type { MarketRegistryWire } from "../generations.ts";
+import { blockBytesFor, blockIsRecipesOwn, classifyRecipeAddress, durationBeyondLifeNote, readFixedRatePosition, readRecipeSource, readReferenceLoss } from "./cover-reading.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
@@ -31,12 +34,6 @@ type RefreshOrderAction = Extract<PrepareOrdersInput["action"], { type: "refresh
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined);
 const isAddr = (v: unknown): v is `0x${string}` => typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v);
-const recipeOfTemplate = (t: unknown): `0x${string}` | undefined => {
-  if (!t || typeof t !== "object") return undefined;
-  const inline = (t as { inline?: unknown }).inline;
-  const r = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;
-  return isAddr(r) ? r : undefined;
-};
 
 
 /** The venue's answers embed: `answers[]` rows, each `{ answer_id, underwriter, answer: { status, options[] } }` (or flat). */
@@ -114,7 +111,11 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   let premiumAnnualized: string;
   let expiryTimestamp: bigint;
   let quoteRef: { rfqId: string; answerId: string; optionId: string } | undefined;
-  let templateRecipe: `0x${string}` | undefined = recipeOfTemplate(rfq.market_template);
+  let templateRecipe: `0x${string}` | undefined = recipeAddressOfTemplate(rfq.market_template);
+  // The frozen rate the REQUEST names (cork-api 0.4.4 `rate_override`); a cited option's own
+  // rate, when it carries one, is the rate this answer builds at.
+  const requestedRate = fixedRateOverrideOfTemplate(rfq.market_template);
+  let templateRate = requestedRate;
   // The requester's inline block (anchor, expiry, fees) — the cited option's when it carries one.
   let inline: InlineTemplateParams | undefined = inlineParamsOfTemplate(rfq.market_template);
   let inlineSource: "rfq" | "cited option" = "rfq";
@@ -133,7 +134,8 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     premiumAnnualized = p;
     expiryTimestamp = BigInt(e);
     quoteRef = { rfqId: action.rfqId, answerId: action.answerId!, optionId: action.optionId! };
-    templateRecipe = recipeOfTemplate(found.option.market_template) ?? templateRecipe;
+    templateRecipe = recipeAddressOfTemplate(found.option.market_template) ?? templateRecipe;
+    templateRate = fixedRateOverrideOfTemplate(found.option.market_template) ?? templateRate;
     const optionInline = inlineParamsOfTemplate(found.option.market_template);
     if (optionInline) {
       inline = optionInline;
@@ -152,6 +154,43 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const recipe = action.jitMarket?.recipe ?? templateRecipe;
   if (!recipe) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: `neither the RFQ nor the cited option names a recipe (market_template.inline.oracle_recipe) — pass jitMarket.recipe (the approved recipe CONTRACT ADDRESS; discover with cork_query resource:"registry-recipes")` }]);
+  }
+  // ── a fixed recipe carries a RATE, every other recipe carries bytes ──
+  // The recipe itself says which (`source()`): a fixed recipe's oracle is keyed on the frozen
+  // rate — the order's rateOverride — and it refuses any recipe bytes; a nav or price recipe
+  // reads a rate oracle and its fill REJECTS a non-zero rateOverride.
+  const resolved = await getRpc(ctx, chainId);
+  if (!resolved) return unavailable(chainId, "requires_rpc", "answer-rfq needs an RPC (the recipe's source, collateral decimals, pool derivation)", ctx);
+  const sourceRead = await readRecipeSource(resolved.client, recipe);
+  // A transport fault says nothing about the recipe: building on "not fixed" would drop the
+  // frozen rate and end in a misleading refusal from the recipe. A REVERT falls through — the
+  // derivation below names what the address is (not an approved recipe, typically).
+  if ("error" in sourceRead && sourceRead.transport) {
+    return unavailable(chainId, "chain_read_failed", `could not read source() of recipe ${recipe}: ${sourceRead.error} — a transport failure, indeterminate. The recipe's source decides whether the order carries a frozen rate or recipe bytes, so nothing is built on a guess. Retry, or set CORK_RPC_URL to a working endpoint`, ctx);
+  }
+  const recipeSource = "source" in sourceRead ? sourceRead.source : undefined;
+  const isFixed = recipeSource === "fixed";
+  // The recipe's COVER: a fixed source is fixed-rate cover by the chain's own word; the other
+  // two covers share the nav/price sources, so they are told apart by the configured hint
+  // (undefined when no generation names the recipe — its block then rides as written).
+  const kind: CoverKind | undefined = isFixed ? "fixed-rate" : coverKindOfRecipeName((await classifyRecipeAddress(chainId, recipe))?.recipe.recipeName);
+  const explicitRate = action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? BigInt(action.jitMarket.rateOverride) : undefined;
+  if (recipeSource !== undefined && !isFixed && explicitRate !== undefined) {
+    return unavailable(chainId, "invalid_order_terms", `jitMarket.rateOverride ${explicitRate} with recipe ${recipe}, which reads a ${recipeSource} oracle: a fill that carries a non-zero rateOverride on such a recipe reverts UnexpectedRateOverride. Remove jitMarket.rateOverride, or answer with the fixed recipe (jitMarket.recipe) for fixed-rate cover`, ctx);
+  }
+  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);
+  const rateFrom = explicitRate !== undefined ? "jitMarket.rateOverride" : cited && templateRate !== requestedRate ? "cited option" : "rfq";
+  if (isFixed && rateOverride === undefined) {
+    return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is the FIXED-rate recipe, and neither the ${cited ? "cited option" : "RFQ"} nor this call names the frozen rate: the template carries no admissible market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0). Pass jitMarket.rateOverride — the rate the pool freezes at`, ctx);
+  }
+  if (isFixed && requestedRate !== undefined && rateOverride !== requestedRate) {
+    warnings.push({ code: "invalid_order_terms", message: `the RFQ asks for the frozen rate ${requestedRate}, and this answer builds at ${rateOverride} (${rateFrom}) — a different FixedRateOracle and so a different pool: a visible counter-proposal the requester may ignore. The order still builds` });
+  }
+  // The template against the recipe, in the words rfq-open uses for the same contradiction: a
+  // block written for another cover, a rate on a recipe that reads an oracle.
+  if (kind !== undefined) warnings.push(...inlineBlockWarnings(kind, recipe, inline, { raw: templateRate?.toString(), admissible: templateRate }, "underwriter"));
+  else if (recipeSource !== undefined && !isFixed && templateRate !== undefined) {
+    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} template carries rate_override ${templateRate}, but recipe ${recipe} reads a ${recipeSource} oracle: a fill that carries a non-zero rateOverride on such a recipe REVERTS (UnexpectedRateOverride). The rate is NOT carried into this order; for fixed-rate cover answer with the fixed recipe (jitMarket.recipe)` });
   }
   const notionalStr = action.notionalAssets ?? str(rfq.notional_assets);
   if (notionalStr === undefined || !/^\d+$/.test(notionalStr) || BigInt(notionalStr) === 0n) return unavailable(chainId, "invalid_order_terms", "no positive notional: the RFQ carries no notional_assets and none was passed", ctx);
@@ -177,24 +216,15 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // verified live 2026-09-11 on Arbitrum for the liquidity recipe and read in the 0.4.0 source
   // for the impairment one. So the payload is carried (the undeployed case is exactly when it
   // matters), and a deployed oracle's rate is compared with the anchor below and disclosed.
-  const inlineData = inline ? inlineAdditionalData(inline) : undefined;
+  // A block lends its bytes only to its OWN recipe (rfq-open resolves the request the same
+  // way): a fixed recipe refuses every payload (UnexpectedExtraData), and another cover's words
+  // are parameters this recipe does not read.
+  const inlineData = blockBytesFor(kind, inline);
   // `extraData` is the name; `additionalData` the deprecated alias (both present and different
   // is refused by the maker path's resolver, which this order re-enters).
   const explicitBytes = action.jitMarket?.extraData ?? action.jitMarket?.additionalData;
   const extraData: `0x${string}` | undefined = explicitBytes ?? inlineData;
-  // The impairment window is sized by duration_seconds — the requester's choice, which the recipe
-  // never compares with the pool's life. A window sized for 7 days on a market that lives 30 can
-  // hit its wall long before expiry; one sized for 30 on a 7-day market is looser cover than the
-  // spread implies. Either is the requester's to choose and the underwriter's to price, so it is
-  // DISCLOSED (info), never refused; a day of slack absorbs the clock between open and answer.
-  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inline.durationSeconds !== undefined) {
-    const tenor = expiryTimestamp - nowSecs;
-    const gap = inline.durationSeconds > tenor ? inline.durationSeconds - tenor : tenor - inline.durationSeconds;
-    if (gap > 86_400n) {
-      warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} impairment block sizes the rate window for duration_seconds ${inline.durationSeconds} while this answer's market lives ${tenor} s (expiry ${expiryTimestamp} − now ${nowSecs}) — ${inline.durationSeconds < tenor ? "the window can reach its wall before the market expires" : "the window is wider than the market's life needs"}; the recipe never checks the two agree. The requester chose it and the constraint (pool identity) is built from it, so the order builds as asked — price the cover on the window, not the tenor` });
-    }
-  }
-  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && explicitBytes === undefined) {
+  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && blockIsRecipesOwn(kind, inline) && inlineData === undefined && explicitBytes === undefined) {
     const missing = (["anchorRate", "durationSeconds", "apySpreadPercentage"] as const).filter((k) => inline![k as keyof typeof inline] === undefined);
     warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT extraData and the recipe will refuse to resolve. Pass jitMarket.extraData (encodeImpairmentArgs) or ask the requester for a complete block` });
   }
@@ -228,7 +258,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // pair's first wrapper address, which is part of the pool's identity. The explicit field wins.
   const oracleSalt = action.jitMarket?.oracleSalt ?? inline?.oracleSalt;
   const derive = await handleQuery(
-    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(oracleSalt !== undefined ? { oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0" ? { rate: action.jitMarket.rateOverride } : {}) } } as Parameters<typeof handleQuery>[0],
+    { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(oracleSalt !== undefined ? { oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(rateOverride !== undefined ? { rate: rateOverride.toString() } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
   );
   // A gated derive keeps its reason FIRST (the envelope contract) — but the warnings gathered
@@ -237,15 +267,57 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // recipe's raw revert with no hint that the RFQ's own block was the cause.
   if (derive.state !== "ok") return { ...derive, warnings: [{ code: derive.warnings[0]?.code ?? "invalid_state", message: `answer-rfq could not derive the pool the cover creates: ${derive.warnings[0]?.message ?? derive.state}` }, ...warnings, ...derive.warnings.slice(1)] };
   type DerivedConstraint = { rateMin: bigint | string; rateMax: bigint | string; rateChangePerDayMax: bigint | string; rateChangeCapacityMax: bigint | string };
-  const dd = derive.data as { pool: { poolId: `0x${string}`; exists: boolean; constraint?: DerivedConstraint } | null; shares: { corkSwapToken: `0x${string}` | null } | null; recipe: `0x${string}`; oracle: { address: `0x${string}` | null; deployed: boolean; rate?: bigint | string } };
+  const dd = derive.data as { registry: `0x${string}`; input: { wire: string }; source: string; pool: { poolId: `0x${string}`; exists: boolean; constraint?: DerivedConstraint } | null; shares: { corkSwapToken: `0x${string}` | null } | null; recipe: `0x${string}`; oracle: { address: `0x${string}` | null; deployed: boolean; rate?: bigint | string } };
   if (!dd.pool) return unavailable(chainId, "oracle_not_deployable", "the pair cannot get an oracle as registered — no pool id, no cST, no order", ctx);
   const cst = dd.shares?.corkSwapToken ?? null;
   if (!cst) return unavailable(chainId, "share_prediction_unavailable", "the pool's cST could not be read or predicted — the order's maker side cannot be set", ctx);
   // The anchor against a DEPLOYED oracle: the recipe ignores it, so the requester's expectation
-  // and this pool agree only when the live rate equals the anchor at signing.
+  // and this pool agree only when the live rate equals the anchor at signing. A fixed recipe has
+  // no anchor at all (its oracle IS the rate), so the notice is not its concern.
   const liveRate = typeof dd.oracle.rate === "bigint" ? dd.oracle.rate : typeof dd.oracle.rate === "string" && /^\d+$/.test(dd.oracle.rate) ? BigInt(dd.oracle.rate) : undefined;
-  if (inline?.anchorRate !== undefined && dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {
+  if (!isFixed && inline?.anchorRate !== undefined && dd.oracle.deployed && liveRate !== undefined && liveRate !== inline.anchorRate) {
     warnings.push({ code: "rate_drift_notice", message: `the requester's inline template names anchor_rate ${inline.anchorRate}, but the pair's oracle is DEPLOYED at ${dd.oracle.address} and reads ${liveRate} now — the recipe anchors on the LIVE rate and ignores the carried anchor, so this order's constraint (and pool ${dd.pool.poolId}) follow ${liveRate}, not the requester's ${inline.anchorRate}. A pool derived at the anchor is a different pool; the requester's fill checks decide whether this one is acceptable. The anchor is still carried in extraData for the undeployed-oracle case` });
+  }
+  // The impairment window is sized by the duration the ORDER carries: the explicit bytes when
+  // the caller passed them, else the block's. Whether the recipe accepts it is the recipe's to
+  // say — against a deployed oracle the maker path below runs recipe.verify, the creating
+  // fill's own check. On the nested wire that check REJECTS a duration beyond the market's
+  // remaining life (it returns false; measured on the live recipe), and its verdict carries no
+  // reason, so the cause this tool can see is said here beside it — and ahead of it where
+  // verify cannot run yet (an undeployed oracle). A window sized far from the tenor is
+  // otherwise the requester's to choose and the underwriter's to price: DISCLOSED, not refused.
+  const carriesImpairmentBytes = kind === "impairment" || (kind === undefined && inline?.schema === INLINE_IMPAIRMENT_SCHEMA);
+  const carriedDuration = !carriesImpairmentBytes ? undefined : explicitBytes !== undefined ? impairmentDurationOfArgs(explicitBytes) : inlineData !== undefined && inline?.schema === INLINE_IMPAIRMENT_SCHEMA ? inline.durationSeconds : undefined;
+  if (carriedDuration !== undefined) {
+    const tenor = expiryTimestamp - nowSecs;
+    const whose = explicitBytes !== undefined ? "jitMarket.extraData sizes" : `the ${cited ? "cited option's" : "RFQ's"} impairment block sizes`;
+    const beyondLife = dd.pool.exists ? undefined : durationBeyondLifeNote(dd.input.wire as MarketRegistryWire, carriedDuration, tenor);
+    if (beyondLife !== undefined) {
+      warnings.push({ code: "would_revert", message: `${whose} the rate window for a duration of ${carriedDuration} s, and this answer's market expires at ${expiryTimestamp} (now ${nowSecs}): the fill that creates the pool reverts RecipeRejectedConstraint. ${beyondLife}` });
+    } else {
+      const gap = carriedDuration > tenor ? carriedDuration - tenor : tenor - carriedDuration;
+      if (gap > 86_400n) {
+        warnings.push({ code: "invalid_order_terms", message: `${whose} the rate window for a duration of ${carriedDuration} s while this answer's market lives ${tenor} s (expiry ${expiryTimestamp} − now ${nowSecs}) — ${carriedDuration < tenor ? "the window can reach its wall before the market expires" : "the window is wider than the market's life needs"}. The constraint (pool identity) is built from it, so the order builds as asked — price the cover on the window, not the tenor` });
+      }
+    }
+  }
+  // What this answer could NOT read from the chain — listed in `answer.notRead`, so an answer
+  // without a warning is never mistaken for one whose reads all came back clean.
+  const notRead: string[] = [];
+  // A frozen rate against the reference's rate today: above it, the cover pays at once and the
+  // underwriter is out of pocket from the first block.
+  let fixedEcho: Record<string, unknown> | undefined;
+  if (isFixed && rateOverride !== undefined) {
+    const p = await readFixedRatePosition(resolved.client, dd.registry, { collateralAsset, referenceAsset }, rateOverride, "underwriter");
+    if (p.warning) warnings.push(p.warning);
+    if (p.notRead) notRead.push(p.notRead);
+    fixedEcho = {
+      rateOverride: rateOverride.toString(),
+      rateFrom,
+      requestedRate: requestedRate?.toString() ?? null,
+      ...(p.live ? { liveRate: p.live.rate.toString(), liveRateSource: p.live.source, position: p.live.position, gapPercentage: p.live.gapPercentage.toString() } : {}),
+      scales: { rateOverride: "ABSOLUTE rate, 1e18 = 1.0 — the frozen rate", requestedRate: "ABSOLUTE rate, 1e18 = 1.0 — the rate the RFQ asked for (null = none)", liveRate: "ABSOLUTE rate, 1e18 = 1.0 — the pair's deployed nav or price oracle today (absent = not compared, see notRead)", gapPercentage: "PERCENTAGE of the live rate, 1e18 = 1% — below: the loss the reference must take before the cover pays; above: the gap the cover pays at once" },
+    };
   }
   // The derived constraint is PINNED into the order explicitly: the maker path then verifies
   // the carried numbers (recipe.verify) instead of resolving a second time — one derivation,
@@ -253,17 +325,20 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const pinnedConstraint = action.jitMarket?.constraint ?? (dd.pool.constraint ? { rateMin: String(dd.pool.constraint.rateMin), rateMax: String(dd.pool.constraint.rateMax), rateChangePerDayMax: String(dd.pool.constraint.rateChangePerDayMax), rateChangeCapacityMax: String(dd.pool.constraint.rateChangeCapacityMax) } : undefined);
 
   // ── amounts, the kernel's way ──
-  const resolved = await getRpc(ctx, chainId);
-  if (!resolved) return unavailable(chainId, "requires_rpc", "answer-rfq needs an RPC (collateral decimals, pool derivation)", ctx);
   let collateralDecimals: number;
   try {
     collateralDecimals = Number(await resolved.client.readContract({ address: collateralAsset, abi: erc20Abi, functionName: "decimals" }));
   } catch (err) {
     return chainReadFailed(chainId, err, [{ code: "chain_read_failed", message: `reading decimals() of collateral ${collateralAsset} failed` }], ctx);
   }
-  // The underwriter is the side that carries a loss the reference's share price does not report.
-  const hiddenLoss = await readUnreportedLoss(resolved.client, referenceAsset);
-  if (hiddenLoss !== undefined) warnings.push(unreportedLossWarning(referenceAsset, hiddenLoss, "underwriter"));
+  // The underwriter is the side that carries a loss the reference's share price does not
+  // report — in a NAV-sourced pool only: a price-sourced pool reads a market price and a
+  // fixed-rate pool reads no feed.
+  if (dd.source === "nav") {
+    const loss = await readReferenceLoss(resolved.client, referenceAsset, "underwriter");
+    if (loss.warning) warnings.push(loss.warning);
+    if (loss.notRead) notRead.push(loss.notRead);
+  }
   const tenorSeconds = expiryTimestamp - nowSecs;
   const takingAmount = premiumAmount(premiumAnnualized, notional, tenorSeconds);
   const makingAmount = coverMakingAmount(notional, collateralDecimals);
@@ -281,7 +356,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // The caller's explicit jitMarket fields win; absent ones come from the requester's inline
   // block (fees, anchor), else the defaults. `undefined` values are dropped so a spread never
   // erases an inline value.
-  const { recipe: _r, additionalData: _legacyBytes, ...jitRest } = action.jitMarket ?? {};
+  const { recipe: _r, additionalData: _legacyBytes, rateOverride: _rate, ...jitRest } = action.jitMarket ?? {};
   const jitExplicit = Object.fromEntries(Object.entries(jitRest).filter(([, v]) => v !== undefined));
   const jitFromInline = {
     ...(extraData !== undefined ? { extraData } : {}),
@@ -304,7 +379,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     ocoGroup,
     ...(allowedSender !== undefined ? { allowedSender } : {}),
     ...(quoteRef ? { quoteRef } : {}),
-    jitMarket: { collateralAsset, referenceAsset, expiryTimestamp: expiryTimestamp.toString(), recipe, rateOverride: "0", enableJitMint: false, ...jitFromInline, ...jitExplicit } as NonNullable<MakerOrderAction["jitMarket"]>,
+    jitMarket: { collateralAsset, referenceAsset, expiryTimestamp: expiryTimestamp.toString(), recipe, rateOverride: rateOverride?.toString() ?? "0", enableJitMint: false, ...jitFromInline, ...jitExplicit } as NonNullable<MakerOrderAction["jitMarket"]>,
   };
   const env = await sugar.prepare({ ...input, action: makerAction }, ctx);
   if (env.state !== "ok") return { ...env, warnings: [...warnings, ...env.warnings] };
@@ -345,11 +420,16 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
               swapFeeWad: inline.swapFeeWad ?? null,
               unwindSwapFeeWad: inline.unwindSwapFeeWad ?? null,
               ...(inline.schema === INLINE_IMPAIRMENT_SCHEMA ? { durationSeconds: inline.durationSeconds?.toString() ?? null, apySpreadPercentage: inline.apySpreadPercentage?.toString() ?? null, complete: inlineData !== undefined } : {}),
+              ...(inline.schema === INLINE_FIXED_SCHEMA ? { rateOverride: inline.rateOverride?.toString() ?? null } : {}),
               extraData: extraData ?? null,
-              anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed,
-              note: "the recipe reads the anchor word of extraData only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ",
+              // The anchor words apply to the recipes that read a rate oracle; a fixed recipe has none.
+              ...(inline.schema === INLINE_FIXED_SCHEMA
+                ? {}
+                : { anchorHonored: inline.anchorRate === undefined ? null : !dd.oracle.deployed, note: "the recipe reads the anchor word of extraData only while the pair's oracle is undeployed; against a deployed oracle it anchors on the live rate — see rate_drift_notice when they differ" }),
             }
           : null,
+        ...(fixedEcho ? { fixed: fixedEcho } : {}),
+        ...(notRead.length > 0 ? { notRead } : {}),
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
       },
       execution: executionAnswerRfq(),

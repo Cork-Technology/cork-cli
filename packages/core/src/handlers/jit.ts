@@ -12,7 +12,7 @@ import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from
 import { poolManagerAbi } from "../chain/abis.ts";
 import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
-import { oracleRateUnreadableMessage, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
+import { oracleRateUnreadableMessage, previewRecipeVerify, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 
 /** Site-specific WORDS for the shared value gate: the boundary rules are identical wherever a
@@ -406,15 +406,20 @@ export async function runJitPreflightLadder(args: {
     // oracle: the liquidity recipe checks the LIVE rate sits inside the window, so a predicted
     // oracle can't answer yet (the fill deploys it first).
     if (oracle.deployed) {
-      const ok = await codec.verify(client, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle: oracle.address, expiryTimestamp, creating, constraint, extraData }).catch(() => null);
-      if (ok === false) {
+      const v = await previewRecipeVerify(client, wire, { recipe, collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, oracle: oracle.address, expiryTimestamp, creating, constraint, extraData });
+      if (v.status === "rejected") {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — the fill would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
-      } else if (ok === null) {
+      } else if (v.status !== "accepted") {
         if (oracle.rateError && oracle.rateReadFailure !== "transport") warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and the fill will too.") });
-        else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the fill's constraint check could not be previewed" });
+        // A REVERT is the recipe's own refusal, named by its error — not a failed read.
+        else if (v.status === "reverted") warnings.push({ code: "would_revert", message: `recipe.verify REVERTS for this constraint: ${v.reason} — the fill runs the same call and reverts the same way. Fix what the recipe names (cork_query registry-recipes describes its parameters), then rebuild` });
+        else warnings.push({ code: "chain_read_failed", message: `the recipe.verify pre-flight read failed in transport (${v.reason}) — the fill's constraint check could not be previewed` });
       }
     } else {
-      warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically${wire === "nested" ? ` (with oracleSalt ${oracleSalt})` : ""}, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
+      // A FixedRateOracle is keyed on the RATE alone: no salt, no pair sources, no live rate.
+      warnings.push(source === "fixed"
+        ? { code: "oracle_not_deployed", message: `the FixedRateOracle for this rate is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically (keyed on the rate alone), then recipe.verify checks the carried constraint against it. The rate never moves, so the pool id below holds until the fill` }
+        : { code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the fill deploys it automatically${wire === "nested" ? ` (with oracleSalt ${oracleSalt})` : ""}, then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before the fill would shift it and revert OrderNotForPool` });
     }
     // Creation-bound pre-flight (best-effort): the adapter enforces the registry's
     // maxExpiryDuration when the fill must CREATE the pool — a bound the >5y advisory alone

@@ -1,12 +1,12 @@
 // Split from handlers.ts (2026-08-05): submit handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { isAddressEqual, recoverAddress } from "viem";
-import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
+import { Envelope, RFQ_MODES, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
-import { resolveGenerations, resolveRollover } from "../config-remote.ts";
-import { classifyAddress, primaryOf } from "../generations.ts";
-import { readUnreportedLoss, unreportedLossWarning } from "../chain/nav-loss.ts";
+import { resolveRollover } from "../config-remote.ts";
 import { readRfqCover } from "../cover.ts";
+import { fixedRateOverrideViolation, inlineOfTemplate, oracleParamsOf } from "../orders-answer.ts";
+import { classifyInlineRecipe, coverChainReadings, singleCollateral } from "./cover-reading.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -626,48 +626,55 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     }
 
     if (action.type === "rfq-open") {
-      // [F6] Mirror the sibling rollover-intent validation: an inverted or already-past window
-      // was previously relayed untouched and failed (or half-worked) only at the venue.
+      // ── refusals first: everything the venue would 400, said here with the recipe ──
+      // [F6] An inverted, empty or already-past window was once relayed untouched and failed
+      // (or half-worked) only at the venue.
       const nowSecs = nowSecondsOf(ctx);
       if (action.expiryWindow.notBefore > action.expiryWindow.notAfter) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow is inverted: notBefore (${action.expiryWindow.notBefore}) is after notAfter (${action.expiryWindow.notAfter})`, ctx);
       }
-      // The venue's rule is STRICT (`expiry_window.not_before must be < not_after`, cork-api
-      // 400 on equality; MIRRORED_VENUE_LOGIC) — a requester asking for ONE exact expiry sends
-      // the same value twice and learned the rule from a raw venue rejection (the 2026-10-01 integration triage
-      // item 5). Refused here with the recipe instead. Equality as "exactly this expiry" is the
-      // natural request; relaxing the venue rule is raised with its owner.
       const windowViolation = rfqOpenWindowViolation(action.expiryWindow);
       if (windowViolation) return unavailable(chainId, "invalid_order_terms", windowViolation, ctx);
-      // The recipe an inline market template names decides which GENERATION the cover is created
-      // on, and an underwriter quoting only the primary passes on a previous-generation recipe
-      // silently. Classified chain-free against the configured recipe hints; an address no
-      // generation hints at is said so (the registry's isRecipe is the on-chain authority —
-      // cork_query registry-recipes).
       if (BigInt(action.expiryWindow.notAfter) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow.notAfter (${action.expiryWindow.notAfter}) is not in the future (now ${nowSecs}) — no pool expiry could ever satisfy this window`, ctx);
       }
-      const { warnings: recipeWarnings, hint: recipeHint } = await inlineRecipeWarnings(chainId, action.marketTemplate);
-      // WHICH cover this request buys is decided by the template's recipe, never by `modes`
-      // (pricing labels nothing on chain reads). Zyfai's first trade asked for downside cover
-      // and got an exit-only pool because the request path never said so (planning#88): the
-      // reading rides the result, and a request that contradicts itself is named before relay.
-      const { cover, warnings: coverWarnings } = readRfqCover({ modes: action.modes, marketTemplate: action.marketTemplate, recipeHint, nowSeconds: nowSecs });
       if (BigInt(action.validUntil) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
       }
-      // Best-effort chain read (silent without an RPC): a reference that keeps bad debt out of
-      // its share price moves NO rate — the requester and the underwriter should both know.
-      const lossWarnings: Array<{ code: string; message: string }> = [];
-      try {
-        const rpc = await getRpc(ctx, chainId);
-        const loss = rpc ? await readUnreportedLoss(rpc.client, action.referenceAsset) : undefined;
-        if (loss !== undefined) {
-          cover.referenceLoss = { reportedInSharePrice: false, lostAssets: loss.lostAssets.toString(), totalAssets: loss.totalAssets.toString(), coveredAssets: loss.coveredAssets === null ? null : loss.coveredAssets.toString(), openShortfall: loss.openShortfall.toString(), note: "base units of the vault's own asset. lostAssets is a counter that never decreases; coveredAssets is the value of the shares held by address(1) (null = not read); openShortfall = max(0, lostAssets − coveredAssets) is what the share price hides today" };
-          lossWarnings.push(unreportedLossWarning(action.referenceAsset, loss, "requester"));
-        }
-      } catch {
-        /* an unusable RPC never blocks an off-chain relay */
+      const modesViolation = rfqModesViolation(action.modes);
+      if (modesViolation) return unavailable(chainId, "invalid_order_terms", modesViolation, ctx);
+      if (action.modes.includes("fixed_rate")) {
+        const fixedViolation = fixedRateTemplateViolation(action.marketTemplate);
+        if (fixedViolation) return unavailable(chainId, "invalid_order_terms", `modes names fixed_rate, and ${fixedViolation}. The venue refuses the request without it (cork-api 0.4.4). ${UNITS_TOPIC_REFERENCE}`, ctx);
+      }
+      // ── which cover the request buys ──
+      // The recipe an inline template names decides the GENERATION the cover is created on and
+      // the COVER itself; `modes` are what the requester accepts and nothing on chain reads
+      // them. Zyfai's first trade asked for downside cover and got an exit-only pool because the
+      // request path never said so: the reading rides the result, and a request that
+      // contradicts itself is named before relay.
+      const classified = await classifyInlineRecipe(chainId, action.marketTemplate);
+      const { cover, warnings: coverWarnings } = readRfqCover({
+        modes: action.modes,
+        marketTemplate: action.marketTemplate,
+        recipe: classified.recipe,
+        unknownRecipe: classified.address,
+        expiryWindow: { notBefore: BigInt(action.expiryWindow.notBefore), notAfter: BigInt(action.expiryWindow.notAfter) },
+        nowSeconds: nowSecs,
+      });
+      let chainWarnings: Array<{ code: string; message: string }> = [];
+      if (classified.recipe !== undefined) {
+        chainWarnings = await coverChainReadings(ctx, chainId, {
+          cover,
+          recipe: classified.recipe,
+          collateralAsset: singleCollateral(action.collateralAsset),
+          referenceAsset: action.referenceAsset,
+          marketTemplate: action.marketTemplate,
+          side: "requester",
+        });
+      } else if (classified.address !== undefined) {
+        // The KIND comes from the configured hint; without one there is no generation to ask.
+        cover.notRead = ["the recipe is not one a configured generation names, so nothing was asked of the chain: no constraint, no reference rate, no loss reading"];
       }
       const res = await postRfq(deps, {
         schema_version: "1",
@@ -684,7 +691,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         valid_until: action.validUntil,
         signature: action.signature,
       });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings, ...lossWarnings]);
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...classified.warnings, ...coverWarnings, ...chainWarnings]);
     }
 
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
@@ -741,6 +748,17 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         if (problem !== null) {
           return unavailable(chainId, "invalid_order_terms", `options[${i}].premium_annualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1%) — got ${JSON.stringify(p)} (${problem}); percent numbers (4.1) belong only on the legacy book field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
         }
+        // The venue types an option's `mode` with the same enum as a request's (a misspelled
+        // mode is a 400 there, and here it would also slip past the fixed-rate rule below).
+        if (o.mode !== undefined && !(RFQ_MODES as readonly unknown[]).includes(o.mode)) {
+          return unavailable(chainId, "invalid_order_terms", `options[${i}].mode must be one of ${RFQ_MODES.join(", ")} — got ${JSON.stringify(o.mode)} (the venue refuses any other value)`, ctx);
+        }
+        // cork-api 0.4.4: a fixed_rate option declares its own frozen rate (it may differ from
+        // the request's as a visible counter-proposal) — the venue's rule, mirrored.
+        if (o.mode === "fixed_rate") {
+          const fixedViolation = fixedRateTemplateViolation(o.market_template);
+          if (fixedViolation) return unavailable(chainId, "invalid_order_terms", `options[${i}].mode is fixed_rate, and ${fixedViolation}. The venue refuses the answer without it (cork-api 0.4.4). ${UNITS_TOPIC_REFERENCE}`, ctx);
+        }
       }
     }
     const res = await postRfqAnswer(deps, action.rfqId, {
@@ -760,14 +778,10 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
   }
 }
 
-/** rfq-open: which generation the inline template's `oracle_recipe` belongs to, chain-free from
- *  the configured recipe hints. Info on the primary's recipe (named), info on a previous
- *  generation's (named, with the pass it invites), `recipe_not_found` info when no generation
- *  hints at the address — never a refusal: the registry's `isRecipe` is the authority. */
 /** The venue's `expiry_window` refine (cork-indexing-api post-rfq.schema.ts: `not_before <
  *  not_after`, strict), mirrored op-for-op — registered in MIRRORED_VENUE_LOGIC. Returns the
  *  refusal text, or null when the window is admissible. The inverted case is caught earlier by
- *  the schema-level ordering check; equality is the venue's own 400. */
+ *  the ordering check; equality is the venue's own 400. */
 export function rfqOpenWindowViolation(window: { notBefore: number; notAfter: number }): string | null {
   if (window.notBefore === window.notAfter) {
     return `expiryWindow is EMPTY under the venue's rule: not_before must be strictly before not_after, and both are ${window.notAfter}. For one exact pool expiry send notBefore = expiry − 1 (the window then admits only that expiry second); the venue rejects equality with a 400`;
@@ -775,25 +789,23 @@ export function rfqOpenWindowViolation(window: { notBefore: number; notAfter: nu
   return null;
 }
 
-async function inlineRecipeWarnings(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<{ warnings: Array<{ code: string; message: string }>; hint: { recipeName?: string | undefined; generation: string } | undefined }> {
-  const { warnings, hit } = await classifyInlineRecipe(chainId, marketTemplate);
-  return { warnings, hint: hit === undefined ? undefined : { recipeName: hit.recipeName, generation: hit.label } };
+/** The venue's `modes must be unique` refine (post-rfq.schema.ts), mirrored — registered in
+ *  MIRRORED_VENUE_LOGIC. The count bound (1..3) is the input schema's. */
+export function rfqModesViolation(modes: readonly string[]): string | null {
+  const repeated = modes.filter((m, i) => modes.indexOf(m) !== i);
+  return repeated.length > 0 ? `modes must name each alternative once: ${[...new Set(repeated)].join(", ")} is repeated (the venue rejects a repeated mode with a 400)` : null;
 }
 
-async function classifyInlineRecipe(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<{ warnings: Array<{ code: string; message: string }>; hit: { label: string; status: string; recipeName?: string } | undefined }> {
-  const none = { warnings: [], hit: undefined };
-  const inline = marketTemplate?.["inline"];
-  const recipe = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;
-  if (typeof recipe !== "string" || !/^0x[0-9a-fA-F]{40}$/u.test(recipe)) return none;
-  const { generations } = await resolveGenerations(chainId);
-  const hit = classifyAddress(generations, recipe).find((c) => c.role === "recipe");
-  const primary = primaryOf(generations);
-  if (hit === undefined) {
-    return { hit, warnings: [{ code: "recipe_not_found", message: `the inline template's oracle_recipe ${recipe} matches no configured generation's recipe hints on chainId ${chainId} — an underwriter can only quote a recipe approved on its registry (cork_query resource:"registry-recipes" lists them per generation); relayed as asked` }] };
+/** The venue's fixed-rate template rule (cork-api 0.4.4 `FixedRateMarketTemplateSchema`, applied
+ *  to a request whose modes include fixed_rate and to an answer option whose mode is
+ *  fixed_rate), mirrored — registered in MIRRORED_VENUE_LOGIC. An opaque template id cannot
+ *  declare the rate, so the template must be INLINE and carry `oracle_params.rate_override`
+ *  under the venue's value rule (`fixedRateOverrideViolation`). Returns the reason in words
+ *  (a clause that follows "…, and"), or null when the venue admits the template. */
+export function fixedRateTemplateViolation(template: unknown): string | null {
+  if (inlineOfTemplate(template) === undefined) {
+    return `fixed-rate cover needs an INLINE market template: {inline: {oracle_recipe: <the fixed recipe's address>, oracle_params: {rate_override: "<rate>"}}} — a market_template_id alone, or no template, cannot declare the frozen rate`;
   }
-  const which = hit.recipeName ? `${hit.recipeName} recipe` : "recipe";
-  if (primary !== undefined && hit.label !== primary.label) {
-    return { hit, warnings: [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the ${hit.label} generation (${hit.status}), not the primary ${primary.label}: the cover is created on ${hit.label}, which only an adapter bound to that generation can fill or exercise, and an underwriter quoting the primary alone passes on this RFQ silently. Pass the primary's recipe from cork_query resource:"registry-recipes" if the adapter you fill through is bound to the primary` }] };
-  }
-  return { hit, warnings: [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the primary ${hit.label} generation: the cover is created there, and the adapter you fill through must be bound to that generation's pool manager` }] };
+  const problem = fixedRateOverrideViolation(oracleParamsOf(template)?.["rate_override"]);
+  return problem === null ? null : `market_template.inline.oracle_params.rate_override is required as a positive decimal uint256 STRING, ABSOLUTE 1e18 = 1.0 ("1075000000000000000" = 1.075): ${problem}`;
 }

@@ -14,6 +14,7 @@
 //
 //   bun run test:mutation            # full catalog (~2–5 min; spawns focused vitest runs)
 //   bun scripts/mutation-probes.ts --only marketid,orders   # comma-separated id prefixes
+//   bun scripts/mutation-probes.ts --rot                    # anchors only: every find matches once (seconds)
 //
 // Selection philosophy: mutants target the places where a silent defect becomes SIGNED-BUT-WRONG
 // BYTES or a wrong money answer — struct/tuple field order, enum ordinals, bit flags, hash
@@ -428,10 +429,10 @@ const CATALOG: Mutant[] = [
   {
     // A previous-generation recipe must be told apart from the primary's: that is the pass Zyfai met.
     id: "rfq-open-recipe-generation-collapsed",
-    file: "packages/core/src/handlers/submit.ts",
-    find: "  if (primary !== undefined && hit.label !== primary.label) {",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (primaryLabel !== undefined && recipe.generation !== primaryLabel) {",
     replace: "  if (false) {",
-    tests: [T.venue],
+    tests: [T.venue, T.cover],
   },
   {
     // R5c: a released binary reads its line's config branch, never main (the development branch).
@@ -1041,12 +1042,12 @@ const CATALOG: Mutant[] = [
     tests: [T.answer],
   },
   {
-    // Only the cork-inline-liquidity/1 schema is read; accepting any schema reads a foreign
+    // Only the three cork-inline-*/1 schemas are read; accepting any schema reads a foreign
     // block's numbers as ours.
     id: "answer-inline-schema-gate-dropped",
     file: "packages/core/src/orders-answer.ts",
-    find: "  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;",
-    replace: "",
+    find: "    case INLINE_LIQUIDITY_SCHEMA:\n      return { schema: INLINE_LIQUIDITY_SCHEMA, ...common };\n    // Any other",
+    replace: "    default:\n      return { schema: INLINE_LIQUIDITY_SCHEMA, ...common };\n    // Any other",
     tests: [T.answer],
   },
   {
@@ -3175,7 +3176,8 @@ const CATALOG: Mutant[] = [
     tests: [T.decodeEnvelopes],
   },
 
-  // ── which cover an RFQ buys: the recipe decides, the mode is a pricing label (cover.ts) ────
+  // ── which cover an RFQ buys (cover.ts, cover-reading.ts, nav-loss.ts) and the venue's
+  //    fixed-rate rule (cork-api 0.4.4), on both sides of an RFQ ───────────────────────────────
   {
     // The 1-wei floor IS the liquidity recipes' signature: an exclusive comparator reads a
     // liquidity pool as a band and tells an exit-only holder it is protected.
@@ -3190,8 +3192,8 @@ const CATALOG: Mutant[] = [
     // (nav) would stop being named exit-only cover.
     id: "cover-nav-recipe-not-liquidity",
     file: "packages/core/src/cover.ts",
-    find: 'if (name === "liquidity" || name === "nav") return "liquidity";',
-    replace: 'if (name === "liquidity") return "liquidity";',
+    find: "if (name === \"liquidity\" || name === \"nav\") return \"liquidity\";",
+    replace: "if (name === \"liquidity\") return \"liquidity\";",
     tests: [T.cover],
   },
   {
@@ -3203,8 +3205,16 @@ const CATALOG: Mutant[] = [
     tests: [T.cover],
   },
   {
-    // The band divides by the recipe's 365-day year; any other year misstates the deductible
-    // and the rate floor against the deployed recipe's own resolve.
+    // The allowances are asked BEFORE the floor: a fixed pool frozen at 1 wei (the venue admits
+    // "1") has a 1-wei floor too, and the floor check first would call it a liquidity pool.
+    id: "cover-fixed-shape-after-floor",
+    file: "packages/core/src/cover.ts",
+    find: "if (c.rateChangePerDayMax === 0n && c.rateChangeCapacityMax === 0n) return \"fixed-rate\";",
+    replace: "if (c.rateMin > 1n && c.rateChangePerDayMax === 0n && c.rateChangeCapacityMax === 0n) return \"fixed-rate\";",
+    tests: [T.cover],
+  },
+  {
+    // The band divides by the recipe's 365-day year; any other year misstates the deductible.
     id: "cover-band-year",
     file: "packages/core/src/cover.ts",
     find: "  return (apySpreadPercentage * durationSeconds) / YEAR_SECONDS;",
@@ -3212,29 +3222,222 @@ const CATALOG: Mutant[] = [
     tests: [T.cover],
   },
   {
-    // THE TRAP unwarned: an impairment mode on a liquidity recipe relays silently — the buyer
-    // pays a downside price for a pool that pays nothing on a loss.
-    id: "cover-trap-mismatch-dropped",
+    // THE TRAP unwarned: a mode that names another cover than the template's recipe relays
+    // silently — the buyer is quoted one cover and the pool is another.
+    id: "cover-mode-mismatch-dropped",
     file: "packages/core/src/cover.ts",
-    find: '  if (kind === "liquidity" && wantsImpairment) {',
+    find: "  if (others.length > 0) {",
     replace: "  if (false) {",
     tests: [T.cover],
   },
   {
-    // The duration bound is inclusive of the pool's remaining life: >= refuses a duration the
-    // recipe admits; a dropped check lets DurationTooLong reach the fill.
-    id: "cover-duration-bound-exclusive",
+    // The mismatch filter inverted: the mode that AGREES with the recipe is the one accused.
+    id: "cover-mode-table-inverted",
     file: "packages/core/src/cover.ts",
-    find: "params.durationSeconds > params.expiry - a.nowSeconds) {",
-    replace: "params.durationSeconds >= params.expiry - a.nowSeconds) {",
+    find: "const others = modes.filter((m) => RFQ_MODE_COVER[m] !== kind);",
+    replace: "const others = modes.filter((m) => RFQ_MODE_COVER[m] === kind);",
     tests: [T.cover],
   },
   {
-    // The spread cap is inclusive (100% a year is admissible).
-    id: "cover-spread-cap-exclusive",
+    // A request that never names the mode of the cover its template builds is not told which
+    // mode to name.
+    id: "cover-mode-missing-dropped",
     file: "packages/core/src/cover.ts",
-    find: "if (params.apySpreadPercentage > IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE) {",
-    replace: "if (params.apySpreadPercentage >= IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE) {",
+    find: "  if (!modes.includes(expected)) {",
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // modesAgree means the request names EXACTLY the one mode of its template: 'includes' calls
+    // a mixed-mode request coherent.
+    id: "cover-modes-agree-any",
+    file: "packages/core/src/cover.ts",
+    find: "modesAgree: a.modes.length === 1 && a.modes[0] === COVER_RFQ_MODE[kind],",
+    replace: "modesAgree: a.modes.includes(COVER_RFQ_MODE[kind]),",
+    tests: [T.cover],
+  },
+  {
+    // A block written for another cover is carried without a word: the recipe reads none of it.
+    id: "cover-block-mismatch-dropped",
+    file: "packages/core/src/cover.ts",
+    find: "  if (params !== undefined && INLINE_SCHEMA_COVER[params.schema] !== kind) {",
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // A band of exactly 100% leaves a floor of zero: no window. Inclusive.
+    id: "cover-band-full-window-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "warnings: band >= PERCENT_SCALE ? [",
+    replace: "warnings: band > PERCENT_SCALE ? [",
+    tests: [T.cover],
+  },
+  {
+    // The venue admits uint256's maximum; the recipe's rate + 1 overflows on it. Unwarned, the
+    // request looks buildable.
+    id: "cover-fixed-overflow-unwarned",
+    file: "packages/core/src/cover.ts",
+    find: "  const overflow = rateOverride === UINT256_MAX;",
+    replace: "  const overflow = false;",
+    tests: [T.cover],
+  },
+  {
+    // Only the maximum itself overflows: max − 1 has a rate + 1.
+    id: "cover-fixed-overflow-widened",
+    file: "packages/core/src/cover.ts",
+    find: "  const overflow = rateOverride === UINT256_MAX;",
+    replace: "  const overflow = rateOverride >= UINT256_MAX - 1n;",
+    tests: [T.cover],
+  },
+  {
+    // The gap is a share of the LIVE rate (the loss the reference must take); over the frozen
+    // rate it misstates the deductible.
+    id: "cover-moneyness-base",
+    file: "packages/core/src/cover.ts",
+    find: "gapPercentage: (gap * PERCENT_SCALE) / liveRate };",
+    replace: "gapPercentage: (gap * PERCENT_SCALE) / fixedRate };",
+    tests: [T.cover],
+  },
+  {
+    // A rate AT the reference's rate has no gap: reading it as above cries wolf on the request
+    // that locks in today's value.
+    id: "cover-moneyness-at-is-above",
+    file: "packages/core/src/cover.ts",
+    find: "position: fixedRate > liveRate ? \"above\"",
+    replace: "position: fixedRate >= liveRate ? \"above\"",
+    tests: [T.cover],
+  },
+  {
+    // Below and above swapped: a deductible is announced as an immediate payout and the real
+    // immediate payout as a deductible.
+    id: "cover-moneyness-below-is-above",
+    file: "packages/core/src/cover.ts",
+    find: "position: fixedRate > liveRate ? \"above\" : fixedRate < liveRate ? \"below\" : \"at\"",
+    replace: "position: fixedRate < liveRate ? \"above\" : fixedRate > liveRate ? \"below\" : \"at\"",
+    tests: [T.cover],
+  },
+  {
+    // Only a rate ABOVE the reference's warns.
+    id: "cover-itm-warns-at",
+    file: "packages/core/src/cover.ts",
+    find: "  if (m.position !== \"above\") return undefined;",
+    replace: "  if (m.position === \"below\") return undefined;",
+    tests: [T.cover],
+  },
+  {
+    // The two sides swapped: the underwriter reads the requester's advice.
+    id: "cover-itm-side-swapped",
+    file: "packages/core/src/cover.ts",
+    find: "    message: a.side === \"underwriter\"",
+    replace: "    message: a.side !== \"underwriter\"",
+    tests: [T.cover],
+  },
+  {
+    // The request's window is inclusive at both ends: an expiry AT notBefore is inside.
+    id: "cover-expiry-window-lower-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "(expiry < window.notBefore || expiry > window.notAfter)",
+    replace: "(expiry <= window.notBefore || expiry > window.notAfter)",
+    tests: [T.cover],
+  },
+  {
+    // …and an expiry AT notAfter is inside (the documented notBefore = expiry − 1 form).
+    id: "cover-expiry-window-upper-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "(expiry < window.notBefore || expiry > window.notAfter)",
+    replace: "(expiry < window.notBefore || expiry >= window.notAfter)",
+    tests: [T.cover],
+  },
+  {
+    // A pool expiring NOW cannot be created.
+    id: "cover-expiry-past-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "  if (expiry <= nowSeconds) return [",
+    replace: "  if (expiry < nowSeconds) return [",
+    tests: [T.cover],
+  },
+  {
+    // The venue refuses zero and a leading zero; admitting them relays a request the venue 400s
+    // (or reads "01" as a rate nobody wrote).
+    id: "fixed-rate-leading-zero-admitted",
+    file: "packages/core/src/orders-answer.ts",
+    find: "if (!/^[1-9][0-9]{0,77}$/u.test(rate)) return",
+    replace: "if (!/^[0-9][0-9]{0,77}$/u.test(rate)) return",
+    tests: [T.cover],
+  },
+  {
+    // 78 digits is uint256's length: a 79-digit value passes neither the venue nor BigInt bounds.
+    id: "fixed-rate-digit-bound-widened",
+    file: "packages/core/src/orders-answer.ts",
+    find: "if (!/^[1-9][0-9]{0,77}$/u.test(rate)) return",
+    replace: "if (!/^[1-9][0-9]{0,78}$/u.test(rate)) return",
+    tests: [T.cover],
+  },
+  {
+    // 2^256 is 78 digits and one past the maximum: without the bound it is relayed and the
+    // venue refuses it.
+    id: "fixed-rate-uint256-bound-dropped",
+    file: "packages/core/src/orders-answer.ts",
+    find: "  if (rate.length === 78 && rate > UINT256_MAX_DECIMAL) return",
+    replace: "  if (false) return",
+    tests: [T.cover],
+  },
+  {
+    // The venue ADMITS the maximum itself (its own vector).
+    id: "fixed-rate-uint256-bound-inclusive",
+    file: "packages/core/src/orders-answer.ts",
+    find: "  if (rate.length === 78 && rate > UINT256_MAX_DECIMAL) return",
+    replace: "  if (rate.length === 78 && rate >= UINT256_MAX_DECIMAL) return",
+    tests: [T.cover],
+  },
+  {
+    // The venue requires a STRING: a JSON number 1 is a 400 there.
+    id: "fixed-rate-number-admitted",
+    file: "packages/core/src/orders-answer.ts",
+    find: "  if (typeof rate !== \"string\") return",
+    replace: "  if (rate === undefined) return",
+    tests: [T.cover],
+  },
+  {
+    // The fixed recipe refuses ANY payload (UnexpectedExtraData): the fixed block encodes none.
+    id: "fixed-block-carries-bytes",
+    file: "packages/core/src/orders-answer.ts",
+    find: "    case INLINE_FIXED_SCHEMA:\n      return undefined;",
+    replace: "    case INLINE_FIXED_SCHEMA:\n      return \"0x00\";",
+    tests: [T.cover],
+  },
+  {
+    // A fixed_rate request without a valid rate is relayed and the venue 400s it — with the
+    // request id burned and no teaching.
+    id: "submit-fixed-rule-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      if (action.modes.includes(\"fixed_rate\")) {",
+    replace: "      if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // The venue keys the rule on fixed_rate being AMONG the modes, not on it being the only one.
+    id: "submit-fixed-rule-sole-mode-only",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      if (action.modes.includes(\"fixed_rate\")) {",
+    replace: "      if (action.modes.length === 1 && action.modes[0] === \"fixed_rate\") {",
+    tests: [T.cover],
+  },
+  {
+    // A repeated mode is a venue 400.
+    id: "submit-modes-unique-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      if (modesViolation) return unavailable(",
+    replace: "      if (false) return unavailable(",
+    tests: [T.cover],
+  },
+  {
+    // A fixed_rate ANSWER OPTION must carry its own rate (0.4.4): unmirrored, the venue refuses
+    // the whole answer.
+    id: "submit-fixed-option-rule-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        if (o.mode === \"fixed_rate\") {",
+    replace: "        if (false) {",
     tests: [T.cover],
   },
   {
@@ -3242,15 +3445,47 @@ const CATALOG: Mutant[] = [
     // the buyer is asking for.
     id: "cover-rfq-open-reading-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings, ...lossWarnings]);",
-    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...recipeWarnings, ...lossWarnings]);",
+    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...classified.warnings, ...coverWarnings, ...chainWarnings]);",
+    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...classified.warnings, ...chainWarnings]);",
     tests: [T.cover],
   },
-
-  // ── a reference that keeps losses out of its share price (chain/nav-loss.ts) ───────────────
   {
-    // The share computed against the wrong base: the disclosed percentage misstates how much
-    // of the vault is unreported loss.
+    // The chain's side of the reading computed and thrown away: no in-the-money warning, no
+    // recipe refusal, no loss disclosure.
+    id: "cover-rfq-open-chain-warnings-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "[...classified.warnings, ...coverWarnings, ...chainWarnings]);",
+    replace: "[...classified.warnings, ...coverWarnings]);",
+    tests: [T.cover],
+  },
+  {
+    // Only a NAV-sourced pool swaps at the vault's share price: a price-sourced pool told about
+    // lostAssets is told about a number its rate never reads.
+    id: "reading-nav-gate-widened",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (source === \"nav\") {",
+    replace: "  if (source !== \"fixed\") {",
+    tests: [T.cover],
+  },
+  {
+    // The requester of NAV-read cover is no longer told the reference keeps losses out of its
+    // share price.
+    id: "reading-nav-gate-dropped",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (source === \"nav\") {",
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // Without an RPC nothing was asked — and the result must say so.
+    id: "reading-no-rpc-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "      notRead.push(\"no RPC resolved: the recipe was not asked and the reference was not read\");",
+    replace: "",
+    tests: [T.cover],
+  },
+  {
+    // The share computed against the wrong base misstates how much of the vault is open loss.
     id: "nav-loss-share-base",
     file: "packages/core/src/chain/nav-loss.ts",
     find: "(l.openShortfall * 100_000_000n) / l.totalAssets;",
@@ -3279,51 +3514,629 @@ const CATALOG: Mutant[] = [
     // conservative is lost.
     id: "nav-loss-unread-cover-as-zero",
     file: "packages/core/src/chain/nav-loss.ts",
-    find: "    let coveredAssets: bigint | null = null;",
-    replace: "    let coveredAssets: bigint | null = 0n;",
+    find: "  let coveredAssets: bigint | null = null;",
+    replace: "  let coveredAssets: bigint | null = 0n;",
     tests: [T.cover],
   },
   {
-    // The covered state worded as an open one: the underwriter is told to price a hole that
-    // does not exist.
-    id: "nav-loss-covered-state-dropped",
+    // A zero counter records no loss: asking address(1) anyway turns a failed side read into
+    // "cover unread" on a vault with nothing to cover.
+    id: "nav-loss-zero-counter-asks-cover",
     file: "packages/core/src/chain/nav-loss.ts",
-    find: "    : l.openShortfall === 0n\n      ? `its",
-    replace: "    : l.openShortfall < 0n\n      ? `its",
+    find: "  if (lost === 0n) return {",
+    replace: "  if (false) return {",
     tests: [T.cover],
   },
   {
-    // rfq-open stops telling the requester: the reading and the warning vanish.
-    id: "nav-loss-rfq-open-dropped",
-    file: "packages/core/src/handlers/submit.ts",
-    find: "        const loss = rpc ? await readUnreportedLoss(rpc.client, action.referenceAsset) : undefined;",
-    replace: "        const loss = undefined as Awaited<ReturnType<typeof readUnreportedLoss>>; void rpc;",
+    // Every read is pinned to one block: unpinned, a cover landing mid-read pairs a new counter
+    // with an old cover.
+    id: "nav-loss-block-unpinned",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "client.readContract({ address: reference, abi: navLossAbi, functionName, blockNumber, ...(args ? { args } : {}) });",
+    replace: "client.readContract({ address: reference, abi: navLossAbi, functionName, ...(args ? { args } : {}) });",
     tests: [T.cover],
   },
   {
-    // The underwriter — the side that CARRIES the hidden shortfall — is no longer told.
-    id: "nav-loss-underwriter-dropped",
-    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  if (hiddenLoss !== undefined) warnings.push(unreportedLossWarning(referenceAsset, hiddenLoss, \"underwriter\"));",
-    replace: "  void hiddenLoss;",
-    tests: ["packages/core/test/answer-rfq.test.ts"],
+    // A zero counter is `none` whatever else was or was not read.
+    id: "nav-loss-state-none-needs-cover",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "  if (l.lostAssets === 0n) return \"none\";",
+    replace: "  if (l.lostAssets === 0n && l.coveredAssets !== null) return \"none\";",
+    tests: [T.cover],
+  },
+  {
+    // Covered worded as open: the underwriter is told to price a hole that does not exist.
+    id: "nav-loss-covered-state-swapped",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "return l.openShortfall === 0n ? \"covered\" : \"open\";",
+    replace: "return l.openShortfall === 0n ? \"open\" : \"covered\";",
+    tests: [T.cover],
   },
   {
     // The two sides swapped: the underwriter reads the requester's reassurance.
     id: "nav-loss-side-swapped",
     file: "packages/core/src/chain/nav-loss.ts",
-    find: 'const consequence = side === "underwriter"',
-    replace: 'const consequence = side !== "underwriter"',
+    find: "const consequence = side === \"underwriter\"",
+    replace: "const consequence = side !== \"underwriter\"",
     tests: [T.cover],
   },
   {
-    // A covered vault worded as a present shortfall: the underwriter is told it carries a hole
-    // that does not exist.
-    id: "nav-loss-open-claim-unconditional",
-    file: "packages/core/src/chain/nav-loss.ts",
-    find: "  const open = l.openShortfall > 0n;",
-    replace: "  const open = l.openShortfall >= 0n;",
+    // The underwriter of a PRICE-sourced pool is warned about a share-price accounting its pool
+    // never reads.
+    id: "answer-loss-nav-gate-widened",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (dd.source === \"nav\") {",
+    replace: "  if (true) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The underwriter — the side that CARRIES an open shortfall — is no longer told.
+    id: "nav-loss-underwriter-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (dd.source === \"nav\") {",
+    replace: "  if (false) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The RFQ's rate_override IS the order's rateOverride (cork-api 0.4.4): dropped, a fixed
+    // request cannot be answered without retyping the rate.
+    id: "answer-fixed-rate-not-carried",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);",
+    replace: "  const rateOverride = explicitRate;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A template rate carried into an order whose recipe reads an oracle: the fill reverts
+    // UnexpectedRateOverride.
+    id: "answer-rate-on-oracle-recipe",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);",
+    replace: "  const rateOverride = explicitRate ?? templateRate;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // "0" is the schema's no-rate default, not a frozen rate of zero.
+    id: "answer-zero-is-a-rate",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "action.jitMarket.rateOverride !== \"0\" ? BigInt",
+    replace: "action.jitMarket.rateOverride !== \"\" ? BigInt",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // Another rate is another oracle and another pool: unsaid, the requester's fill check fails
+    // on a pool id nobody explained.
+    id: "answer-counter-proposal-silent",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (isFixed && requestedRate !== undefined && rateOverride !== requestedRate) {",
+    replace: "  if (false) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The fixed recipe resolves only against a DEPLOYED oracle: without the deploy-then-resolve
+    // simulation every fixed-rate derivation dies on RateOracleNotDeployed.
+    id: "resolve-pending-deploy-skipped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "  if (pending) return resolveAfterDeploy(",
+    replace: "  if (false) return resolveAfterDeploy(",
     tests: [T.cover],
+  },
+  {
+    // A deploy that would revert is a fact about the ORACLE, not the recipe's refusal.
+    id: "resolve-deploy-leg-ignored",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "  if (deployLeg?.status !== \"success\") {",
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // A green resolve leg with no data is not a constraint.
+    id: "resolve-leg-data-unchecked",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "  if (resolveLeg?.status !== \"success\" || !resolveLeg.data) {",
+    replace: "  if (resolveLeg?.status !== \"success\") {",
+    tests: [T.cover],
+  },
+  {
+    // The NAV wrapper is the reference's own value; the price wrapper is the fallback.
+    id: "liverate-price-first",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "for (const mode of [\"nav\", \"price\"] as const) {",
+    replace: "for (const mode of [\"price\", \"nav\"] as const) {",
+    tests: [T.cover],
+  },
+  {
+    // The pool read stops naming the cover: the holder is back to decoding four limits.
+    id: "query-pool-cover-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "          cover: poolCover(s.market),",
+    replace: "",
+    tests: [T.cover],
+  },
+  {
+    // A rate on a recipe that reads an oracle reverts the fill (UnexpectedRateOverride) and the
+    // venue does not check it: unwarned, the requester learns at the fill.
+    id: "cover-stray-rate-dropped",
+    file: "packages/core/src/cover.ts",
+    find: "    if (rate.admissible !== undefined) {",
+    replace: "    if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // The same warning on the FIXED recipe accuses the one field that recipe needs.
+    id: "cover-stray-rate-on-fixed",
+    file: "packages/core/src/cover.ts",
+    find: "  if (kind !== \"fixed-rate\") {\n    if (rate.admissible",
+    replace: "  if (true) {\n    if (rate.admissible",
+    tests: [T.cover],
+  },
+  {
+    // A rate_override that is no rate, on a recipe that reads none: the requester is told to
+    // remove a key nothing reads.
+    id: "cover-stray-invalid-rate-silent",
+    file: "packages/core/src/cover.ts",
+    find: "    } else if (rate.raw !== undefined && audience === \"requester\") {",
+    replace: "    } else if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // The requester is told which block to use; the underwriter that the bytes are not carried.
+    // Swapped, each side reads the other's way out.
+    id: "cover-block-wayout-audience",
+    file: "packages/core/src/cover.ts",
+    find: "    const wayOut = audience === \"requester\"\n      ? `Use ",
+    replace: "    const wayOut = audience !== \"requester\"\n      ? `Use ",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A market_template_id cannot declare the frozen rate: the venue refuses it for fixed_rate.
+    id: "submit-fixed-template-id-admitted",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "  if (inlineOfTemplate(template) === undefined) {\n    return `fixed-rate",
+    replace: "  if (inlineOfTemplate(template) === undefined) {\n    return null; return `fixed-rate",
+    tests: [T.cover],
+  },
+  {
+    // A misspelled option mode is a venue 400 — and it slips past the fixed-rate rule, which keys
+    // on the exact mode name.
+    id: "submit-option-mode-enum-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        if (o.mode !== undefined && !(RFQ_MODES as readonly unknown[]).includes(o.mode)) {",
+    replace: "        if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // A recipe no generation names gets NO chain reads: unsaid, the quiet result reads as clean.
+    id: "submit-unhinted-recipe-silent",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      } else if (classified.address !== undefined) {",
+    replace: "      } else if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // Another cover's block lends its bytes to a recipe that does not read them — and the
+    // request side and the answer side would then resolve different pools.
+    id: "reading-foreign-block-bytes",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  return params !== undefined && blockIsRecipesOwn(kind, params) ? inlineAdditionalData(params) : undefined;",
+    replace: "  return params !== undefined ? inlineAdditionalData(params) : undefined;",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // With the recipe's cover unknown nothing says the block is foreign: it rides as written.
+    id: "reading-block-own-needs-kind",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  return kind === undefined || INLINE_SCHEMA_COVER[params.schema] === kind;",
+    replace: "  return INLINE_SCHEMA_COVER[params.schema] === kind;",
+    tests: [T.cover],
+  },
+  {
+    // A request with no band or no rate is sent to the recipe anyway: a second, cryptic refusal
+    // for the fault the reading already named.
+    id: "reading-unbuildable-sent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "const resolvable = cover.kind === \"liquidity\" || (cover.kind === \"impairment\" && cover.band !== undefined) || fixedRate !== undefined;",
+    replace: "const resolvable = true;",
+    tests: [T.cover],
+  },
+  {
+    // An endpoint that failed (or cannot simulate) established nothing about the request: as a
+    // warning it accuses a request an underwriter can build.
+    id: "reading-outage-as-refusal",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    if (code === \"chain_read_failed\") out.notRead.push(`recipe.resolve: ${said}`);",
+    replace: "    if (false) out.notRead.push(`recipe.resolve: ${said}`);",
+    tests: [T.cover],
+  },
+  {
+    // The recipe's own refusal must say it is the REQUEST that cannot be built — an underwriter
+    // fails the same way.
+    id: "reading-refusal-not-attributed",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    else if (code === \"recipe_refused\") out.warnings.push(",
+    replace: "    else if (false) out.warnings.push(",
+    tests: [T.cover],
+  },
+  {
+    // A verify that failed in transport is not a verify that passed.
+    id: "reading-verify-unread-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  else if (v.status === \"unread\") out.notRead.push(",
+    replace: "  else if (false) out.notRead.push(",
+    tests: [T.cover],
+  },
+  {
+    // The request is for a pool that does not exist: the recipe's creation-only rules apply, and
+    // the duration bound is one of them.
+    id: "reading-verify-not-creating",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "creating: true, constraint, extraData: extraData ?? \"0x\" });",
+    replace: "creating: false, constraint, extraData: extraData ?? \"0x\" });",
+    tests: [T.cover],
+  },
+  {
+    // The requester reads the underwriter's consequence.
+    id: "reading-itm-side-pinned",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "liveRateSource: live.source, side });",
+    replace: "liveRateSource: live.source, side: \"underwriter\" });",
+    tests: [T.cover],
+  },
+  {
+    // A deployed oracle that cannot be read is neither 'no oracle' nor a rate to compare with.
+    id: "reading-unreadable-as-compared",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    if (live.status === \"unreadable\") {",
+    replace: "    if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // A counter read that did not happen reads as a clean bill — on both sides of the RFQ.
+    id: "reading-unread-loss-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  return loss.status === \"unread\" ? { notRead: `the reference's lost-assets counter: ${loss.reason}` } : {};",
+    replace: "  return {};",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // Several acceptable collaterals have no single pair: the missing constraint must be explained.
+    id: "reading-one-of-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    notRead.push(\"the collateral is one_of with several entries: no single pair to resolve the recipe against\");",
+    replace: "    void 0;",
+    tests: [T.cover],
+  },
+  {
+    // A one_of with ONE entry names one pair, and is resolved like an exact collateral.
+    id: "reading-single-one-of-unresolved",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  return c.one_of.length === 1 ? c.one_of[0] : undefined;",
+    replace: "  return undefined;",
+    tests: [T.cover],
+  },
+  {
+    // With several entries, resolving against the first would answer for a pair the requester
+    // may not get.
+    id: "reading-several-one-of-resolved",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  return c.one_of.length === 1 ? c.one_of[0] : undefined;",
+    replace: "  return c.one_of.length >= 1 ? c.one_of[0] : undefined;",
+    tests: [T.cover],
+  },
+  {
+    // A frozen rate with nothing to compare against is not a rate that compared clean.
+    id: "reading-no-live-oracle-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "if (live.status === \"none\") return { notRead: \"the reference's rate today: the pair has no deployed nav or price oracle to compare the frozen rate with\" };",
+    replace: "if (live.status === \"none\") return {};",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // When the recipe's source cannot be read the loss reading is skipped: that must be said.
+    id: "reading-source-failure-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    else notRead.push(`the recipe's source (${read.error}), so the reference's lost-assets counter was not asked`);",
+    replace: "    else void read;",
+    tests: [T.cover],
+  },
+  {
+    // A transport fault on source() must be known as one: answer-rfq refuses on it instead of
+    // building on 'not fixed'.
+    id: "recipe-source-transport-flag",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "    return { error: firstLine(err), transport: isTransportFailure(err) };",
+    replace: "    return { error: firstLine(err), transport: false };",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A vault WITHOUT the view (its call reverts) is `absent`, not "nobody knows".
+    id: "nav-loss-revert-read-as-unread",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    lost = await read(\"lostAssets\");\n  } catch (err) {\n    return isContractRevert(err) ? { status: \"absent\" } : { status: \"unread\", reason: firstLine(err) };",
+    replace: "    lost = await read(\"lostAssets\");\n  } catch (err) {\n    return { status: \"unread\", reason: firstLine(err) };",
+    tests: [T.cover],
+  },
+  {
+    // Only a REVERT says the vault has no such view: any other failure read as `absent` turns an
+    // outage into a clean bill.
+    id: "nav-loss-failure-read-as-absent",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    lost = await read(\"lostAssets\");\n  } catch (err) {\n    return isContractRevert(err) ? { status: \"absent\" } : { status: \"unread\", reason: firstLine(err) };",
+    replace: "    lost = await read(\"lostAssets\");\n  } catch (err) {\n    return { status: \"absent\" };",
+    tests: [T.cover],
+  },
+  {
+    // With the cover unread nothing was established: a present-tense shortfall is a claim the
+    // read does not support.
+    id: "nav-loss-unread-cover-as-open-claim",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    \"cover-unread\": { underwriter: \"You may carry an open shortfall up to the cover size (the cover was not read)\", requester: \"the underwriter may carry an open shortfall (the cover was not read)\" },",
+    replace: "    \"cover-unread\": { underwriter: \"You carry an open shortfall up to the cover size\", requester: \"the underwriter carries an open shortfall\" },",
+    tests: [T.cover],
+  },
+  {
+    // A covered vault worded as a present shortfall.
+    id: "nav-loss-covered-as-open-claim",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    covered: future,",
+    replace: "    covered: { underwriter: \"You carry an open shortfall up to the cover size\", requester: \"the underwriter carries an open shortfall\" },",
+    tests: [T.cover],
+  },
+  {
+    // isContractRevert needs POSITIVE evidence: a classifier that calls everything a revert
+    // reads an RPC outage as 'no such view'.
+    id: "rpc-any-failure-is-revert",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "  return false;\n}\n\n/** The first line of an error's message",
+    replace: "  return true;\n}\n\n/** The first line of an error's message",
+    tests: [T.cover],
+  },
+  {
+    // An address that answers no data for the selector has no such function: that is the
+    // contract's answer too.
+    id: "rpc-zero-data-not-revert",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "name === \"ContractFunctionRevertedError\" || name === \"ContractFunctionZeroDataError\" || ",
+    replace: "name === \"ContractFunctionRevertedError\" || ",
+    tests: [T.cover],
+  },
+  {
+    // The underwriter's answer must list a loss read that did not happen.
+    id: "answer-loss-unread-silent",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (loss.notRead) notRead.push(loss.notRead);",
+    replace: "    void loss.notRead;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The underwriter is the one out of pocket: it must read its own consequence.
+    id: "answer-itm-side-requester",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "rateOverride, \"underwriter\");\n    if (p.warning)",
+    replace: "rateOverride, \"requester\");\n    if (p.warning)",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A frozen rate above the reference's rate is a certain payout: the underwriter signs it
+    // unwarned.
+    id: "answer-itm-warning-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (p.warning) warnings.push(p.warning);",
+    replace: "    void p.warning;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A comparison that was not made must be said: an answer with no position is otherwise
+    // read as clean.
+    id: "answer-live-rate-unread-silent",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (p.notRead) notRead.push(p.notRead);",
+    replace: "    void p.notRead;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The duration judged is the one the ORDER carries: explicit bytes override the block.
+    id: "answer-duration-ignores-explicit-bytes",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "explicitBytes !== undefined ? impairmentDurationOfArgs(explicitBytes) : inlineData",
+    replace: "false ? undefined : inlineData",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A source() read that failed in transport is not 'not fixed': building on it drops the
+    // frozen rate and ends in a misleading refusal.
+    id: "answer-source-outage-builds",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (\"error\" in sourceRead && sourceRead.transport) {",
+    replace: "  if (false) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // An explicit rate on a recipe that reads an oracle is refused HERE with the reason, not
+    // called 'not carried' and then refused downstream.
+    id: "answer-explicit-rate-on-oracle-recipe",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (recipeSource !== undefined && !isFixed && explicitRate !== undefined) {",
+    replace: "  if (false) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A fixed recipe has no anchor: its answer must not echo anchor words.
+    id: "answer-fixed-anchor-echo",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "              ...(inline.schema === INLINE_FIXED_SCHEMA\n                ? {}",
+    replace: "              ...(false\n                ? {}",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The drift notice is about recipes that anchor on a live rate; a fixed oracle IS the rate.
+    id: "answer-fixed-drift-notice",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (!isFixed && inline?.anchorRate !== undefined && dd.oracle.deployed",
+    replace: "  if (inline?.anchorRate !== undefined && dd.oracle.deployed",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A zero rate is an oracle that cannot be read, not a reference worth nothing.
+    id: "liverate-zero-accepted",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    if (read.rate === 0n) return { status: \"unreadable\", source: mode, oracle: wrapper, reason: \"rate() answers zero\", failure: \"zero\" };",
+    replace: "",
+    tests: [T.cover],
+  },
+  {
+    // A deployed NAV wrapper that fails is not replaced by the price wrapper: the two measure
+    // different things, and the switch would be silent.
+    id: "liverate-dead-nav-falls-to-price",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    if (read.rate === null) return { status: \"unreadable\", source: mode, oracle: wrapper, reason: read.rateError ?? \"the read failed\", failure: read.rateReadFailure ?? \"revert\" };",
+    replace: "    if (read.rate === null) continue;",
+    tests: [T.cover],
+  },
+  {
+    // A REVERT of recipe.verify is the recipe's own refusal (DurationTooLong); read as an
+    // outage it becomes 'the pre-flight read failed' and the order looks fillable.
+    id: "verify-revert-as-outage",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    return isTransportFailure(err) ? { status: \"unread\", reason: revertReason(err) } : { status: \"reverted\", reason: revertReason(err) };",
+    replace: "    return { status: \"unread\", reason: revertReason(err) };",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A transport fault says nothing about the recipe.
+    id: "verify-outage-as-revert",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "    return isTransportFailure(err) ? { status: \"unread\", reason: revertReason(err) } : { status: \"reverted\", reason: revertReason(err) };",
+    replace: "    return { status: \"reverted\", reason: revertReason(err) };",
+    tests: [T.cover],
+  },
+  {
+    // The maker path must name a verify revert as the fill's revert, not as a failed read.
+    id: "jit-verify-revert-as-read-failure",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "        else if (v.status === \"reverted\") warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
+    replace: "        else if (false) warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A FixedRateOracle is keyed on the rate alone: the pair-oracle notice (salt, sources,
+    // live rate) describes a different contract.
+    id: "jit-fixed-oracle-notice",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "      warnings.push(source === \"fixed\"\n        ? { code: \"oracle_not_deployed\", message: `the FixedRateOracle",
+    replace: "      warnings.push(false\n        ? { code: \"oracle_not_deployed\", message: `the FixedRateOracle",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A fixed rate never moves: a notice that the live rate may walk out of the window is false.
+    id: "orders-fixed-stale-constraint-notice",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "          if (source !== \"fixed\") warnings.push({ code: \"constraint_window_notice\"",
+    replace: "          if (true) warnings.push({ code: \"constraint_window_notice\"",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The duration is the SECOND word of the impairment payload.
+    id: "impairment-duration-word-misread",
+    file: "packages/core/src/market-registry.ts",
+    find: "BigInt(`0x${bytes.slice(2 + 64, 2 + 128)}`)",
+    replace: "BigInt(`0x${bytes.slice(2, 2 + 64)}`)",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // A bigint rate (the SDK path) must be refused in words: JSON cannot print it, and an
+    // unguarded stringify throws out of the tool.
+    id: "fixed-rate-bigint-throws",
+    file: "packages/core/src/orders-answer.ts",
+    find: "  if (typeof v === \"bigint\") return `${v}n (a bigint)`;",
+    replace: "",
+    tests: [T.cover],
+  },
+  {
+    // Only a well-formed 20-byte address is a recipe address.
+    id: "template-recipe-address-loose",
+    file: "packages/core/src/orders-answer.ts",
+    find: "typeof raw === \"string\" && /^0x[0-9a-fA-F]{40}$/u.test(raw)",
+    replace: "typeof raw === \"string\" && /^0x[0-9a-fA-F]{40,}$/u.test(raw)",
+    tests: [T.cover],
+  },
+  {
+    // recipe.verify answering false is the fill's RecipeRejectedConstraint — the check rfq-open
+    // lost when the local duration rule was removed (the live recipe REJECTS, it does not revert).
+    id: "reading-verify-rejected-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (v.status === \"rejected\") {",
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // A revert of verify is the recipe's own error and the fill's revert.
+    id: "reading-verify-revert-silent",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  } else if (v.status === \"reverted\") out.warnings.push(",
+    replace: "  } else if (false) out.warnings.push(",
+    tests: [T.cover],
+  },
+  {
+    // Measured on the live recipe: a duration EQUAL to the remaining life is accepted.
+    id: "duration-note-boundary-exclusive",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (wire !== \"nested\" || durationSeconds === undefined || durationSeconds <= lifeSeconds) return undefined;",
+    replace: "  if (wire !== \"nested\" || durationSeconds === undefined || durationSeconds < lifeSeconds) return undefined;",
+    tests: [T.cover, "packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The flat (0.3.x) verify takes no expiry: naming a duration rule there invents a refusal
+    // that generation never makes.
+    id: "duration-note-on-flat",
+    file: "packages/core/src/handlers/cover-reading.ts",
+    find: "  if (wire !== \"nested\" || durationSeconds === undefined || durationSeconds <= lifeSeconds) return undefined;",
+    replace: "  if (durationSeconds === undefined || durationSeconds <= lifeSeconds) return undefined;",
+    tests: [T.cover],
+  },
+  {
+    // The recipe's false carries no reason: without the cause the underwriter is told only to
+    // 're-resolve', which cannot help.
+    id: "answer-duration-cause-unsaid",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (beyondLife !== undefined) {",
+    replace: "    if (false) {",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The recipe applies the duration rule only when the pool is CREATED (creating = true).
+    id: "answer-duration-cause-on-existing-pool",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    const beyondLife = dd.pool.exists ? undefined : durationBeyondLifeNote(",
+    replace: "    const beyondLife = durationBeyondLifeNote(",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+
+  {
+    // create-pool's twin of the JIT ladder's branch: a REVERT of recipe.verify is the tx's own
+    // revert, named — not "the pre-flight read failed".
+    id: "market-verify-revert-as-read-failure",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "        else if (v.status === \"reverted\") warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
+    replace: "        else if (false) warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
+    tests: [T.answer],
+  },
+  {
+    // …and a transport fault on it must not be reported as the recipe's revert.
+    id: "market-verify-outage-as-revert",
+    file: "packages/core/src/handlers/prepare-market.ts",
+    find: "      if (v.status === \"rejected\") {\n        warnings.push({ code: \"would_revert\", message: \"recipe.verify REJECTS this constraint against the live oracle right now — sending this tx",
+    replace: "      if (v.status !== \"accepted\") {\n        warnings.push({ code: \"would_revert\", message: \"recipe.verify REJECTS this constraint against the live oracle right now — sending this tx",
+    tests: [T.answer],
+  },
+  {
+    // The same on the JIT ladder: every non-accepted outcome collapsed into "REJECTS" loses
+    // the difference between the recipe's false, its revert, and an outage.
+    id: "jit-verify-outage-as-rejection",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "      if (v.status === \"rejected\") {\n        warnings.push({ code: \"would_revert\", message: \"recipe.verify REJECTS this constraint against the live oracle right now — the fill",
+    replace: "      if (v.status !== \"accepted\") {\n        warnings.push({ code: \"would_revert\", message: \"recipe.verify REJECTS this constraint against the live oracle right now — the fill",
+    tests: [T.answer],
   },
 
   // ── ForSelf caller-gate generation (WHITELIST() binding + account pre-flight) ─────────────
@@ -5307,8 +6120,8 @@ const CATALOG: Mutant[] = [
     // zero spread = a collapsed window at worst) instead of a refusal.
     id: "inline-impairment-partial-encodes-zero",
     file: "packages/core/src/orders-answer.ts",
-    find: "    if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;\n    return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });",
-    replace: "    return encodeImpairmentArgs({ anchorRate: p.anchorRate ?? 0n, durationSeconds: p.durationSeconds ?? 0n, apySpreadPercentage: p.apySpreadPercentage ?? 0n });",
+    find: "      if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;\n      return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });",
+    replace: "      return encodeImpairmentArgs({ anchorRate: p.anchorRate ?? 0n, durationSeconds: p.durationSeconds ?? 0n, apySpreadPercentage: p.apySpreadPercentage ?? 0n });",
     tests: [T.answer],
   },
   {
@@ -5316,8 +6129,8 @@ const CATALOG: Mutant[] = [
     // answer silently builds without the requester's words.
     id: "inline-impairment-schema-dropped",
     file: "packages/core/src/orders-answer.ts",
-    find: '  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;',
-    replace: '  if (o.schema !== INLINE_LIQUIDITY_SCHEMA) return undefined;',
+    find: "    case INLINE_IMPAIRMENT_SCHEMA: {\n      const durationSeconds = positive(",
+    replace: "    case \"never/0\": {\n      const durationSeconds = positive(",
     tests: [T.answer],
   },
   {
@@ -5343,7 +6156,7 @@ const CATALOG: Mutant[] = [
     // additionalData and nobody is told which word is missing.
     id: "answer-impairment-incomplete-silent",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && inlineData === undefined && explicitBytes === undefined) {",
+    find: "  if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && blockIsRecipesOwn(kind, inline) && inlineData === undefined && explicitBytes === undefined) {",
     replace: "  if (false) {",
     tests: [T.answer],
   },
@@ -6209,6 +7022,22 @@ const catalog = only ? CATALOG.filter((m) => only.some((p) => m.id.startsWith(p)
 if (catalog.length === 0) {
   console.error("no mutants matched --only");
   process.exit(1);
+}
+
+// `--rot`: check every selected probe's anchor against the real source and exit — seconds, no
+// sandbox, no test run. The full run makes the same two checks per mutant, but only when it
+// reaches that mutant: a refactor that moves an anchor then surfaces an hour in. Run this first.
+if (process.argv.includes("--rot")) {
+  let stale = 0;
+  for (const m of catalog) {
+    const source = readFileSync(m.file, "utf8");
+    const count = source.split(m.find).length - 1;
+    if (count === 1 && m.find !== m.replace) continue;
+    stale++;
+    console.log(`ROT      ${m.id} — ${count === 0 ? "pattern no longer matches" : count > 1 ? `pattern matches ${count} times (ambiguous anchor)` : "find and replace are identical"} in ${m.file}`);
+  }
+  console.log(`\n${catalog.length} probes checked: ${stale} rotted`);
+  process.exit(stale > 0 ? 1 : 0);
 }
 
 // ── sandbox: mutants run in a disposable COPY of the working tree ───────────────────────────

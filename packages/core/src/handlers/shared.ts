@@ -481,9 +481,8 @@ export { PERMIT2_ADDRESS } from "../order-approvals.ts";
 
 /** First line of an unknown error's message — the one spelling of the repeated
  *  `err instanceof Error ? err.message.split("\n")[0] : String(err)` idiom. */
-export function firstLine(err: unknown): string {
-  return err instanceof Error ? (err.message.split("\n")[0] ?? String(err)) : String(err);
-}
+import { firstLine } from "../chain/rpc.ts";
+export { firstLine };
 
 /** A nonexistent pool does NOT revert — market() returns a zeroed struct. ONE predicate + ONE
  *  refusal envelope for every surface that must not build against the zero address (phoenix

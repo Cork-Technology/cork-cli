@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
+import { CST, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -513,6 +513,29 @@ describe("eval task fixtures — one-cancels-the-other, ladders, cancel.retires,
     expect(d.jit?.constraint?.rateMax).toBe("801534246575342465");
     expect(taskOf("answer-rfq-impairment").expect.answer!.test(`rateMax 801534246575342465 pinned`)).toBe(true);
     expect(taskOf("answer-rfq-impairment").expect.answer!.test(`rateMax 1600000000000000000`)).toBe(false); // the liquidity shape — the wrong recipe
+  });
+
+  it("answer-rfq-fixed-in-the-money: the play answers from the RFQ's own template, the rate rides as the frozen rate, and the warning the grader wants surfaced is in the tool's output", async () => {
+    const env = await callOf("answer-rfq-fixed-in-the-money");
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as { kind: string; answer: { fixed?: { rateOverride: string; position?: string; gapPercentage?: string } } };
+    expect(d.kind).toBe("maker-order");
+    expect(d.answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_ABOVE_RATE, position: "above", gapPercentage: "12500000000000000000" });
+    const w = env.warnings.find((x) => x.code === "fixed_rate_in_the_money")!;
+    // The ground-truth warning text itself satisfies the grader; an answer that only names the rate does not.
+    expect(taskOf("answer-rfq-fixed-in-the-money").expect.answer!.test(w.message)).toBe(true);
+    expect(taskOf("answer-rfq-fixed-in-the-money").expect.answer!.test(`the pool freezes at ${RFQ_FIXED_ABOVE_RATE}; sign the typed data`)).toBe(false);
+    expect(taskOf("answer-rfq-fixed-in-the-money").expect.answer!.test(PLAYS.find((p) => p.id === "answer-rfq-fixed-in-the-money")!.finalText!)).toBe(true);
+  });
+
+  it("submit-rfq-open-fixed: the play's body is the one the task grades, relayed with the cover reading that answers the question", async () => {
+    const env = await callOf("submit-rfq-open-fixed");
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as { rfqId: string; cover: { kind: string; fixed: { position: string; gapPercentage: string }; resolved: { constraint: { rateMin: string; rateMax: string } } } };
+    expect(d.rfqId).toBe("rfq_eval1");
+    expect(d.cover).toMatchObject({ kind: "fixed-rate", fixed: { position: "below", gapPercentage: "6250000000000000000" }, resolved: { constraint: { rateMin: RFQ_FIXED_RATE, rateMax: (BigInt(RFQ_FIXED_RATE) + 1n).toString() } } });
+    expect(taskOf("submit-rfq-open-fixed").expect.answer!.test("rfq_eval1 — the rate is 6.25% below the reference's rate")).toBe(true);
+    expect(taskOf("submit-rfq-open-fixed").expect.answer!.test("rfq_eval1")).toBe(false);
   });
 
   it("answer-rfq-firm: the sugar answers the stub RFQ with the kernel-exact amounts, reserved for the requester", async () => {

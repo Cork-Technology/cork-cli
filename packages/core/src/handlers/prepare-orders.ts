@@ -279,7 +279,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         if (ladder.verified) {
           const { client, boundController, source, oracle, derived } = ladder.verified;
           jitData = { ...jitData, source, oracle: { address: oracle.address, deployed: oracle.deployed, ...(oracle.deployed ? oracleRateEcho(oracle) : {}) }, derivedPoolId: derived.poolId, constraint, identity: "PINNED at signing: the constraint is carried in the order, so this pool id and the predicted share addresses hold however far the rate moves (2.1.0)" };
-          warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
+          // A fixed rate never moves: its constraint cannot go stale, so there is nothing to notice.
+          if (source !== "fixed") warnings.push({ code: "constraint_window_notice", message: "staleness is now guarded by recipe.verify at fill time, not a moving pool id: if the live rate walks outside the carried constraint's window, fills revert RecipeRejectedConstraint until you re-resolve and sign a fresh order" });
 
           try {
             // Predicted cST: direct read when the pool exists; otherwise the state-override

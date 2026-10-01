@@ -262,6 +262,27 @@ export function isTransportError(err: unknown): boolean {
   return false;
 }
 
+/** Whether a failed read is the CONTRACT's answer — it reverted, or the address answered no
+ *  data for that selector (no such function, or no code) — as opposed to a failure of the
+ *  endpoint. Positive evidence only: viem's revert error classes anywhere in the cause chain, or
+ *  a node's own "execution reverted" text. Everything else (an HTTP fault, a rate limit, "header
+ *  not found" on a lagging node behind a load balancer) is NOT a revert, and a caller that reads
+ *  "the contract has no such view" from it turns an outage into a fact about the contract. */
+export function isContractRevert(err: unknown): boolean {
+  for (let e = err, depth = 0; e && typeof e === "object" && depth < 8; e = (e as { cause?: unknown }).cause, depth++) {
+    const name = (e as { name?: string }).name;
+    if (name === "ContractFunctionRevertedError" || name === "ContractFunctionZeroDataError" || name === "ExecutionRevertedError" || name === "AbiDecodingZeroDataError") return true;
+    const message = (e as { message?: unknown }).message;
+    if (typeof message === "string" && /execution reverted/iu.test(message)) return true;
+  }
+  return false;
+}
+
+/** The first line of an error's message (viem's are many lines long). */
+export function firstLine(err: unknown): string {
+  return err instanceof Error ? (err.message.split("\n")[0] ?? String(err)) : String(err);
+}
+
 /**
  * Feed a real read failure back into the breaker so a chosen endpoint that goes bad mid-TTL is
  * dropped instead of being served until chosenTtlMs expires. Call only for transport-class errors.

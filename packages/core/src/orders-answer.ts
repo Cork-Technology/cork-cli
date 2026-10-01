@@ -77,11 +77,18 @@ export function impliedPremiumWad(premiumAmountNative: bigint, notionalAssets: b
  *  cannot build the recipe's 96-byte additionalData and reads as incomplete (`complete: false`),
  *  so the caller is told to pass jitMarket.additionalData instead of getting a guessed word.
  *
+ *  Since cork-api 0.4.4 the venue DOES name one key in the bag: `rate_override`, required when a
+ *  request or an option says `fixed_rate` (see fixedRateOverrideViolation below).
+ *
  *  Every value is read defensively: another schema name, a missing field, or a non-digit value
  *  reads as absent, never as a guess. */
 export const INLINE_LIQUIDITY_SCHEMA = "cork-inline-liquidity/1";
 export const INLINE_IMPAIRMENT_SCHEMA = "cork-inline-impairment/1";
-export const INLINE_TEMPLATE_SCHEMAS = [INLINE_LIQUIDITY_SCHEMA, INLINE_IMPAIRMENT_SCHEMA] as const;
+/** `cork-inline-fixed/1` — the block for the FIXED-rate recipe: `rate_override` (the venue's own
+ *  key, cork-api 0.4.4) plus the pool expiry and the two creation fees this tool's other blocks
+ *  carry. The fixed recipe takes NO recipe bytes: the rate rides as the order's `rateOverride`. */
+export const INLINE_FIXED_SCHEMA = "cork-inline-fixed/1";
+export const INLINE_TEMPLATE_SCHEMAS = [INLINE_LIQUIDITY_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, INLINE_FIXED_SCHEMA] as const;
 export type InlineTemplateSchema = (typeof INLINE_TEMPLATE_SCHEMAS)[number];
 interface InlineCommonParams {
   anchorRate?: bigint;
@@ -91,7 +98,7 @@ interface InlineCommonParams {
   /** OPTIONAL `oracle_salt` (bytes32 hex) — the salt of the destination pair's FIRST oracle
    *  wrapper on a nested-wire generation (market-registry 0.5.0 `deploy(ca, ref, mode, salt)`;
    *  part of the pool's identity through the oracle address). A requester↔underwriter
-   *  convention of OURS on both inline schemas (2026-09-22): the venue stores the bag verbatim
+   *  convention of OURS on the inline schemas (2026-09-22): the venue stores the bag verbatim
    *  and has no view on it. Absent = the zero salt (the pair's default wrapper); an explicit
    *  `jitMarket.oracleSalt` on the answer wins over it. Read only as a 32-byte hex string. */
   oracleSalt?: `0x${string}`;
@@ -104,14 +111,69 @@ export interface InlineImpairmentParams extends InlineCommonParams {
   durationSeconds?: bigint;
   apySpreadPercentage?: bigint;
 }
-export type InlineTemplateParams = InlineLiquidityParams | InlineImpairmentParams;
-export function inlineParamsOfTemplate(t: unknown): InlineTemplateParams | undefined {
+export interface InlineFixedParams extends InlineCommonParams {
+  schema: typeof INLINE_FIXED_SCHEMA;
+  /** The frozen rate, ABSOLUTE 1e18 = 1.0 — absent when `rate_override` breaks the venue's rule. */
+  rateOverride?: bigint;
+}
+export type InlineTemplateParams = InlineLiquidityParams | InlineImpairmentParams | InlineFixedParams;
+
+/** `market_template.inline`, or undefined for a template id, no template, or a malformed value.
+ *  THE one walk into a template: every reader of `oracle_recipe` / `oracle_params` goes
+ *  through here, so they cannot disagree on what counts as an inline template. */
+export function inlineOfTemplate(t: unknown): Record<string, unknown> | undefined {
   if (!t || typeof t !== "object") return undefined;
   const inline = (t as { inline?: unknown }).inline;
-  const op = inline && typeof inline === "object" ? (inline as { oracle_params?: unknown }).oracle_params : undefined;
-  if (!op || typeof op !== "object") return undefined;
-  const o = op as Record<string, unknown>;
-  if (o.schema !== INLINE_LIQUIDITY_SCHEMA && o.schema !== INLINE_IMPAIRMENT_SCHEMA) return undefined;
+  return inline && typeof inline === "object" ? (inline as Record<string, unknown>) : undefined;
+}
+
+/** `market_template.inline.oracle_params`, or undefined for a template id or a malformed bag. */
+export function oracleParamsOf(t: unknown): Record<string, unknown> | undefined {
+  const op = inlineOfTemplate(t)?.["oracle_params"];
+  return op && typeof op === "object" ? (op as Record<string, unknown>) : undefined;
+}
+
+/** `market_template.inline.oracle_recipe` when it is a well-formed address. */
+export function recipeAddressOfTemplate(t: unknown): `0x${string}` | undefined {
+  const raw = inlineOfTemplate(t)?.["oracle_recipe"];
+  return typeof raw === "string" && /^0x[0-9a-fA-F]{40}$/u.test(raw) ? (raw as `0x${string}`) : undefined;
+}
+
+/** A value as it reads in a message — JSON where JSON can say it (a bigint cannot). */
+const shown = (v: unknown): string => {
+  if (typeof v === "bigint") return `${v}n (a bigint)`;
+  try {
+    return JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+};
+
+const UINT256_MAX_DECIMAL = (2n ** 256n - 1n).toString();
+
+/** The venue's fixed-rate rule, op for op (cork-api 0.4.4 `FixedRateMarketTemplateSchema`): a
+ *  STRING of 1..78 digits with no leading zero, at most uint256 max. A JSON number, a sign, a
+ *  fraction, an exponent, hex, zero and an overflow are all refused there with a 400. Returns
+ *  the problem in words, or null when the venue admits the value. */
+export function fixedRateOverrideViolation(rate: unknown): string | null {
+  if (typeof rate !== "string") return `it must be a decimal STRING, got ${rate === undefined ? "nothing" : shown(rate)}`;
+  if (!/^[1-9][0-9]{0,77}$/u.test(rate)) return `${shown(rate)} is not a positive decimal integer without a leading zero (no sign, fraction, exponent or hex; zero has no oracle)`;
+  // Equal-length decimal strings order the same way their numbers do.
+  if (rate.length === 78 && rate > UINT256_MAX_DECIMAL) return `${rate} exceeds uint256`;
+  return null;
+}
+
+/** The frozen rate a template carries in `inline.oracle_params.rate_override` (ABSOLUTE,
+ *  1e18 = 1.0), read under the VENUE's rule — this key is the venue's, so it is read whatever
+ *  schema name the block carries. Undefined when absent or inadmissible. */
+export function fixedRateOverrideOfTemplate(t: unknown): bigint | undefined {
+  const rate = oracleParamsOf(t)?.rate_override;
+  return fixedRateOverrideViolation(rate) === null ? BigInt(rate as string) : undefined;
+}
+
+export function inlineParamsOfTemplate(t: unknown): InlineTemplateParams | undefined {
+  const o = oracleParamsOf(t);
+  if (!o) return undefined;
   const digits = (v: unknown): string | undefined => {
     const s = typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
     return s !== undefined && /^\d+$/.test(s) ? s : undefined;
@@ -129,24 +191,39 @@ export function inlineParamsOfTemplate(t: unknown): InlineTemplateParams | undef
     ...(unwindFee !== undefined ? { unwindSwapFeeWad: unwindFee } : {}),
     ...(oracleSalt !== undefined ? { oracleSalt } : {}),
   };
-  if (o.schema === INLINE_IMPAIRMENT_SCHEMA) {
-    const durationSeconds = positive(o.duration_seconds), apySpreadPercentage = positive(o.apy_spread_percentage);
-    return { schema: INLINE_IMPAIRMENT_SCHEMA, ...common, ...(durationSeconds !== undefined ? { durationSeconds } : {}), ...(apySpreadPercentage !== undefined ? { apySpreadPercentage } : {}) };
+  switch (o.schema) {
+    case INLINE_IMPAIRMENT_SCHEMA: {
+      const durationSeconds = positive(o.duration_seconds), apySpreadPercentage = positive(o.apy_spread_percentage);
+      return { schema: INLINE_IMPAIRMENT_SCHEMA, ...common, ...(durationSeconds !== undefined ? { durationSeconds } : {}), ...(apySpreadPercentage !== undefined ? { apySpreadPercentage } : {}) };
+    }
+    case INLINE_FIXED_SCHEMA: {
+      const rateOverride = fixedRateOverrideOfTemplate(t);
+      return { schema: INLINE_FIXED_SCHEMA, ...common, ...(rateOverride !== undefined ? { rateOverride } : {}) };
+    }
+    case INLINE_LIQUIDITY_SCHEMA:
+      return { schema: INLINE_LIQUIDITY_SCHEMA, ...common };
+    // Any other schema name is a block this tool has no contract for: read as absent.
+    default:
+      return undefined;
   }
-  return { schema: INLINE_LIQUIDITY_SCHEMA, ...common };
 }
 
-/** The recipe `additionalData` an inline block resolves to, by its schema — or undefined when
- *  the block cannot yield the recipe's payload (liquidity: no anchor; impairment: any of the
- *  three words missing — the recipe's _decode takes exactly 96 bytes, so a partial block is
- *  NOT encoded with zeros: a zero anchor/duration/spread would revert or produce a window the
- *  requester never asked for). */
+/** The recipe bytes (`extraData`) an inline block resolves to, by its schema — or undefined when
+ *  the block yields none: liquidity without an anchor; impairment with any of its three words
+ *  missing (the recipe's decoder takes exactly 96 bytes, so a partial block is NOT encoded with
+ *  zeros: a zero anchor/duration/spread would revert or produce a window the requester never
+ *  asked for); and the fixed block ALWAYS — the fixed recipe refuses any payload
+ *  (`UnexpectedExtraData`), its rate rides as the order's `rateOverride`. */
 export function inlineAdditionalData(p: InlineTemplateParams): `0x${string}` | undefined {
-  if (p.schema === INLINE_IMPAIRMENT_SCHEMA) {
-    if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;
-    return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });
+  switch (p.schema) {
+    case INLINE_IMPAIRMENT_SCHEMA:
+      if (p.anchorRate === undefined || p.durationSeconds === undefined || p.apySpreadPercentage === undefined) return undefined;
+      return encodeImpairmentArgs({ anchorRate: p.anchorRate, durationSeconds: p.durationSeconds, apySpreadPercentage: p.apySpreadPercentage });
+    case INLINE_FIXED_SCHEMA:
+      return undefined;
+    case INLINE_LIQUIDITY_SCHEMA:
+      return p.anchorRate !== undefined ? encodeAnchorArgs(p.anchorRate) : undefined;
   }
-  return p.anchorRate !== undefined ? encodeAnchorArgs(p.anchorRate) : undefined;
 }
 
 /** The liquidity recipes' `additionalData`: `abi.encode(uint256 anchorRate)`. */

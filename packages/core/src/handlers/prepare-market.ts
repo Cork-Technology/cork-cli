@@ -8,7 +8,7 @@ import { jitValueGate, maxExpiryBoundWarning, resolveFeeRule, resolveJitBytesInp
 import { refreshContractConstant } from "../chain/constants-cache.ts";
 import type { MarketRegistryWire, PhoenixWire } from "../generations.ts";
 import { poolManagerAbi } from "../chain/abis.ts";
-import { oracleRateEcho, oracleRateUnreadableMessage, probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
+import { oracleRateEcho, oracleRateUnreadableMessage, previewRecipeVerify, probeFixedOracle, probePairWrapper, resolveModeSugar, resolveRecipeOracleConstraint, staticResolveConstraint } from "./registry.ts";
 
 /** cork_prepare_market: unsigned oracle-infrastructure txs against the 2.1.0 registry —
  *  deploy-oracle = MarketRegistry.deploy(ca, ref, mode) (mode-keyed: one pair can hold a PRICE
@@ -323,17 +323,20 @@ async function handleCreatePool(
     // sequence), on the wire's arg order. Only meaningful against a DEPLOYED oracle; an
     // undeployed one is deployed by the tx itself, then re-checked live.
     if (oracle.deployed) {
-      const ok = await codec.verify(client, { recipe, collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, oracle: oracle.address, expiryTimestamp, creating, constraint, extraData }).catch(() => null);
-      if (ok === false) {
+      const v = await previewRecipeVerify(client, wire, { recipe, collateralAsset: a.collateralAsset, referenceAsset: a.referenceAsset, oracle: oracle.address, expiryTimestamp, creating, constraint, extraData });
+      if (v.status === "rejected") {
         warnings.push({ code: "would_revert", message: "recipe.verify REJECTS this constraint against the live oracle right now — sending this tx would revert RecipeRejectedConstraint (the constraint is stale, or was never one this recipe would produce). Re-resolve it (cork_compute recipe-rate-constraint) and rebuild" });
-      } else if (ok === null) {
+      } else if (v.status !== "accepted") {
         if (oracle.rateError && oracle.rateReadFailure !== "transport") warnings.push({ code: "oracle_rate_unreadable", message: oracleRateUnreadableMessage(oracle.address, oracle.rateError, "recipe.verify read it and failed the same way, and createNewPool will too.") });
-        else warnings.push({ code: "chain_read_failed", message: "the recipe.verify pre-flight read failed — the creator's constraint check could not be previewed" });
+        else if (v.status === "reverted") warnings.push({ code: "would_revert", message: `recipe.verify REVERTS for this constraint: ${v.reason} — createNewPool runs the same call and reverts the same way. Fix what the recipe names (cork_query registry-recipes describes its parameters), then rebuild` });
+        else warnings.push({ code: "chain_read_failed", message: `the recipe.verify pre-flight read failed in transport (${v.reason}) — the creator's constraint check could not be previewed` });
       }
     } else {
-      warnings.push({ code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the tx deploys it automatically (permissionless, idempotent${wire === "nested" ? `, with oracleSalt ${oracleSalt}` : ""}), then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before this tx lands would shift it` });
+      warnings.push(source === "fixed"
+        ? { code: "oracle_not_deployed", message: `the FixedRateOracle for this rate is not deployed yet (predicted ${oracle.address}) — the tx deploys it automatically (permissionless, idempotent, keyed on the rate alone), then recipe.verify checks the carried constraint against it. The rate never moves, so the pool id below holds` }
+        : { code: "oracle_not_deployed", message: `the recipe's oracle is not deployed yet (predicted ${oracle.address}) — the tx deploys it automatically (permissionless, idempotent${wire === "nested" ? `, with oracleSalt ${oracleSalt}` : ""}), then recipe.verify re-checks the carried constraint against the LIVE rate. The pool id below assumes the predicted oracle address; re-registering the pair's sources before this tx lands would shift it` });
     }
-    warnings.push({ code: "constraint_window_notice", message: "the tx carries the constraint resolved NOW: if the live rate walks outside its window before you broadcast, the creator reverts RecipeRejectedConstraint — re-resolve (cork_compute recipe-rate-constraint) and rebuild" });
+    if (source !== "fixed") warnings.push({ code: "constraint_window_notice", message: "the tx carries the constraint resolved NOW: if the live rate walks outside its window before you broadcast, the creator reverts RecipeRejectedConstraint — re-resolve (cork_compute recipe-rate-constraint) and rebuild" });
     // cST/cPT + existence: pinned when the pool exists, else the state-override simulation —
     // the same prediction derive-cork-pool serves, so the tx's return values are known upfront.
     // The simulation runs AS the creator — the account that calls the controller on both wires.

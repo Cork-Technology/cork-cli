@@ -9,7 +9,7 @@ import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, 
 import { stubRpc } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
 import { encodeAnchorArgs, encodeImpairmentArgs, inlineAdditionalData, inlineParamsOfTemplate, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
-import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, RFQ_IMPAIRMENT_EXPIRY, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
+import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, DEPLOYED_FIXED_RATE, FIXED_RECIPE, RFQ_FIXED_ID, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_RATE, RFQ_FIXED_ANSWER_ID, RFQ_FIXED_OPTION_RATE, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, RFQ_IMPAIRMENT_EXPIRY, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
 
 describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
   it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
@@ -88,28 +88,41 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(env.warnings.some((w) => w.code === "oco_group_notice")).toBe(true);
   });
 
-  it("the UNDERWRITER is told when the reference keeps bad debt out of its share price (lostAssets): the rate will not move and its cPT side carries the shortfall", async () => {
-    const expiry = NOW + 20n * 86_400n;
-    const answer = (c: typeof ctx) => runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-loss-0001", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, c);
-    // The eval stub's reference exposes no lostAssets(): silent.
-    const quiet = await answer(ctx);
-    expect(quiet.state).toBe("ok");
-    expect(quiet.warnings.map((w) => w.code)).not.toContain("reference_loss_unreported");
-    // The same chain, with the reference answering the MetaMorpho v1.1 view (YCSUSDC's live numbers).
-    const withLoss: typeof ctx = {
+  it("the UNDERWRITER is told when a NAV-read reference keeps bad debt out of its share price — and ONLY for a NAV-sourced recipe", async () => {
+    // The same chain, with the reference answering the MetaMorpho v1.1 view (YCSUSDC's counter, 31.38 of it covered).
+    const lossy = (fault?: Error): typeof ctx => ({
       ...ctx,
       resolveRpc: async (chainId, url) => {
         const r = (await ctx.resolveRpc!(chainId, url))!;
         const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
-        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lostAssets" ? 131_382_052n : a.functionName === "totalAssets" ? 701_674_000_000n : a.functionName === "balanceOf" ? 10n ** 18n : a.functionName === "convertToAssets" ? 31_382_052n : inner(a))) as never } };
+        const view: Record<string, bigint> = { lostAssets: 131_382_052n, totalAssets: 701_674_000_000n, balanceOf: 10n ** 18n, convertToAssets: 31_382_052n };
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => { if (fault && a.functionName === "lostAssets") throw fault; return a.functionName in view ? view[a.functionName] : inner(a); }) as never } };
       },
-    };
-    const warned = await answer(withLoss);
+    });
+    // The impairment recipe reads the NAV oracle: its underwriter carries an open shortfall.
+    const nav = (c: typeof ctx) => runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-loss-0001", action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: RFQ_IMPAIRMENT_EXPIRY } }, c);
+    const warned = await nav(lossy());
     expect(warned.state, JSON.stringify(warned.warnings)).toBe("ok");
     const w = warned.warnings.find((x) => x.code === "reference_loss_unreported")!;
     // 131.38 lost, 31.38 covered through address(1): 100.00 is open.
     expect(w.message).toMatch(/cover 31382052 of it, and 100000000 of 701674000000 reported total assets is OPEN shortfall \(0\.014251%/u);
     expect(w.message).toMatch(/your cPT side receives shares backed by less.*price it yourself, or pass/u);
+    expect((warned.data as { answer: { notRead?: string[] } }).answer.notRead).toBeUndefined();
+    // The eval stub's reference exposes no lostAssets(): the view is absent — silent, and not "unread".
+    const quiet = await nav(ctx);
+    expect(quiet.state).toBe("ok");
+    expect(quiet.warnings.map((x) => x.code)).not.toContain("reference_loss_unreported");
+    expect((quiet.data as { answer: { notRead?: string[] } }).answer.notRead).toBeUndefined();
+    // A counter read that failed in TRANSPORT is neither: nobody knows, and the answer says so.
+    const unread = await nav(lossy(Object.assign(new Error("socket hang up"), { name: "HttpRequestError" })));
+    expect(unread.state).toBe("ok");
+    expect(unread.warnings.map((x) => x.code)).not.toContain("reference_loss_unreported");
+    expect((unread.data as { answer: { notRead?: string[] } }).answer.notRead).toEqual(["the reference's lost-assets counter: socket hang up"]);
+    // The liquidity recipe here reads a PRICE oracle: a market price, not the vault's share
+    // price — the same lossy vault raises nothing on it.
+    const price = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-loss-0002", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: (NOW + 20n * 86_400n).toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, lossy());
+    expect(price.state, JSON.stringify(price.warnings)).toBe("ok");
+    expect(price.warnings.map((x) => x.code)).not.toContain("reference_loss_unreported");
   });
 
   it("an RFQ that declares NO fill_sender is answered OPEN with fill_sender_unknown — never reserved for the requester account by guess (the LOP compares allowedSender with its CALLER; an adapter-bound requester would be locked out)", async () => {
@@ -497,7 +510,8 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     const twentyDaysOut = (nowSecs + 20n * 86_400n).toString();
     const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-impair-0004", action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: twentyDaysOut } }, ctx);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
-    const note = env.warnings.find((w) => w.code === "invalid_order_terms" && w.message.includes("duration_seconds"));
+    const note = env.warnings.find((w) => w.code === "invalid_order_terms" && w.message.includes("sizes the rate window"));
+    expect(note?.message).toMatch(/^the RFQ's impairment block sizes the rate window for a duration of /u);
     expect(note?.message).toContain(RFQ_IMPAIRMENT_DURATION);
     expect(note?.message).toContain("reach its wall before the market expires");
     // The constraint is STILL built from the requester's duration — the tenor never leaks into it.
@@ -525,4 +539,294 @@ describe("answer-rfq reads the impairment inline template (cork-inline-impairmen
     expect(inline.extraData).toBe(explicit);
     expect(fixed.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("lacks"))).toBe(false);
   });
+});
+
+describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate rides as the order's rateOverride, never as recipe bytes", () => {
+  const NOW = 1_790_000_000n;
+  const ctx = stubContext();
+  const base = { chainId: 42161 as const, account: DEMO_ACCOUNT };
+  type Fixed = { rateOverride: string; rateFrom: string; requestedRate: string | null; liveRate?: string; liveRateSource?: string; position?: string; gapPercentage?: string; scales: Record<string, string> };
+  type Answered = { orderHash: string; extension: `0x${string}`; typedData: { message: Record<string, string> }; jit: { derivedPoolId: string; constraint: Record<string, string> }; answer: { fixed?: Fixed; notRead?: string[]; inline: { schema: string; rateOverride?: string | null; extraData: string | null } | null; pool: { recipe: string; oracleDeployed: boolean } } };
+  const answer = (id: string, rfqId: string, over: Record<string, unknown> = {}, c: HandlerContext = ctx) =>
+    runTool("cork_prepare_orders", { ...base, clientRequestId: `answer-fixed-${id}`, action: { type: "answer-rfq", rfqId, premiumAnnualized: "0.04", expiryTimestamp: RFQ_IMPAIRMENT_EXPIRY, ...over } }, c);
+  const hookOf = async (d: Answered) => ((await runTool("cork_decode", { chainId: 42161, kind: "order", data: { ...d.typedData.message, extension: d.extension } }, ctx)).data as { jit: { recipe: string; rateOverride: string; extraData?: string; constraint: Record<string, string> } }).jit;
+
+  it("the RFQ's rate_override becomes the order's rateOverride with EMPTY extraData; the constraint is the recipe's rate .. rate + 1", async () => {
+    const env = await answer("0001", RFQ_FIXED_ID);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    expect(d.answer.pool).toMatchObject({ recipe: FIXED_RECIPE, oracleDeployed: false });
+    expect(d.jit.constraint).toEqual({ rateMin: RFQ_FIXED_RATE, rateMax: (BigInt(RFQ_FIXED_RATE) + 1n).toString(), rateChangePerDayMax: "0", rateChangeCapacityMax: "0" });
+    // Read back from the bytes the maker signs — not from the tool's own echo.
+    const hook = await hookOf(d);
+    expect(hook.recipe.toLowerCase()).toBe(FIXED_RECIPE.toLowerCase());
+    expect(hook.rateOverride).toBe(RFQ_FIXED_RATE);
+    expect(hook.extraData ?? "0x").toBe("0x");
+    expect(hook.constraint).toMatchObject({ rateMin: RFQ_FIXED_RATE, rateChangePerDayMax: "0" });
+    // 0.75 against the pair's 0.8: the reference must lose 6.25% before this cover pays.
+    expect(d.answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_RATE, rateFrom: "rfq", requestedRate: RFQ_FIXED_RATE, liveRate: "800000000000000000", liveRateSource: "nav", position: "below", gapPercentage: "6250000000000000000" });
+    expect(d.answer.fixed!.scales["gapPercentage"]).toMatch(/1e18 = 1%/u);
+    expect(d.answer.inline).toMatchObject({ schema: "cork-inline-fixed/1", rateOverride: RFQ_FIXED_RATE, extraData: null });
+    expect(d.answer.notRead).toBeUndefined();
+    expect(env.warnings.map((w) => w.code)).not.toContain("fixed_rate_in_the_money");
+    // A fixed-rate pool reads no feed: the loss reading is not its concern.
+    expect(env.warnings.map((w) => w.code)).not.toContain("reference_loss_unreported");
+  });
+
+  it("a fixed answer carries no floating-rate text: no stale-constraint notice, no anchor drift, no anchor echo, and the undeployed oracle is named as keyed on the rate", async () => {
+    const env = await answer("0014", RFQ_FIXED_ID);
+    expect(env.warnings.map((w) => w.code)).toEqual(["oracle_not_deployed", "oco_group_notice"]);
+    expect(env.warnings[0]!.message).toMatch(/the FixedRateOracle for this rate is not deployed yet .*keyed on the rate alone/u);
+    expect(env.warnings[0]!.message).not.toMatch(/oracleSalt|LIVE rate|re-registering/u);
+    const inline = (env.data as Answered).answer.inline as Record<string, unknown>;
+    expect(inline).not.toHaveProperty("anchorHonored");
+    expect(inline).not.toHaveProperty("note");
+    // A recipe that reads an oracle keeps both notices (the liquidity answer of the first describe).
+    const floating = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-fixed-0015", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: (NOW + 20n * 86_400n).toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
+    expect(floating.warnings.map((w) => w.code)).toContain("constraint_window_notice");
+  });
+
+  it("a rate whose FixedRateOracle already EXISTS: the order builds against the deployed oracle, and an anchor_rate a requester left in the block raises no drift notice (a fixed recipe has no anchor)", async () => {
+    // The stub's RFQ, with its block rewritten to the one rate deployed in this world plus a stray anchor.
+    const rewritten: HandlerContext = {
+      ...ctx,
+      venueFetch: async (url: string, init?: RequestInit) => {
+        const res = await ctx.venueFetch!(url, init);
+        if (init?.method === "POST" || !url.includes(RFQ_FIXED_ID)) return res;
+        const body = (await res.json()) as { request: { market_template: { inline: { oracle_params: Record<string, string> } } } };
+        body.request.market_template.inline.oracle_params = { ...body.request.market_template.inline.oracle_params, rate_override: DEPLOYED_FIXED_RATE.toString(), anchor_rate: "700000000000000000" };
+        return new Response(JSON.stringify(body), { status: 200 });
+      },
+    };
+    const env = await answer("0018", RFQ_FIXED_ID, {}, rewritten);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    expect(d.answer.pool.oracleDeployed).toBe(true);
+    expect(d.jit.constraint).toMatchObject({ rateMin: DEPLOYED_FIXED_RATE.toString(), rateMax: (DEPLOYED_FIXED_RATE + 1n).toString() });
+    expect(env.warnings.map((w) => w.code)).toEqual(["oco_group_notice"]);
+  });
+
+  it("a CITED option's own rate is the rate the order builds at (cork-api 0.4.4: each option carries its own template) — said as a counter-proposal to the request", async () => {
+    const env = await runTool("cork_prepare_orders", { chainId: 42161, account: SIGNED_LOP_PAYLOAD.order.maker as `0x${string}`, clientRequestId: "answer-fixed-0016", action: { type: "answer-rfq", rfqId: RFQ_FIXED_ID, answerId: RFQ_FIXED_ANSWER_ID, optionId: "opt1" } }, ctx);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    expect(d.answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_OPTION_RATE, rateFrom: "cited option", requestedRate: RFQ_FIXED_RATE });
+    expect((await hookOf(d)).rateOverride).toBe(RFQ_FIXED_OPTION_RATE);
+    expect(env.warnings.some((x) => /the RFQ asks for the frozen rate 750000000000000000, and this answer builds at 740000000000000000 \(cited option\)/u.test(x.message))).toBe(true);
+  });
+
+  it("a recipe whose source() cannot be READ is not treated as 'not fixed': a transport fault refuses with the reason instead of dropping the rate", async () => {
+    const flaky: HandlerContext = {
+      ...ctx,
+      resolveRpc: async (chainId, url) => {
+        const r = (await ctx.resolveRpc!(chainId, url))!;
+        const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => { if (a.functionName === "source") throw Object.assign(new Error("socket hang up"), { name: "HttpRequestError" }); return inner(a); }) as never } };
+      },
+    };
+    const env = await answer("0017", RFQ_FIXED_ID, {}, flaky);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]).toMatchObject({ code: "chain_read_failed" });
+    expect(env.warnings[0]!.message).toMatch(/could not read source\(\) of recipe .*: socket hang up — a transport failure.*nothing is built on a guess/u);
+  });
+
+  it("a rate ABOVE the reference's rate: the underwriter is told it would be out of pocket from the first block — and the order still builds", async () => {
+    const env = await answer("0002", RFQ_FIXED_ABOVE_ID);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const w = env.warnings.find((x) => x.code === "fixed_rate_in_the_money")!;
+    expect(w.message).toMatch(/the frozen rate 900000000000000000 is 12\.5000% ABOVE the reference's rate today.*You would be out of pocket by that gap on every cST from the first block/u);
+    expect((env.data as Answered).answer.fixed).toMatchObject({ position: "above", gapPercentage: "12500000000000000000" });
+  });
+
+  it("another rate than the RFQ's is a visible counter-proposal: another oracle, another pool, said", async () => {
+    const asked = (await answer("0003", RFQ_FIXED_ID)).data as Answered;
+    const env = await answer("0004", RFQ_FIXED_ID, { jitMarket: { rateOverride: "740000000000000000" } });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    expect(d.answer.fixed).toMatchObject({ rateOverride: "740000000000000000", rateFrom: "jitMarket.rateOverride", requestedRate: RFQ_FIXED_RATE });
+    expect(d.jit.derivedPoolId).not.toBe(asked.jit.derivedPoolId);
+    expect((await hookOf(d)).rateOverride).toBe("740000000000000000");
+    expect(env.warnings.find((x) => /a different FixedRateOracle and so a different pool/u.test(x.message))!.message).toMatch(/the RFQ asks for the frozen rate 750000000000000000, and this answer builds at 740000000000000000 \(jitMarket\.rateOverride\)/u);
+    // The SAME rate passed explicitly is not a counter-proposal.
+    const same = await answer("0005", RFQ_FIXED_ID, { jitMarket: { rateOverride: RFQ_FIXED_RATE } });
+    expect(same.warnings.some((x) => /a different FixedRateOracle/u.test(x.message))).toBe(false);
+    expect((same.data as Answered).jit.derivedPoolId).toBe(asked.jit.derivedPoolId);
+  });
+
+  it("the fixed recipe without a rate anywhere is refused before any derivation; with an explicit rate it builds", async () => {
+    const expiry = (NOW + 20n * 86_400n).toString();
+    const none = await answer("0006", RFQ_OPEN_ID, { expiryTimestamp: expiry, jitMarket: { recipe: FIXED_RECIPE } });
+    expect(none.state).toBe("unavailable");
+    expect(none.warnings[0]).toMatchObject({ code: "invalid_order_terms" });
+    expect(none.warnings[0]!.message).toMatch(/is the FIXED-rate recipe, and neither the RFQ nor this call names the frozen rate.*Pass jitMarket\.rateOverride/u);
+    // A literal "0" is the schema's "no rate", not a rate.
+    const zero = await answer("0007", RFQ_OPEN_ID, { expiryTimestamp: expiry, jitMarket: { recipe: FIXED_RECIPE, rateOverride: "0" } });
+    expect(zero.state).toBe("unavailable");
+    expect(zero.warnings[0]!.message).toMatch(/neither the RFQ nor this call names the frozen rate/u);
+    const explicit = await answer("0008", RFQ_OPEN_ID, { expiryTimestamp: expiry, jitMarket: { recipe: FIXED_RECIPE, rateOverride: "770000000000000000" } });
+    expect(explicit.state, JSON.stringify(explicit.warnings)).toBe("ok");
+    expect((explicit.data as Answered).answer.fixed).toMatchObject({ rateOverride: "770000000000000000", rateFrom: "jitMarket.rateOverride", requestedRate: null });
+    // No request rate to differ from: not a counter-proposal.
+    expect(explicit.warnings.some((x) => /a different FixedRateOracle/u.test(x.message))).toBe(false);
+  });
+
+  it("a rate on the template with a recipe that reads an ORACLE is not carried — the fill would revert — and recipe bytes on the fixed recipe are the recipe's refusal", async () => {
+    const env = await answer("0009", RFQ_FIXED_ID, { jitMarket: { recipe: LIQUIDITY_RECIPE } });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    // The same two contradictions rfq-open names, in the underwriter's words: the block is
+    // another cover's, and the rate cannot ride on a recipe that reads an oracle.
+    const said = env.warnings.filter((x) => x.code === "invalid_order_terms").map((x) => x.message);
+    expect(said.some((m) => /the inline block is cork-inline-fixed\/1.*gives liquidity \(duration-risk\) cover.*The block's bytes are NOT carried into this order/u.test(m))).toBe(true);
+    expect(said.some((m) => /carries rate_override 750000000000000000, but the recipe .* reads a rate oracle.*UnexpectedRateOverride.*The rate is NOT carried into this order/u.test(m))).toBe(true);
+    expect((await hookOf(d)).rateOverride).toBe("0");
+    expect(d.answer.fixed).toBeUndefined();
+    expect(d.jit.constraint["rateMin"]).toBe("1"); // the liquidity window, not a frozen rate
+    // An EXPLICIT rate on such a recipe is not silently dropped and then refused downstream:
+    // it is refused here, with the reason.
+    const explicit = await answer("0013", RFQ_OPEN_ID, { expiryTimestamp: (NOW + 20n * 86_400n).toString(), jitMarket: { recipe: LIQUIDITY_RECIPE, rateOverride: "750000000000000000" } });
+    expect(explicit.state).toBe("unavailable");
+    expect(explicit.warnings[0]).toMatchObject({ code: "invalid_order_terms" });
+    expect(explicit.warnings[0]!.message).toMatch(/jitMarket\.rateOverride 750000000000000000 with recipe .*, which reads a price oracle.*UnexpectedRateOverride/u);
+    const bytes = await answer("0010", RFQ_FIXED_ID, { jitMarket: { extraData: "0x01" } });
+    expect(bytes.state).toBe("unavailable");
+    expect(bytes.warnings[0]).toMatchObject({ code: "recipe_refused" });
+    expect(bytes.warnings[0]!.message).toMatch(/answer-rfq could not derive the pool the cover creates.*UnexpectedExtraData\(1\)/u);
+  });
+
+  it("when the reference's rate cannot be read the order still builds and the answer says the comparison was not made", async () => {
+    const wrappers = (lookup: () => string): HandlerContext => ({
+      ...ctx,
+      resolveRpc: async (chainId, url) => {
+        const r = (await ctx.resolveRpc!(chainId, url))!;
+        const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lookupWrapper" ? lookup() : inner(a))) as never } };
+      },
+    });
+    // The registry read itself failing is said with its reason — never swallowed.
+    const failed = await answer("0012", RFQ_FIXED_ID, {}, wrappers(() => { throw new Error("registry read timed out"); }));
+    expect(failed.state, JSON.stringify(failed.warnings)).toBe("ok");
+    expect((failed.data as Answered).answer.notRead).toEqual(["the reference's rate today: registry read timed out"]);
+    expect((failed.data as Answered).answer.fixed!.position).toBeUndefined();
+    const env = await answer("0011", RFQ_FIXED_ID, {}, wrappers(() => "0x0000000000000000000000000000000000000000"));
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const d = env.data as Answered;
+    expect(d.answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_RATE });
+    expect(d.answer.fixed!.position).toBeUndefined();
+    expect(d.answer.notRead).toEqual(["the reference's rate today: the pair has no deployed nav or price oracle to compare the frozen rate with"]);
+  });
+});
+
+describe("answer-rfq: an impairment window longer than the market's life — the recipe's verdict, with the cause this tool can see", () => {
+  const NOW = 1_790_000_000n;
+  const ctx = stubContext();
+  const base = { chainId: 42161 as const, account: DEMO_ACCOUNT };
+  const answerAt = (id: string, expiry: bigint, over: Record<string, unknown> = {}, c: HandlerContext = ctx) =>
+    runTool("cork_prepare_orders", { ...base, clientRequestId: `answer-dur-${id}`, action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), ...over } }, c);
+  const reverts = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.filter((x) => x.code === "would_revert").map((x) => x.message);
+
+  it("against a deployed oracle the maker path runs recipe.verify — the creating fill's check — which REJECTS; the cause is said beside it; at the boundary both are silent", async () => {
+    // The RFQ's block sizes the window for 7 days; this answer's market lives 3.
+    const short = await answerAt("0001", NOW + 3n * 86_400n);
+    expect(short.state, JSON.stringify(short.warnings)).toBe("ok");
+    const said = reverts(short);
+    expect(said).toHaveLength(2);
+    // The chain's verdict (the maker path) …
+    expect(said.some((m) => /recipe\.verify REJECTS this constraint/u.test(m))).toBe(true);
+    // … and why: the recipe's false carries no reason, so the cause this tool can see is named.
+    expect(said.some((m) => /^the RFQ's impairment block sizes the rate window for a duration of 604800 s, and this answer's market expires at \d+ \(now 1790000000\): the fill that creates the pool reverts RecipeRejectedConstraint\. The carried duration 604800 s exceeds the market's remaining life 259200 s/u.test(m))).toBe(true);
+    // A market that lives exactly the duration is the boundary the recipe admits.
+    expect(reverts(await answerAt("0002", NOW + 604_800n))).toEqual([]);
+    expect(reverts(await answerAt("0003", NOW + 604_799n))).toHaveLength(2);
+  });
+
+  it("the duration judged is the one the ORDER carries: explicit bytes with a shorter duration silence both, with a longer one raise both — attributed to the bytes", async () => {
+    const threeDays = NOW + 3n * 86_400n;
+    const shorter = await answerAt("0004", threeDays, { jitMarket: { extraData: encodeImpairmentArgs({ anchorRate: 800_000_000_000_000_000n, durationSeconds: 100_000n, apySpreadPercentage: 10n * 10n ** 18n }) } });
+    expect(shorter.state, JSON.stringify(shorter.warnings)).toBe("ok");
+    expect(reverts(shorter)).toEqual([]);
+    // 100000 s against a 259200 s market: more than a day apart, disclosed — and attributed to the bytes, not the block.
+    expect(shorter.warnings.find((x) => /sizes the rate window/u.test(x.message))!.message).toMatch(/^jitMarket\.extraData sizes the rate window for a duration of 100000 s while this answer's market lives 259200 s/u);
+    const longer = await answerAt("0005", NOW + 604_800n, { jitMarket: { extraData: encodeImpairmentArgs({ anchorRate: 800_000_000_000_000_000n, durationSeconds: 700_000n, apySpreadPercentage: 10n * 10n ** 18n }) } });
+    expect(reverts(longer)).toHaveLength(2);
+    expect(reverts(longer).some((m) => /^jitMarket\.extraData sizes the rate window for a duration of 700000 s.*The carried duration 700000 s exceeds the market's remaining life 604800 s/u.test(m))).toBe(true);
+  });
+
+  it("the rule applies when the pool is CREATED: for a pool that already exists the recipe accepts any duration, and nothing is said", async () => {
+    const existing: HandlerContext = {
+      ...ctx,
+      resolveRpc: async (chainId, url) => {
+        const r = (await ctx.resolveRpc!(chainId, url))!;
+        const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "shares" ? ["0x00000000000000000000000000000000000000e1", "0x00000000000000000000000000000000000000e2"] : inner(a))) as never } };
+      },
+    };
+    const env = await answerAt("0007", NOW + 3n * 86_400n, {}, existing);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(reverts(env)).toEqual([]);
+  });
+
+  it("where verify cannot run yet (the pair's oracle is not deployed) the cause is still said — ahead of the fill's check, not instead of it", async () => {
+    const noOracle: HandlerContext = {
+      ...ctx,
+      resolveRpc: async (chainId, url) => {
+        const r = (await ctx.resolveRpc!(chainId, url))!;
+        const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lookupWrapper" ? "0x0000000000000000000000000000000000000000" : inner(a))) as never, simulateContract: (async () => ({ result: "0x00000000000000000000000000000000000000c1" })) as never } };
+      },
+    };
+    const env = await answerAt("0006", NOW + 3n * 86_400n, {}, noOracle);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(reverts(env)).toHaveLength(1);
+    expect(reverts(env)[0]).toMatch(/The carried duration 604800 s exceeds the market's remaining life 259200 s.*this generation's impairment recipe rejects such a constraint when the pool is created/u);
+  });
+});
+
+describe("the recipe.verify pre-flight (JIT ladder and create-pool): a revert is the recipe's refusal, a transport fault is not a verdict", () => {
+  const NOW = 1_790_000_000n;
+  const stub = stubContext();
+  /** The stub chain with its recipe.verify replaced. */
+  const withVerify = (verify: () => unknown): HandlerContext => ({
+    ...stub,
+    resolveRpc: async (chainId, url) => {
+      const r = (await stub.resolveRpc!(chainId, url))!;
+      const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+      return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "verify" ? verify() : inner(a))) as never } };
+    },
+  });
+  const reverting = withVerify(() => { throw new Error("execution reverted: SomeRecipeError(7)"); });
+  const flaky = withVerify(() => { throw Object.assign(new Error("verify timed out"), { name: "HttpRequestError" }); });
+  const rejecting = withVerify(() => false);
+  const answer = (c: HandlerContext, id: string) => runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: `verify-preflight-${id}`, action: { type: "answer-rfq", rfqId: RFQ_IMPAIRMENT_ID, premiumAnnualized: "0.04", expiryTimestamp: RFQ_IMPAIRMENT_EXPIRY } }, c);
+  const createPool = (c: HandlerContext, id: string) =>
+    runTool("cork_prepare_market", { chainId: 42161, clientRequestId: `verify-preflight-pool-${id}`, action: { type: "create-pool", collateralAsset: JIT_TASK_PAIR.collateralAsset, referenceAsset: JIT_TASK_PAIR.referenceAsset, expiryTimestamp: (NOW + 604_800n).toString(), recipe: IMPAIRMENT_RECIPE, extraData: encodeImpairmentArgs({ anchorRate: 800_000_000_000_000_000n, durationSeconds: 604_800n, apySpreadPercentage: 10n * 10n ** 18n }) } }, c);
+  const of = (env: { warnings: Array<{ code: string; message: string }> }, code: string) => env.warnings.filter((w) => w.code === code).map((w) => w.message);
+
+  for (const [name, run] of [["the JIT ladder (answer-rfq → maker-order)", answer], ["create-pool", createPool]] as const) {
+    it(`${name}: a REVERT of recipe.verify is would_revert with the recipe's own error name — the artifact must not look fillable`, async () => {
+      const env = await run(reverting, "revert");
+      expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+      expect(of(env, "would_revert")).toHaveLength(1);
+      expect(of(env, "would_revert")[0]).toMatch(/recipe\.verify REVERTS for this constraint: .*SomeRecipeError\(7\).*reverts the same way/u);
+      expect(of(env, "chain_read_failed")).toEqual([]);
+    });
+
+    it(`${name}: a transport fault on recipe.verify is chain_read_failed, and says nothing about the recipe`, async () => {
+      const env = await run(flaky, "transport");
+      expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+      expect(of(env, "would_revert")).toEqual([]);
+      expect(of(env, "chain_read_failed")).toHaveLength(1);
+      expect(of(env, "chain_read_failed")[0]).toMatch(/the recipe\.verify pre-flight read failed in transport \(.*verify timed out.*\)/u);
+    });
+
+    it(`${name}: recipe.verify answering false is the rejection (RecipeRejectedConstraint); answering true is silent`, async () => {
+      const no = await run(rejecting, "false");
+      expect(of(no, "would_revert")).toHaveLength(1);
+      expect(of(no, "would_revert")[0]).toMatch(/recipe\.verify REJECTS this constraint.*RecipeRejectedConstraint/u);
+      const yes = await run(stub, "true");
+      expect(yes.state, JSON.stringify(yes.warnings)).toBe("ok");
+      expect(of(yes, "would_revert")).toEqual([]);
+      expect(of(yes, "chain_read_failed")).toEqual([]);
+    });
+  }
 });

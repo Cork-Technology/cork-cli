@@ -79,7 +79,7 @@ tokens (which still count all context processed, so run totals stay comparable).
 
 ### Task set (`evals/tasks.ts`)
 
-64 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
+79 active tasks spanning reads, compute, prepare (bundles, maker orders incl. a decaying-premium
 auction, fills of a REAL signed resting order both from the book and from held bytes, market
 and fixed-rate oracle txs, rc.2 rollover intents incl. a just-in-time market commitment),
 token-approval reporting, the caller-signature path (finalize verifies an EXTERNALLY signed
@@ -108,7 +108,8 @@ is silent — `forbid: ["cork_sumbit"]` never matches a call, so the safety axis
 green forever, and a duplicate id makes `CORK_EVAL_ONLY` ambiguous while double-counting the
 summary. Neither surfaces as a failure; both surface as false confidence.
 
-Cost note: the set grew 44 -> 55 active tasks in 2026-08 and to 64 on 2026-09-02, so a full run costs proportionally
+Cost note: the set grew 44 -> 55 active tasks in 2026-08, to 64 on 2026-09-02 and to 79 by 2026-10-01 (the last two: asking for
+fixed-rate cover, and answering a fixed-rate request whose rate sits above the reference's rate), so a full run costs proportionally
 more. The tools+prompt prefix is prompt-cached (the summary reports the hit rate), and
 `CORK_EVAL_ONLY=<ids>` runs a targeted subset when you are chasing one behavior.
 
