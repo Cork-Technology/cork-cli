@@ -5,6 +5,12 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+### Fixed
+
+- The config-branch workflow's existing-branch path (the second and every later publication to `config/<line>`) failed on its first run: the GraphQL `createCommitOnBranch` variables were passed through `gh api -F` as a string, so the v0.6.1-rc.2 release run stopped before publishing. The path now updates the file through the REST contents endpoint, conditioned on the blob the invariant check read, the same API family the first-publication (orphan) path uses. The rc.1 release had only exercised the orphan path.
+
 ## [0.6.1-rc.2] — 2026-10-01
 
 A patch candidate of the 0.6 line, built from the the 2026-10-01 integration triage triage and the Zyfai integration pass. It adds the filler side of a rollover (the fill, the clone deploy, the intent hooks the maker side never produced), smart-account envelope unwrapping in decode, a ForSelf adapter verifier in track, the grant list on every pool action, and the rfq-open pre-flights. Every new path is fork-proven or live-verified and mutation-checked. The covered surface grows additively (new variants, new fields, new SDK exports); nothing is removed or renamed.

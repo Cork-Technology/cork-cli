@@ -75,8 +75,10 @@ jobs:
         run: |
           jq -e '.schemaVersion == 2 and (.generations | type == "object")' cork-defaults.v2.json > /dev/null \
             || { echo "::error::cork-defaults.v2.json is not a schema-2 document"; exit 1; }
-          if gh api "repos/${GITHUB_REPOSITORY}/contents/cork-defaults.v2.json?ref=${BRANCH}" --jq .content 2>/dev/null | base64 -d > current.json; then
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/cork-defaults.v2.json?ref=${BRANCH}" > current.meta.json 2>/dev/null; then
+            jq -r .content current.meta.json | base64 -d > current.json
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "blob=$(jq -r .sha current.meta.json)" >> "$GITHUB_OUTPUT"
             if cmp -s current.json cork-defaults.v2.json; then echo "unchanged=true" >> "$GITHUB_OUTPUT"; echo "branch already carries this file"; exit 0; fi
             echo "unchanged=false" >> "$GITHUB_OUTPUT"
             # every (chain, set key) on the branch must survive; every new primary must be a known key
@@ -98,6 +100,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.line.outputs.branch }}
           EXISTS: ${{ steps.check.outputs.exists }}
+          BLOB: ${{ steps.check.outputs.blob }}
           SRC: ${{ inputs.ref }}
         run: |
           set -e
@@ -105,13 +108,15 @@ jobs:
           body="Published by the config-branch workflow (run ${GITHUB_RUN_ID}). This branch holds only cork-defaults.v2.json; every ${{ steps.line.outputs.line }}.x binary from 0.6.1 on reads it. Policy R5c."
           msg="$(printf '%s\n\n%s' "$headline" "$body")"
           if [ "$EXISTS" = "true" ]; then
-            # An existing branch: createCommitOnBranch — GitHub signs the commit (Verified, github-actions[bot]).
-            head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" --jq .object.sha)
-            content=$(base64 -w0 cork-defaults.v2.json)
-            gh api graphql -f query='
-              mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }' \
-              -F input="{\"branch\":{\"repositoryNameWithOwner\":\"${GITHUB_REPOSITORY}\",\"branchName\":\"${BRANCH}\"},\"expectedHeadOid\":\"${head}\",\"message\":{\"headline\":$(printf '%s' "$headline" | jq -Rs .),\"body\":$(printf '%s' "$body" | jq -Rs .)},\"fileChanges\":{\"additions\":[{\"path\":\"cork-defaults.v2.json\",\"contents\":\"${content}\"}]}}" \
-              --jq '.data.createCommitOnBranch.commit | "published \(.oid) \(.url)"'
+            # An existing branch: the REST contents update, conditioned on the blob the check step
+            # read (a concurrent writer makes it a 409, never a silent overwrite). GitHub signs the
+            # commit (Verified, github-actions[bot]) — the same API family as the orphan path below.
+            # The first release through this path (v0.6.1-rc.2, run 36844384170) used a GraphQL
+            # createCommitOnBranch whose variables `gh api -F` passed as a STRING, and it failed.
+            jq -n --arg m "$msg" --arg c "$(base64 -w0 cork-defaults.v2.json)" --arg b "$BRANCH" --arg s "$BLOB" \
+              '{message:$m, content:$c, branch:$b, sha:$s}' > commit.json
+            gh api -X PUT "repos/${GITHUB_REPOSITORY}/contents/cork-defaults.v2.json" --input commit.json \
+              --jq '.commit | "published \(.sha) \(.html_url)"'
           else
             # First publication: an ORPHAN commit (no parent — nothing but this file may be on the branch).
             blob=$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" -f encoding=base64 -f content="$(base64 -w0 cork-defaults.v2.json)" --jq .sha)
