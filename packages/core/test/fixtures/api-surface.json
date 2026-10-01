@@ -353,6 +353,10 @@
       "kind": "value"
     },
     {
+      "name": "FILLER_AUTH_TYPES",
+      "kind": "value"
+    },
+    {
       "name": "FORSELF_ACTION_MAP",
       "kind": "value"
     },
@@ -2041,6 +2045,10 @@
       "kind": "value"
     },
     {
+      "name": "fillerAuthTypedData",
+      "kind": "value"
+    },
+    {
       "name": "fillerJobOf",
       "kind": "value"
     },
@@ -2162,6 +2170,10 @@
     },
     {
       "name": "hasCallback",
+      "kind": "value"
+    },
+    {
+      "name": "hashFillerAuth",
       "kind": "value"
     },
     {
@@ -2778,6 +2790,10 @@
     },
     {
       "name": "standardRolloverHooks",
+      "kind": "value"
+    },
+    {
+      "name": "subFillerOf",
       "kind": "value"
     },
     {
@@ -4381,6 +4397,10 @@
       "kind": "type"
     },
     {
+      "name": "FILLER_AUTH_TYPES",
+      "kind": "value"
+    },
+    {
       "name": "FORSELF_ACTION_MAP",
       "kind": "value"
     },
@@ -4973,6 +4993,10 @@
       "kind": "value"
     },
     {
+      "name": "fillerAuthTypedData",
+      "kind": "value"
+    },
+    {
       "name": "fillerJobOf",
       "kind": "value"
     },
@@ -5014,6 +5038,10 @@
     },
     {
       "name": "gaslessOrderOf",
+      "kind": "value"
+    },
+    {
+      "name": "hashFillerAuth",
       "kind": "value"
     },
     {
@@ -5194,6 +5222,10 @@
     },
     {
       "name": "standardRolloverHooks",
+      "kind": "value"
+    },
+    {
+      "name": "subFillerOf",
       "kind": "value"
     },
     {

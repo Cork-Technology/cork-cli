@@ -90,6 +90,20 @@ describe("runTool rollover-intent with hooks", () => {
     expect(none.warnings.find((w) => w.code === "invalid_order_terms")!.message).toMatch(/NO intent hooks/u);
   });
 
+  it("a partial-fill order pulls with the module's clamp (every fill re-pulls orderSize against a shrinking balance) and teaches a standing allowance; an exact order pulls exactly", async () => {
+    const partial = await prepare({ settler: rollover.partialSettler, allowPartialFills: true, standardHooks: { srcCptToken: SRC_CPT, dstCptToken: DST_CPT } });
+    expect(partial.state).toBe("ok");
+    const pre = decodeFunctionData({ abi: ownerTokenPullModuleAbi, data: ((partial.data as Data).venuePost.intent.preRolloverHooks[0] as { callData: `0x${string}` }).callData });
+    expect(pre.args).toEqual([SRC_CPT, 10n ** 18n, true]);
+    expect(partial.warnings.find((w) => w.code === "owner_managed_funding")!.message).toMatch(/standing across fills.*OwnerTokenPullModule__NothingPullable/u);
+    const exact = await prepare({ standardHooks: { srcCptToken: SRC_CPT, dstCptToken: DST_CPT } });
+    const preExact = decodeFunctionData({ abi: ownerTokenPullModuleAbi, data: ((exact.data as Data).venuePost.intent.preRolloverHooks[0] as { callData: `0x${string}` }).callData });
+    expect(preExact.args).toEqual([SRC_CPT, 10n ** 18n, false]);
+    expect(exact.warnings.find((w) => w.code === "owner_managed_funding")!.message).not.toMatch(/standing across fills/u);
+    const underfill = await prepare({ allowUnderfill: true, standardHooks: { srcCptToken: SRC_CPT, dstCptToken: DST_CPT } });
+    expect(decodeFunctionData({ abi: ownerTokenPullModuleAbi, data: ((underfill.data as Data).venuePost.intent.preRolloverHooks[0] as { callData: `0x${string}` }).callData }).args).toEqual([SRC_CPT, 10n ** 18n, true]);
+  });
+
   it("a generation without configured modules refuses standardHooks and points at explicit hooks", async () => {
     const previous = rollover.generations!.find((g) => g.label === "phoenix/v0.3-rc.1")!;
     expect(previous.modules).toBeUndefined();

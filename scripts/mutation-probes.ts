@@ -345,8 +345,8 @@ const CATALOG: Mutant[] = [
     // The post-hook returns the dst cPT to the HOLDER (the account); another recipient steals it.
     id: "rollover-hooks-post-recipient-not-holder",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "orderSize, recipient: input.account, allowUnderfill: action.allowUnderfill });",
-    replace: "orderSize, recipient: action.rolloverContract, allowUnderfill: action.allowUnderfill });",
+    find: "orderSize, recipient: input.account, allowUnderfill: clampPull });",
+    replace: "orderSize, recipient: action.rolloverContract, allowUnderfill: clampPull });",
     tests: [T.rolloverHooks],
   },
   {
@@ -420,8 +420,8 @@ const CATALOG: Mutant[] = [
     // The venue's window rule is STRICT: equality must be refused locally, or the requester meets a raw 400.
     id: "rfq-open-equal-window-relayed",
     file: "packages/core/src/handlers/submit.ts",
-    find: "      if (action.expiryWindow.notBefore === action.expiryWindow.notAfter) {",
-    replace: "      if (false) {",
+    find: "  if (window.notBefore === window.notAfter) {",
+    replace: "  if (false) {",
     tests: [T.venue],
   },
   {
@@ -3125,6 +3125,53 @@ const CATALOG: Mutant[] = [
     find: "        { address: args.adapter, balance: SIMULATED_SENDER_BALANCE },\n",
     replace: "",
     tests: [T.mr],
+  },
+
+  // ── rollover-fill: the exclusive-filler gate sees BaseFiller as the settler's caller ──────
+  {
+    // Gate compared against the ACCOUNT: a reservation for the account itself prepares ok with
+    // no FillerAuth, and the settler reverts Settler__UnauthorizedFiller (msg.sender is BaseFiller).
+    id: "rollover-fill-exclusive-caller-is-account",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "!isAddressEqual(order.exclusiveFiller, baseFiller);",
+    replace: "!isAddressEqual(order.exclusiveFiller, account);",
+    tests: [T.rolloverFill],
+  },
+  {
+    // FillerAuth destination hashed as the settler instead of the account: a correct delegation
+    // reads as refuted and a signature over the wrong party would verify.
+    id: "rollover-fill-filler-auth-destination",
+    file: "packages/core/src/rollover-fill.ts",
+    find: "message: { orderDigest: a.orderDigest, destination: getAddress(a.account), subFiller: subFillerOf(a.account) },",
+    replace: "message: { orderDigest: a.orderDigest, destination: a.settler, subFiller: subFillerOf(a.account) },",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Terminal set shrunk to Settled: an Expired / Cancelled / Closing order builds fill bytes
+    // the settler refuses (Settler__OrderInTerminalState).
+    id: "rollover-fill-terminal-set-shrunk",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: 'new Set(["Settled", "Expired", "Cancelled", "Closing"])',
+    replace: 'new Set(["Settled"])',
+    tests: [T.rolloverFill],
+  },
+  {
+    // The partial-order clamp dropped: the second partial fill's pre-hook pulls orderSize from a
+    // holder who has less and reverts in transferFrom.
+    id: "rollover-hooks-partial-clamp-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const clampPull = action.allowUnderfill || action.allowPartialFills;",
+    replace: "const clampPull = action.allowUnderfill;",
+    tests: [T.rolloverHooks],
+  },
+  {
+    // An executor module admitted as a wallet entry: a tx to an integrator's module is described
+    // as "the smart account itself — confirm it is YOUR wallet".
+    id: "decode-wallet-entry-schemes-widened",
+    file: "packages/core/src/handlers/decode.ts",
+    find: 'new Set(["safe-exec-transaction", "safe-4337-module", "erc7579-execute"])',
+    replace: 'new Set(["safe-exec-transaction", "safe-4337-module", "erc7579-execute", "erc7579-executor-module", "safe-multisend"])',
+    tests: [T.decodeEnvelopes],
   },
 
   // ── ForSelf caller-gate generation (WHITELIST() binding + account pre-flight) ─────────────

@@ -401,10 +401,18 @@ function envelopeWarnings(legs: DecodedLeg[]): Array<{ code: string; message: st
 /** The outermost decoded call when it is an envelope whose target is the account itself (a Safe
  *  `execTransaction`, an ERC-7579 `execute`): the tx `to` is the WALLET, and `unknown_target`
  *  would accuse the signer's own account. */
-function outerEnvelopeIsWallet(legs: DecodedLeg[] | undefined): Extract<DecodedLeg, { kind: "envelope" }> | undefined {
+type OuterEnvelope = { leg: Extract<DecodedLeg, { kind: "envelope" }>; role: "wallet" | "infrastructure" };
+/** Schemes whose entry point IS the smart account: the call's `to` is the wallet itself (a Safe's
+ *  execTransaction or its 4337 module through the Safe's fallback, an ERC-7579 account's execute).
+ *  Every other non-singleton outer envelope — an integrator's executor module, a MultiSend nobody
+ *  here has read, an EntryPoint at an unknown address — is wallet INFRASTRUCTURE at an address
+ *  nobody can vouch for, and must not be described as the signer's own account. */
+const WALLET_ENTRY_SCHEMES: ReadonlySet<string> = new Set(["safe-exec-transaction", "safe-4337-module", "erc7579-execute"]);
+function outerEnvelopeOf(legs: DecodedLeg[] | undefined): OuterEnvelope | undefined {
   const outer = legs?.[0];
   if (legs?.length !== 1 || outer?.kind !== "envelope") return undefined;
-  return envelopeSingletonAt(outer.to) === undefined ? outer : undefined;
+  if (envelopeSingletonAt(outer.to) !== undefined) return undefined;
+  return { leg: outer, role: WALLET_ENTRY_SCHEMES.has(outer.scheme) ? "wallet" : "infrastructure" };
 }
 
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
@@ -678,11 +686,14 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
     }
   }
   if (legs) warnings.push(...envelopeWarnings(legs));
-  const walletEnvelope = outerEnvelopeIsWallet(legs);
-  if (walletEnvelope !== undefined && to !== null) {
+  const outerEnvelope = outerEnvelopeOf(legs);
+  if (outerEnvelope !== undefined && to !== null) {
     const idx = warnings.findIndex((w) => w.code === "unknown_target");
     if (idx >= 0) {
-      warnings[idx] = { code: "unknown_target", message: `\`to\` ${to} is not a Cork contract — it is the smart account itself (a ${walletEnvelope.scheme} envelope, ${walletEnvelope.version}), which this decoder has no authority for: confirm it is YOUR wallet. The calls the account makes are decoded below and verified against the Cork address book` };
+      const { leg, role } = outerEnvelope;
+      warnings[idx] = role === "wallet"
+        ? { code: "unknown_target", message: `\`to\` ${to} is not a Cork contract — it is the smart account itself (a ${leg.scheme} envelope, ${leg.version}), which this decoder has no authority for: confirm it is YOUR wallet. The calls the account makes are decoded below and verified against the Cork address book` }
+        : { code: "unknown_target", message: `\`to\` ${to} is not a Cork contract and NOT the signer's account: it is wallet infrastructure (a ${leg.scheme} envelope, ${leg.version}${leg.account ? `, acting for account ${leg.account}` : ""}) at an address nobody here has verified — an integrator's executor module or a MultiSend/EntryPoint deployment outside the byte-verified singletons. Identify the contract before signing; the calls it would make are decoded below and verified against the Cork address book` };
     }
   }
 

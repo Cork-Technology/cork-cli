@@ -213,8 +213,11 @@ export const ENVELOPE_SINGLETONS: readonly EnvelopeSingleton[] = [
   { scheme: "safe-multisend", label: "Safe MultiSend 1.3.0 (L2)", address: "0x998739BFdAAdde7C933B942a68053933098f9EDa", byteVerified: true },
   { scheme: "safe-multisend", label: "Safe MultiSendCallOnly 1.3.0", address: "0x40A2aCCbd92BCA938b02010E17A5b8929b49130D", byteVerified: true },
   { scheme: "safe-multisend", label: "Safe MultiSendCallOnly 1.3.0 (L2)", address: "0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B", byteVerified: true },
+  // The 4337 module is reached THROUGH the Safe's fallback handler, so an envelope's `to` is the
+  // Safe, never this address: the entry labels a signed tx sent straight to the module and never
+  // makes a `safe-4337-module` envelope `trusted` (that layer is `unverified` by construction).
   { scheme: "safe-4337-module", label: "Safe4337Module 0.3.0", address: "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226", byteVerified: true },
-  { scheme: "rhinestone-intent-executor", label: "Rhinestone IntentExecutor", address: "0x00000000005ad9ce1f5035fd62ca96cef16adaaf", byteVerified: true },
+  { scheme: "rhinestone-intent-executor", label: "Rhinestone IntentExecutor", address: "0x00000000005aD9Ce1f5035fd62CA96cEF16aDAAf", byteVerified: true },
 ];
 
 /** The singleton an envelope's target is, if any. */

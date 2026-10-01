@@ -22,9 +22,9 @@
 // ERC-7683 envelope the settler re-encodes and compares byte-for-byte (`originData` must equal
 // abi.encode(order)) is built from the same OrderData encoder the intent builder signs with —
 // one encoder, so the envelope can only disagree where the venue's record does.
-import { type Address, decodeFunctionData, encodeAbiParameters, encodeFunctionData, getAddress, type Hex } from "viem";
+import { type Address, decodeFunctionData, encodeAbiParameters, encodeFunctionData, getAddress, hashTypedData, type Hex, pad } from "viem";
 import type { RolloverWire } from "./generations.ts";
-import { encodeOrderData, type JitMarketParamsStruct, type OrderDataStruct, ORDER_DATA_TYPEHASH, type RolloverCall, type RolloverIntentStruct } from "./rollover.ts";
+import { corkSettlerDomain, encodeOrderData, type JitMarketParamsStruct, type OrderDataStruct, ORDER_DATA_TYPEHASH, type RolloverCall, type RolloverIntentStruct } from "./rollover.ts";
 
 // ── ABIs (the contracts' own signatures) ──────────────────────────────────────────────────────
 
@@ -371,4 +371,42 @@ export function encodeDeployRolloverContract(): Hex {
 export function requiredPremium(dstCstProduced: bigint, minPremiumPerShare: bigint): bigint {
   const n = dstCstProduced * minPremiumPerShare;
   return (n + 10n ** 18n - 1n) / 10n ** 18n;
+}
+
+// ── FillerAuth: the delegated authorization a RESERVED order needs when filled through BaseFiller ──
+// LibFillerAuth.isAuthorised passes (a) no gate, (b) `msg.sender == exclusiveFiller` at
+// settler.fill — and through BaseFiller that sender is BaseFiller itself, never the account — or
+// (c) a signature by exclusiveFiller over FillerAuth(orderDigest, destination, subFiller) under
+// the settler's own CorkSettler/1.0.0 domain. BaseFiller passes destination = its msg.sender (the
+// account that calls it) and subFiller = bytes32(uint160(msg.sender)) (INV-SUBFILLER-PROVENANCE),
+// so the exclusive filler signs over the ACCOUNT that will call BaseFiller, itself included.
+
+/** The EIP-712 type the exclusive filler signs (Typehashes.FILLER_AUTH_TYPEHASH). */
+export const FILLER_AUTH_TYPES = {
+  FillerAuth: [
+    { name: "orderDigest", type: "bytes32" },
+    { name: "destination", type: "address" },
+    { name: "subFiller", type: "bytes32" },
+  ],
+} as const;
+
+/** The sub-filler identity BaseFiller derives for the account that calls it. */
+export function subFillerOf(account: Address): Hex {
+  return pad(getAddress(account), { size: 32 });
+}
+
+/** The FillerAuth typed data for a fill THROUGH BaseFiller by `account` — what the exclusive
+ *  filler signs (eth_signTypedData_v4) to delegate its reservation to that account. */
+export function fillerAuthTypedData(a: { chainId: number; settler: Address; orderDigest: Hex; account: Address }) {
+  return {
+    domain: corkSettlerDomain(a.chainId, a.settler),
+    types: FILLER_AUTH_TYPES,
+    primaryType: "FillerAuth" as const,
+    message: { orderDigest: a.orderDigest, destination: getAddress(a.account), subFiller: subFillerOf(a.account) },
+  };
+}
+
+/** LibFillerAuth.hashFillerAuth: the digest `fillerAuthSig` must verify against. */
+export function hashFillerAuth(a: { chainId: number; settler: Address; orderDigest: Hex; account: Address }): Hex {
+  return hashTypedData(fillerAuthTypedData(a));
 }

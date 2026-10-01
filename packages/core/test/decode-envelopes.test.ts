@@ -13,6 +13,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { BUNDLED_DEFAULTS, corkActionCall, decodeSingleCall, encodeMulticall, generationsOf, primaryOf, runTool, type HandlerContext } from "@cork/core";
 import {
   decodeErc7579Executions,
+  erc7579ExecutorModuleAbi,
   decodeMultiSendTransactions,
   decodeRhinestoneOperation,
   ENVELOPE_SINGLETONS,
@@ -126,6 +127,8 @@ describe("envelopes.ts — one layer at a time, from the contracts' own layouts"
     const args = encodeFunctionData({ abi: multiSendAbi, functionName: "multiSend", args: [`0x${"01".padEnd(2, "0")}${ADAPTER_1.slice(2)}${"0".repeat(64)}${(4).toString(16).padStart(64, "0")}1234` as Hex] });
     expect(() => unwrapEnvelope(MULTISEND_141, args)).toThrow(/runs past the end/u);
     expect(() => decodeMultiSendTransactions("0x00")).toThrow(/truncated/u);
+    // An operation byte that is neither CALL nor DELEGATECALL is not a Safe transaction.
+    expect(() => decodeMultiSendTransactions(`0x02${ADAPTER_1.slice(2)}${"0".repeat(64)}${(2).toString(16).padStart(64, "0")}1234` as Hex)).toThrow(/operation 2/u);
     void bytes;
   });
 
@@ -247,6 +250,17 @@ describe("the reference ForSelf adapter of a generation is Cork's own deployment
     expect(codes(own)).toEqual(["target_unverified"]);
   });
 
+  it("an SDK caller that vouched for ONE adapter gets a mismatch naming it when the call targets another unlisted adapter", () => {
+    const vouched = getAddress("0x00000000000000000000000000000000000000f5");
+    const other = getAddress("0x00000000000000000000000000000000000000f6");
+    const call = (to: `0x${string}`) => ({ to, value: 0n, data: exerciseForSelf, skipRevert: false, callbackHash: `0x${"0".repeat(64)}` as Hex });
+    const leg = decodeSingleCall(call(other), { forSelf: vouched }) as Leg & { expectedTarget?: string };
+    expect(leg).toMatchObject({ kind: "forself", verification: "mismatch", expectedTarget: vouched });
+    expect(decodeSingleCall(call(vouched), { forSelf: vouched })).toMatchObject({ kind: "forself", verification: "trusted" });
+    // The reference list still wins over the vouched one: a generation's own adapter is trusted and labeled.
+    expect(decodeSingleCall(call(BASE_PRIMARY_FORSELF), { forSelf: vouched, forSelfAdapters: [{ address: BASE_PRIMARY_FORSELF, label: "phoenix/v0.4-rc.1" }] })).toMatchObject({ verification: "trusted", generation: "phoenix/v0.4-rc.1" });
+  });
+
   it("kind:tx — a signed tx TO the reference adapter names it in toLabel with its generation", async () => {
     const raw = await signer.signTransaction({ type: "eip1559", chainId: 8453, nonce: 0, to: BASE_PRIMARY_FORSELF, data: exerciseForSelf, gas: 300_000n, maxFeePerGas: 1_000_000n, maxPriorityFeePerGas: 1_000n });
     const env = await runTool("cork_decode", { kind: "tx", data: raw }, ctx);
@@ -291,6 +305,22 @@ describe("the live Zyfai fill (Base, 2026-09-30) — Rhinestone intent around ap
     expect(env.state).toBe("ok");
     expect((env.data as { toLabel: string }).toLabel).toBe("Rhinestone IntentExecutor");
     expect(codes(env)).toEqual(["envelope_unwrapped", "target_unverified"]);
+  });
+
+  it("kind:tx — a tx whose `to` is an integrator's EXECUTOR MODULE is wallet infrastructure, never described as the signer's own account", async () => {
+    const executorModule = getAddress("0xce1f0a65d3cf0c5cb0b7a1b4e23a7e7d1a2f9cc1");
+    const data = encodeFunctionData({ abi: erc7579ExecutorModuleAbi, functionName: "executeGuardedBatch", args: [[{ target: fx.forSelfAdapter, value: 0n, callData: exerciseForSelf }]] });
+    const raw = await signer.signTransaction({ type: "eip1559", chainId: 8453, nonce: 3, to: executorModule, data, gas: 500_000n, maxFeePerGas: 1_000_000n, maxPriorityFeePerGas: 1_000n });
+    const env = await runTool("cork_decode", { kind: "tx", data: raw }, ctx);
+    expect(env.state).toBe("ok");
+    expect(codes(env)).toEqual(["envelope_unwrapped", "target_unverified", "unknown_target"]);
+    expect(msg(env, "unknown_target")).toMatch(/NOT the signer's account: it is wallet infrastructure \(a erc7579-executor-module envelope/u);
+    expect(msg(env, "unknown_target")).not.toMatch(/YOUR wallet/u);
+    // A MultiSend at an address outside the byte-verified singletons: the same honesty.
+    const foreignMultiSend = getAddress("0x00000000000000000000000000000000000000d5");
+    const raw2 = await signer.signTransaction({ type: "eip1559", chainId: 8453, nonce: 4, to: foreignMultiSend, data: multiSend([{ op: 0, to: fx.forSelfAdapter, data: exerciseForSelf }]), gas: 500_000n, maxFeePerGas: 1_000_000n, maxPriorityFeePerGas: 1_000n });
+    const env2 = await runTool("cork_decode", { kind: "tx", data: raw2 }, ctx);
+    expect(msg(env2, "unknown_target")).toMatch(/wallet infrastructure \(a safe-multisend envelope/u);
   });
 
   it("kind:tx — a tx whose `to` is the wallet itself (Safe execTransaction) is told so, not accused", async () => {

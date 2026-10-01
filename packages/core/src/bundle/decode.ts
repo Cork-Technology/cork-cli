@@ -181,10 +181,15 @@ function verifyAdapter(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBa
  *  labeled with its generation; the caller-vouched adapter (`trust.forSelf`, a prepare's own
  *  target) is trusted plain; anything else is unverified — an integrator-deployed adapter is
  *  nobody's to vouch for here (never a mismatch: there is no single right ForSelf adapter). */
-function verifyForSelf(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBase, "verification" | "generation"> {
+function verifyForSelf(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBase, "verification" | "generation" | "expectedTarget"> {
   const reference = trust.forSelfAdapters?.find((a) => a.address.toLowerCase() === to.toLowerCase());
   if (reference !== undefined) return { verification: "trusted", generation: reference.label };
-  if (trust.forSelf !== undefined && trust.forSelf.toLowerCase() === to.toLowerCase()) return { verification: "trusted" };
+  if (trust.forSelf !== undefined) {
+    // A caller that vouched for ONE adapter (a prepare decoding its own bytes, an SDK integrator
+    // pinning the adapter it deployed) gets the contradiction, not a shrug: a ForSelf call at any
+    // other unlisted address is a mismatch naming the vouched one.
+    return trust.forSelf.toLowerCase() === to.toLowerCase() ? { verification: "trusted" } : { verification: "mismatch", expectedTarget: trust.forSelf };
+  }
   return { verification: "unverified" };
 }
 

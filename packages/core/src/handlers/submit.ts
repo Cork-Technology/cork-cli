@@ -635,18 +635,17 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // the same value twice and learned the rule from a raw venue rejection (cork-cli-private#24
       // item 5). Refused here with the recipe instead. Equality as "exactly this expiry" is the
       // natural request; relaxing the venue rule is raised with its owner.
-      if (action.expiryWindow.notBefore === action.expiryWindow.notAfter) {
-        return unavailable(chainId, "invalid_order_terms", `expiryWindow is EMPTY under the venue's rule: not_before must be strictly before not_after, and both are ${action.expiryWindow.notAfter}. For one exact pool expiry send notBefore = expiry − 1 (the window then admits only that expiry second); the venue rejects equality with a 400`, ctx);
-      }
+      const windowViolation = rfqOpenWindowViolation(action.expiryWindow);
+      if (windowViolation) return unavailable(chainId, "invalid_order_terms", windowViolation, ctx);
       // The recipe an inline market template names decides which GENERATION the cover is created
       // on, and an underwriter quoting only the primary passes on a previous-generation recipe
       // silently. Classified chain-free against the configured recipe hints; an address no
       // generation hints at is said so (the registry's isRecipe is the on-chain authority —
       // cork_query registry-recipes).
-      const recipeWarnings = await inlineRecipeWarnings(chainId, action.marketTemplate);
       if (BigInt(action.expiryWindow.notAfter) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow.notAfter (${action.expiryWindow.notAfter}) is not in the future (now ${nowSecs}) — no pool expiry could ever satisfy this window`, ctx);
       }
+      const recipeWarnings = await inlineRecipeWarnings(chainId, action.marketTemplate);
       if (BigInt(action.validUntil) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
       }
@@ -745,6 +744,17 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
  *  the configured recipe hints. Info on the primary's recipe (named), info on a previous
  *  generation's (named, with the pass it invites), `recipe_not_found` info when no generation
  *  hints at the address — never a refusal: the registry's `isRecipe` is the authority. */
+/** The venue's `expiry_window` refine (cork-indexing-api post-rfq.schema.ts: `not_before <
+ *  not_after`, strict), mirrored op-for-op — registered in MIRRORED_VENUE_LOGIC. Returns the
+ *  refusal text, or null when the window is admissible. The inverted case is caught earlier by
+ *  the schema-level ordering check; equality is the venue's own 400. */
+export function rfqOpenWindowViolation(window: { notBefore: number; notAfter: number }): string | null {
+  if (window.notBefore === window.notAfter) {
+    return `expiryWindow is EMPTY under the venue's rule: not_before must be strictly before not_after, and both are ${window.notAfter}. For one exact pool expiry send notBefore = expiry − 1 (the window then admits only that expiry second); the venue rejects equality with a 400`;
+  }
+  return null;
+}
+
 async function inlineRecipeWarnings(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<Array<{ code: string; message: string }>> {
   const inline = marketTemplate?.["inline"];
   const recipe = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;

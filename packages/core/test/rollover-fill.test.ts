@@ -3,14 +3,17 @@
 // same intent builder a holder signs with, signed with a throwaway key, and the fill calldata is
 // decoded back through the BaseFiller ABI to prove the job the contract will read.
 import { describe, expect, it } from "vitest";
-import { decodeAbiParameters, getAddress, type Hex, zeroHash } from "viem";
+import { decodeAbiParameters, getAddress, hashTypedData, type Hex, keccak256, encodeAbiParameters, toHex, zeroHash } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   buildRolloverIntent,
   computeOrderDigest,
+  corkSettlerDomainSeparator,
   decodeBaseFillerCall,
   encodeOriginData,
+  fillerAuthTypedData,
   gaslessOrderOf,
+  hashFillerAuth,
   GASLESS_ORDER_COMPONENTS,
   hashJitMarketParams,
   parseRolloverPayload,
@@ -21,6 +24,10 @@ import {
   type RolloverVenuePost,
 } from "@cork/core";
 import { stubRpc, type StubCall } from "./helpers.ts";
+import { chainStatusName } from "../src/rollover-verify.ts";
+
+// The public Anvil #1 key — a well-known test vector, never a secret: the EXCLUSIVE filler.
+const exclusive = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 
 const NOW = 1_790_000_000n;
 const CHAIN = 8453;
@@ -145,17 +152,101 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     const late = await fill({ orderDigest: expired.digest, signedOrder: expired.payload });
     expect(late.state).toBe("unavailable");
     expect(late.warnings[0]!.message).toMatch(/Settler__FillAfterDeadline/u);
-    const reserved = await signedOrder({ exclusiveFiller: getAddress("0x00000000000000000000000000000000000000e1") });
+    const reserved = await signedOrder({ exclusiveFiller: exclusive.address });
     const priv = await fill({ orderDigest: reserved.digest, signedOrder: reserved.payload });
     expect(priv.state).toBe("unavailable");
     expect(codes(priv)).toEqual(["private_order"]);
-    const authed = await fill({ orderDigest: reserved.digest, signedOrder: reserved.payload, fillerAuthSig: "0x1234" });
+    // Every terminal status refuses, by its own name.
+    for (const name of ["Settled", "Expired", "Cancelled", "Closing"]) {
+      const status = [0, 1, 2, 3, 4, 5].find((i) => chainStatusName(i) === name)!;
+      const terminal = await fill({ orderDigest: digest, signedOrder: payload }, { resolveRpc: chain({ status }) });
+      expect(terminal.state, name).toBe("conflict");
+      expect(codes(terminal)).toEqual(["status_mismatch"]);
+      expect(terminal.warnings[0]!.message).toContain(name);
+    }
+    const opened = await fill({ orderDigest: digest, signedOrder: payload }, { resolveRpc: chain({ status: 1 }) });
+    expect(opened.state).toBe("ok");
+  });
+
+  it("a RESERVED order: settler.fill's caller is BaseFiller, so even the exclusive filler itself needs a FillerAuth signature over the account that calls BaseFiller; the signature is verified the way the settler verifies it", async () => {
+    const { payload, digest } = await signedOrder({ exclusiveFiller: exclusive.address });
+    const priv = await fill({ orderDigest: digest, signedOrder: payload });
+    const td = (priv.data as { fillerAuthTypedData: Parameters<typeof hashTypedData>[0]; fillerAuthDigest: Hex }).fillerAuthTypedData;
+    // The typed data the refusal hands back IS the digest the settler checks: LibFillerAuth.hashFillerAuth
+    // = toTypedDataHash(domain, keccak(FILLER_AUTH_TYPEHASH ‖ orderDigest ‖ destination ‖ subFiller)).
+    const typehash = keccak256(toHex("FillerAuth(bytes32 orderDigest,address destination,bytes32 subFiller)"));
+    const structHash = keccak256(encodeAbiParameters([{ type: "bytes32" }, { type: "bytes32" }, { type: "address" }, { type: "bytes32" }], [typehash, digest, FILLER, `0x${FILLER.slice(2).toLowerCase().padStart(64, "0")}` as Hex]));
+    const manual = keccak256(`0x1901${corkSettlerDomainSeparator(CHAIN, EXACT).slice(2)}${structHash.slice(2)}` as Hex);
+    expect(hashTypedData(td)).toBe(manual);
+    expect(hashFillerAuth({ chainId: CHAIN, settler: EXACT, orderDigest: digest, account: FILLER })).toBe(manual);
+    expect((priv.data as { fillerAuthDigest: Hex }).fillerAuthDigest).toBe(manual);
+    // The exclusive filler (an EOA) delegates to FILLER: verified chain-free by ecrecover.
+    const auth = await exclusive.signTypedData(fillerAuthTypedData({ chainId: CHAIN, settler: EXACT, orderDigest: digest, account: FILLER }));
+    const authed = await fill({ orderDigest: digest, signedOrder: payload, fillerAuthSig: auth });
     expect(authed.state).toBe("ok");
-    expect((decodeBaseFillerCall((authed.data as Data).calldata).args[0] as { fillerAuthSig: Hex }).fillerAuthSig).toBe("0x1234");
-    const settled = await fill({ orderDigest: digest, signedOrder: payload }, { resolveRpc: chain({ status: 2 }) });
-    expect(settled.state).toBe("conflict");
-    expect(codes(settled)).toEqual(["status_mismatch"]);
-    expect(settled.warnings[0]!.message).toMatch(/Settled/u);
+    expect((authed.data as Data).fillerAuth).toBe("eoa-verified");
+    expect((decodeBaseFillerCall((authed.data as Data).calldata).args[0] as { fillerAuthSig: Hex }).fillerAuthSig).toBe(auth);
+    // The wrong signer: ecrecover yields someone else and the filler's isValidSignature (an EOA
+    // has none — the staticcall reverts) rejects → a conflict, no bytes.
+    const wrong = await holder.signTypedData(fillerAuthTypedData({ chainId: CHAIN, settler: EXACT, orderDigest: digest, account: FILLER }));
+    const bad = await fill({ orderDigest: digest, signedOrder: payload, fillerAuthSig: wrong });
+    expect(bad.state).toBe("conflict");
+    expect(codes(bad)).toEqual(["signature_or_reconstruction_mismatch"]);
+    expect((bad.data as { recoveredSigner: string }).recoveredSigner.toLowerCase()).toBe(holder.address.toLowerCase());
+    // A signature over a DIFFERENT account (the exclusive filler delegating to someone else) is
+    // not this fill's authorization.
+    const forOther = await exclusive.signTypedData(fillerAuthTypedData({ chainId: CHAIN, settler: EXACT, orderDigest: digest, account: holder.address }));
+    const other = await fill({ orderDigest: digest, signedOrder: payload, fillerAuthSig: forOther });
+    expect(other.state).toBe("conflict");
+    // Without an RPC a non-recovering signature rides unverified, said so.
+    const blind = await fill({ orderDigest: digest, signedOrder: payload, fillerAuthSig: wrong }, { resolveRpc: async () => null });
+    expect(blind.state).toBe("ok");
+    expect((blind.data as Data).fillerAuth).toBe("unverified");
+    expect(blind.warnings.find((w) => w.code === "funding_needs_rpc")!.message).toMatch(/does not ecrecover to/u);
+    // A reservation for the ACCOUNT ITSELF is still gated: the contract sees BaseFiller as the caller.
+    const self = await signedOrder({ exclusiveFiller: FILLER });
+    const selfRefused = await fill({ orderDigest: self.digest, signedOrder: self.payload });
+    expect(selfRefused.state).toBe("unavailable");
+    expect(codes(selfRefused)).toEqual(["private_order"]);
+    expect(selfRefused.warnings[0]!.message).toMatch(/YOUR OWN signature/u);
+    // A reservation for BaseFiller itself is the one direct pass through this path.
+    const forBaseFiller = await signedOrder({ exclusiveFiller: BASE_FILLER as `0x${string}` });
+    const direct = await fill({ orderDigest: forBaseFiller.digest, signedOrder: forBaseFiller.payload });
+    expect(direct.state).toBe("ok");
+    expect((direct.data as Data).fillerAuth).toBe("reserved-for-base-filler");
+  });
+
+  it("an order signed under another chain's settler domain cannot be filled here; a passed openDeadline is disclosed chain-free and refused once the chain says the order is still None", async () => {
+    const foreign = await signedOrder({ chainId: 42161 });
+    const env = await fill({ orderDigest: foreign.digest, signedOrder: foreign.payload });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]!.message).toMatch(/originChainId is 42161, not 8453/u);
+    const late = await signedOrder({ openDeadline: NOW - 1n, fillDeadline: NOW + 600n });
+    const blind = await fill({ orderDigest: late.digest, signedOrder: late.payload }, { resolveRpc: async () => null });
+    expect(blind.state).toBe("ok");
+    expect(blind.warnings.find((w) => w.code === "would_revert")!.message).toMatch(/Settler__OpenAfterOpenDeadline/u);
+    const none = await fill({ orderDigest: late.digest, signedOrder: late.payload }, { resolveRpc: chain({ status: 0 }) });
+    expect(none.state).toBe("unavailable");
+    expect(none.warnings[0]!.message).toMatch(/Settler__OpenAfterOpenDeadline/u);
+    const opened = await fill({ orderDigest: late.digest, signedOrder: late.payload }, { resolveRpc: chain({ status: 1 }) });
+    expect(opened.state).toBe("ok");
+  });
+
+  it("the fill size defaults to the venue's remainingSize (string or number); inline on a partial order it defaults to the ORDER size and says so", async () => {
+    const p = await signedOrder({ settler: PARTIAL, allowPartialFills: true });
+    const asString = await fill({ orderDigest: p.digest }, { venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: "250000000000000000", payload: p.payload }, fills: [], slots: [] } }]) });
+    expect(asString.state).toBe("ok");
+    expect((asString.data as Data).fillerSrcCst).toBe("250000000000000000");
+    expect(codes(asString)).not.toContain("invalid_order_terms");
+    const asNumber = await fill({ orderDigest: p.digest }, { venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: 250000000000, payload: p.payload }, fills: [], slots: [] } }]) });
+    expect((asNumber.data as Data).fillerSrcCst).toBe("250000000000");
+    const inline = await fill({ orderDigest: p.digest, signedOrder: p.payload });
+    expect(inline.state).toBe("ok");
+    expect((inline.data as Data).fillerSrcCst).toBe("1000000000000000000");
+    expect(inline.warnings.find((w) => w.code === "invalid_order_terms")!.message).toMatch(/inline path has no remaining-size source/u);
+    const exact = await signedOrder();
+    const exactInline = await fill({ orderDigest: exact.digest, signedOrder: exact.payload });
+    expect(codes(exactInline)).not.toContain("invalid_order_terms"); // an exact order fills at its size by definition
   });
 
   it("a partial-settler order fills at a smaller size; a wrong clone, a low premium cap and a short balance are named before the chain says so", async () => {

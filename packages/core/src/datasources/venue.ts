@@ -37,7 +37,7 @@ export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
  * enumerate them instead of trusting memory.
  */
 export const MIRRORED_VENUE_LOGIC = [
-  { gate: "rfq-open expiry_window: not_before must be STRICTLY < not_after (equality is a 400)", mirror: "packages/core/src/handlers/submit.ts#inlineRecipeWarnings", venueSource: "src/modules/rfq/v1/schemas/post-rfq.schema.ts (expiry_window refine)" },
+  { gate: "rfq-open expiry_window: not_before must be STRICTLY < not_after (equality is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqOpenWindowViolation", venueSource: "src/modules/rfq/v1/schemas/post-rfq.schema.ts (expiry_window refine)" },
   { gate: "quote_ref citation: answer existence, PARTY rule (requester or the cited answer's underwriter), option/chain/collateral coherence", mirror: "packages/core/src/handlers/submit.ts#resolveCitation", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (Verify RFQ provenance)" },
   { gate: "quote_ref premium acceptance band (parseFloat, fraction x100 canonicalization, strict ratio > 10 || < 0.1, both premiums > 0)", mirror: "packages/core/src/handlers/submit.ts#resolveListingPremium", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (premium scale signal)" },
   { gate: "premiumAnnualized caps: RFQ fraction pattern + < 0.5; book pattern + <= 100 (patterns are structure/R13, caps are policy)", mirror: "packages/core/src/handlers/submit.ts#premiumFractionViolation", venueSource: "rfq + limit-orders write schemas" },

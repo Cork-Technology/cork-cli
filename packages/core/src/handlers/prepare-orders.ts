@@ -679,8 +679,19 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (settlerGeneration === undefined || mods?.ownerTokenPull === undefined || mods.postRolloverDstCptTransfer === undefined) {
         return unavailable(chainId, "unknown_deployment", `the ${settlerGeneration?.label ?? "settler's"} rollover generation configures no hook modules on chainId ${chainId} (OwnerTokenPullModule / PostRolloverDstCptTransferModule) — pass the hooks explicitly through \`hooks\``, ctx);
       }
-      hooks = standardRolloverHooks({ modules: { ownerTokenPull: mods.ownerTokenPull, postRolloverDstCptTransfer: mods.postRolloverDstCptTransfer }, srcCptToken: action.standardHooks.srcCptToken, dstCptToken: action.standardHooks.dstCptToken, orderSize, recipient: input.account, allowUnderfill: action.allowUnderfill });
-      warnings.push({ code: "owner_managed_funding", message: `the pre-hook pulls ${orderSize} of src cPT ${action.standardHooks.srcCptToken} from ${input.account} into the clone ${action.rolloverContract} at fill time — approve the CLONE for that amount before the order is filled (a direct ERC-20 approve from your account); the post-hook returns the minted dst cPT ${action.standardHooks.dstCptToken} to you` });
+      // The pull module takes a FIXED amount (orderSize — the hooks are signed before any fill
+      // size is known). On a partial-fill order the first fill pulls orderSize, the clone burns the
+      // fill amount and sweeps the surplus back to the holder, and the NEXT fill pulls orderSize
+      // again from a holder who now has less: the module must CLAMP to balance and allowance
+      // (its allowUnderfill flag — independent of the ORDER's allowUnderfill, which the clone
+      // checks against the fill context), and the holder's allowance to the clone must outlast
+      // the first pull (each pull consumes min(balance, allowance) of allowance).
+      const clampPull = action.allowUnderfill || action.allowPartialFills;
+      hooks = standardRolloverHooks({ modules: { ownerTokenPull: mods.ownerTokenPull, postRolloverDstCptTransfer: mods.postRolloverDstCptTransfer }, srcCptToken: action.standardHooks.srcCptToken, dstCptToken: action.standardHooks.dstCptToken, orderSize, recipient: input.account, allowUnderfill: clampPull });
+      const allowanceTeaching = action.allowPartialFills
+        ? `approve the CLONE for the ORDER SIZE and keep that allowance standing across fills (an unlimited allowance, or re-approve after each partial fill): every fill's pre-hook pulls min(your balance, your allowance, ${orderSize}) and the clone sweeps the unburned surplus back to you, so a one-time allowance of exactly ${orderSize} is spent by the FIRST fill and the next one reverts OwnerTokenPullModule__NothingPullable`
+        : `approve the CLONE for that amount before the order is filled (a direct ERC-20 approve from your account)`;
+      warnings.push({ code: "owner_managed_funding", message: `the pre-hook pulls ${orderSize} of src cPT ${action.standardHooks.srcCptToken} from ${input.account} into the clone ${action.rolloverContract} at fill time — ${allowanceTeaching}; the post-hook returns the minted dst cPT ${action.standardHooks.dstCptToken} to you` });
     } else if (action.hooks !== undefined) {
       const toCall = (h: { target: `0x${string}`; value: string; callData: `0x${string}`; allowFailure: boolean; isDelegateCall: boolean }): RolloverCall => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall });
       hooks = {

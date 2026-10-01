@@ -22,7 +22,8 @@ import { resolveRollover } from "../config-remote.ts";
 import { getRolloverOrder } from "../datasources/venue.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, erc20ApproveTx } from "../order-approvals.ts";
 import { activeSettlersTeaching, classifyRolloverSettler, computeOrderDigest, hashJitMarketParams, type JitMarketParamsStruct, retiredSettlerTeaching, type RolloverGeneration, RolloverJitWireError } from "../rollover.ts";
-import { encodeBaseFillerExecute, encodeBaseFillerExecuteWithMarket, encodeDeployRolloverContract, encodeOriginData, gaslessOrderOf, parseRolloverPayload, type ParsedRolloverPayload, requiredPremium, rolloverFactoryAbi } from "../rollover-fill.ts";
+import { encodeBaseFillerExecute, encodeBaseFillerExecuteWithMarket, encodeDeployRolloverContract, encodeOriginData, fillerAuthTypedData, gaslessOrderOf, hashFillerAuth, parseRolloverPayload, type ParsedRolloverPayload, requiredPremium, rolloverFactoryAbi } from "../rollover-fill.ts";
+import { checkContractMakerSignature, recoverEoaSigner } from "./order-auth.ts";
 import { chainStatusName, settlerStatusAbi } from "../rollover-verify.ts";
 import { resolveJitBytesInput } from "./jit.ts";
 import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -43,10 +44,14 @@ function payloadOfVenueRow(row: Record<string, unknown>): Record<string, unknown
   return p && typeof p === "object" ? (p as Record<string, unknown>) : undefined;
 }
 
-function remainingSizeOf(row: Record<string, unknown> | undefined, fallback: bigint): bigint {
+/** The venue's `remainingSize` (a decimal string, or a number on an older row) — undefined when
+ *  the row carries none, so the caller can say which default it fell back to. */
+function remainingSizeOf(row: Record<string, unknown> | undefined): bigint | undefined {
   const order = row?.["order"];
   const v = order && typeof order === "object" ? (order as Record<string, unknown>)["remainingSize"] : undefined;
-  return typeof v === "string" && /^[0-9]+$/u.test(v) ? BigInt(v) : fallback;
+  if (typeof v === "string" && /^[0-9]+$/u.test(v)) return BigInt(v);
+  if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return BigInt(v);
+  return undefined;
 }
 
 export async function handleRolloverFill(input: PrepareOrdersInput, action: RolloverFillAction, ctx: HandlerContext): Promise<Envelope> {
@@ -54,9 +59,12 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const account = input.account;
   const nowSecs = nowSecondsOf(ctx);
   const warnings: Warning[] = [];
+  /** A refusal that carries every disclosure gathered so far (an alias teaching, a transport
+   *  note) ahead of the refusing code — `warnings[0]` stays the reason. */
+  const refuse = (code: string, message: string): Envelope => envelope({ state: "unavailable", data: null, chainId, source: "config", warnings: [{ code, message }, ...warnings], ctx });
   const { rollover, warning: rolloverWarn } = await resolveRollover(chainId);
   if (rolloverWarn) warnings.push(rolloverWarn);
-  if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One and Base — 42161, 8453)`, ctx);
+  if (!rollover) return refuse("unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One and Base — 42161, 8453)`);
 
   // ── the signed order: inline, or the venue's record by digest ──
   let parsed: ParsedRolloverPayload;
@@ -76,15 +84,15 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     } catch (err) {
       return venueFailed(chainId, err, ctx);
     }
-    if (!row) return unavailable(chainId, "order_not_found", `rollover order ${action.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest); pass the signed payload inline via signedOrder if you hold it`, ctx);
+    if (!row) return refuse("order_not_found", `rollover order ${action.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest); pass the signed payload inline via signedOrder if you hold it`);
     const payload = payloadOfVenueRow(row);
     if (!payload || typeof payload["order"] !== "object" || typeof payload["intent"] !== "object") {
-      return unavailable(chainId, "invalid_service_response", `the venue's record for ${action.orderDigest} carries no signed payload (order + intent + signature) — nothing to fill from; the row's fields: ${Object.keys(row).join(", ")}`, ctx);
+      return refuse("invalid_service_response", `the venue's record for ${action.orderDigest} carries no signed payload (order + intent + signature) — nothing to fill from; the row's fields: ${Object.keys(row).join(", ")}`);
     }
     try {
       parsed = parseRolloverPayload(payload as never);
     } catch (err) {
-      return unavailable(chainId, "invalid_service_response", `the venue's payload for ${action.orderDigest} failed shape validation: ${firstLine(err)} — no fill bytes are built from a row this tool cannot read`, ctx);
+      return refuse("invalid_service_response", `the venue's payload for ${action.orderDigest} failed shape validation: ${firstLine(err)} — no fill bytes are built from a row this tool cannot read`);
     }
     venueRow = row;
   }
@@ -92,7 +100,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
 
   // ── [K3] the digest is RECOMPUTED from the payload; the claimed digest must match ──
   if (Number(order.originChainId) !== chainId) {
-    return unavailable(chainId, "invalid_order_terms", `the order's originChainId is ${order.originChainId}, not ${chainId} — its digest lives under that chain's settler domain and it cannot be filled here`, ctx);
+    return refuse("invalid_order_terms", `the order's originChainId is ${order.originChainId}, not ${chainId} — its digest lives under that chain's settler domain and it cannot be filled here`);
   }
   const localDigest = computeOrderDigest(chainId, order);
   if (localDigest.toLowerCase() !== action.orderDigest.toLowerCase()) {
@@ -134,35 +142,45 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
 
   // ── settler generation, mode, deadlines, exclusivity ──
   const cls = classifyRolloverSettler(rollover, order.settler);
-  if (cls.status === "retired") return unavailable(chainId, "settler_retired", retiredSettlerTeaching(order.settler, cls, rollover), ctx);
+  if (cls.status === "retired") return refuse("settler_retired", retiredSettlerTeaching(order.settler, cls, rollover));
   if (cls.status === "unknown") {
-    return unavailable(chainId, "settler_not_recognized", `settler ${order.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — no BaseFiller is known for it, so no fill can be built here`, ctx);
+    return refuse("settler_not_recognized", `settler ${order.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — no BaseFiller is known for it, so no fill can be built here`);
   }
   const generation: RolloverGeneration = cls.generation;
   const baseFiller = generation.baseFiller;
-  if (!baseFiller) return unavailable(chainId, "unknown_deployment", `the ${generation.label} rollover generation configures no BaseFiller on chainId ${chainId} — the filler entry this tool builds against`, ctx);
-  if (cls.kind === "EXACT" && order.allowPartialFills) return unavailable(chainId, "settler_mode_mismatch", `the order is bound to the ExactSettler of ${generation.label} but allows partial fills — the settler reverts Settler__PartialFillsNotSupported; this order can never fill`, ctx);
-  if (cls.kind === "PARTIAL" && !order.allowPartialFills) return unavailable(chainId, "settler_mode_mismatch", `the order is bound to the PartialSettler of ${generation.label} but forbids partial fills — the settler reverts Settler__ExactFillsNotSupported; this order can never fill`, ctx);
-  if (order.fillDeadline <= nowSecs) return unavailable(chainId, "invalid_order_terms", `the order's fillDeadline ${order.fillDeadline} has passed (now ${nowSecs}) — the settler reverts Settler__FillAfterDeadline`, ctx);
-  if (order.rolloverParams.settler.toLowerCase() !== order.settler.toLowerCase()) return unavailable(chainId, "invalid_order_terms", `rolloverParams.settler ${order.rolloverParams.settler} differs from the order's settler ${order.settler} — admission reverts Settler__RolloverParamsSettlerMismatch`, ctx);
-  const reserved = !isAddressEqual(order.exclusiveFiller, zeroAddress) && !isAddressEqual(order.exclusiveFiller, account);
-  if (reserved && action.fillerAuthSig === undefined) {
-    return envelope({
-      state: "unavailable",
-      data: { orderDigest: localDigest, exclusiveFiller: order.exclusiveFiller, fillSender: account },
-      chainId,
-      source: artifactSource,
-      warnings: [...warnings, { code: "private_order", message: `the order reserves its fill for ${order.exclusiveFiller}, and this fill is sent by ${account} — the settler reverts Settler__UnauthorizedFiller unless that filler signed a FillerAuth(orderDigest, destination = ${account}, subFiller = ${account}) under its domain; pass it as fillerAuthSig` }],
-      ctx,
-    });
+  if (!baseFiller) return refuse("unknown_deployment", `the ${generation.label} rollover generation configures no BaseFiller on chainId ${chainId} — the filler entry this tool builds against`);
+  if (cls.kind === "EXACT" && order.allowPartialFills) return refuse("settler_mode_mismatch", `the order is bound to the ExactSettler of ${generation.label} but allows partial fills — the settler reverts Settler__PartialFillsNotSupported; this order can never fill`);
+  if (cls.kind === "PARTIAL" && !order.allowPartialFills) return refuse("settler_mode_mismatch", `the order is bound to the PartialSettler of ${generation.label} but forbids partial fills — the settler reverts Settler__ExactFillsNotSupported; this order can never fill`);
+  if (order.fillDeadline <= nowSecs) return refuse("invalid_order_terms", `the order's fillDeadline ${order.fillDeadline} has passed (now ${nowSecs}) — the settler reverts Settler__FillAfterDeadline`);
+  if (order.rolloverParams.settler.toLowerCase() !== order.settler.toLowerCase()) return refuse("invalid_order_terms", `rolloverParams.settler ${order.rolloverParams.settler} differs from the order's settler ${order.settler} — admission reverts Settler__RolloverParamsSettlerMismatch`);
+  // LibFillerAuth passes a direct call by exclusiveFiller — but settler.fill's caller is
+  // BaseFiller, never the account, so through this path ONLY a reservation for BaseFiller itself
+  // is a direct pass; every other reservation (the account's own included) needs the exclusive
+  // filler's FillerAuth signature over the account that calls BaseFiller.
+  const reserved = !isAddressEqual(order.exclusiveFiller, zeroAddress) && !isAddressEqual(order.exclusiveFiller, baseFiller);
+  const authDigest = hashFillerAuth({ chainId, settler: order.settler, orderDigest: localDigest, account });
+  let fillerAuth: "not-reserved" | "reserved-for-base-filler" | "eoa-verified" | "erc1271-verified" | "unverified" = isAddressEqual(order.exclusiveFiller, zeroAddress) ? "not-reserved" : "reserved-for-base-filler";
+  if (reserved) {
+    if (action.fillerAuthSig === undefined) {
+      return envelope({
+        state: "unavailable",
+        data: { orderDigest: localDigest, exclusiveFiller: order.exclusiveFiller, fillSender: account, fillerAuthDigest: authDigest, fillerAuthTypedData: fillerAuthTypedData({ chainId, settler: order.settler, orderDigest: localDigest, account }) },
+        chainId,
+        source: artifactSource,
+        warnings: [...warnings, { code: "private_order", message: `the order reserves its fill for ${order.exclusiveFiller}; settler.fill is called by BaseFiller ${baseFiller}, never by ${account}, so the settler reverts Settler__UnauthorizedFiller unless ${order.exclusiveFiller} signed FillerAuth(orderDigest ${localDigest}, destination = ${account}, subFiller = bytes32(${account})) under the settler's CorkSettler/1.0.0 domain — ${isAddressEqual(order.exclusiveFiller, account) ? "that is YOUR OWN signature (the reservation names you, but the contract sees BaseFiller as the caller)" : "the exclusive filler delegates the fill to you with it"}; sign data.fillerAuthTypedData and pass it as fillerAuthSig` }],
+        ctx,
+      });
+    }
+    fillerAuth = "unverified";
   }
 
   // ── amounts ──
-  const fillerSrcCst = action.fillerSrcCst !== undefined ? BigInt(action.fillerSrcCst) : remainingSizeOf(venueRow, order.orderSize);
-  if (fillerSrcCst === 0n) return unavailable(chainId, "invalid_order_terms", "fillerSrcCst is zero — nothing to roll (Settler__RolloverAmountOutOfBounds)", ctx);
-  if (fillerSrcCst > order.orderSize) return unavailable(chainId, "invalid_order_terms", `fillerSrcCst ${fillerSrcCst} exceeds the order's size ${order.orderSize} (Settler__RolloverAmountOutOfBounds)`, ctx);
+  const venueRemaining = remainingSizeOf(venueRow);
+  const fillerSrcCst = action.fillerSrcCst !== undefined ? BigInt(action.fillerSrcCst) : (venueRemaining ?? order.orderSize);
+  if (fillerSrcCst === 0n) return refuse("invalid_order_terms", "fillerSrcCst is zero — nothing to roll (Settler__RolloverAmountOutOfBounds)");
+  if (fillerSrcCst > order.orderSize) return refuse("invalid_order_terms", `fillerSrcCst ${fillerSrcCst} exceeds the order's size ${order.orderSize} (Settler__RolloverAmountOutOfBounds)`);
   if (cls.kind === "EXACT" && !order.allowUnderfill && fillerSrcCst !== order.orderSize) {
-    return unavailable(chainId, "invalid_order_terms", `an ExactSettler order without allowUnderfill fills only at its full size ${order.orderSize}; fillerSrcCst ${fillerSrcCst} reverts Settler__ExactFillRequiresFullOrderSize`, ctx);
+    return refuse("invalid_order_terms", `an ExactSettler order without allowUnderfill fills only at its full size ${order.orderSize}; fillerSrcCst ${fillerSrcCst} reverts Settler__ExactFillRequiresFullOrderSize`);
   }
   const premiumEstimate = requiredPremium(fillerSrcCst, order.minPremiumPerShare);
   const premiumCap = action.premiumCap !== undefined ? BigInt(action.premiumCap) : premiumEstimate;
@@ -172,6 +190,9 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const amountNotices: Warning[] = [];
   if (premiumCap < premiumEstimate) {
     amountNotices.push({ code: "would_revert", message: `premiumCap ${premiumCap} is below ceil(fillerSrcCst × minPremiumPerShare / 1e18) = ${premiumEstimate}, the premium the settler charges at a 1:1 dst/src mint — the fill reverts Settler__PremiumExceedsCap unless the destination pool mints fewer shares per src share than that` });
+  }
+  if (action.fillerSrcCst === undefined && venueRemaining === undefined && cls.kind === "PARTIAL") {
+    amountNotices.push({ code: "invalid_order_terms", message: `fillerSrcCst defaulted to the ORDER size ${order.orderSize}: ${venueRow ? "the venue row carries no remainingSize" : "the inline path has no remaining-size source"}, and the settler exposes no consumed-size view — on a partially filled PartialSettler order this overfills (Settler__RolloverAmountOutOfBounds / CorkRolloverContract__OverfillCeiling); pass fillerSrcCst = the remaining size` });
   }
   if (premiumCapEstimated) {
     amountNotices.push({ code: "premium_cap_estimated", message: `premiumCap defaulted to ${premiumEstimate} = ceil(fillerSrcCst × minPremiumPerShare / 1e18): exact when the destination pool mints one dst cST per src cST consumed; a destination pool minting MORE shares per collateral charges more (ceil(dstCstProduced × rate / 1e18)) and reverts Settler__PremiumExceedsCap above the cap — simulate, and raise the cap if the simulation names that error; BaseFiller refunds the unspent part either way` });
@@ -183,16 +204,16 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const hasCommitment = committed.toLowerCase() !== zeroHash;
   let jitParams: JitMarketParamsStruct | undefined;
   if (hasCommitment && action.jitMarket === undefined) {
-    return unavailable(chainId, "invalid_order_terms", `the order commits to a just-in-time destination market (rolloverParams.jitMarketHash ${committed}) — pass the negotiated jitMarket instruction so the fill runs executeWithMarket; without it the destination pool may not exist and BaseFiller__JitNotConfigured / the settler's DstCstNotCanonical refuses`, ctx);
+    return refuse("invalid_order_terms", `the order commits to a just-in-time destination market (rolloverParams.jitMarketHash ${committed}) — pass the negotiated jitMarket instruction so the fill runs executeWithMarket; without it the destination pool may not exist and BaseFiller__JitNotConfigured / the settler's DstCstNotCanonical refuses`);
   }
   if (!hasCommitment && action.jitMarket !== undefined) {
-    return unavailable(chainId, "invalid_order_terms", "the order commits to NO just-in-time market (jitMarketHash is zero), but a jitMarket instruction was passed — BaseFiller would revert BaseFiller__JitMarketHashMismatch; drop jitMarket (the destination pool must already exist)", ctx);
+    return refuse("invalid_order_terms", "the order commits to NO just-in-time market (jitMarketHash is zero), but a jitMarket instruction was passed — BaseFiller would revert BaseFiller__JitMarketHashMismatch; drop jitMarket (the destination pool must already exist)");
   }
   if (action.jitMarket !== undefined) {
     const jm = action.jitMarket;
     const { extraData: additionalData, oracleSalt: resolvedSalt, saltGiven } = resolveJitBytesInput(jm, undefined, generation.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"], bytesField: "additionalData" }, warnings);
     const wire = generation.wire;
-    if (wire === "rc.1") return unavailable(chainId, "invalid_order_terms", `the ${generation.label} rollover generation (wire rc.1) predates just-in-time markets — this order's commitment cannot be executed there`, ctx);
+    if (wire === "rc.1") return refuse("invalid_order_terms", `the ${generation.label} rollover generation (wire rc.1) predates just-in-time markets — this order's commitment cannot be executed there`);
     jitParams = {
       collateralAsset: jm.collateralAsset,
       referenceAsset: jm.referenceAsset,
@@ -212,7 +233,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     try {
       localHash = hashJitMarketParams(jitParams, wire);
     } catch (err) {
-      if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${order.settler} belongs to the ${generation.label} generation, wire ${wire})`, ctx);
+      if (err instanceof RolloverJitWireError) return refuse("invalid_order_terms", `${err.message} (settler ${order.settler} belongs to the ${generation.label} generation, wire ${wire})`);
       throw err;
     }
     if (localHash.toLowerCase() !== committed.toLowerCase()) {
@@ -236,6 +257,30 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     { role: "taker", stage: "before-fill", holder: account, token: order.premiumToken, tokenRole: "premium token", spender: baseFiller, spenderRole: "Cork BaseFiller", mechanism: "erc20-approve", amount: premiumCap.toString(), kind: "cap", wallets: "eoa+contract", note: "BaseFiller pulls the whole premiumCap, pays the settler exactly ceil(dstCstProduced × minPremiumPerShare / 1e18), and refunds the rest to you in the same transaction", unsignedTx: erc20ApproveTx(order.premiumToken, baseFiller, premiumCap) },
   ];
   const balances: { srcCst?: string; premiumToken?: string } = {};
+  // The filler authorization, verified the way the settler verifies it (SignatureChecker):
+  // ecrecover first (chain-free), the exclusive filler's own isValidSignature when it has code.
+  if (reserved && action.fillerAuthSig !== undefined) {
+    const eoa = await recoverEoaSigner(authDigest, action.fillerAuthSig);
+    if (eoa.signer !== null && isAddressEqual(eoa.signer, order.exclusiveFiller)) fillerAuth = "eoa-verified";
+    else if (resolved) {
+      const v = await checkContractMakerSignature(resolved.client, { maker: order.exclusiveFiller, orderHash: authDigest, signature: action.fillerAuthSig });
+      if (v.kind === "erc1271") fillerAuth = "erc1271-verified";
+      else if (v.kind === "erc1271_rejected") {
+        return envelope({
+          state: "conflict",
+          data: { orderDigest: localDigest, exclusiveFiller: order.exclusiveFiller, fillSender: account, fillerAuthDigest: authDigest, ...(eoa.signer !== null ? { recoveredSigner: eoa.signer } : {}) },
+          chainId,
+          source: "chain",
+          warnings: [...rpcWarn(resolved), ...warnings, { code: "signature_or_reconstruction_mismatch", message: `fillerAuthSig does not verify for ${order.exclusiveFiller} over FillerAuth(${localDigest}, destination ${account}, subFiller bytes32(${account})) under the settler's domain — ${eoa.signer !== null ? `ecrecover yields ${eoa.signer}` : "the bytes are not an ECDSA signature"} and the filler's isValidSignature rejects it; the settler reverts Settler__UnauthorizedFiller. No fill bytes` }],
+          ...rpcProvenance(input.format, resolved),
+          ctx,
+        });
+      } else warnings.push({ code: "chain_read_failed", message: `the exclusive filler's isValidSignature could not be asked (${v.reason}) and ecrecover does not yield ${order.exclusiveFiller}${eoa.signer !== null ? ` (it yields ${eoa.signer})` : ""} — fillerAuthSig rides UNVERIFIED; simulate before signing` });
+    } else warnings.push({ code: "funding_needs_rpc", message: `fillerAuthSig does not ecrecover to ${order.exclusiveFiller}${eoa.signer !== null ? ` (it yields ${eoa.signer})` : ""} and no RPC resolved to ask a contract filler's isValidSignature — it rides UNVERIFIED; the settler reverts Settler__UnauthorizedFiller if it is wrong` });
+  }
+  if (!resolved && order.openDeadline <= nowSecs) {
+    warnings.push({ code: "would_revert", message: `the order's openDeadline ${order.openDeadline} has passed (now ${nowSecs}) and no RPC resolved to read whether the settler already opened it — if it is still None, BaseFiller's openFor reverts Settler__OpenAfterOpenDeadline` });
+  }
   if (resolved) {
     try {
       const [status, clone, srcBal, premBal] = await Promise.all([
@@ -264,10 +309,10 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       });
     }
     if (chainStatus === "None" && order.openDeadline <= nowSecs) {
-      return unavailable(chainId, "invalid_order_terms", `the order is not yet opened on the settler and its openDeadline ${order.openDeadline} has passed (now ${nowSecs}) — BaseFiller's openFor reverts Settler__OpenAfterOpenDeadline`, ctx);
+      return refuse("invalid_order_terms", `the order is not yet opened on the settler and its openDeadline ${order.openDeadline} has passed (now ${nowSecs}) — BaseFiller's openFor reverts Settler__OpenAfterOpenDeadline`);
     }
     if (cloneOk === false) {
-      return unavailable(chainId, "invalid_order_terms", `the order names rolloverContract ${order.rolloverContract}, but the ${generation.label} factory's clone for user ${order.user} is a different address — admission reverts Settler__RolloverContractNotDeployed / Settler__UserNotRolloverContractOwner`, ctx);
+      return refuse("invalid_order_terms", `the order names rolloverContract ${order.rolloverContract}, but the ${generation.label} factory's clone for user ${order.user} is a different address — admission reverts Settler__RolloverContractNotDeployed / Settler__UserNotRolloverContractOwner`);
     }
     approvals = await annotateApprovalStatus(resolved.client, { entries: approvals, nowSeconds: nowSecs, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
     warnings.push(...amountNotices);
@@ -285,7 +330,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   try {
     calldata = jitParams !== undefined ? encodeBaseFillerExecuteWithMarket(jobArgs, jitParams, generation.wire as "rc.2" | "0.2") : encodeBaseFillerExecute(jobArgs);
   } catch (err) {
-    return unavailable(chainId, "invalid_order_terms", firstLine(err), ctx);
+    return refuse("invalid_order_terms", firstLine(err));
   }
   const hooks = { pre: intent.preRolloverHooks.length, mid: intent.midRolloverHooks.length, post: intent.postRolloverHooks.length, premiumPhase: intent.premiumHooks.length };
   return envelope({
@@ -319,6 +364,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       openDeadline: order.openDeadline.toString(),
       fillDeadline: order.fillDeadline.toString(),
       exclusiveFiller: isAddressEqual(order.exclusiveFiller, zeroAddress) ? null : order.exclusiveFiller,
+      fillerAuth,
       intentHooks: hooks,
       originData,
       chainStatus,
@@ -351,12 +397,14 @@ export async function handleDeployRolloverContract(input: PrepareOrdersInput, ac
   const chainId = input.chainId;
   const owner = action.owner ?? input.account;
   const warnings: Warning[] = [];
-  const { rollover, warning: rolloverWarn } = await resolveRollover(chainId, undefined, ctx.generation);
+  const { rollover, generation: gen, warning: rolloverWarn } = await resolveRollover(chainId, undefined, ctx.generation);
   if (rolloverWarn) warnings.push(rolloverWarn);
   if (!rollover) return unavailable(chainId, "unknown_deployment", `no rollover deployment configured for chainId ${chainId} (rollover is live on Arbitrum One and Base — 42161, 8453)`, ctx);
-  const generation = classifyRolloverSettler(rollover, rollover.exactSettler);
-  const gen = generation.status === "unknown" ? undefined : generation.generation;
-  if (gen?.status === "retired") return unavailable(chainId, "settler_retired", `the selected rollover generation ${gen.label} is retired — its factory's clones serve no admissible settler; select an active generation`, ctx);
+  // A retired rollover block (a `retired` date) still resolves — for history reads — but its
+  // factory's clones serve no admissible settler.
+  if (gen !== undefined && rollover.generations?.some((g) => g.label === gen.label && g.retired !== undefined)) {
+    return unavailable(chainId, "settler_retired", `the selected rollover generation ${gen.label} is retired — its factory's clones serve no admissible settler; select an active generation`, ctx);
+  }
   const factory = rollover.factory as `0x${string}`;
   const calldata = encodeDeployRolloverContract();
   const resolved = await getRpc(ctx, chainId);
