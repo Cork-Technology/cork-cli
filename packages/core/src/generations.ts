@@ -126,6 +126,11 @@ export const RolloverBlockSchema = z
      *  JITMarketCreated when a fill creates the destination pool) — optional because the July
      *  rc.1 record predates the Distribution's component baselines. */
     baseFiller: Address.optional(),
+    /** The generation's hook MODULES (rollover 0.2.0 src/modules): the delegatecall targets a
+     *  holder's clone runs per phase — the pre-hook that pulls the src cPT in and the post-hook
+     *  that returns the dst cPT (`standardRolloverHooks`). Optional: the rc.1/rc.2 records predate
+     *  the module baselines. */
+    modules: z.object({ ownerTokenPull: Address.optional(), postRolloverDstCptTransfer: Address.optional() }).strip().optional(),
     retired: z.string().optional(),
     contractsVersion: z.string().optional(),
     wire: z.enum(ROLLOVER_WIRES),
@@ -415,6 +420,8 @@ export interface RolloverGenerationEntry {
   settlerDomain: { name: string; version: string };
   seededAtBlock: number;
   baseFiller?: `0x${string}` | undefined;
+  /** The generation's hook modules (OwnerTokenPullModule / PostRolloverDstCptTransferModule), when recorded. */
+  modules?: { ownerTokenPull?: `0x${string}` | undefined; postRolloverDstCptTransfer?: `0x${string}` | undefined } | undefined;
   retired?: string | undefined;
   contractsVersion?: string | undefined;
   wire: RolloverWire;
@@ -439,6 +446,7 @@ export function rolloverGenerationsOf(list: readonly ResolvedGeneration[]): Roll
     settlerDomain: { name: r.settlerDomain.name, version: r.settlerDomain.version },
     seededAtBlock: r.seededAtBlock,
     ...(r.baseFiller !== undefined ? { baseFiller: r.baseFiller as `0x${string}` } : {}),
+    ...(r.modules !== undefined ? { modules: { ...(r.modules.ownerTokenPull !== undefined ? { ownerTokenPull: r.modules.ownerTokenPull as `0x${string}` } : {}), ...(r.modules.postRolloverDstCptTransfer !== undefined ? { postRolloverDstCptTransfer: r.modules.postRolloverDstCptTransfer as `0x${string}` } : {}) } } : {}),
     ...(r.retired !== undefined ? { retired: r.retired } : {}),
     ...(r.contractsVersion !== undefined ? { contractsVersion: r.contractsVersion } : {}),
     wire: r.wire,

@@ -8,7 +8,7 @@ import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarnin
 import type { MarketRegistryWire } from "../generations.ts";
 import { buildDeployFixedRateOracleCall, buildJitExtension, deriveJitMarket, type JITMarketParams, predictShares, wireCodec } from "../market-registry.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
-import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, RolloverJitWireError, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
+import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, type RolloverCall, type RolloverIntentArgs, standardRolloverHooks, RolloverJitWireError, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
@@ -20,6 +20,7 @@ import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
 import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
 import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-orders-sugars.ts";
+import { handleDeployRolloverContract, handleRolloverFill } from "./prepare-rollover-fill.ts";
 import { authenticateSignedOrder, makerCodeUnknownWarning, verifyMakerSignatureLadder } from "./order-auth.ts";
 
 /** The sugars re-enter this dispatcher and its approval annotator; handed in, never imported back. */
@@ -74,6 +75,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   const action = input.action;
 
   if (action.type === "maker-ladder") return handleMakerLadder(input, action, ctx);
+  if (action.type === "rollover-fill") return handleRolloverFill(input, action, ctx);
+  if (action.type === "deploy-rollover-contract") return handleDeployRolloverContract(input, action, ctx);
   if (action.type === "answer-rfq") return handleAnswerRfq(input, action, ctx, SUGAR_DEPS);
   if (action.type === "refresh-order") return handleRefreshOrder(input, action, ctx, SUGAR_DEPS);
 
@@ -660,13 +663,42 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       warnings.push({ code: "jit_market_notice", message: `this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash, the ${jitWire ?? "settler generation's"} JITMarketParams layout${jitWire === "0.2" ? " — oracleSalt committed" : jitWire === "rc.2" ? " — no oracleSalt member" : ""}${action.jitMarketHash !== undefined ? "; a pre-computed hash must have been produced for THAT wire or the fill reverts BaseFiller__JitMarketHashMismatch" : ""}) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free` });
     }
 
-    // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
-    // refuse the same orders). The builder pins intent.deadline = fillDeadline and attaches no
-    // hooks, so the submit-side extras don't apply here.
     const openDeadline = BigInt(action.openDeadline);
     const fillDeadline = BigInt(action.fillDeadline);
     const orderSize = BigInt(action.orderSize);
+    // The intent's hooks (2026-10-01): the clone runs them per phase, and a roll without the
+    // pre-hook that pulls the holder's src cPT in and the post-hook that returns the dst cPT
+    // cannot complete (nothing to burn; CorkRolloverContract__DstCptNotRestored). They are hashed
+    // into rolloverIntentHash, so they ride the signed order or not at all.
+    if (action.hooks !== undefined && action.standardHooks !== undefined) {
+      return unavailable(chainId, "invalid_order_terms", "hooks and standardHooks are mutually exclusive — pass the two canonical modules through standardHooks, or compose every hook yourself through hooks", ctx);
+    }
+    let hooks: RolloverIntentArgs["hooks"];
+    if (action.standardHooks !== undefined) {
+      const mods = settlerGeneration?.modules;
+      if (settlerGeneration === undefined || mods?.ownerTokenPull === undefined || mods.postRolloverDstCptTransfer === undefined) {
+        return unavailable(chainId, "unknown_deployment", `the ${settlerGeneration?.label ?? "settler's"} rollover generation configures no hook modules on chainId ${chainId} (OwnerTokenPullModule / PostRolloverDstCptTransferModule) — pass the hooks explicitly through \`hooks\``, ctx);
+      }
+      hooks = standardRolloverHooks({ modules: { ownerTokenPull: mods.ownerTokenPull, postRolloverDstCptTransfer: mods.postRolloverDstCptTransfer }, srcCptToken: action.standardHooks.srcCptToken, dstCptToken: action.standardHooks.dstCptToken, orderSize, recipient: input.account, allowUnderfill: action.allowUnderfill });
+      warnings.push({ code: "owner_managed_funding", message: `the pre-hook pulls ${orderSize} of src cPT ${action.standardHooks.srcCptToken} from ${input.account} into the clone ${action.rolloverContract} at fill time — approve the CLONE for that amount before the order is filled (a direct ERC-20 approve from your account); the post-hook returns the minted dst cPT ${action.standardHooks.dstCptToken} to you` });
+    } else if (action.hooks !== undefined) {
+      const toCall = (h: { target: `0x${string}`; value: string; callData: `0x${string}`; allowFailure: boolean; isDelegateCall: boolean }): RolloverCall => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall });
+      hooks = {
+        ...(action.hooks.preRolloverHooks ? { preRolloverHooks: action.hooks.preRolloverHooks.map(toCall) } : {}),
+        ...(action.hooks.midRolloverHooks ? { midRolloverHooks: action.hooks.midRolloverHooks.map(toCall) } : {}),
+        ...(action.hooks.postRolloverHooks ? { postRolloverHooks: action.hooks.postRolloverHooks.map(toCall) } : {}),
+        ...(action.hooks.premiumHooks ? { premiumHooks: action.hooks.premiumHooks.map(toCall) } : {}),
+      };
+    } else {
+      warnings.push({ code: "invalid_order_terms", message: "this order carries NO intent hooks: the clone will have no src cPT to burn and nowhere to send the dst cPT, so no filler can complete it — pass standardHooks (srcCptToken + dstCptToken) unless you compose hooks yourself" });
+    }
+    const allHooks = [...(hooks?.preRolloverHooks ?? []), ...(hooks?.midRolloverHooks ?? []), ...(hooks?.postRolloverHooks ?? []), ...(hooks?.premiumHooks ?? [])];
+
+    // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
+    // refuse the same orders). The builder pins intent.deadline = fillDeadline; the hooks it
+    // carries are checked by the same shape rule the submit side runs.
     const violation = checkRolloverOrderTerms({
+      ...(allHooks.length > 0 ? { hooks: allHooks } : {}),
       nowSeconds: nowSecondsOf(ctx),
       openDeadline,
       fillDeadline,
@@ -706,12 +738,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       ...(action.exclusiveFiller !== undefined ? { exclusiveFiller: action.exclusiveFiller } : {}),
       ...(action.orderSalt !== undefined ? { orderSalt: BigInt(action.orderSalt) } : {}),
       ...(action.nonce !== undefined ? { nonce: BigInt(action.nonce) } : {}),
+      ...(hooks !== undefined ? { hooks } : {}),
       clientRequestId: input.clientRequestId,
     });
     return envelope({
       state: "ok",
       data: {
         kind: "rollover-intent",
+        intentHooks: { pre: built.intent.preRolloverHooks.length, mid: built.intent.midRolloverHooks.length, post: built.intent.postRolloverHooks.length, premiumPhase: built.intent.premiumHooks.length, ...(action.standardHooks !== undefined ? { standard: true, modules: settlerGeneration!.modules } : {}) },
         settler: action.settler,
         ...(cls.status === "active" ? { settlerKind: cls.kind, settlerGeneration: cls.generation.label } : {}),
         /** The JITMarketParams layout `rolloverParams.jitMarketHash` is (or must be) computed on — the settler generation's rollover wire. */

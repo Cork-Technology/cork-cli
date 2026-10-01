@@ -478,7 +478,11 @@ describe("cork_query derive-cork-pool (2.1.0: recipe contract + off-chain constr
       },
       {
         simulateCalls: (a) => {
-          expect(a.stateOverrides).toBeTruthy(); // the POOL_CREATOR_ROLE grant rides the simulation
+          const overrides = a.stateOverrides as Array<{ address: string; balance?: bigint; stateDiff?: unknown[] }>;
+          expect(overrides.some((o) => o.stateDiff !== undefined)).toBe(true); // the POOL_CREATOR_ROLE grant rides the simulation
+          // The simulating account is a contract with no ETH; a balance-validating endpoint (anvil,
+          // 2026-10-01) refuses the whole simulation unless the dry-run grants it a balance.
+          expect(overrides.find((o) => o.address.toLowerCase() === a.account.toLowerCase() && o.balance !== undefined)?.balance).toBe(10n ** 18n);
           return { results: [{ status: "success", data: "0x" }, { status: "success", data: "0x" + sharesWord(GT.cpt) + sharesWord(GT.cst) }] };
         },
       },

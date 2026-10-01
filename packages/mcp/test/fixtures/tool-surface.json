@@ -2888,6 +2888,164 @@
                   },
                   "nonce": {
                     "$ref": "#/$defs/Uint64Str"
+                  },
+                  "standardHooks": {
+                    "type": "object",
+                    "properties": {
+                      "srcCptToken": {
+                        "description": "the SOURCE pool's cPT — the position being rolled (cork_query cork-pool shares.corkPrincipalToken of srcPoolId); the pre-hook pulls orderSize of it from you into your clone, so approve the clone for it before the fill",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "dstCptToken": {
+                        "description": "the DESTINATION pool's cPT (shares.corkPrincipalToken of dstPoolId, or the predicted one for a just-in-time pool); the post-hook returns the minted dst cPT to you",
+                        "$ref": "#/$defs/Address"
+                      }
+                    },
+                    "required": [
+                      "srcCptToken",
+                      "dstCptToken"
+                    ],
+                    "additionalProperties": false,
+                    "description": "the two hooks every production roll runs, built for you from the settler generation's configured modules (OwnerTokenPullModule as PRE: pull your src cPT into the clone; PostRolloverDstCptTransferModule as POST: send the minted dst cPT back to you). Hooks are hashed into the signed commitment and cannot be added after signing. Mutually exclusive with `hooks`; an order with NEITHER rolls nothing (the clone has no cPT to burn) and is warned"
+                  },
+                  "hooks": {
+                    "type": "object",
+                    "properties": {
+                      "preRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "midRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "postRolloverHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "premiumHooks": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "$ref": "#/$defs/Address"
+                            },
+                            "value": {
+                              "description": "native value in wei, decimal string",
+                              "$ref": "#/$defs/UintStr"
+                            },
+                            "callData": {
+                              "$ref": "#/$defs/Hex"
+                            },
+                            "allowFailure": {
+                              "type": "boolean"
+                            },
+                            "isDelegateCall": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "target",
+                            "value",
+                            "callData",
+                            "allowFailure",
+                            "isDelegateCall"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "explicit intent hooks per phase (delegatecall-only, zero value, allowFailure false — the clone refuses anything else) for a holder composing its own modules; prefer `standardHooks`"
                   }
                 },
                 "required": [
@@ -2905,7 +3063,207 @@
                   "fillDeadline"
                 ],
                 "additionalProperties": false,
-                "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"
+                "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rollover-fill"
+                  },
+                  "orderDigest": {
+                    "description": "the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it [K3]; a disagreement is a conflict, never filled",
+                    "$ref": "#/$defs/Bytes32"
+                  },
+                  "signedOrder": {
+                    "type": "object",
+                    "properties": {
+                      "order": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {},
+                        "description": "the OrderData fields as the venue serves them (decimal strings; `rolloverParams` nested)"
+                      },
+                      "intent": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {},
+                        "description": "the RolloverIntent: rolloverContract, orderDigest, deadline, nonce, the four hook arrays"
+                      },
+                      "signature": {
+                        "description": "the cPT holder's signature over the order digest — EIP-712 bytes for an EOA, the ERC-1271 bytes a contract holder signed with; passed to the settler verbatim",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "envelope": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {},
+                        "description": "the venue's derived envelope (orderData/orderDataType/originData), cross-checked when present"
+                      }
+                    },
+                    "required": [
+                      "order",
+                      "intent",
+                      "signature"
+                    ],
+                    "description": "fill from a payload you ALREADY HOLD (the `payload` object of cork_query rollover-orders filters.orderDigest, or what the holder handed you) — the venue is not contacted. Must hash to `orderDigest`"
+                  },
+                  "fillerSrcCst": {
+                    "description": "src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to the order's remaining size. An ExactSettler needs the full size unless the order allows underfill",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "premiumCap": {
+                    "description": "the most premium (in the order's premiumToken, its own base units) this fill will pay — the settler charges ceil(dstCstProduced × minPremiumPerShare / 1e18) and reverts Settler__PremiumExceedsCap above the cap; BaseFiller refunds the unspent part. Defaults to ceil(fillerSrcCst × minPremiumPerShare / 1e18), exact at a 1:1 dst/src mint ratio — a destination pool minting more shares per collateral needs a higher cap (premium_cap_estimated says so; simulate)",
+                    "$ref": "#/$defs/TokenAmount"
+                  },
+                  "minDstPerSrc": {
+                    "default": "0",
+                    "description": "floor on dst cST per src cST, 1e18 = 1.0 (the settler checks dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18)); 0 = no floor",
+                    "x-units": "D18{1}",
+                    "$ref": "#/$defs/UintStr"
+                  },
+                  "fillerAuthSig": {
+                    "description": "when the order names an exclusiveFiller that is NOT your account: that filler's signature over FillerAuth(orderDigest, destination = your account, subFiller = your account) under the settler domain; without it a reserved order refuses here",
+                    "$ref": "#/$defs/Hex"
+                  },
+                  "jitMarket": {
+                    "type": "object",
+                    "properties": {
+                      "collateralAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "referenceAsset": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "expiryTimestamp": {
+                        "description": "destination pool expiry — must outlast the order's fillDeadline",
+                        "$ref": "#/$defs/UnixSeconds"
+                      },
+                      "recipe": {
+                        "description": "the approved IMarketRecipe CONTRACT ADDRESS the created market names (discover with cork_query resource:'registry-recipes')",
+                        "$ref": "#/$defs/Address"
+                      },
+                      "rateOverride": {
+                        "default": "0",
+                        "description": "FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0); MUST stay 0 for price/nav recipes",
+                        "x-units": "D18{1}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "constraint": {
+                        "type": "object",
+                        "properties": {
+                          "rateMin": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE rate ceiling, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangePerDayMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE max rate movement per day, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          },
+                          "rateChangeCapacityMax": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "ABSOLUTE total rate-movement budget, 1e18 = 1.0",
+                            "x-units": "D18{1}",
+                            "$ref": "#/$defs/UintStr"
+                          }
+                        },
+                        "required": [
+                          "rateMin",
+                          "rateMax",
+                          "rateChangePerDayMax",
+                          "rateChangeCapacityMax"
+                        ],
+                        "additionalProperties": false,
+                        "description": "the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"
+                      },
+                      "extraData": {
+                        "description": "the recipe-specific bytes the constraint was derived from — committed as keccak256 in the BaseFiller's `additionalData` member (the struct keeps that name; the typed-data output shows it). Defaults to 0x. This is the input name on every JIT block; `additionalData` is the deprecated alias",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "additionalData": {
+                        "description": "DEPRECATED alias of `extraData` (the BaseFiller struct's own member name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData",
+                        "$ref": "#/$defs/Hex"
+                      },
+                      "oracleSalt": {
+                        "description": "rollover 0.2-wire settlers only: the salt of the destination pair's FIRST oracle wrapper, part of the JITMarketParams commitment (defaults to the zero salt there); refused non-zero for an rc.2 settler, whose struct has no salt member",
+                        "$ref": "#/$defs/Bytes32"
+                      },
+                      "swapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      },
+                      "unwindSwapFeePercentage": {
+                        "default": "0",
+                        "description": "PERCENTAGE, 1e18 = 1% — creation only. 8-field generations (phoenix/v0.3-rc.1 and older) cap it at 5e18 = 5% inclusive; the 10-field primary (phoenix/v0.4-rc.1) accepts any value strictly below 100e18 (Phoenix reverts InvalidFees at or above) and makes it PART OF THE POOL ID",
+                        "x-units": "D18{%}",
+                        "$ref": "#/$defs/UintStr"
+                      }
+                    },
+                    "required": [
+                      "collateralAsset",
+                      "referenceAsset",
+                      "expiryTimestamp",
+                      "recipe",
+                      "constraint"
+                    ],
+                    "additionalProperties": false,
+                    "description": "REQUIRED when the order's rolloverParams.jitMarketHash is non-zero: the destination-market instruction the holder committed to, encoded for BaseFiller.executeWithMarket on the settler generation's wire — its hash must equal the signed commitment (checked locally; the contract reverts BaseFiller__JitMarketHashMismatch otherwise) and dstPoolId must be the pool it derives"
+                  },
+                  "maxPages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 10,
+                    "description": "hard bound on venue pages searched when the order is not served by its digest route; ignored with `signedOrder`"
+                  }
+                },
+                "required": [
+                  "type",
+                  "orderDigest"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; simulate before signing"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "deploy-rollover-contract"
+                  },
+                  "owner": {
+                    "description": "the account the clone belongs to; defaults to `account`. The factory deploys for msg.sender ONLY, so the transaction must be sent by this owner",
+                    "$ref": "#/$defs/Address"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false,
+                "description": "unsigned CorkRolloverContractFactory.deployRolloverContract() calldata: the per-account rollover clone every roll order names as `rolloverContract` (one per owner, CREATE2; the predicted address is reported, and an already-deployed clone makes the tx a refusal on chain — reported as already existing instead). Targets the selected generation's factory (primary by default)"
               },
               {
                 "type": "object",

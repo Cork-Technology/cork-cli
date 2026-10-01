@@ -26,16 +26,7 @@
 // captured golden vector (BaseFiller.hashJITMarketParams @ 0x3D16…1224, 2026-09-22) tells them
 // apart. The contract keeps the member name `additionalData` (the registry side renamed its twin
 // to `extraData`); this module keeps the contract's name on the struct.
-import {
-  concatHex,
-  encodeAbiParameters,
-  hashDomain,
-  hashTypedData,
-  keccak256,
-  stringToHex,
-  zeroAddress,
-  zeroHash,
-} from "viem";
+import { concatHex, encodeAbiParameters, encodeFunctionData, hashDomain, hashTypedData, keccak256, parseAbi, stringToHex, zeroAddress, zeroHash } from "viem";
 import type { RolloverWire } from "./generations.ts";
 
 type Address = `0x${string}`;
@@ -533,6 +524,8 @@ export interface RolloverGenerationRecord {
   seededAtBlock: number;
   /** The generation's BaseFiller (optional — the July rc.1 record predates the baselines). */
   baseFiller?: `0x${string}` | undefined;
+  /** The generation's hook modules (optional; see generations.ts RolloverBlockSchema). */
+  modules?: { ownerTokenPull?: `0x${string}` | undefined; postRolloverDstCptTransfer?: `0x${string}` | undefined } | undefined;
   retired?: string | undefined;
   label?: string | undefined;
   contractsVersion?: string | undefined;
@@ -571,6 +564,7 @@ export function rolloverGenerations(dep: RolloverDeploymentRecord): RolloverGene
     partialSettler: g.partialSettler,
     seededAtBlock: g.seededAtBlock,
     ...(g.baseFiller !== undefined ? { baseFiller: g.baseFiller } : {}),
+    ...(g.modules !== undefined ? { modules: g.modules } : {}),
     ...(g.retired !== undefined ? { retired: g.retired } : {}),
     ...(g.contractsVersion !== undefined ? { contractsVersion: g.contractsVersion } : {}),
     ...(g.settlerDomain !== undefined ? { settlerDomain: g.settlerDomain } : {}),
@@ -634,8 +628,9 @@ export function retiredSettlerTeaching(
   return `settler ${settler} is the ${role} of the RETIRED ${cls.generation.label} rollover generation (retired ${cls.generation.retired ?? "at the last wire change"}) — nothing useful can be built or relayed against it: the venue archives retired generations and admits only the active generations, and the current-generation digest this tool computes would not verify on that contract; use an active ${role}: ${activeSettlersTeaching(dep, cls.kind)}`;
 }
 
-/** Order-term fields the deterministic admission battery reads. `intentDeadline`/`hooks` are
- *  submit-side extras (the prepare builder pins deadline = fillDeadline and attaches no hooks). */
+/** Order-term fields the deterministic admission battery reads. `intentDeadline` is a
+ *  submit-side extra (the prepare builder pins deadline = fillDeadline); `hooks` are checked on
+ *  both sides since the builder carries them (2026-10-01). */
 export interface RolloverOrderTermsInput {
   nowSeconds: bigint;
   openDeadline: bigint;
@@ -711,7 +706,21 @@ export interface RolloverIntentArgs {
   exclusiveFiller?: Address;
   orderSalt?: bigint;
   nonce?: bigint;
+  /** The intent's hooks — delegatecall modules the holder's clone runs per phase. A real roll
+   *  needs at least the pre-hook that pulls the holder's src cPT into the clone and the post-hook
+   *  that moves the minted dst cPT out (`standardRolloverHooks`); they are hashed into the signed
+   *  commitment, so they cannot be added after signing. */
+  hooks?: Partial<Pick<RolloverIntentStruct, "preRolloverHooks" | "midRolloverHooks" | "postRolloverHooks" | "premiumHooks">>;
   clientRequestId: string;
+}
+
+/** One hook as the venue wire carries it (decimal value, lowercase target). */
+export interface RolloverVenueHook {
+  target: string;
+  value: string;
+  callData: Hex;
+  allowFailure: boolean;
+  isDelegateCall: boolean;
 }
 
 export interface RolloverIntentResult {
@@ -770,14 +779,48 @@ export interface RolloverVenuePost {
     rolloverContract: string;
     deadline: string;
     nonce: string;
-    preRolloverHooks: never[];
-    midRolloverHooks: never[];
-    postRolloverHooks: never[];
-    premiumHooks: never[];
+    preRolloverHooks: RolloverVenueHook[];
+    midRolloverHooks: RolloverVenueHook[];
+    postRolloverHooks: RolloverVenueHook[];
+    premiumHooks: RolloverVenueHook[];
   };
   /** Placeholder instruction — the caller replaces it with the EIP-712 signature. */
   signature: string;
   envelope: { orderDataType: Hex };
+}
+
+const venueHook = (c: RolloverCall): RolloverVenueHook => ({ target: c.target.toLowerCase(), value: c.value.toString(), callData: c.callData, allowFailure: c.allowFailure, isDelegateCall: c.isDelegateCall });
+
+/** The two hook MODULES every production roll runs (rollover 0.2.0 `src/modules`, delegatecalled
+ *  by the holder's clone; ERC-7484-attested on the factory's registry): OwnerTokenPullModule
+ *  `execute(IERC20 token, uint256 amount, bool allowUnderfill)` as a PRE hook pulls the holder's
+ *  src cPT into the clone (the holder approves the clone for it), and
+ *  PostRolloverDstCptTransferModule `execute(IERC20 dstCpt, address recipient)` as a POST hook
+ *  moves the minted dst cPT out to the holder — without it the clone refuses
+ *  (CorkRolloverContract__DstCptNotRestored). Addresses are per generation (config
+ *  `rollover.modules`; the same CREATE2 addresses on Base and Arbitrum for v0.2.0). */
+export const ownerTokenPullModuleAbi = parseAbi(["function execute(address token, uint256 amount, bool allowUnderfill)"]);
+export const postRolloverDstCptTransferModuleAbi = parseAbi(["function execute(address dstCpt, address recipient)"]);
+
+export interface StandardRolloverHooksArgs {
+  modules: { ownerTokenPull: Address; postRolloverDstCptTransfer: Address };
+  /** The SOURCE pool's cPT the holder rolls (pulled into the clone) and the DESTINATION pool's cPT (returned). */
+  srcCptToken: Address;
+  dstCptToken: Address;
+  /** The cPT amount the pre-hook pulls — the order size (one cPT per cST burned). */
+  orderSize: bigint;
+  /** Where the dst cPT goes after the roll — the holder. */
+  recipient: Address;
+  /** Mirror of the order's allowUnderfill: the pull tolerates a short cPT balance only then. */
+  allowUnderfill: boolean;
+}
+
+/** The canonical pre + post hooks of a roll (see the module ABIs above). */
+export function standardRolloverHooks(a: StandardRolloverHooksArgs): Pick<RolloverIntentStruct, "preRolloverHooks" | "postRolloverHooks"> {
+  return {
+    preRolloverHooks: [{ target: a.modules.ownerTokenPull, value: 0n, callData: encodeFunctionData({ abi: ownerTokenPullModuleAbi, functionName: "execute", args: [a.srcCptToken, a.orderSize, a.allowUnderfill] }), allowFailure: false, isDelegateCall: true }],
+    postRolloverHooks: [{ target: a.modules.postRolloverDstCptTransfer, value: 0n, callData: encodeFunctionData({ abi: postRolloverDstCptTransferModuleAbi, functionName: "execute", args: [a.dstCptToken, a.recipient] }), allowFailure: false, isDelegateCall: true }],
+  };
 }
 
 /** Build a signable rollover order: OrderData typed-data + the locally-recomputed zero-digest
@@ -791,10 +834,10 @@ export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult
     orderDigest: zeroHash,
     deadline: a.fillDeadline,
     nonce,
-    preRolloverHooks: [],
-    midRolloverHooks: [],
-    postRolloverHooks: [],
-    premiumHooks: [],
+    preRolloverHooks: a.hooks?.preRolloverHooks ?? [],
+    midRolloverHooks: a.hooks?.midRolloverHooks ?? [],
+    postRolloverHooks: a.hooks?.postRolloverHooks ?? [],
+    premiumHooks: a.hooks?.premiumHooks ?? [],
   };
   const rolloverIntentHash = intentStructHash(intent);
   const order: OrderDataStruct = {
@@ -868,10 +911,10 @@ export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult
       rolloverContract: lc(intent.rolloverContract),
       deadline: intent.deadline.toString(),
       nonce: intent.nonce.toString(),
-      preRolloverHooks: [],
-      midRolloverHooks: [],
-      postRolloverHooks: [],
-      premiumHooks: [],
+      preRolloverHooks: intent.preRolloverHooks.map(venueHook),
+      midRolloverHooks: intent.midRolloverHooks.map(venueHook),
+      postRolloverHooks: intent.postRolloverHooks.map(venueHook),
+      premiumHooks: intent.premiumHooks.map(venueHook),
     },
     signature: "<sign the typedData with the user wallet and paste the signature here>",
     envelope: { orderDataType: ORDER_DATA_TYPEHASH },

@@ -53,7 +53,7 @@ export interface ApprovalRequirement {
   /** The party being authorized to pull. For permit2-approve this is the Permit2 INTERNAL
    *  spender (the LOP); the tx itself goes to the Permit2 contract (unsignedTx.to). */
   spender: `0x${string}`;
-  spenderRole: "1inch LOP" | "Permit2" | "Cork JIT adapter" | "ForSelf adapter" | "Cork adapter";
+  spenderRole: "1inch LOP" | "Permit2" | "Cork JIT adapter" | "ForSelf adapter" | "Cork adapter" | "Cork BaseFiller";
   mechanism: "erc20-approve" | "permit2-approve" | "erc2612-permit";
   /** Required minimum in the token's base units; null = size via simulation (JIT mint funding). */
   amount: string | null;

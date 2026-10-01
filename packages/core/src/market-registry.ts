@@ -1088,6 +1088,10 @@ function simulateLegFailure(leg: { status: string; error?: unknown; data?: `0x${
   return `${label} failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err ?? leg.status)}`;
 }
 
+/** ETH granted to the simulating account by state override — the role holder is a contract with
+ *  no balance, and some endpoints validate the sender's balance even in eth_simulateV1. */
+export const SIMULATED_SENDER_BALANCE = 10n ** 18n;
+
 export async function predictShares(
   client: PublicClient,
   args: {
@@ -1161,6 +1165,11 @@ export async function predictShares(
       ],
       stateOverrides: [
         { address: args.controller, stateDiff: [{ slot: roleMemberSlot(creatorRole, args.adapter), value: toHex(1n, { size: 32 }) }] },
+        // The simulating account is a CONTRACT (the role holder) and holds no ETH; an endpoint
+        // that validates the sender's balance (anvil, 2026-10-01 rollover rehearsal: "total cost
+        // … exceeds the balance of the account") would refuse the whole simulation as a transport
+        // failure. One ether of simulated balance makes the dry-run balance-independent.
+        { address: args.adapter, balance: SIMULATED_SENDER_BALANCE },
       ],
     });
     const create = simulated.results[pre.length];

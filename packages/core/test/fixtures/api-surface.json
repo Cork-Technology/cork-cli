@@ -385,6 +385,10 @@
       "kind": "type"
     },
     {
+      "name": "FillerJobArgs",
+      "kind": "type"
+    },
+    {
       "name": "FinalizeMakerOrderArgs",
       "kind": "type"
     },
@@ -433,6 +437,10 @@
       "kind": "type"
     },
     {
+      "name": "GASLESS_ORDER_COMPONENTS",
+      "kind": "value"
+    },
+    {
       "name": "GENERATION_ALIASES",
       "kind": "value"
     },
@@ -447,6 +455,10 @@
     {
       "name": "GENERATION_STATUSES",
       "kind": "value"
+    },
+    {
+      "name": "GaslessCrossChainOrder",
+      "kind": "type"
     },
     {
       "name": "Generation",
@@ -901,6 +913,10 @@
       "kind": "type"
     },
     {
+      "name": "ParsedRolloverPayload",
+      "kind": "type"
+    },
+    {
       "name": "ParsedTdxQuote",
       "kind": "type"
     },
@@ -1145,6 +1161,10 @@
       "kind": "type"
     },
     {
+      "name": "RolloverVenueHook",
+      "kind": "type"
+    },
+    {
       "name": "RolloverVenuePost",
       "kind": "type"
     },
@@ -1194,6 +1214,10 @@
     },
     {
       "name": "SHARE_DECIMALS",
+      "kind": "value"
+    },
+    {
+      "name": "SIMULATED_SENDER_BALANCE",
       "kind": "value"
     },
     {
@@ -1274,6 +1298,10 @@
     },
     {
       "name": "SplitTakerArgs",
+      "kind": "type"
+    },
+    {
+      "name": "StandardRolloverHooksArgs",
       "kind": "type"
     },
     {
@@ -1378,6 +1406,10 @@
     },
     {
       "name": "VenuePostResult",
+      "kind": "type"
+    },
+    {
+      "name": "VenueRolloverPayload",
       "kind": "type"
     },
     {
@@ -1506,6 +1538,14 @@
     },
     {
       "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "baseFillerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "baseFillerRc2Abi",
       "kind": "value"
     },
     {
@@ -1773,6 +1813,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeBaseFillerCall",
+      "kind": "value"
+    },
+    {
       "name": "decodeBookWatermark",
       "kind": "value"
     },
@@ -1897,11 +1941,23 @@
       "kind": "value"
     },
     {
+      "name": "encodeBaseFillerExecute",
+      "kind": "value"
+    },
+    {
+      "name": "encodeBaseFillerExecuteWithMarket",
+      "kind": "value"
+    },
+    {
       "name": "encodeBookWatermark",
       "kind": "value"
     },
     {
       "name": "encodeCorkAction",
+      "kind": "value"
+    },
+    {
+      "name": "encodeDeployRolloverContract",
       "kind": "value"
     },
     {
@@ -1922,6 +1978,10 @@
     },
     {
       "name": "encodeOrderData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeOriginData",
       "kind": "value"
     },
     {
@@ -1978,6 +2038,10 @@
     },
     {
       "name": "fetchDigestLogs",
+      "kind": "value"
+    },
+    {
+      "name": "fillerJobOf",
       "kind": "value"
     },
     {
@@ -2042,6 +2106,10 @@
     },
     {
       "name": "fusionTotalFee",
+      "kind": "value"
+    },
+    {
+      "name": "gaslessOrderOf",
       "kind": "value"
     },
     {
@@ -2341,6 +2409,10 @@
       "kind": "value"
     },
     {
+      "name": "ownerTokenPullModuleAbi",
+      "kind": "value"
+    },
+    {
       "name": "parseAuctionGetterData",
       "kind": "value"
     },
@@ -2354,6 +2426,10 @@
     },
     {
       "name": "parsePostInteractionData",
+      "kind": "value"
+    },
+    {
+      "name": "parseRolloverPayload",
       "kind": "value"
     },
     {
@@ -2402,6 +2478,10 @@
     },
     {
       "name": "postRfqCounter",
+      "kind": "value"
+    },
+    {
+      "name": "postRolloverDstCptTransferModuleAbi",
       "kind": "value"
     },
     {
@@ -2545,6 +2625,10 @@
       "kind": "value"
     },
     {
+      "name": "requiredPremium",
+      "kind": "value"
+    },
+    {
       "name": "resetConfigMemo",
       "kind": "value"
     },
@@ -2625,6 +2709,10 @@
       "kind": "value"
     },
     {
+      "name": "rolloverFactoryAbi",
+      "kind": "value"
+    },
+    {
       "name": "rolloverFactoryScanTargets",
       "kind": "value"
     },
@@ -2686,6 +2774,10 @@
     },
     {
       "name": "splitTakerArgs",
+      "kind": "value"
+    },
+    {
+      "name": "standardRolloverHooks",
       "kind": "value"
     },
     {
@@ -4317,6 +4409,10 @@
       "kind": "type"
     },
     {
+      "name": "FillerJobArgs",
+      "kind": "type"
+    },
+    {
       "name": "FinalizeMakerOrderArgs",
       "kind": "type"
     },
@@ -4346,6 +4442,14 @@
     },
     {
       "name": "FusionPostInteraction",
+      "kind": "type"
+    },
+    {
+      "name": "GASLESS_ORDER_COMPONENTS",
+      "kind": "value"
+    },
+    {
+      "name": "GaslessCrossChainOrder",
       "kind": "type"
     },
     {
@@ -4489,6 +4593,10 @@
       "kind": "value"
     },
     {
+      "name": "ParsedRolloverPayload",
+      "kind": "type"
+    },
+    {
       "name": "ProtocolEmitter",
       "kind": "type"
     },
@@ -4581,6 +4689,10 @@
       "kind": "type"
     },
     {
+      "name": "RolloverVenueHook",
+      "kind": "type"
+    },
+    {
       "name": "RolloverVenuePost",
       "kind": "type"
     },
@@ -4601,6 +4713,10 @@
       "kind": "type"
     },
     {
+      "name": "StandardRolloverHooksArgs",
+      "kind": "type"
+    },
+    {
       "name": "TakerFillArgs",
       "kind": "type"
     },
@@ -4614,6 +4730,10 @@
     },
     {
       "name": "UnsignedApprovalTx",
+      "kind": "type"
+    },
+    {
+      "name": "VenueRolloverPayload",
       "kind": "type"
     },
     {
@@ -4674,6 +4794,14 @@
     },
     {
       "name": "auctionPhase",
+      "kind": "value"
+    },
+    {
+      "name": "baseFillerAbi",
+      "kind": "value"
+    },
+    {
+      "name": "baseFillerRc2Abi",
       "kind": "value"
     },
     {
@@ -4761,6 +4889,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeBaseFillerCall",
+      "kind": "value"
+    },
+    {
       "name": "decodeBookWatermark",
       "kind": "value"
     },
@@ -4801,7 +4933,19 @@
       "kind": "value"
     },
     {
+      "name": "encodeBaseFillerExecute",
+      "kind": "value"
+    },
+    {
+      "name": "encodeBaseFillerExecuteWithMarket",
+      "kind": "value"
+    },
+    {
       "name": "encodeBookWatermark",
+      "kind": "value"
+    },
+    {
+      "name": "encodeDeployRolloverContract",
       "kind": "value"
     },
     {
@@ -4810,6 +4954,10 @@
     },
     {
       "name": "encodeOrderData",
+      "kind": "value"
+    },
+    {
+      "name": "encodeOriginData",
       "kind": "value"
     },
     {
@@ -4822,6 +4970,10 @@
     },
     {
       "name": "fetchDigestLogs",
+      "kind": "value"
+    },
+    {
+      "name": "fillerJobOf",
       "kind": "value"
     },
     {
@@ -4858,6 +5010,10 @@
     },
     {
       "name": "fusionTotalFee",
+      "kind": "value"
+    },
+    {
+      "name": "gaslessOrderOf",
       "kind": "value"
     },
     {
@@ -4949,6 +5105,10 @@
       "kind": "value"
     },
     {
+      "name": "ownerTokenPullModuleAbi",
+      "kind": "value"
+    },
+    {
       "name": "parseAuctionGetterData",
       "kind": "value"
     },
@@ -4957,7 +5117,15 @@
       "kind": "value"
     },
     {
+      "name": "parseRolloverPayload",
+      "kind": "value"
+    },
+    {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "postRolloverDstCptTransferModuleAbi",
       "kind": "value"
     },
     {
@@ -4989,11 +5157,19 @@
       "kind": "value"
     },
     {
+      "name": "requiredPremium",
+      "kind": "value"
+    },
+    {
       "name": "resolveLogsEndpoint",
       "kind": "value"
     },
     {
       "name": "retiredSettlerTeaching",
+      "kind": "value"
+    },
+    {
+      "name": "rolloverFactoryAbi",
       "kind": "value"
     },
     {
@@ -5014,6 +5190,10 @@
     },
     {
       "name": "splitTakerArgs",
+      "kind": "value"
+    },
+    {
+      "name": "standardRolloverHooks",
       "kind": "value"
     },
     {
@@ -5129,6 +5309,10 @@
     {
       "name": "ResolvedConstraint",
       "kind": "type"
+    },
+    {
+      "name": "SIMULATED_SENDER_BALANCE",
+      "kind": "value"
     },
     {
       "name": "SOURCE_INTERFACE",

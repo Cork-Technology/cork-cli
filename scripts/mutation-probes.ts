@@ -123,6 +123,8 @@ const T = {
   decodeEnvelopes: "packages/core/test/decode-envelopes.test.ts",
   trackForSelfAdapter: "packages/core/test/track-forself-adapter.test.ts",
   phoenixApprovals: "packages/core/test/phoenix-approvals.test.ts",
+  rolloverFill: "packages/core/test/rollover-fill.test.ts",
+  rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
@@ -320,6 +322,81 @@ const CATALOG: Mutant[] = [
     find: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\" && c.label === gen.label);",
     replace: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\");",
     tests: [T.trackForSelfAdapter],
+  },
+  {
+    // The pre-hook pulls (token, AMOUNT, allowUnderfill): swapping the amount for the fee flag
+    // pulls nothing and the clone has no cPT to burn.
+    id: "rollover-hooks-pull-args-swapped",
+    file: "packages/core/src/rollover.ts",
+    find: "functionName: \"execute\", args: [a.srcCptToken, a.orderSize, a.allowUnderfill] }), allowFailure: false, isDelegateCall: true }],",
+    replace: "functionName: \"execute\", args: [a.srcCptToken, a.allowUnderfill ? 1n : 0n, a.allowUnderfill] }), allowFailure: false, isDelegateCall: true }],",
+    tests: [T.rolloverHooks],
+  },
+  {
+    // Hooks ride the SIGNED commitment: a builder that hashes the intent without them signs an
+    // order whose clone will run no hooks (and whose venue post lies about them).
+    id: "rollover-hooks-dropped-from-intent",
+    file: "packages/core/src/rollover.ts",
+    find: "    preRolloverHooks: a.hooks?.preRolloverHooks ?? [],",
+    replace: "    preRolloverHooks: [],",
+    tests: [T.rolloverHooks],
+  },
+  {
+    // The post-hook returns the dst cPT to the HOLDER (the account); another recipient steals it.
+    id: "rollover-hooks-post-recipient-not-holder",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "orderSize, recipient: input.account, allowUnderfill: action.allowUnderfill });",
+    replace: "orderSize, recipient: action.rolloverContract, allowUnderfill: action.allowUnderfill });",
+    tests: [T.rolloverHooks],
+  },
+  {
+    // The ERC-7683 envelope's nonce IS the order's salt (LibSettlerAdmission mirrors them); any
+    // other value is Settler__OrderSaltMismatch — and the originData the settler re-encodes differs.
+    id: "rollover-fill-envelope-nonce-not-salt",
+    file: "packages/core/src/rollover-fill.ts",
+    find: "    nonce: o.orderSalt,",
+    replace: "    nonce: 0n,",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The premium the settler charges rounds UP (LibAtomicFill); a floor under-caps by one unit.
+    id: "rollover-fill-premium-floor",
+    file: "packages/core/src/rollover-fill.ts",
+    find: "  return (n + 10n ** 18n - 1n) / 10n ** 18n;",
+    replace: "  return n / 10n ** 18n;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An ExactSettler order without allowUnderfill fills at its full size only.
+    id: "rollover-fill-exact-size-gate-dropped",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  if (cls.kind === \"EXACT\" && !order.allowUnderfill && fillerSrcCst !== order.orderSize) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The jitMarket instruction must reproduce the SIGNED commitment on the settler's wire.
+    id: "rollover-fill-jit-hash-check-dropped",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "    if (localHash.toLowerCase() !== committed.toLowerCase()) {",
+    replace: "    if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A claimed digest the payload does not hash to is a conflict, never filled.
+    id: "rollover-fill-digest-recompute-dropped",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  if (localDigest.toLowerCase() !== action.orderDigest.toLowerCase()) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A settled/expired/cancelled order is terminal on chain (Settler__OrderInTerminalState).
+    id: "rollover-fill-terminal-status-ignored",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "const TERMINAL: ReadonlySet<string> = new Set([\"Settled\", \"Expired\", \"Cancelled\", \"Closing\"]);",
+    replace: "const TERMINAL: ReadonlySet<string> = new Set([\"Expired\", \"Cancelled\", \"Closing\"]);",
+    tests: [T.rolloverFill],
   },
   {
     // An owner-side burn allowance must name the CORK ADAPTER (the pool burns with the adapter as
@@ -3036,6 +3113,17 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/market-registry.ts",
     find: "    poolManager = getAddress(\n      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }),\n    );",
     replace: "    void (await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }));",
+    tests: [T.mr],
+  },
+
+  {
+    // Sender balance override dropped: the dry-run runs from a contract with no ETH, and an
+    // endpoint that validates the sender's balance refuses the whole simulation as a transport
+    // failure — the 2026-10-01 fork rehearsal's share_prediction_unavailable.
+    id: "predict-shares-sender-balance-dropped",
+    file: "packages/core/src/market-registry.ts",
+    find: "        { address: args.adapter, balance: SIMULATED_SENDER_BALANCE },\n",
+    replace: "",
     tests: [T.mr],
   },
 

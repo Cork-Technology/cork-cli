@@ -11,7 +11,7 @@
 import { concatHex, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddress, parseAbi, size, sliceHex, toEventSelector, toHex } from "viem";
 import type { PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
-import { controllerViewsAbi } from "./market-registry.ts";
+import { controllerViewsAbi, SIMULATED_SENDER_BALANCE } from "./market-registry.ts";
 import type { Market8 } from "./types.ts";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
@@ -287,6 +287,8 @@ export async function predictShares(
         { to: args.controller, data: createData },
         { to: poolManager, data: buildSharesCall(args.poolId) },
       ],
+      // The adapter is a contract with no ETH; a balance-validating endpoint refuses otherwise.
+      stateOverrides: [{ address: args.adapter, balance: SIMULATED_SENDER_BALANCE }],
     });
     const last = simulated.results[1];
     if (last?.status === "success" && last.data && last.data.length >= 2 + 64 * 2) {

@@ -39,6 +39,7 @@ const SKIP_SUBTREES = new Set(["input", "examples", "typedData", "order", "venue
 const ALLOWLIST: Record<string, string> = {
   value: "eth-transaction wei field — named by the tx envelope convention, universally wei ('0' on every prepare)",
   premiumPaymentMode: "an enum ordinal (0=upfront, 1=on-settle), not a premium amount",
+  premiumPhase: "a hook COUNT — how many intent modules run in the rollover's premium phase (intentHooks on rollover-intent / rollover-fill), not an amount",
   premiumAnnualized: "the venue's decimal-fraction STRING ('0.041' = 4.1%) — not base units; the convention is the field's own contract (and it fails the digits-only check anyway)",
   maxFeePerGas: "EIP-1559 gas field on a decoded signed tx — always wei by protocol, the tx envelope's own vocabulary",
   maxPriorityFeePerGas: "see maxFeePerGas",

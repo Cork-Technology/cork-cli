@@ -514,6 +514,31 @@ const MakerJitMarketWire = z
         "attach the Cork JIT adapter as the maker-side preInteraction hook (2.1.0): the order names a recipe CONTRACT and CARRIES the off-chain-resolved constraint — pool id and share addresses are PINNED at signing; the fill deploys the oracle if needed, re-checks the constraint with recipe.verify (stale ⇒ RecipeRejectedConstraint), creates the pool if missing, and (if enableJitMint) mints the cST just in time. One order side MUST be the derived pool's cST. The bytes follow the target generation's registry wire (flat 0.3.x, or the nested 0.5.0 layout of the phoenix/v0.4-rc.1 primary — MarketParams + oracleSalt, a 10-field pool id with the fees inside); select it with `generation`. Omit entirely for a plain order on an existing pool",
       );
 
+/** One intent hook as the settler and the venue carry it: a delegatecall MODULE the holder's clone runs. */
+const HookCallWire = z.strictObject({
+  target: Address,
+  value: UintStr.describe("native value in wei, decimal string"),
+  callData: Hex,
+  allowFailure: z.boolean(),
+  isDelegateCall: z.boolean(),
+});
+
+/** The rollover JIT market instruction (BaseFiller.JITMarketParams), shared by rollover-intent (hashed
+ *  into the signed commitment) and rollover-fill (the executeWithMarket argument that must reproduce it). */
+const RolloverJitMarketWire = z.strictObject({
+        collateralAsset: Address,
+        referenceAsset: Address,
+        expiryTimestamp: UnixSeconds.describe("destination pool expiry — must outlast the order's fillDeadline"),
+        recipe: Address.describe("the approved IMarketRecipe CONTRACT ADDRESS the created market names (discover with cork_query resource:'registry-recipes')"),
+        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0); MUST stay 0 for price/nav recipes").meta({ "x-units": X_UNITS.wad }),
+        constraint: RateConstraintWire.describe("the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"),
+        extraData: Hex.optional().describe("the recipe-specific bytes the constraint was derived from — committed as keccak256 in the BaseFiller's `additionalData` member (the struct keeps that name; the typed-data output shows it). Defaults to 0x. This is the input name on every JIT block; `additionalData` is the deprecated alias"),
+        additionalData: Hex.optional().describe("DEPRECATED alias of `extraData` (the BaseFiller struct's own member name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData"),
+        oracleSalt: Bytes32.optional().describe("rollover 0.2-wire settlers only: the salt of the destination pair's FIRST oracle wrapper, part of the JITMarketParams commitment (defaults to the zero salt there); refused non-zero for an rc.2 settler, whose struct has no salt member"),
+        swapFeePercentage: JitSwapFeeWire,
+        unwindSwapFeePercentage: JitUnwindSwapFeeWire,
+      });
+
 export const OrdersAction = z.discriminatedUnion("type", [
   A("maker-order", {
     poolId: MarketId,
@@ -612,20 +637,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     minCaReceived: RolloverMinCaWire.optional(),
     minSharesOut: RolloverMinSharesWire.optional(),
     jitMarketHash: RolloverJitMarketHashWire.optional().describe("pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally [K3]; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket"),
-    jitMarket: z
-      .strictObject({
-        collateralAsset: Address,
-        referenceAsset: Address,
-        expiryTimestamp: UnixSeconds.describe("destination pool expiry — must outlast the order's fillDeadline"),
-        recipe: Address.describe("the approved IMarketRecipe CONTRACT ADDRESS the created market names (discover with cork_query resource:'registry-recipes')"),
-        rateOverride: UintStr.default("0").describe("FIXED recipes only: the rate their FixedRateOracle is deployed at (ABSOLUTE, 1e18 = 1.0); MUST stay 0 for price/nav recipes").meta({ "x-units": X_UNITS.wad }),
-        constraint: RateConstraintWire.describe("the four rate limits the commitment pins (ABSOLUTE, 1e18 = 1.0) — resolve them with cork_compute recipe-rate-constraint; explicit here so the hash is deterministic offline"),
-        extraData: Hex.optional().describe("the recipe-specific bytes the constraint was derived from — committed as keccak256 in the BaseFiller's `additionalData` member (the struct keeps that name; the typed-data output shows it). Defaults to 0x. This is the input name on every JIT block; `additionalData` is the deprecated alias"),
-        additionalData: Hex.optional().describe("DEPRECATED alias of `extraData` (the BaseFiller struct's own member name for the same recipe bytes) — accepted with an info deprecation_notice; both present and different refuse as invalid input. Pass extraData"),
-        oracleSalt: Bytes32.optional().describe("rollover 0.2-wire settlers only: the salt of the destination pair's FIRST oracle wrapper, part of the JITMarketParams commitment (defaults to the zero salt there); refused non-zero for an rc.2 settler, whose struct has no salt member"),
-        swapFeePercentage: JitSwapFeeWire,
-        unwindSwapFeePercentage: JitUnwindSwapFeeWire,
-      })
+    jitMarket: RolloverJitMarketWire
       .optional()
       .describe("negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash [K3] — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
@@ -635,7 +647,44 @@ export const OrdersAction = z.discriminatedUnion("type", [
     exclusiveFiller: Address.optional(),
     orderSalt: Uint64Str.optional().describe("pin for byte-stable retries; omitted = derived from clientRequestId"),
     nonce: Uint64Str.optional(),
-  }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order)"),
+    standardHooks: z
+      .strictObject({
+        srcCptToken: Address.describe("the SOURCE pool's cPT — the position being rolled (cork_query cork-pool shares.corkPrincipalToken of srcPoolId); the pre-hook pulls orderSize of it from you into your clone, so approve the clone for it before the fill"),
+        dstCptToken: Address.describe("the DESTINATION pool's cPT (shares.corkPrincipalToken of dstPoolId, or the predicted one for a just-in-time pool); the post-hook returns the minted dst cPT to you"),
+      })
+      .optional()
+      .describe("the two hooks every production roll runs, built for you from the settler generation's configured modules (OwnerTokenPullModule as PRE: pull your src cPT into the clone; PostRolloverDstCptTransferModule as POST: send the minted dst cPT back to you). Hooks are hashed into the signed commitment and cannot be added after signing. Mutually exclusive with `hooks`; an order with NEITHER rolls nothing (the clone has no cPT to burn) and is warned"),
+    hooks: z
+      .strictObject({
+        preRolloverHooks: z.array(HookCallWire).max(32).optional(),
+        midRolloverHooks: z.array(HookCallWire).max(32).optional(),
+        postRolloverHooks: z.array(HookCallWire).max(32).optional(),
+        premiumHooks: z.array(HookCallWire).max(32).optional(),
+      })
+      .optional()
+      .describe("explicit intent hooks per phase (delegatecall-only, zero value, allowFailure false — the clone refuses anything else) for a holder composing its own modules; prefer `standardHooks`"),
+  }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign"),
+  A("rollover-fill", {
+    orderDigest: Bytes32.describe("the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it [K3]; a disagreement is a conflict, never filled"),
+    signedOrder: z
+      .object({
+        order: z.record(z.string(), z.unknown()).describe("the OrderData fields as the venue serves them (decimal strings; `rolloverParams` nested)"),
+        intent: z.record(z.string(), z.unknown()).describe("the RolloverIntent: rolloverContract, orderDigest, deadline, nonce, the four hook arrays"),
+        signature: Hex.describe("the cPT holder's signature over the order digest — EIP-712 bytes for an EOA, the ERC-1271 bytes a contract holder signed with; passed to the settler verbatim"),
+        envelope: z.record(z.string(), z.unknown()).optional().describe("the venue's derived envelope (orderData/orderDataType/originData), cross-checked when present"),
+      })
+      .optional()
+      .describe("fill from a payload you ALREADY HOLD (the `payload` object of cork_query rollover-orders filters.orderDigest, or what the holder handed you) — the venue is not contacted. Must hash to `orderDigest`"),
+    fillerSrcCst: RolloverOrderSizeWire.optional().describe("src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to the order's remaining size. An ExactSettler needs the full size unless the order allows underfill"),
+    premiumCap: TokenAmount.optional().describe("the most premium (in the order's premiumToken, its own base units) this fill will pay — the settler charges ceil(dstCstProduced × minPremiumPerShare / 1e18) and reverts Settler__PremiumExceedsCap above the cap; BaseFiller refunds the unspent part. Defaults to ceil(fillerSrcCst × minPremiumPerShare / 1e18), exact at a 1:1 dst/src mint ratio — a destination pool minting more shares per collateral needs a higher cap (premium_cap_estimated says so; simulate)"),
+    minDstPerSrc: UintStr.default("0").describe("floor on dst cST per src cST, 1e18 = 1.0 (the settler checks dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18)); 0 = no floor").meta({ "x-units": X_UNITS.wad }),
+    fillerAuthSig: Hex.optional().describe("when the order names an exclusiveFiller that is NOT your account: that filler's signature over FillerAuth(orderDigest, destination = your account, subFiller = your account) under the settler domain; without it a reserved order refuses here"),
+    jitMarket: RolloverJitMarketWire.optional().describe("REQUIRED when the order's rolloverParams.jitMarketHash is non-zero: the destination-market instruction the holder committed to, encoded for BaseFiller.executeWithMarket on the settler generation's wire — its hash must equal the signed commitment (checked locally; the contract reverts BaseFiller__JitMarketHashMismatch otherwise) and dstPoolId must be the pool it derives"),
+    maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue pages searched when the order is not served by its digest route; ignored with `signedOrder`"),
+  }).describe("unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; simulate before signing"),
+  A("deploy-rollover-contract", {
+    owner: Address.optional().describe("the account the clone belongs to; defaults to `account`. The factory deploys for msg.sender ONLY, so the transaction must be sent by this owner"),
+  }).describe("unsigned CorkRolloverContractFactory.deployRolloverContract() calldata: the per-account rollover clone every roll order names as `rolloverContract` (one per owner, CREATE2; the predicted address is reported, and an already-deployed clone makes the tx a refusal on chain — reported as already existing instead). Targets the selected generation's factory (primary by default)"),
   A("maker-ladder", {
     poolId: MarketId,
     side: z.enum(["BUY", "SELL"]).describe("side from the MAKER's perspective for the venue listing — one side for the whole ladder"),
@@ -779,13 +828,6 @@ export type CapabilitiesInput = z.infer<typeof CapabilitiesInput>;
 // Every action is an off-chain HTTPS POST to the as-built venue relaying a CALLER-authored (and
 // where the venue verifies it, CALLER-signed) payload [K1]. Commitments in the payload are
 // recomputed locally before relaying [K3].
-const HookCallWire = z.strictObject({
-  target: Address,
-  value: UintStr.describe("native value in wei, decimal string"),
-  callData: Hex,
-  allowFailure: z.boolean(),
-  isDelegateCall: z.boolean(),
-});
 const RolloverParamsWire = z.strictObject({
   srcCstToken: Address,
   dstCstToken: Address,
