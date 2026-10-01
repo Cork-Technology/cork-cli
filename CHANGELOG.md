@@ -7,6 +7,10 @@ covered.
 
 ## [Unreleased]
 
+## [0.6.1-rc.3] — 2026-10-01
+
+A patch candidate of the 0.6 line. It aligns the tool with venue cork-api 0.4.4, which adds fixed-rate cover as a third RFQ mode, and it makes the tool say which cover a request buys. The recipe decides the cover; the tool now asks the recipe on chain instead of restating its rules, and it reports an endpoint failure as a read that did not happen, not as a refusal. The covered surface gains one enum value (`fixed_rate`) and additive fields; nothing is removed. A binary older than this one refuses the new mode as invalid input.
+
 ### Added
 
 - FIXED-RATE cover through an RFQ (venue cork-api 0.4.4). `cork_submit rfq-open` accepts the mode `fixed_rate`, and `modes` now takes one to three unique modes. A fixed-rate request names the fixed recipe in an inline template and carries the frozen rate in `marketTemplate.inline.oracle_params.rate_override`: a decimal string on the absolute scale (1e18 = 1.0), with no leading zero. The inline block has a name, `cork-inline-fixed/1`: `schema`, `rate_override`, `expiry`, `swap_fee_wad`, `unwind_swap_fee_wad`. The tool mirrors the venue's rule and refuses before relay, as `invalid_order_terms`, what the venue refuses: a `fixed_rate` request without an inline template, without `rate_override`, or with a value that is not a positive decimal uint256 string; a repeated mode; and an `rfq-answer` option whose mode is `fixed_rate` and whose own template carries no valid rate. We sent every rate vector of the venue's own test suite to the real venue and to the tool: both refuse the same eleven and accept the same two. Both rules are registered in `MIRRORED_VENUE_LOGIC`. A binary older than this one refuses the `fixed_rate` mode as invalid input, so upgrade to ask for or to answer fixed-rate cover.
