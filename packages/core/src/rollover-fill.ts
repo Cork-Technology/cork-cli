@@ -1,4 +1,4 @@
-// The FILLER side of a rollover (2026-10-01, cork-cli-private#24 item 4) and the per-account
+// The FILLER side of a rollover (2026-10-01, the 2026-10-01 integration triage, item 4) and the per-account
 // rollover clone: pure byte-building against the 0.2.0 / rc.2 contracts (rollover-private
 // `origin/main` 38a4a55 = the deployed 0.2.0; the rc.2 layout differs only in JITMarketParams).
 //

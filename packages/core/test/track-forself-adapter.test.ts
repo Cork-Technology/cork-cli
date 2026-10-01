@@ -1,4 +1,4 @@
-// cork_track verify kind "forSelfAdapter" (2026-10-01, cork-cli-private#24 item 2): which
+// cork_track verify kind "forSelfAdapter" (2026-10-01, the 2026-10-01 integration triage, item 2): which
 // generation does a ForSelf adapter serve, and is it Cork's reference one? The decoder labels a
 // generation's REFERENCE adapter chain-free; an integrator's own adapter (Zyfai's) has no config
 // entry anywhere, and only its CORK()/LOP()/WHITELIST() views can say — a chain read, so it lives

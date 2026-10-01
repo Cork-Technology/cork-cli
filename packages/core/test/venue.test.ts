@@ -628,7 +628,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 
-  it("rfq-open: an EQUAL window is refused locally with the venue's strict rule and the one-expiry recipe (cork-cli-private#24 item 5)", async () => {
+  it("rfq-open: an EQUAL window is refused locally with the venue's strict rule and the one-expiry recipe (the 2026-10-01 integration triage, item 5)", async () => {
     const seen: Seen[] = [];
     const equal = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
     (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;

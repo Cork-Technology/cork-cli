@@ -224,7 +224,7 @@ const UINT160_MAX = (1n << 160n) - 1n;
 
 /**
  * The token grants a pool bundle needs BEFORE it is broadcast, derived from the same tables the
- * funding legs come from (2026-10-01, cork-cli-private#24 item 3): every pulled input is an
+ * funding legs come from (2026-10-01, the 2026-10-01 integration triage, item 3): every pulled input is an
  * allowance from the INITIATOR to the Cork adapter — a plain ERC-20 allowance in erc20-approve
  * mode, the two Permit2 layers in permit2 mode (the ERC-20 allowance to the Permit2 contract,
  * plus Permit2's internal (initiator, token, spender = adapter) allowance the adapter's

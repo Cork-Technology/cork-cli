@@ -316,7 +316,7 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   const corkAdapters = generations.flatMap((g) => (g.phoenix?.corkAdapter ? [{ address: g.phoenix.corkAdapter as `0x${string}`, label: g.label }] : []));
   // The REFERENCE ForSelf adapter of each generation (the Distribution record's forSelf block) is
   // Cork's own deployment and may be called trusted, labeled with its generation; an integrator's
-  // adapter is not in any config and stays unverified (cork-cli-private#24 item 2, 2026-10-01).
+  // adapter is not in any config and stays unverified (the 2026-10-01 integration triage, item 2, 2026-10-01).
   const forSelfAdapters = generations.flatMap((g) => (g.forSelf?.adapter ? [{ address: g.forSelf.adapter as `0x${string}`, label: g.label }] : []));
   const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {

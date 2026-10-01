@@ -632,7 +632,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       }
       // The venue's rule is STRICT (`expiry_window.not_before must be < not_after`, cork-api
       // 400 on equality; MIRRORED_VENUE_LOGIC) — a requester asking for ONE exact expiry sends
-      // the same value twice and learned the rule from a raw venue rejection (cork-cli-private#24
+      // the same value twice and learned the rule from a raw venue rejection (the 2026-10-01 integration triage
       // item 5). Refused here with the recipe instead. Equality as "exactly this expiry" is the
       // natural request; relaxing the venue rule is raised with its owner.
       const windowViolation = rfqOpenWindowViolation(action.expiryWindow);

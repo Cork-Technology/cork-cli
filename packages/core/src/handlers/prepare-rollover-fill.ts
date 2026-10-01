@@ -1,5 +1,5 @@
 // cork_prepare_orders: the FILLER side of a rollover (`rollover-fill`) and the per-account clone
-// (`deploy-rollover-contract`) — 2026-10-01, cork-cli-private#24 item 4. Until now the maker side
+// (`deploy-rollover-contract`) — 2026-10-01, the 2026-10-01 integration triage, item 4. Until now the maker side
 // existed (rollover-intent → cork_submit rollover-order) and nothing could take a posted roll
 // order: underwriter-one's v0.4 roll orders were re-posted every half hour and never filled.
 //

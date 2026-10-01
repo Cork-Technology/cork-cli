@@ -491,7 +491,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
 
 /** What `cork_track verify` kind "forSelfAdapter" answers for an adapter address: which
  *  generation its bindings belong to, and whether it is that generation's REFERENCE adapter.
- *  The decoder cannot run this chain-free (2026-10-01, cork-cli-private#24 item 2). */
+ *  The decoder cannot run this chain-free (2026-10-01, the 2026-10-01 integration triage, item 2). */
 export type ForSelfAdapterClassification =
   | { kind: "verified"; adapter: `0x${string}`; generation: GenerationRef; reference: boolean; surface: "combined" | "pool-only"; callerGate: boolean | undefined; bindings: { poolManager: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }
   | { kind: "mismatch"; adapter: `0x${string}`; reason: string; bindings: { poolManager?: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }

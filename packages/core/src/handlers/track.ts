@@ -141,7 +141,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   }
 
   // forSelfAdapter: classify an adapter by its own bindings against every configured generation
-  // (cork-cli-private#24 item 2, 2026-10-01). The decode handler labels a generation's REFERENCE
+  // (the 2026-10-01 integration triage, item 2, 2026-10-01). The decode handler labels a generation's REFERENCE
   // adapter chain-free; an integrator's own adapter (Zyfai's) has no config entry anywhere, and
   // only its CORK()/LOP()/WHITELIST() views can say which generation it serves — that is a chain
   // read, so it lives here, not in decode.

@@ -1,4 +1,4 @@
-// rollover-intent HOOKS (2026-10-01, cork-cli-private#24 item 4, found by the fork rehearsal): a
+// rollover-intent HOOKS (2026-10-01, the 2026-10-01 integration triage, item 4, found by the fork rehearsal): a
 // roll order's intent must carry the pre-hook that pulls the holder's src cPT into the clone and
 // the post-hook that returns the minted dst cPT, and both are hashed into the signed commitment.
 // The builder never carried hooks, so no order it built could complete on chain. `standardHooks`

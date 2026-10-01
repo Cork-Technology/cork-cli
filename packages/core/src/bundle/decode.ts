@@ -43,7 +43,7 @@ export interface DecodeTrustTargets {
   /** An integrator-deployed ForSelf adapter, once the caller has verified its bindings. */
   forSelf?: `0x${string}` | undefined;
   /** Every configured generation's REFERENCE ForSelf adapter (the Distribution record's
-   *  `forSelf.adapter`), each with its generation label (2026-10-01, cork-cli-private#24 item 2):
+   *  `forSelf.adapter`), each with its generation label (2026-10-01, the 2026-10-01 integration triage, item 2):
    *  a call to one of them is trusted and labeled with the generation; an integrator's own
    *  adapter (Zyfai's) stays `unverified` — verify it with cork_track verify kind forSelfAdapter. */
   forSelfAdapters?: readonly { address: `0x${string}`; label: string }[] | undefined;

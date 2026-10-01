@@ -1,4 +1,4 @@
-// Smart-account ENVELOPE unwrapping in cork_decode (2026-10-01, cork-cli-private#24 + the owner's
+// Smart-account ENVELOPE unwrapping in cork_decode (2026-10-01, the 2026-10-01 integration triage + the owner's
 // ask): a contract wallet's transaction wraps the call it means — a Safe execTransaction, an
 // ERC-4337 handleOps bundle, an ERC-7579 execute, a Rhinestone intent, a MultiSend batch, often
 // nested — and before this the decoder called the whole thing an unknown target and read nothing.
@@ -236,7 +236,7 @@ describe("cork_decode through envelopes — the inner Cork legs are verified lik
   });
 });
 
-describe("the reference ForSelf adapter of a generation is Cork's own deployment (cork-cli-private#24 item 2)", () => {
+describe("the reference ForSelf adapter of a generation is Cork's own deployment (the 2026-10-01 integration triage, item 2)", () => {
   it("a ForSelf call at a generation's reference adapter is trusted and labeled with the generation; an integrator's adapter stays unverified", async () => {
     const ref = await runTool("cork_decode", { kind: "calldata", chainId: 8453, data: exerciseForSelf, to: BASE_PRIMARY_FORSELF }, ctx);
     expect(ref.state).toBe("ok");
