@@ -12,6 +12,8 @@ import { resolveRollover, rolloverDigestScanTargets } from "../config-remote.ts"
 import { chainStatusName, fetchDigestLogs, LogsRangeLimited, resolveLogsEndpoint, settlerStatusAbi, venueChainConsistent } from "../rollover-verify.ts";
 import { getLopFills, getLopOrderbook, getRolloverOrder } from "../datasources/venue.ts";
 import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDep, getRpc, type HandlerContext, jsonSafe, rpcProvenance, rpcWarn, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { resolveGenerations } from "../config-remote.ts";
+import { classifyForSelfAdapter } from "./forself.ts";
 import { collectVenuePages } from "./query.ts";
 
 /** [K7] chain-verification payload on rollover-order reconcile results: the settler's live
@@ -136,6 +138,40 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
       return envelope({ state: match ? "ok" : "conflict", data: { verified: match, computedDigest: digest, claimedDigest: claimed }, chainId, source: "config", ...(match ? {} : { warnings: [{ code: "artifact_digest_mismatch", message: "recomputed artifact digest does not match the claimed digest" }] }), ctx });
     }
     return envelope({ state: "ok", data: { computedDigest: digest }, chainId, source: "config", ctx });
+  }
+
+  // forSelfAdapter: classify an adapter by its own bindings against every configured generation
+  // (cork-cli-private#24 item 2, 2026-10-01). The decode handler labels a generation's REFERENCE
+  // adapter chain-free; an integrator's own adapter (Zyfai's) has no config entry anywhere, and
+  // only its CORK()/LOP()/WHITELIST() views can say which generation it serves — that is a chain
+  // read, so it lives here, not in decode.
+  if (subj.kind === "forSelfAdapter") {
+    if (input.mode !== "verify") return unavailable(chainId, "phase_gated", `a ForSelf adapter is VERIFIED against its on-chain bindings — pass mode 'verify' (nothing of it reconciles or simulates)`, ctx);
+    const resolved = await getRpc(ctx, chainId);
+    if (!resolved) return unavailable(chainId, "requires_rpc", "forSelfAdapter verification reads the adapter's bindings on chain — it needs an RPC (none resolved — set CORK_RPC_URL)", ctx);
+    const { generations, warnings: cfgWarn } = await resolveGenerations(chainId);
+    const rpc = () => rpcProvenance(input.format, resolved);
+    const lop = LOP_ADDRESSES[chainId];
+    const c = await classifyForSelfAdapter({ client: resolved.client, chainId, adapter: subj.adapter, generations, lop });
+    const base = { mode: "verify" as const, adapter: subj.adapter };
+    if (c.kind === "unknown") return chainReadFailed(chainId, new Error(c.reason), [...rpcWarn(resolved), ...cfgWarn], ctx, resolved);
+    if (c.kind === "no-code") {
+      return envelope({ state: "conflict", data: { ...base, verified: false, code: false }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...cfgWarn, { code: "adapter_binding_mismatch", message: `there is NO CONTRACT at ${subj.adapter} on chainId ${chainId} — an allowance or a transaction to it is irrecoverable` }], ...rpc(), ctx });
+    }
+    if (c.kind === "mismatch") {
+      return envelope({ state: "conflict", data: { ...base, verified: false, code: true, bindings: c.bindings }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...cfgWarn, { code: "adapter_binding_mismatch", message: `the contract at ${subj.adapter} is NOT a ForSelf adapter of any configured generation: ${c.reason}. Do not grant it an allowance` }], ...rpc(), ctx });
+    }
+    const which = c.reference ? `the REFERENCE ForSelf adapter of the ${c.generation.label} generation (Cork's own deployment per the Distribution record)` : `an integrator-deployed ForSelf adapter bound to the ${c.generation.label} generation (not Cork's reference adapter — its CODE is the integrator's to audit; this check proves only that its bindings name that generation's pool manager${c.surface === "combined" ? ", the 1inch LOP" : ""}${c.callerGate ? " and whitelist manager" : ""})`;
+    return envelope({
+      state: "ok",
+      data: { ...base, verified: true, code: true, reference: c.reference, surface: c.surface, callerGate: c.callerGate, bindings: c.bindings, ...generationData(c.generation) },
+      chainId,
+      source: "chain",
+      warnings: [...rpcWarn(resolved), ...cfgWarn, { code: "for_self_artifact", message: `${subj.adapter} is ${which}; surface: ${c.surface === "combined" ? "pool actions + LOP fills (LOP() answers)" : "pool actions only (no LOP() view)"}; caller gate: ${c.callerGate ? "yes — every entrypoint checks isWhitelisted(poolId, msg.sender)" : "no (pre-caller-gate deployment: WHITELIST() reverts)"}` }],
+      ...rpc(),
+      generation: c.generation,
+      ctx,
+    });
   }
 
   // chain-authoritative subjects need an RPC.

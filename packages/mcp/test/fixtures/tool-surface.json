@@ -4191,6 +4191,24 @@
                 ],
                 "additionalProperties": false,
                 "description": "a prior cork_submit reference — resolve it to a lifecycle state"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "forSelfAdapter"
+                  },
+                  "adapter": {
+                    "$ref": "#/$defs/Address"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "adapter"
+                ],
+                "additionalProperties": false,
+                "description": "a ForSelf adapter address (an integrator's own, or a generation's reference one) — read its CORK()/LOP()/WHITELIST() bindings on chain and name the generation they belong to: the check cork_decode cannot run chain-free, so a decode's `unverified` ForSelf leg points here. mode verify only"
               }
             ]
           },
@@ -4242,6 +4260,11 @@
           "MarketId": {
             "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
+          },
+          "Address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address"
           }
         }
       },

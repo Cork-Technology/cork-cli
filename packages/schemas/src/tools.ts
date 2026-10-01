@@ -748,6 +748,7 @@ export const TrackSubject = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }).describe("a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state [K7]"),
   z.strictObject({ kind: z.literal("marketRef"), poolId: MarketId }).describe("a pool — re-hash its MarketId against live chain state"),
   z.strictObject({ kind: z.literal("submissionRef"), submissionRef: z.string() }).describe("a prior cork_submit reference — resolve it to a lifecycle state"),
+  z.strictObject({ kind: z.literal("forSelfAdapter"), adapter: Address }).describe("a ForSelf adapter address (an integrator's own, or a generation's reference one) — read its CORK()/LOP()/WHITELIST() bindings on chain and name the generation they belong to: the check cork_decode cannot run chain-free, so a decode's `unverified` ForSelf leg points here. mode verify only"),
 ]);
 export type TrackSubject = z.infer<typeof TrackSubject>;
 

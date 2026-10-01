@@ -97,6 +97,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_track: [
     { title: "Digest-pin an artifact you were handed", input: { mode: "verify", subject: { kind: "artifact", artifact: { any: "json" } } } },
     { title: "Verify a pool against chain (MarketId re-hash)", input: { mode: "verify", subject: { kind: "marketRef", poolId: DEMO_POOL_ID } } },
+    { title: "Which generation does this ForSelf adapter serve? (bindings read on chain; Base)", input: { mode: "verify", subject: { kind: "forSelfAdapter", adapter: "0x3864902695DC930Df406ef5dEB74c4DC249e23f1" }, chainId: 8453 } },
     { title: "Reconcile a tx receipt", input: { mode: "reconcile", subject: { kind: "txHash", txHash: "0x2222222222222222222222222222222222222222222222222222222222222222" } } },
     { title: "Dry-run a prepared bundle before signing (wouldRevert + reason)", input: { mode: "simulate", subject: { kind: "artifact", artifact: { bundler3: "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13", multicall: "0x374f435d", account: DEMO_ACCOUNT } }, chainId: 42161 } },
   ],
@@ -202,6 +203,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     variants: {
       "verify/artifact": { status: "activated" },
       "verify/marketRef": { status: "activated" },
+      "verify/forSelfAdapter": { status: "activated", reason: "CORK()/LOP()/WHITELIST() read over RPC and classified against every configured generation; names the reference adapter; a pool-only or pre-caller-gate adapter is disclosed, never accused" },
       "reconcile/txHash": { status: "activated" },
       "simulate/artifact": { status: "activated", reason: "eth_call dry-run of frozen bytes (wouldRevert + reason + gas estimate); other subject kinds have nothing executable" },
       "reconcile/orderHash": { status: "activated", reason: "venue lifecycle + [K7] chain verification: settler orderStatus() over RPC (automatic) and event history via HyperRPC (needs ENVIO_API_TOKEN)" },

@@ -9,7 +9,7 @@ import type { PublicClient } from "viem";
 import { UNITS_TOPIC_REFERENCE, type ChainId, Envelope, executionEthTransaction, type PreparePhoenixInput } from "@cork/schemas";
 import { buildFillOrderForSelfCall, buildPoolForSelfCall, forSelfBindingAbi } from "../forself.ts";
 import type { AuctionPriceReport } from "../fusion.ts";
-import type { GenerationRef, PhoenixWire } from "../generations.ts";
+import { classifyAddress, type GenerationRef, type PhoenixWire, type ResolvedGeneration } from "../generations.ts";
 import { decodeJitExtensionFor } from "../jit-extension.ts";
 import { resolveGenerations } from "../config-remote.ts";
 import { buildTakerFill, decodeMakerTraits } from "../orders.ts";
@@ -487,4 +487,73 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     ...(gen ? { generation: gen } : {}),
     ctx,
   });
+}
+
+/** What `cork_track verify` kind "forSelfAdapter" answers for an adapter address: which
+ *  generation its bindings belong to, and whether it is that generation's REFERENCE adapter.
+ *  The decoder cannot run this chain-free (2026-10-01, cork-cli-private#24 item 2). */
+export type ForSelfAdapterClassification =
+  | { kind: "verified"; adapter: `0x${string}`; generation: GenerationRef; reference: boolean; surface: "combined" | "pool-only"; callerGate: boolean | undefined; bindings: { poolManager: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }
+  | { kind: "mismatch"; adapter: `0x${string}`; reason: string; bindings: { poolManager?: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }
+  | { kind: "no-code"; adapter: `0x${string}` }
+  | { kind: "unknown"; adapter: `0x${string}`; reason: string };
+
+/** Classify a ForSelf adapter by its OWN bindings (CORK, LOP, WHITELIST), each read against every
+ *  configured generation of the chain — the inverse of verifyForSelfBindings, which checks an
+ *  adapter against ONE expected generation. Attribution discipline is the same: a DEFINITIVE
+ *  on-chain answer decides (a binding to a pool manager no generation configures is a mismatch;
+ *  a contract that refuses CORK() is not a ForSelf adapter); a transport failure is `unknown`,
+ *  never a verdict. LOP() and WHITELIST() are OPTIONAL views: a pool-only adapter has no LOP(),
+ *  a pre-caller-gate deployment has no WHITELIST(). */
+export async function classifyForSelfAdapter(args: {
+  client: PublicClient;
+  chainId: ChainId;
+  adapter: `0x${string}`;
+  generations: readonly ResolvedGeneration[];
+  lop: `0x${string}` | undefined;
+}): Promise<ForSelfAdapterClassification> {
+  const { client, adapter, generations, lop } = args;
+  let code: string | undefined;
+  try {
+    code = await client.getCode({ address: adapter });
+  } catch (err) {
+    return { kind: "unknown", adapter, reason: `the adapter's code could not be read (${revertReason(err)})` };
+  }
+  if (code === undefined || code === "0x") return { kind: "no-code", adapter };
+  type Probe = { kind: "answered"; value: `0x${string}` } | { kind: "refused" } | { kind: "transport"; reason: string };
+  const probe = (functionName: "CORK" | "LOP" | "WHITELIST"): Promise<Probe> =>
+    client
+      .readContract({ address: adapter, abi: forSelfBindingAbi, functionName })
+      .then((value): Probe => ({ kind: "answered", value: value as `0x${string}` }))
+      .catch((err): Probe => (isTransportFailure(err) ? { kind: "transport", reason: revertReason(err) } : { kind: "refused" }));
+  const [cork, lopProbe, wl] = await Promise.all([probe("CORK"), probe("LOP"), probe("WHITELIST")]);
+  for (const p of [cork, lopProbe, wl]) if (p.kind === "transport") return { kind: "unknown", adapter, reason: `a binding read failed in transport (${p.reason})` };
+  const bindings = {
+    ...(cork.kind === "answered" ? { poolManager: cork.value } : {}),
+    ...(lopProbe.kind === "answered" ? { lop: lopProbe.value } : {}),
+    ...(wl.kind === "answered" ? { whitelistManager: wl.value } : {}),
+  };
+  if (cork.kind !== "answered") return { kind: "mismatch", adapter, reason: "the contract does not answer CORK() — it is not a Cork ForSelf adapter (every ForSelf adapter pins its pool manager there)", bindings };
+  const owner = classifyAddress(generations, cork.value).find((c) => c.role === "poolManager");
+  if (owner === undefined) {
+    return { kind: "mismatch", adapter, reason: `CORK() names ${cork.value}, which is the pool manager of NO configured generation on this chain — the adapter trades on a protocol this tool does not know (a stale, shadow or foreign deployment)`, bindings };
+  }
+  const gen = generations.find((g) => g.label === owner.label)!;
+  if (lopProbe.kind === "answered" && lop !== undefined && lopProbe.value.toLowerCase() !== lop.toLowerCase()) {
+    return { kind: "mismatch", adapter, reason: `LOP() names ${lopProbe.value}, not the chain's 1inch LOP v4 ${lop} — a fill through this adapter would settle on a different order protocol`, bindings };
+  }
+  const expectedWl = gen.phoenix?.whitelistManager;
+  if (wl.kind === "answered" && expectedWl !== undefined && wl.value.toLowerCase() !== expectedWl.toLowerCase()) {
+    return { kind: "mismatch", adapter, reason: `WHITELIST() names ${wl.value}, not the ${gen.label} generation's WhitelistManager ${expectedWl} (the one its pool manager CORK() belongs to) — the caller gate would consult the wrong list`, bindings };
+  }
+  const reference = classifyAddress(generations, adapter).some((c) => c.role === "forSelfAdapter" && c.label === gen.label);
+  return {
+    kind: "verified",
+    adapter,
+    generation: { label: gen.label, status: gen.status, ...(gen.distribution !== undefined ? { distribution: gen.distribution } : {}) },
+    reference,
+    surface: lopProbe.kind === "answered" ? "combined" : "pool-only",
+    callerGate: wl.kind === "answered" ? true : false,
+    bindings: { poolManager: cork.value, ...(lopProbe.kind === "answered" ? { lop: lopProbe.value } : {}), ...(wl.kind === "answered" ? { whitelistManager: wl.value } : {}) },
+  };
 }

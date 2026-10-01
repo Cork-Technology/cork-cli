@@ -121,6 +121,7 @@ const T = {
   generations: "packages/core/test/generations.test.ts",
   configRemote: "packages/core/test/config-remote.test.ts",
   decodeEnvelopes: "packages/core/test/decode-envelopes.test.ts",
+  trackForSelfAdapter: "packages/core/test/track-forself-adapter.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
@@ -291,6 +292,33 @@ const CATALOG: Mutant[] = [
     find: "  if (reference !== undefined) return { verification: \"trusted\", generation: reference.label };",
     replace: "  if (reference !== undefined) return { verification: \"trusted\" };",
     tests: [T.decodeEnvelopes],
+  },
+  {
+    // The classification keys on CORK(): the pool manager an adapter PINS decides its generation.
+    // Taking the first configured generation instead would call a v0.3-bound adapter a v0.4 one.
+    id: "forself-classify-ignores-cork-binding",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "  const owner = classifyAddress(generations, cork.value).find((c) => c.role === \"poolManager\");",
+    replace: "  const owner = classifyAddress(generations, generations[0]!.phoenix!.poolManager).find((c) => c.role === \"poolManager\");",
+    tests: [T.trackForSelfAdapter],
+  },
+  {
+    // A WHITELIST() that answers with the WRONG manager is a mismatch (the caller gate would
+    // consult the wrong list); accepting any answered manager hides it.
+    id: "forself-classify-whitelist-mismatch-ignored",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "  if (wl.kind === \"answered\" && expectedWl !== undefined && wl.value.toLowerCase() !== expectedWl.toLowerCase()) {",
+    replace: "  if (false) {",
+    tests: [T.trackForSelfAdapter],
+  },
+  {
+    // reference = THIS generation's configured forSelf adapter; any configured adapter would also
+    // call the previous set's reference adapter the primary's.
+    id: "forself-classify-reference-any-generation",
+    file: "packages/core/src/handlers/forself.ts",
+    find: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\" && c.label === gen.label);",
+    replace: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\");",
+    tests: [T.trackForSelfAdapter],
   },
   {
     // R5c: a released binary reads its line's config branch, never main (the development branch).
