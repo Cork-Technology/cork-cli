@@ -514,8 +514,8 @@ const CATALOG: Mutant[] = [
     // (the 2026-09-25 anvil-smoke finding).
     id: "decode-adapter-book-dropped",
     file: "packages/core/src/handlers/decode.ts",
-    find: "corkAdapter: dep?.corkAdapter, corkAdapters, lop:",
-    replace: "corkAdapter: dep?.corkAdapter, corkAdapters: [], lop:",
+    find: "corkAdapter: dep?.corkAdapter, corkAdapters, forSelfAdapters, lop:",
+    replace: "corkAdapter: dep?.corkAdapter, corkAdapters: [], forSelfAdapters, lop:",
     tests: [T.decodeTrust],
   },
   {
