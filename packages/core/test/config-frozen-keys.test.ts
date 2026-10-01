@@ -8,7 +8,7 @@
 // live file.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { corkDefaultsUrlFor } from "@cork/core";
+import { CORK_DEFAULTS_REPO, corkDefaultsUrlFor } from "@cork/core";
 
 type Doc = { schemaVersion: number; generations: Record<string, { primary: string; sets: Record<string, unknown> }> };
 
@@ -49,7 +49,8 @@ describe("frozen keys — the file a released line reads keeps every set key tha
 
   it("the URL a released 0.6 binary builds names the config/0.6 branch and the line's file", () => {
     const entry = RELEASED_LINE_KEYS.find((e) => e.line === "0.6")!;
-    expect(corkDefaultsUrlFor("v0.6.1-rc.1").endsWith(`/${entry.ref}/${entry.file}`)).toBe(true);
+    // Exact equality: the WHOLE URL a binary fetches — repo, branch and file — not a suffix.
+    expect(corkDefaultsUrlFor("v0.6.1-rc.1")).toBe(`${CORK_DEFAULTS_REPO}/${entry.ref}/${entry.file}`);
   });
 
   it.skipIf(!LIVE)("LIVE: the public refs serve the keys each line knows", async () => {

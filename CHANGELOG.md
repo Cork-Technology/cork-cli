@@ -21,6 +21,7 @@ covered.
 
 ### Fixed
 
+- The live registry parity suite (`rpc-live.test.ts`, CORK_RPC_LIVE=1) gains an independent NESTED-wire reference against the primary 0.5.0 registry on Arbitrum — ABI re-declared from the deployed contract's verified source, 4-argument `deploy` with the zero salt, address-unit denominations, 3-tuple feeds, and the 10-field pool id re-encoded with the fees inside. The flat reference stays pinned to `phoenix/v0.3-rc.1`.
 - Share prediction (`derive-cork-pool`, `create-pool`, the JIT prepares) grants the simulating account a balance in the same state override that grants it the creator role. The account is the role holder, a contract with no ETH, and an endpoint that validates the sender's balance in `eth_simulateV1` (anvil does) refused the whole dry-run as a transport failure — `share_prediction_unavailable` on every fresh pool of the fork rehearsal. The prediction is now balance-independent on every endpoint.
 
 ## [0.6.1-rc.1] — 2026-09-28

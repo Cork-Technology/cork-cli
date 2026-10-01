@@ -15,9 +15,9 @@ const LIVE = process.env.CORK_RPC_LIVE === "1";
 // mode)`, label-keyed denominations, `feedDecimals`. Since the 0.6 generation cutover the primary
 // registry speaks the NESTED 0.5.0 wire (`deploy` takes an oracleSalt, address-keyed denominations),
 // so this suite pins the generation its ABI speaks; resolving the primary sent 3-argument calls to
-// the 0.5.0 registry, which reverted (every live-smoke run since 2026-09-24). The nested registry is
-// proven by the fork rehearsal (nested-fill-rehearsal); a nested-wire raw reference here is an open
-// follow-up.
+// the 0.5.0 registry, which reverted (every live-smoke run since 2026-09-24). The NESTED registry
+// has its own independent reference at the end of this file (2026-10-01), declared from the
+// Sourcify exact-match ABI of the deployed 0.5.0 registry, against the PRIMARY generation.
 const FLAT_GEN = "phoenix/v0.3-rc.1";
 
 describe.skipIf(!LIVE)("resolveRpc — live", () => {
@@ -444,5 +444,210 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
     // When the share simulation ran (eth_simulateV1 supported), the triple must match exactly.
     if (d.shares?.corkSwapToken) expect(cst.toLowerCase()).toBe(d.shares.corkSwapToken.toLowerCase());
     if (d.shares?.corkPrincipalToken) expect(cpt.toLowerCase()).toBe(d.shares.corkPrincipalToken.toLowerCase());
+  }, 90_000);
+});
+
+// Nested-wire parity (market-registry 0.5.0, the phoenix/v0.4-rc.1 PRIMARY on Arbitrum): the same
+// independent-reference discipline as the flat suite above, with the ABI re-declared HERE from the
+// Sourcify exact-match verification of the deployed registry 0xe1f5…55c5 (fetched 2026-10-01) —
+// `deploy` takes an oracleSalt, denominations are ADDRESS units, feeds carry no feedDecimals, and
+// the pool id is the 10-field Market with the two fees INSIDE (CorkPoolManager v1.4.0-rc.1 field
+// order, re-declared below). Nothing is imported from market-registry.ts or marketid.ts.
+describe.skipIf(!LIVE)("0.5.0 registry (nested wire, the primary) — live parity vs an independent raw-read reference", () => {
+  const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"; // sUSDe (registered on the 0.5.0 registry 2026-09-23)
+  const REF = "0xdDb46999F8891663a8F2828d25298f70416d7610"; // sUSDS (registered on the 0.5.0 registry 2026-09-23)
+  const LIQ = "0x679Cbd016587c423f342e5Ba31e58356228c964d"; // LiquidityRecipe of the 0.5.0 set
+  const ANCHOR_ARGS = `0x${(10n ** 18n).toString(16).padStart(64, "0")}` as const; // abi.encode(1e18)
+  const PRICE_MODE = 0; // OracleMode.PRICE
+  const ZERO_SALT = `0x${"00".repeat(32)}` as const;
+  const EXPIRY = 1_900_000_000n;
+  const ctx = { nowSeconds: 1_790_000_000n };
+
+  const nestedAbi = parseAbi([
+    "struct AssetSource { address addr; uint8 sourceType; uint8 sourceInterface; address denomination; }",
+    "struct Asset { address addr; string name; uint8 kind; AssetSource priceSource; AssetSource navSource; }",
+    "struct ConversionFeed { address base; address quote; address aggregatorAddress; }",
+    "function getAssets(uint256 offset, uint256 limit) view returns (Asset[] page, uint256 total)",
+    "function getConversionFeeds(uint256 offset, uint256 limit) view returns (ConversionFeed[] page, uint256 total)",
+    "function getDenominations(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+    "function getRecipes(uint256 offset, uint256 limit) view returns (address[] page, uint256 total)",
+    "function isRecipe(address recipe) view returns (bool)",
+    "function lookupWrapper(address ca, address ref, uint8 mode) view returns (address wrapper)",
+    "function predictFixedRateOracle(uint256 rate) view returns (address oracle)",
+    "function deploy(address ca, address ref, uint8 mode, bytes32 oracleSalt) returns (address wrapper)",
+    "function version() pure returns (string)",
+    "function source() view returns (uint8)",
+    "function decimals() view returns (uint8)",
+    "function resolve(address ca, address ref, address rateOracle, bytes extraData) view returns ((uint256 rateMin, uint256 rateMax, uint256 rateChangePerDayMax, uint256 rateChangeCapacityMax) constraint)",
+  ]);
+  const REF_RECIPE_SOURCE = ["nav", "price", "fixed"] as const;
+
+  const primary42161 = async () => {
+    const { resolveMarketRegistry } = await import("@cork/core");
+    const { marketRegistry: mr, generation } = await resolveMarketRegistry(42161);
+    expect(generation?.wire).toBe("nested"); // no generation passed = the PRIMARY, and the primary speaks the nested wire
+    expect(generation?.label).toBe("phoenix/v0.4-rc.1");
+    const r = await resolveRpc(42161, undefined);
+    expect(r).not.toBeNull();
+    return { registry: mr!.registry as `0x${string}`, client: r!.client };
+  };
+
+  it("the primary registry is the 0.5.0 contract (version() says so) and answers the nested views", async () => {
+    const { registry, client } = await primary42161();
+    expect(await client.readContract({ address: registry, abi: nestedAbi, functionName: "version" })).toBe("0.5.0");
+    const [, total] = await client.readContract({ address: registry, abi: nestedAbi, functionName: "getAssets", args: [0n, 1n] });
+    expect(total).toBeGreaterThan(0n);
+  }, 30_000);
+
+  it("registry-assets (primary) matches a raw one-shot getAssets read; denominations are address units", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-assets", format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const items = (ours.data as { items: Array<{ address: string; priceSource: { address: string; denomination: string } | null }> }).items;
+    const { registry, client } = await primary42161();
+    const [page] = await client.readContract({ address: registry, abi: nestedAbi, functionName: "getAssets", args: [0n, 500n] });
+    expect(items.map((i) => i.address.toLowerCase()).sort()).toEqual(page.map((a) => a.addr.toLowerCase()).sort());
+    for (const row of page) {
+      const mine = items.find((i) => i.address.toLowerCase() === row.addr.toLowerCase())!;
+      if (row.priceSource.addr === zeroAddress) expect(mine.priceSource).toBeNull();
+      else {
+        expect(mine.priceSource!.address.toLowerCase()).toBe(row.priceSource.addr.toLowerCase());
+        // The denomination is an ADDRESS on this wire — served verbatim, never a label.
+        expect(mine.priceSource!.denomination.toLowerCase()).toBe(row.priceSource.denomination.toLowerCase());
+      }
+    }
+  }, 60_000);
+
+  it("registry-recipes (primary) matches raw getRecipes + per-recipe source()/constant reads", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-recipes", format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const items = (ours.data as { items: Array<{ address: string; source: string; constants: Record<string, string> }> }).items;
+    const { registry, client } = await primary42161();
+    const [addrs] = await client.readContract({ address: registry, abi: nestedAbi, functionName: "getRecipes", args: [0n, 100n] });
+    expect(items.map((i) => i.address.toLowerCase()).sort()).toEqual(addrs.map((a) => a.toLowerCase()).sort());
+    for (const addr of addrs) {
+      const mine = items.find((i) => i.address.toLowerCase() === addr.toLowerCase())!;
+      const ordinal = await client.readContract({ address: addr, abi: nestedAbi, functionName: "source" });
+      expect(mine.source, `source of ${addr}`).toBe(REF_RECIPE_SOURCE[ordinal]);
+      for (const [name, v] of Object.entries(mine.constants)) {
+        const raw = await client.readContract({ address: addr, abi: parseAbi([`function ${name}() view returns (uint256)`] as const), functionName: name });
+        expect(String(raw), `constant ${name} on ${addr}`).toBe(v);
+      }
+    }
+  }, 90_000);
+
+  it("registry-denominations (primary) matches raw getDenominations — address units, same set, same order", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const items = (ours.data as { items: Array<{ unit: string }> }).items;
+    const { registry, client } = await primary42161();
+    const [page] = await client.readContract({ address: registry, abi: nestedAbi, functionName: "getDenominations", args: [0n, 200n] });
+    expect(items.map((i) => i.unit.toLowerCase())).toEqual(page.map((u) => u.toLowerCase()));
+    // The flat-wire filter is refused on this wire with teaching, never answered from a stale table.
+    const byLabel = await runTool("cork_query", { chainId: 42161, resource: "registry-denominations", filters: { label: "USD" }, format: "concise" }, ctx);
+    expect(byLabel.state).not.toBe("ok");
+  }, 60_000);
+
+  it("registry-feeds (primary) matches raw getConversionFeeds (3-tuple, no feedDecimals); live decimals match the aggregator", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-feeds", format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const items = (ours.data as { items: Array<{ base: string; quote: string; aggregator: string; feedDecimals?: number; live: { decimals: number } | null }> }).items;
+    const { registry, client } = await primary42161();
+    const [page] = await client.readContract({ address: registry, abi: nestedAbi, functionName: "getConversionFeeds", args: [0n, 200n] });
+    expect(items.length).toBe(page.length);
+    for (const row of page) {
+      const mine = items.find((i) => i.base.toLowerCase() === row.base.toLowerCase() && i.quote.toLowerCase() === row.quote.toLowerCase());
+      expect(mine, `feed ${row.base}→${row.quote} missing from our read`).toBeDefined();
+      expect(mine!.aggregator.toLowerCase()).toBe(row.aggregatorAddress.toLowerCase());
+      expect(mine!.feedDecimals, "feedDecimals is a flat-wire field; the nested row must not invent one").toBeUndefined();
+      if (mine!.live) {
+        const dec = await client.readContract({ address: row.aggregatorAddress, abi: nestedAbi, functionName: "decimals" });
+        expect(mine!.live.decimals).toBe(dec);
+      }
+    }
+  }, 60_000);
+
+  it("fixed-rate oracle prediction (primary) matches the registry's own predictFixedRateOracle view", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { rate: (10n ** 18n).toString() }, format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
+    const { registry, client } = await primary42161();
+    const predicted = await client.readContract({ address: registry, abi: nestedAbi, functionName: "predictFixedRateOracle", args: [10n ** 18n] });
+    expect(od.address.toLowerCase()).toBe(predicted.toLowerCase());
+    const code = await client.getCode({ address: predicted });
+    expect(od.deployed).toBe(code !== undefined && code !== "0x");
+  }, 60_000);
+
+  it("pair oracle prediction (price mode, primary) matches raw lookupWrapper / a raw 4-argument deploy simulation with the zero salt", async () => {
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "price" }, format: "concise" }, ctx);
+    expect(ours.state).toBe("ok");
+    const od = (ours.data as { oracle: { address: string; deployed: boolean } }).oracle;
+    const { registry, client } = await primary42161();
+    const wrapper = await client.readContract({ address: registry, abi: nestedAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    if (wrapper !== zeroAddress) {
+      expect(od.deployed).toBe(true);
+      expect(od.address.toLowerCase()).toBe(wrapper.toLowerCase());
+    } else {
+      expect(od.deployed).toBe(false);
+      const sim = await client.simulateContract({ address: registry, abi: nestedAbi, functionName: "deploy", args: [CA, REF, PRICE_MODE, ZERO_SALT] });
+      expect(od.address.toLowerCase()).toBe(sim.result.toLowerCase());
+    }
+  }, 60_000);
+
+  const liqApproved = async (): Promise<boolean> => {
+    const { registry, client } = await primary42161();
+    return client.readContract({ address: registry, abi: nestedAbi, functionName: "isRecipe", args: [LIQ] });
+  };
+
+  it("recipe-rate-constraint (primary) matches a raw recipe.resolve staticcall wei-for-wei", async () => {
+    const ours = await runTool("cork_compute", { chainId: 42161, params: { kind: "recipe-rate-constraint", recipe: LIQ, collateralAsset: CA, referenceAsset: REF, args: ANCHOR_ARGS }, format: "concise" }, ctx);
+    if (!(await liqApproved())) {
+      expect(ours.state).toBe("unavailable");
+      expect(ours.warnings.some((w) => w.code === "recipe_not_found")).toBe(true);
+      return;
+    }
+    expect(ours.state).toBe("ok");
+    const oc = (ours.data as { constraint: Record<string, string> }).constraint;
+    const { registry, client } = await primary42161();
+    const wrapper = await client.readContract({ address: registry, abi: nestedAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    const raw = await client.readContract({ address: LIQ, abi: nestedAbi, functionName: "resolve", args: [CA, REF, wrapper, ANCHOR_ARGS] });
+    expect(oc["rateMin"]).toBe(raw.rateMin.toString());
+    expect(oc["rateMax"]).toBe(raw.rateMax.toString());
+    expect(oc["rateChangePerDayMax"]).toBe(raw.rateChangePerDayMax.toString());
+    expect(oc["rateChangeCapacityMax"]).toBe(raw.rateChangeCapacityMax.toString());
+  }, 60_000);
+
+  it("derive-cork-pool (primary): oracle matches the raw prediction; the 10-field poolId re-derives from an independent encode with the fees INSIDE", async () => {
+    const fees = { swapFeePercentage: (10n ** 18n).toString(), unwindSwapFeePercentage: (5n * 10n ** 17n).toString() }; // 1% / 0.5% — part of the id on this wire
+    const ours = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: EXPIRY.toString(), recipe: LIQ, args: ANCHOR_ARGS, ...fees }, format: "concise" }, ctx);
+    if (!(await liqApproved())) {
+      expect(ours.state).toBe("unavailable");
+      expect(ours.warnings.some((w) => w.code === "recipe_not_found")).toBe(true);
+      return;
+    }
+    expect(ours.state).toBe("ok");
+    const od = ours.data as { oracle: { address: string; deployed: boolean }; pool: { poolId: string; constraint: Record<string, string> } | null };
+    const { registry, client } = await primary42161();
+    const wrapper = await client.readContract({ address: registry, abi: nestedAbi, functionName: "lookupWrapper", args: [CA, REF, PRICE_MODE] });
+    if (wrapper !== zeroAddress) expect(od.oracle.address.toLowerCase()).toBe(wrapper.toLowerCase());
+    else {
+      const sim = await client.simulateContract({ address: registry, abi: nestedAbi, functionName: "deploy", args: [CA, REF, PRICE_MODE, ZERO_SALT] });
+      expect(od.oracle.address.toLowerCase()).toBe(sim.result.toLowerCase());
+    }
+    expect(od.pool).not.toBeNull();
+    const c = od.pool!.constraint;
+    // Market (v1.4.0-rc.1, 10 fields): the two fees AFTER rateOracle, swap THEN unwind.
+    const encoded = encodeAbiParameters(
+      [{ type: "tuple", components: [
+        { name: "collateralAsset", type: "address" }, { name: "referenceAsset", type: "address" }, { name: "expiryTimestamp", type: "uint256" },
+        { name: "rateMin", type: "uint256" }, { name: "rateMax", type: "uint256" }, { name: "rateChangePerDayMax", type: "uint256" }, { name: "rateChangeCapacityMax", type: "uint256" },
+        { name: "rateOracle", type: "address" }, { name: "swapFeePercentage", type: "uint256" }, { name: "unwindSwapFeePercentage", type: "uint256" },
+      ] }],
+      [{ collateralAsset: CA, referenceAsset: REF, expiryTimestamp: EXPIRY, rateMin: BigInt(c["rateMin"]!), rateMax: BigInt(c["rateMax"]!), rateChangePerDayMax: BigInt(c["rateChangePerDayMax"]!), rateChangeCapacityMax: BigInt(c["rateChangeCapacityMax"]!), rateOracle: od.oracle.address as `0x${string}`, swapFeePercentage: BigInt(fees.swapFeePercentage), unwindSwapFeePercentage: BigInt(fees.unwindSwapFeePercentage) }],
+    );
+    expect(od.pool!.poolId.toLowerCase()).toBe(keccak256(encoded).toLowerCase());
+    // The fees are IDENTITY on this wire: the same pair with zero fees is a different pool.
+    const zeroFees = await runTool("cork_query", { chainId: 42161, resource: "derive-cork-pool", filters: { collateralAsset: CA, referenceAsset: REF, expiry: EXPIRY.toString(), recipe: LIQ, args: ANCHOR_ARGS }, format: "concise" }, ctx);
+    expect(zeroFees.state).toBe("ok");
+    expect((zeroFees.data as { pool: { poolId: string } }).pool.poolId).not.toBe(od.pool!.poolId);
   }, 90_000);
 });
