@@ -31,12 +31,23 @@ import { INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA, inlineParamsOfTempla
 export const COVER_KINDS = ["liquidity", "impairment", "fixed-rate"] as const;
 export type CoverKind = (typeof COVER_KINDS)[number];
 
-/** One plain sentence per kind: what the holder is protected against. */
+/** The names to say. Liquidity cover answers DURATION risk (you cannot sell or redeem the
+ *  reference at its book value in time); impairment cover answers CREDIT risk (the reference
+ *  loses value). */
+export const COVER_LABELS: Record<CoverKind, string> = {
+  liquidity: "liquidity (duration-risk) cover",
+  impairment: "impairment (credit-risk) cover",
+  "fixed-rate": "fixed-rate cover",
+};
+
+/** One plain sentence per kind: what the holder is protected against. Every kind but
+ *  fixed-rate reads the rate oracle, so "a loss" means a loss the oracle REPORTS — a vault that
+ *  keeps bad debt out of its share price (chain/nav-loss.ts) moves no rate. */
 export const COVER_PROTECTION: Record<CoverKind, string> = {
   liquidity:
-    "an EXIT at the oracle's rate, not protection: the pool rate follows the reference's NAV or price, so a loss in the reference lowers the rate with it and this cover pays nothing for that loss; it pays only when the reference cannot be sold or redeemed at the oracle's rate elsewhere",
+    "duration-risk cover — an EXIT at the oracle's rate, not credit protection: the pool rate follows the reference's NAV or price, so a loss the oracle reports lowers the rate with it and this cover pays nothing for that loss; it pays only when the reference cannot be sold or redeemed at the oracle's rate elsewhere",
   impairment:
-    "DOWNSIDE protection with a deductible: the pool rate is held inside a band around the rate at creation, so a loss in the reference beyond the band is paid by the cover",
+    "credit-risk cover — DOWNSIDE protection with a deductible: the pool rate is held inside a band around the rate at creation, so a loss the oracle reports beyond the band is paid by the cover",
   "fixed-rate":
     "DOWNSIDE protection at a frozen rate: the pool rate is an immutable rate fixed at creation, so every loss in the reference below it is paid by the cover; the reference's yield after creation is not tracked",
 };
@@ -85,6 +96,8 @@ export function impairmentWindow(anchorRate: bigint, bandPercentage: bigint): { 
 export interface CoverReading {
   /** `unknown` = no inline recipe to read (a template id, or a recipe no generation configures). */
   kind: CoverKind | "unknown";
+  /** The name to say: "liquidity (duration-risk) cover", "impairment (credit-risk) cover". */
+  label?: string;
   decidedBy: string;
   recipe?: `0x${string}`;
   recipeName?: string;
@@ -93,6 +106,8 @@ export interface CoverReading {
   requestedModes: readonly string[];
   /** Whether the requested pricing modes name the cover the recipe gives (null = cannot tell). */
   modesAgree: boolean | null;
+  /** Present when a chain read found the reference keeps losses out of its share price. */
+  referenceLoss?: { reportedInSharePrice: false; lostAssets: string; totalAssets: string; note: string };
   band?: {
     apySpreadPercentage: string;
     durationSeconds: string;
@@ -139,6 +154,7 @@ export function readRfqCover(a: {
   const modesAgree = kind === "liquidity" ? wantsLiquidity && !wantsImpairment : wantsImpairment && !wantsLiquidity;
   const cover: CoverReading = {
     kind,
+    label: COVER_LABELS[kind],
     decidedBy: "the recipe named in marketTemplate.inline.oracle_recipe — the venue's `modes` are pricing labels and nothing on chain reads them",
     recipe,
     ...(a.recipeHint?.recipeName !== undefined ? { recipeName: a.recipeHint.recipeName } : {}),
@@ -150,7 +166,7 @@ export function readRfqCover(a: {
   if (kind === "liquidity" && wantsImpairment) {
     warnings.push({
       code: "cover_mode_mismatch",
-      message: `modes names liquidity_impairment, but the template's recipe ${recipe} is a LIQUIDITY recipe: the pool it creates follows the oracle's rate and pays NOTHING for a loss in the reference (measured: 0.000000 on a 10% NAV loss), while an underwriter may price this request as downside cover. For downside protection name the impairment recipe of the generation you trade (cork_query registry-recipes) with a cork-inline-impairment/1 block; for exit-only cover ask for liquidity_only alone. cork_capabilities topic:"cover"`,
+      message: `modes names liquidity_impairment, but the template's recipe ${recipe} is a LIQUIDITY recipe (duration-risk cover): the pool it creates follows the oracle's rate and pays NOTHING for a loss in the reference (measured: 0.000000 on a 10% NAV loss), while an underwriter may price this request as downside cover. For credit-risk (downside) protection name the impairment recipe of the generation you trade (cork_query registry-recipes) with a cork-inline-impairment/1 block; for exit-only cover ask for liquidity_only alone. cork_capabilities topic:"cover"`,
     });
   }
   if (kind !== "liquidity" && wantsLiquidity) {

@@ -143,7 +143,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
       "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
       "oracle_not_deployable", "oracle_not_deployed", "oracle_rate_unreadable", "stale_share_prediction", "share_prediction_unavailable",
       "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "contract_maker_pre_rest", "expiry_far_future", "roles_not_granted", "implementation_not_approved", "implementation_gate_bypassed", "maker_not_ready",
-      "recipe_generation_notice", "rollover_contract_exists", "premium_cap_estimated", "cover_mode_mismatch",
+      "recipe_generation_notice", "rollover_contract_exists", "premium_cap_estimated", "cover_mode_mismatch", "reference_loss_unreported",
     ],
   },
   {
@@ -657,9 +657,9 @@ binaries keep the addresses they understand.`,
   },
   cover: {
     name: "cover",
-    aliases: ["cover-types", "cover-kinds", "impairment", "downside", "liquidity-cover", "fixed-rate"],
+    aliases: ["cover-types", "cover-kinds", "impairment", "downside", "liquidity-cover", "fixed-rate", "duration-risk", "credit-risk", "duration-risk-cover", "credit-risk-cover", "impairment-cover"],
     summary:
-      "WHICH cover a cST is, is decided by the market's RECIPE — never by the RFQ `modes`, which are pricing labels nothing on chain reads. Liquidity cover (the liquidity recipes) follows the oracle's rate: it is an exit, and it pays nothing for a loss in the reference. Impairment cover (the impairment recipe) holds the rate in a band around the rate at creation: a loss beyond the band, the deductible, is paid. Fixed-rate cover freezes the rate. Measured on a fork with a real 10% loss in the reference: liquidity paid 0, impairment paid 9.83%. rfq-open returns `data.cover` and warns `cover_mode_mismatch` when the request contradicts itself.",
+      "WHICH cover a cST is, is decided by the market's RECIPE — never by the RFQ `modes`, which are pricing labels nothing on chain reads. Liquidity (duration-risk) cover, from the liquidity recipes, follows the oracle's rate: it is an exit, and it pays nothing for a loss in the reference. Impairment (credit-risk) cover, from the impairment recipe, holds the rate in a band around the rate at creation: a loss beyond the band, the deductible, is paid. Fixed-rate cover freezes the rate. Measured on a fork with a real 10% loss in the reference: liquidity paid 0, impairment paid 9.83%. rfq-open returns `data.cover` and warns `cover_mode_mismatch` when the request contradicts itself.",
     body: `# Which cover are you buying — the recipe decides
 
 A Cork pool lets the cST holder swap the reference asset for collateral at the pool's RATE. What
@@ -670,12 +670,14 @@ chain reads them.
 
 | Cover | Recipe (\`cork_query registry-recipes\`) | Rate behaviour | A loss in the reference | RFQ mode label |
 |---|---|---|---|---|
-| **Liquidity** (an exit) | the liquidity recipes: \`liquidity\` (price source), \`nav\` (nav source) | window 1 wei .. 2x the anchor, may move a whole anchor a day: the rate FOLLOWS the oracle | NOT paid: the rate falls with the reference, you hand in more reference for the same collateral | \`liquidity_only\` |
-| **Impairment** (downside, with a deductible) | \`impairment\` (ApySpreadImpairmentRecipe) | window = anchor ± apySpread × duration / 365 d; moves one day of the spread per day, seven days of it in a burst: the rate is HELD | paid beyond the band; the band is the deductible | \`liquidity_impairment\` |
-| **Fixed-rate** (downside, frozen) | \`fixed\` (FixedRateRecipe) | an immutable FixedRateOracle: the rate never moves | paid below the frozen rate; later yield of the reference is not tracked | none: the venue has no fixed-rate mode |
+| **Liquidity (duration-risk) cover** (an exit) | the liquidity recipes: \`liquidity\` (price source), \`nav\` (nav source) | window 1 wei .. 2x the anchor, may move a whole anchor a day: the rate FOLLOWS the oracle | NOT paid: the rate falls with the reference, you hand in more reference for the same collateral | \`liquidity_only\` |
+| **Impairment (credit-risk) cover** (downside, with a deductible) | \`impairment\` (ApySpreadImpairmentRecipe) | window = anchor ± apySpread × duration / 365 d; moves one day of the spread per day, seven days of it in a burst: the rate is HELD | paid beyond the band; the band is the deductible | \`liquidity_impairment\` |
+| **Fixed-rate cover** (downside, frozen) | \`fixed\` (FixedRateRecipe) | an immutable FixedRateOracle: the rate never moves | paid below the frozen rate; later yield of the reference is not tracked | none: the venue has no fixed-rate mode |
 
 Names, not numbers: some Cork documents number these as modes, and the numbering is not the
-same across documents. Say liquidity cover, impairment cover, fixed-rate cover.
+same across documents. Say **liquidity (duration-risk) cover**, **impairment (credit-risk)
+cover**, **fixed-rate cover**. Duration risk: you cannot sell or redeem the reference at its
+book value in time. Credit risk: the reference loses value.
 
 ## Measured (Base fork, the phoenix/v0.4-rc.1 contracts, 2026-10-01)
 
@@ -688,7 +690,25 @@ later the holder exercises 100 cST on each:
 | Liquidity cover | 101.836 baseUSD | 100.000 USDC | 100.000 USDC | **0.000 USDC** |
 | Impairment cover (10%/yr, 14.5 days: a 0.397% band) | 91.829 baseUSD | 90.173 USDC | 100.000 USDC | **9.827 USDC** |
 
-## Ask for impairment cover (\`cork_submit rfq-open\`)
+## A loss the share price does not report
+
+Every cover but fixed-rate reads the rate oracle, and a NAV oracle reads the vault's REPORTED
+share price. So "a loss" in the table means a loss the share price reports. Some vaults keep
+losses out of it. MetaMorpho v1.1 adds realized bad debt to a \`lostAssets\` counter and
+reports total assets as real assets plus that counter, so its share price never falls on bad
+debt. On Base (2026-10-01) two registered references do this: YCSUSDC (lostAssets 131.38 USDC,
+0.019% of the vault) and sparkUSDC (0).
+
+On such a vault the pool's rate does not move on that loss, in a liquidity pool and in an
+impairment pool alike. The holder can still swap at the reported price while the pool has
+collateral. The cPT side receives shares backed by less than that price, so the UNDERWRITER
+carries the hidden shortfall, and no rate window prices it. Only a fixed rate does not read
+the feed. \`rfq-open\` and \`answer-rfq\` read \`lostAssets()\` when an RPC resolves and
+warn \`reference_loss_unreported\` to the side reading the result. A vault that does not
+expose that view is not thereby proven to report every loss: each vault family books losses
+its own way.
+
+## Ask for impairment (credit-risk) cover (\`cork_submit rfq-open\`)
 
 1. Read the impairment recipe of the generation you trade: \`cork_query registry-recipes\`
    (hint name \`impairment\`; the recipe states its own caps: spread at most 100% a year, band
@@ -727,7 +747,7 @@ The contracts support it (\`cork_prepare_market deploy-fixed-oracle\`, \`create-
 schema carries the frozen rate, so it cannot be requested through an RFQ today; rfq-open says so.
 `,
     searchText:
-      "cover kind type liquidity impairment fixed-rate downside protection exit deductible band which cover am I buying mode 1 mode 2 liquidity_only liquidity_impairment recipe decides NAV loss payoff what does my cST pay apy spread duration rate floor",
+      "cover kind type liquidity duration-risk duration risk impairment credit-risk credit risk fixed-rate downside protection exit deductible band lostAssets unreported loss bad debt MetaMorpho which cover am I buying mode 1 mode 2 liquidity_only liquidity_impairment recipe decides NAV loss payoff what does my cST pay apy spread duration rate floor",
   },
   migration: {
     name: "migration",

@@ -163,9 +163,9 @@ modes are pricing labels for the underwriter's model, and nothing on chain reads
 
 | Cover | Recipe | The pool's rate | A loss in the reference | RFQ mode to name |
 |---|---|---|---|---|
-| **Liquidity** (an exit) | LiquidityPriceRecipe, LiquidityNavRecipe | follows the oracle: window 1 wei to 2x the anchor, one whole anchor of movement a day | **not paid**. The rate falls with the reference, so you hand in more reference for the same collateral | `liquidity_only` |
-| **Impairment** (downside, with a deductible) | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **paid beyond the band**. The band is your deductible | `liquidity_impairment` |
-| **Fixed-rate** (downside, frozen) | FixedRateRecipe | never moves | paid below the frozen rate | none: the venue has no fixed-rate mode, so it cannot be requested through an RFQ today |
+| **Liquidity (duration-risk) cover**: an exit | LiquidityPriceRecipe, LiquidityNavRecipe | follows the oracle: window 1 wei to 2x the anchor, one whole anchor of movement a day | **not paid**. The rate falls with the reference, so you hand in more reference for the same collateral | `liquidity_only` |
+| **Impairment (credit-risk) cover**: downside, with a deductible | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **paid beyond the band**. The band is your deductible | `liquidity_impairment` |
+| **Fixed-rate cover**: downside, frozen | FixedRateRecipe | never moves | paid below the frozen rate | none: the venue has no fixed-rate mode, so it cannot be requested through an RFQ today |
 
 We measured the difference on a Base fork against the deployed `phoenix/v0.4-rc.1` contracts
 (2026-10-01): two pools over USDC and baseUSD with the same expiry and the same NAV oracle, one per
@@ -177,9 +177,18 @@ each pool:
 | Liquidity cover | 101.836 baseUSD | 100.000 USDC | 100.000 USDC | **0.000 USDC** |
 | Impairment cover (10% a year over 14.5 days: a 0.397% band) | 91.829 baseUSD | 90.173 USDC | 100.000 USDC | **9.827 USDC** |
 
-Liquidity cover is worth buying when the risk is that you cannot sell or redeem the reference at
-its book value in time. It is not protection against the reference losing value. The cover bought
-in the first live trade (Base, 2026-09-10) was liquidity cover.
+Liquidity cover answers duration risk: you cannot sell or redeem the reference at its book value
+in time. It is not protection against the reference losing value. Impairment cover answers credit
+risk: the reference loses value. The cover bought in the first live trade (Base, 2026-09-10) was
+liquidity cover.
+
+**A loss the share price does not report moves no rate.** Both recipes read the rate oracle, and
+a NAV oracle reads the vault's reported share price. MetaMorpho v1.1 vaults keep realized bad
+debt out of that price (they add it to `lostAssets`), so on those vaults the pool's rate does not
+move on bad debt under either recipe. You can still swap at the reported price while the pool has
+collateral, and the underwriter carries the hidden shortfall, so expect it to price that risk or
+to pass. YCSUSDC and sparkUSDC are such vaults on Base today. `ch submit rfq-open` reads
+`lostAssets()` and warns `reference_loss_unreported` when the reference has it.
 
 A recipe is an approved contract address. Copy it from the registry, never from a chat message:
 
@@ -354,7 +363,7 @@ Conventions the live flow uses:
   expiry or fee names a different pool.
 - You sign the RFQ with your own stack. `ch submit` only relays.
 
-To ask for **impairment cover** instead, change three things: the mode, the recipe, and the
+To ask for **impairment (credit-risk) cover** instead, change three things: the mode, the recipe, and the
 block. The block is `cork-inline-impairment/1`: the liquidity block plus `duration_seconds` and
 `apy_spread_percentage` (1e18 = 1%). All three words are required; a partial block is never
 filled in with zeros.

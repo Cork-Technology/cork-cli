@@ -5311,7 +5311,7 @@
                         "liquidity_impairment"
                       ]
                     },
-                    "description": "PRICING labels the underwriter's model reads — the venue never interprets them and nothing on chain reads them. The COVER is decided by the recipe in marketTemplate: a liquidity recipe gives an exit that pays nothing for a loss in the reference, the impairment recipe gives downside protection with a deductible band. Name the mode that matches the recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe); a mismatch is warned cover_mode_mismatch (cork_capabilities topic:'cover')"
+                    "description": "PRICING labels the underwriter's model reads — the venue never interprets them and nothing on chain reads them. The COVER is decided by the recipe in marketTemplate: a liquidity recipe gives liquidity (duration-risk) cover, an exit that pays nothing for a loss in the reference; the impairment recipe gives impairment (credit-risk) cover, downside protection with a deductible band. Name the mode that matches the recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe); a mismatch is warned cover_mode_mismatch (cork_capabilities topic:'cover')"
                   },
                   "packageIds": {
                     "minItems": 1,

@@ -129,6 +129,10 @@
       "kind": "value"
     },
     {
+      "name": "COVER_LABELS",
+      "kind": "value"
+    },
+    {
       "name": "COVER_PROTECTION",
       "kind": "value"
     },
@@ -1393,6 +1397,10 @@
       "kind": "type"
     },
     {
+      "name": "UnreportedLoss",
+      "kind": "type"
+    },
+    {
       "name": "UnsignedApprovalTx",
       "kind": "type"
     },
@@ -2437,6 +2445,10 @@
       "kind": "value"
     },
     {
+      "name": "navLossAbi",
+      "kind": "value"
+    },
+    {
       "name": "normalizeDecimals",
       "kind": "value"
     },
@@ -2630,6 +2642,10 @@
     },
     {
       "name": "readRoleHolder",
+      "kind": "value"
+    },
+    {
+      "name": "readUnreportedLoss",
       "kind": "value"
     },
     {
@@ -2866,6 +2882,14 @@
     },
     {
       "name": "unapprovedCodeAllowed",
+      "kind": "value"
+    },
+    {
+      "name": "unreportedLossShare",
+      "kind": "value"
+    },
+    {
+      "name": "unreportedLossWarning",
       "kind": "value"
     },
     {
@@ -3317,6 +3341,10 @@
       "kind": "type"
     },
     {
+      "name": "UnreportedLoss",
+      "kind": "type"
+    },
+    {
       "name": "constraintAdapterAbi",
       "kind": "value"
     },
@@ -3353,6 +3381,10 @@
       "kind": "value"
     },
     {
+      "name": "navLossAbi",
+      "kind": "value"
+    },
+    {
       "name": "permit2AllowanceAbi",
       "kind": "value"
     },
@@ -3374,6 +3406,10 @@
     },
     {
       "name": "readPoolState",
+      "kind": "value"
+    },
+    {
+      "name": "readUnreportedLoss",
       "kind": "value"
     },
     {
@@ -3402,6 +3438,14 @@
     },
     {
       "name": "rpcDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "unreportedLossShare",
+      "kind": "value"
+    },
+    {
+      "name": "unreportedLossWarning",
       "kind": "value"
     },
     {
@@ -4406,6 +4450,10 @@
     },
     {
       "name": "COVER_KINDS",
+      "kind": "value"
+    },
+    {
+      "name": "COVER_LABELS",
       "kind": "value"
     },
     {

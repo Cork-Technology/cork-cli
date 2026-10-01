@@ -8,6 +8,7 @@ import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirem
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
 import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, INLINE_IMPAIRMENT_SCHEMA, inlineAdditionalData, inlineParamsOfTemplate, premiumAmount, premiumFraction, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
+import { readUnreportedLoss, unreportedLossWarning } from "../chain/nav-loss.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
@@ -260,6 +261,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   } catch (err) {
     return chainReadFailed(chainId, err, [{ code: "chain_read_failed", message: `reading decimals() of collateral ${collateralAsset} failed` }], ctx);
   }
+  // The underwriter is the side that carries a loss the reference's share price does not report.
+  const hiddenLoss = await readUnreportedLoss(resolved.client, referenceAsset);
+  if (hiddenLoss !== undefined) warnings.push(unreportedLossWarning(referenceAsset, hiddenLoss, "underwriter"));
   const tenorSeconds = expiryTimestamp - nowSecs;
   const takingAmount = premiumAmount(premiumAnnualized, notional, tenorSeconds);
   const makingAmount = coverMakingAmount(notional, collateralDecimals);

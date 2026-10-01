@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUNDLED_DEFAULTS,
   COVER_KINDS,
+  COVER_LABELS,
   COVER_PROTECTION,
   coverKindOfConstraint,
   coverKindOfRecipeName,
@@ -19,6 +20,9 @@ import {
   impairmentWindow,
   primaryOf,
   readRfqCover,
+  readUnreportedLoss,
+  unreportedLossShare,
+  unreportedLossWarning,
   RFQ_MODE_COVER,
   runTool,
   type HandlerContext,
@@ -47,6 +51,10 @@ describe("the cover kinds — recipe names and constraint shapes", () => {
     expect(RFQ_MODE_COVER).toEqual({ liquidity_only: "liquidity", liquidity_impairment: "impairment" });
     for (const k of COVER_KINDS) expect(COVER_PROTECTION[k].length).toBeGreaterThan(40);
     expect(COVER_PROTECTION.liquidity).toMatch(/pays nothing for that loss/u);
+    // The names to say: liquidity answers DURATION risk, impairment answers CREDIT risk.
+    expect(COVER_LABELS).toEqual({ liquidity: "liquidity (duration-risk) cover", impairment: "impairment (credit-risk) cover", "fixed-rate": "fixed-rate cover" });
+    expect(COVER_PROTECTION.liquidity).toMatch(/^duration-risk cover/u);
+    expect(COVER_PROTECTION.impairment).toMatch(/^credit-risk cover.*a loss the oracle reports/u);
   });
 
   it("a live pool's four limits name its cover: 1 wei floor = liquidity, zero allowances = fixed-rate, a band = impairment (the fork's two pools)", () => {
@@ -84,6 +92,7 @@ describe("readRfqCover — the request's own contradictions, named", () => {
   it("an impairment recipe with a complete block: the kind, the deductible band and the rate floor, no warning", () => {
     const { cover, warnings } = read(["liquidity_impairment"], IMPAIRMENT, block(), IMP_HINT);
     expect(warnings).toEqual([]);
+    expect(cover.label).toBe("impairment (credit-risk) cover");
     expect(cover).toMatchObject({ kind: "impairment", recipe: IMPAIRMENT, recipeName: "impairment", generation: "phoenix/v0.4-rc.1", modesAgree: true, requestedModes: ["liquidity_impairment"] });
     // 10%/yr over 14 days: 10e18 × 1209600 / 31536000.
     expect(cover.band).toEqual({ apySpreadPercentage: TEN_PERCENT.toString(), durationSeconds: "1209600", bandPercentage: "383561643835616438", anchorRate: ANCHOR.toString(), rateFloor: "1086886070136986302", rateCeiling: "1095255929863013698" });
@@ -157,6 +166,52 @@ describe("readRfqCover — the request's own contradictions, named", () => {
   });
 });
 
+describe("a reference whose share price does not report its losses (MetaMorpho v1.1 lostAssets)", () => {
+  const REF = "0xE74c499fA461AF1844fCa84204490877787cED56" as const; // YCSUSDC on Base
+  const client = (answers: Record<string, bigint | Error>) => ({ readContract: async (a: { functionName: string }) => { const v = answers[a.functionName]; if (v === undefined || v instanceof Error) throw v ?? new Error("execution reverted"); return v; } });
+
+  it("reads lostAssets and totalAssets; a vault without the view, or a failed read, is `undefined` — nothing known, nothing claimed", async () => {
+    expect(await readUnreportedLoss(client({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n }), REF)).toEqual({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n });
+    expect(await readUnreportedLoss(client({ totalAssets: 5n }), REF)).toBeUndefined();
+    expect(await readUnreportedLoss(client({ lostAssets: 0n }), REF)).toBeUndefined();
+    // A vault that HAS the counter at zero still keeps future bad debt out of its price.
+    expect(await readUnreportedLoss(client({ lostAssets: 0n, totalAssets: 329_960_189_000_000n }), REF)).toEqual({ lostAssets: 0n, totalAssets: 329_960_189_000_000n });
+  });
+
+  it("the share is exact integer math (1e8 = 100%), and each side reads its own consequence", () => {
+    const l = { lostAssets: 131_382_052n, totalAssets: 701_674_000_000n };
+    expect(unreportedLossShare(l)).toBe(18_724n); // 0.018724%
+    expect(unreportedLossShare({ lostAssets: 1n, totalAssets: 0n })).toBe(0n);
+    expect(unreportedLossShare({ lostAssets: 5n, totalAssets: 10n })).toBe(50_000_000n);
+    const req = unreportedLossWarning(REF, l, "requester");
+    expect(req.code).toBe("reference_loss_unreported");
+    expect(req.message).toMatch(/\(0\.018724%/u);
+    expect(req.message).toMatch(/you can still swap at the reported price.*the underwriter carries the hidden shortfall/u);
+    const uw = unreportedLossWarning(REF, l, "underwriter");
+    expect(uw.message).toMatch(/You carry the hidden shortfall/u);
+    expect(uw.message).not.toMatch(/you can still swap/u);
+  });
+
+  it("rfq-open reads it when an RPC resolves: data.cover.referenceLoss + the requester's warning; silent without an RPC or without the view", async () => {
+    const example = TOOL_EXAMPLES.cork_submit!.find((e) => e.title.includes("IMPAIRMENT"))!;
+    const run = (resolveRpc: NonNullable<HandlerContext["resolveRpc"]>) =>
+      runTool("cork_submit", JSON.parse(JSON.stringify(example.input)), { nowSeconds: NOW, resolveRpc, venueFetch: async () => new Response(JSON.stringify({ rfq_id: "rfq_loss", state: "open" }), { status: 201 }) });
+    const rpc = (answers: Record<string, bigint>) => (async () => ({ client: client(answers), source: "explicit", host: "stub" })) as unknown as NonNullable<HandlerContext["resolveRpc"]>;
+    const hit = await run(rpc({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n }));
+    expect(hit.state).toBe("ok");
+    expect((hit.data as { cover: { referenceLoss: unknown } }).cover.referenceLoss).toMatchObject({ reportedInSharePrice: false, lostAssets: "131382052", totalAssets: "701674000000" });
+    expect(hit.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice", "reference_loss_unreported"]);
+    const clean = await run(rpc({ totalAssets: 9n }));
+    expect((clean.data as { cover: { referenceLoss?: unknown } }).cover.referenceLoss).toBeUndefined();
+    expect(clean.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice"]);
+    const offline = await run(async () => null);
+    expect(offline.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice"]);
+    // An RPC that cannot be used never blocks an off-chain relay.
+    const broken = await run((async () => { throw new Error("rpc down"); }) as unknown as NonNullable<HandlerContext["resolveRpc"]>);
+    expect(broken.state).toBe("ok");
+  });
+});
+
 type Seen = { url: string; method: string; body?: Record<string, unknown> };
 function ctxWith(seen: Seen[]): HandlerContext {
   return {
@@ -213,8 +268,11 @@ describe("the cover doc topic", () => {
   it("resolves by name and alias and carries the table, the measurement and the trap", () => {
     const t = findDocTopic("cover")!;
     expect(t).toBe(DOC_TOPICS["cover"]);
-    for (const alias of ["cover-types", "impairment", "downside", "fixed-rate"]) expect(findDocTopic(alias)).toBe(t);
-    expect(t.body).toMatch(/\| \*\*Liquidity\*\* \(an exit\)/u);
+    for (const alias of ["cover-types", "impairment", "downside", "fixed-rate", "duration-risk", "credit-risk", "duration-risk-cover", "credit-risk-cover"]) expect(findDocTopic(alias)).toBe(t);
+    expect(t.body).toMatch(/\*\*Liquidity \(duration-risk\) cover\*\*/u);
+    expect(t.body).toMatch(/\*\*Impairment \(credit-risk\) cover\*\*/u);
+    expect(t.body).toMatch(/## A loss the share price does not report/u);
+    expect(t.body).toMatch(/UNDERWRITER\s+carries the hidden shortfall/u);
     expect(t.body).toMatch(/\*\*0\.000 USDC\*\*/u);
     expect(t.body).toMatch(/\*\*9\.827 USDC\*\*/u);
     expect(t.body).toMatch(/cover_mode_mismatch/u);

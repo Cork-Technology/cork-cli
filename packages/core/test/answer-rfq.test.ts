@@ -88,6 +88,29 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(env.warnings.some((w) => w.code === "oco_group_notice")).toBe(true);
   });
 
+  it("the UNDERWRITER is told when the reference keeps bad debt out of its share price (lostAssets): the rate will not move and its cPT side carries the shortfall", async () => {
+    const expiry = NOW + 20n * 86_400n;
+    const answer = (c: typeof ctx) => runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-loss-0001", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, c);
+    // The eval stub's reference exposes no lostAssets(): silent.
+    const quiet = await answer(ctx);
+    expect(quiet.state).toBe("ok");
+    expect(quiet.warnings.map((w) => w.code)).not.toContain("reference_loss_unreported");
+    // The same chain, with the reference answering the MetaMorpho v1.1 view (YCSUSDC's live numbers).
+    const withLoss: typeof ctx = {
+      ...ctx,
+      resolveRpc: async (chainId, url) => {
+        const r = (await ctx.resolveRpc!(chainId, url))!;
+        const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lostAssets" ? 131_382_052n : a.functionName === "totalAssets" ? 701_674_000_000n : inner(a))) as never } };
+      },
+    };
+    const warned = await answer(withLoss);
+    expect(warned.state, JSON.stringify(warned.warnings)).toBe("ok");
+    const w = warned.warnings.find((x) => x.code === "reference_loss_unreported")!;
+    expect(w.message).toMatch(/lostAssets is 131382052 of 701674000000 reported total assets \(0\.018724%/u);
+    expect(w.message).toMatch(/your cPT side receives shares backed by less.*price it yourself, or pass/u);
+  });
+
   it("an RFQ that declares NO fill_sender is answered OPEN with fill_sender_unknown — never reserved for the requester account by guess (the LOP compares allowedSender with its CALLER; an adapter-bound requester would be locked out)", async () => {
     const expiry = NOW + 20n * 86_400n;
     const open = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-nosender-0001", action: { type: "answer-rfq", rfqId: RFQ_NOSENDER_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry.toString(), jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);

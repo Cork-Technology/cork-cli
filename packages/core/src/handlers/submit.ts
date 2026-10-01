@@ -5,6 +5,7 @@ import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
 import { classifyAddress, primaryOf } from "../generations.ts";
+import { readUnreportedLoss, unreportedLossWarning } from "../chain/nav-loss.ts";
 import { readRfqCover } from "../cover.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
@@ -655,6 +656,19 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (BigInt(action.validUntil) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
       }
+      // Best-effort chain read (silent without an RPC): a reference that keeps bad debt out of
+      // its share price moves NO rate — the requester and the underwriter should both know.
+      const lossWarnings: Array<{ code: string; message: string }> = [];
+      try {
+        const rpc = await getRpc(ctx, chainId);
+        const loss = rpc ? await readUnreportedLoss(rpc.client, action.referenceAsset) : undefined;
+        if (loss !== undefined) {
+          cover.referenceLoss = { reportedInSharePrice: false, lostAssets: loss.lostAssets.toString(), totalAssets: loss.totalAssets.toString(), note: "lostAssets and totalAssets are base units of the vault's own asset; the rate oracle reads the reported price" };
+          lossWarnings.push(unreportedLossWarning(action.referenceAsset, loss, "requester"));
+        }
+      } catch {
+        /* an unusable RPC never blocks an off-chain relay */
+      }
       const res = await postRfq(deps, {
         schema_version: "1",
         request_id: input.clientRequestId,
@@ -670,7 +684,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         valid_until: action.validUntil,
         signature: action.signature,
       });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings]);
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings, ...lossWarnings]);
     }
 
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the

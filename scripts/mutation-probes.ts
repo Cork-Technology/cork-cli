@@ -3242,8 +3242,43 @@ const CATALOG: Mutant[] = [
     // the buyer is asking for.
     id: "cover-rfq-open-reading-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings]);",
-    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...recipeWarnings]);",
+    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings, ...lossWarnings]);",
+    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...recipeWarnings, ...lossWarnings]);",
+    tests: [T.cover],
+  },
+
+  // ── a reference that keeps losses out of its share price (chain/nav-loss.ts) ───────────────
+  {
+    // The share computed against the wrong base: the disclosed percentage misstates how much
+    // of the vault is unreported loss.
+    id: "nav-loss-share-base",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "(l.lostAssets * 100_000_000n) / l.totalAssets;",
+    replace: "(l.lostAssets * 100_000_000n) / (l.totalAssets - l.lostAssets + 1n);",
+    tests: [T.cover],
+  },
+  {
+    // rfq-open stops telling the requester: the reading and the warning vanish.
+    id: "nav-loss-rfq-open-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        const loss = rpc ? await readUnreportedLoss(rpc.client, action.referenceAsset) : undefined;",
+    replace: "        const loss = undefined as Awaited<ReturnType<typeof readUnreportedLoss>>; void rpc;",
+    tests: [T.cover],
+  },
+  {
+    // The underwriter — the side that CARRIES the hidden shortfall — is no longer told.
+    id: "nav-loss-underwriter-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (hiddenLoss !== undefined) warnings.push(unreportedLossWarning(referenceAsset, hiddenLoss, \"underwriter\"));",
+    replace: "  void hiddenLoss;",
+    tests: ["packages/core/test/answer-rfq.test.ts"],
+  },
+  {
+    // The two sides swapped: the underwriter reads the requester's reassurance.
+    id: "nav-loss-side-swapped",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: 'const consequence = side === "underwriter"',
+    replace: 'const consequence = side !== "underwriter"',
     tests: [T.cover],
   },
 
