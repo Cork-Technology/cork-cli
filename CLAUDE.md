@@ -170,6 +170,7 @@ Warning codes:
 
 | Code | Meaning / what to do |
 |---|---|
+| `config_override_active` / `config_override_invalid` | Info on every result a LOCAL `config.json` override actually SHAPED (a file that changes nothing shows in `protocol-config`'s `data.config.override` but does not warn) (`config-override.ts`, 2026-09-25): the operator layer that wins over `cork-defaults.v2.json` at WHOLE-SET granularity — a set under `generations.<chain>.sets` replaces or adds the set with that key (complete sets only, R5b), `primary` moves the primary, `only` keeps just the listed keys (a partner pinning what it integrated), LOP/Fusion entries replace per chain; `approvedImplementations` is never overridable (its presence refuses the file). Read from `CORK_CONFIG_FILE`, then `~/.config/cork-helper-cli/config.json`, then the source tree's root (the PRIVATE tree's own `config.json` — internal sets live there, never in the public default; the port excludes the file); `CORK_CONFIG_NO_OVERRIDE=1` disables the layer (the hermetic suite sets it). The message names the file and what it changed; `protocol-config` shows `data.config.{default,override}`. `_invalid`: a PRESENT file was refused whole (schema, a `primary` naming no set, `only` dropping the primary, `CORK_CONFIG_FILE` naming a missing file) and the default serves ALONE — never a partial application. |
 | `requires_rpc` | No RPC resolved (offline, or a chain outside defaults+fallback like vnet 49222). Set `CORK_RPC_URL`. |
 | `request_aborted` | unavailable: the caller's deadline or cancellation (`ctx.signal`, the HTTP ingress's 30 s budget) ended the call before the venue answered — no page fetched past the abort, NO breaker failure recorded (the venue did nothing wrong), and the message says whether the call never started (nothing sent) or was cancelled mid-flight (a relay MAY have reached the venue — retry with the same clientRequestId; the venue's idempotency answers). The HTTP caller sees a 504 at the deadline; the admission slot is held until the cancelled work settles. |
 | `unknown_deployment` | No/partial deployment config for this chainId; an RPC won't fix it. |
@@ -603,6 +604,15 @@ content rejected; `ChainGenerationsSchema` in generations.ts) → 1 h disk cache
 (not published) → bundled copy served silently; a transient failure → bundled copy + a
 `config_fetch_failed` warning. Either outcome is negative-cached 10 min. `CORK_CONFIG_NO_FETCH=1`
 skips fetching (tests set it). Never hand-edit addresses in TS — edit `cork-defaults.v2.json`.
+A LOCAL `config.json` (`config-override.ts`, 2026-10-01 on the 0.6 line) is the OPERATOR layer
+over the fetched document: whole-set replace/add under `generations.<chain>.sets`, `primary`,
+`only`, per-chain LOP/Fusion entries; `approvedImplementations` never overridable (its presence
+refuses the file). Read from `CORK_CONFIG_FILE`, then `~/.config/cork-helper-cli/config.json`,
+then the source tree's root (the PRIVATE tree's own `config.json` — internal sets live there,
+never in the public default; the port excludes it); `CORK_CONFIG_NO_OVERRIDE=1` disables it (the
+hermetic suite sets it). A file that actually shapes a result warns `config_override_active`; a
+refused file warns `config_override_invalid` and the default serves ALONE; `protocol-config`
+shows `data.config.{default,override}`.
 
 The shape: `generations[chainId] = { primary: <label>, sets: { <label>: generation } }`; a
 generation = `{ status: active|read-only, distribution?, phoenix?, marketRegistry?, rollover?,

@@ -85,7 +85,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "mixed",
     contract:
       "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
-    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "no_lop", "request_aborted"],
+    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "config_override_active", "config_override_invalid", "no_lop", "request_aborted"],
   },
   {
     family: "gates",

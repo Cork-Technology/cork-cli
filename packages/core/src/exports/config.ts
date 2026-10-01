@@ -4,6 +4,7 @@
 // CREATE2 attestation verification, the approved-implementations allowlist guard, TEE
 // (Phala/TDX) attestation replay for hosted deployments, and build/version identity.
 export * from "../config.ts";
+export * from "../config-override.ts";
 export * from "../config-remote.ts";
 export * from "../generations.ts";
 export * from "../implementations.ts";

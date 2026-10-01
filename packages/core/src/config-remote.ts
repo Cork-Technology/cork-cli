@@ -27,6 +27,8 @@ import { fetchWithTimeout } from "./fetch-timeout.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
+import { BUILD_VERSION } from "./version.ts";
+import { describeOverride, loadOverrideFrom, mergeConfig, overrideCandidatePaths, type LoadedOverride, type OverrideSummary } from "./config-override.ts";
 import type { CorkDeployment } from "./config.ts";
 import {
   ChainGenerationsSchema,
@@ -44,7 +46,6 @@ import {
   selectGeneration,
 } from "./generations.ts";
 import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
-import { BUILD_VERSION } from "./version.ts";
 
 /** The repository a released binary fetches its defaults from. */
 export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";
@@ -184,12 +185,20 @@ const DefaultsSchema = z.object({
 export type CorkDefaults = z.infer<typeof DefaultsSchema>;
 
 export interface ResolvedConfig {
+  /** The EFFECTIVE document: the default layer with the local override (if any) merged in. */
   defaults: CorkDefaults;
-  /** Which copy served this process: fresh GitHub fetch, disk-cached fetch, or the bundled file. */
+  /** Which copy served the DEFAULT layer: fresh GitHub fetch, disk-cached fetch, or the bundled file. */
   source: "github" | "cache" | "bundled";
   /** Present exactly when a TRANSIENT fetch failure was hit (network/5xx/invalid content). A 404
    *  ("not published") serves the bundled copy silently — see the noise policy above. */
   warning?: { code: string; message: string };
+  /** The local `config.json` layer that was applied (config-override.ts): where it came from and
+   *  what it changed. Absent when no override file exists or the file was refused. */
+  override?: { path: string } & OverrideSummary;
+  /** Every warning this resolution carries, in order: the fetch warning, then the override's
+   *  (`config_override_active` info when one applied; `config_override_invalid` when a present
+   *  file was refused whole and the default served alone). Handlers read THIS list. */
+  warnings: Array<{ code: string; message: string }>;
 }
 
 /** Outcome of one remote attempt: content, or "the file is not published there" (404/410). */
@@ -209,6 +218,10 @@ export interface StoredCache {
 export interface ConfigDeps {
   now: () => number;
   fetchRemote: () => Promise<RemoteFetchResult>;
+  /** The local override layer (config-override.ts). Omitted = the real file search; tests inject
+   *  a fixed document. `CORK_CONFIG_NO_OVERRIDE=1` disables the file search (the hermetic suite sets
+   *  it: the private tree carries its own config.json at the repo root). */
+  loadOverride?: () => LoadedOverride;
   loadCache: () => StoredCache | null;
   saveCache: (entry: StoredCache) => void;
 }
@@ -229,10 +242,16 @@ async function realFetchRemote(): Promise<RemoteFetchResult> {
   return { kind: "ok", data: await res.json() };
 }
 
+export function realLoadOverride(): LoadedOverride {
+  if (process.env.CORK_CONFIG_NO_OVERRIDE) return { kind: "none" };
+  return loadOverrideFrom(overrideCandidatePaths());
+}
+
 export function realConfigDeps(): ConfigDeps {
   return {
     now: () => Date.now(),
     fetchRemote: realFetchRemote,
+    loadOverride: realLoadOverride,
     loadCache: () => {
       try {
         return JSON.parse(readFileSync(cachePath(), "utf8")) as StoredCache;
@@ -278,11 +297,40 @@ export function parseDefaults(raw: unknown): CorkDefaults {
 export const BUNDLED_DEFAULTS: CorkDefaults = parseDefaults(bundledDefaults);
 const BUNDLED = BUNDLED_DEFAULTS;
 
+/** The default layer as one branch of resolveConfig produced it, before the override is applied. */
+type DefaultLayer = Pick<ResolvedConfig, "defaults" | "source" | "warning">;
+
 /** Bundled fallback for a negative outcome: "absent" is silent by policy, "error" warns. */
-function fromFailure(failure: "absent" | "error"): ResolvedConfig {
+function fromFailure(failure: "absent" | "error"): DefaultLayer {
   return failure === "error"
     ? { defaults: BUNDLED, source: "bundled", warning: FETCH_FAILED_WARNING }
     : { defaults: BUNDLED, source: "bundled" };
+}
+
+export const OVERRIDE_INVALID_CODE = "config_override_invalid";
+export const OVERRIDE_ACTIVE_CODE = "config_override_active";
+
+/** Apply the local override layer to a resolved default layer. A refused override (schema
+ *  failure, or a merge that would leave a chain invalid) serves the default ALONE and warns —
+ *  never a partial application. */
+export function applyOverride(layer: DefaultLayer, loaded: LoadedOverride): ResolvedConfig {
+  const warnings = layer.warning ? [layer.warning] : [];
+  if (loaded.kind === "none") return { ...layer, warnings };
+  if (loaded.kind === "invalid") {
+    return { ...layer, warnings: [...warnings, { code: "config_override_invalid", message: `local configuration override ${loaded.path} was REFUSED whole and cork-defaults.v2.json serves alone: ${loaded.error}` }] };
+  }
+  try {
+    // approvedImplementations is read from the BUNDLED copy by implementations.ts and never from
+    // the effective document, and the override schema refuses the key; the merge below carries
+    // the default layer's block through untouched either way.
+    const { merged, summary } = mergeConfig(layer.defaults, loaded.override);
+    // A file that changes nothing (the private tree's empty placeholder) is disclosed in
+    // provenance but does not warn: the warning marks results a local file actually shaped.
+    const effective = summary.sets.length + summary.primaryMoved.length + summary.filtered.length + summary.chainEntries.length > 0;
+    return { ...layer, defaults: merged, override: { path: loaded.path, ...summary }, warnings: effective ? [...warnings, { code: "config_override_active", message: describeOverride(loaded.path, summary) }] : warnings };
+  } catch (err) {
+    return { ...layer, warnings: [...warnings, { code: "config_override_invalid", message: `local configuration override ${loaded.path} was REFUSED whole and cork-defaults.v2.json serves alone: ${err instanceof Error ? err.message : String(err)}` }] };
+  }
 }
 
 /**
@@ -292,13 +340,16 @@ function fromFailure(failure: "absent" | "error"): ResolvedConfig {
  * (10 min after a negative outcome); the disk cache gives short-lived CLI processes the same pacing.
  */
 export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promise<ResolvedConfig> {
+  const loadOverride = deps.loadOverride ?? realLoadOverride;
   // Deliberate offline mode (used by the deterministic test suite): serve the bundled file and
-  // do not attempt the network. No warning — nothing was attempted-and-failed.
-  if (process.env.CORK_CONFIG_NO_FETCH) return { defaults: BUNDLED, source: "bundled" };
+  // do not attempt the network. No warning — nothing was attempted-and-failed. The local override
+  // layer still applies: offline means "no network", not "no operator".
+  if (process.env.CORK_CONFIG_NO_FETCH) return applyOverride({ defaults: BUNDLED, source: "bundled" }, loadOverride());
   const now = deps.now();
   if (memo && now - memo.at < memo.ttl) return memo.resolved;
 
-  const remember = (resolved: ResolvedConfig, ttl: number): ResolvedConfig => {
+  const remember = (layer: DefaultLayer, ttl: number): ResolvedConfig => {
+    const resolved = applyOverride(layer, loadOverride());
     memo = { at: now, ttl, resolved };
     return resolved;
   };
@@ -375,12 +426,17 @@ export function configDiagnostics(now: number = Date.now()): { source: ResolvedC
 /** The shared tail of every resolver result. */
 interface ResolverProvenance {
   source: ResolvedConfig["source"];
+  /** The fetch warning alone (kept for callers that read one). Prefer `warnings`. */
   warning?: { code: string; message: string };
+  /** Every config warning: the fetch warning, then the override's. */
+  warnings: Array<{ code: string; message: string }>;
+  /** The local override layer that shaped this answer, when one applied. */
+  configOverride?: ResolvedConfig["override"];
   refusal?: GenerationRefusal;
 }
 
 function provenanceOf(cfg: ResolvedConfig): ResolverProvenance {
-  return { source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}) };
+  return { source: cfg.source, ...(cfg.warning ? { warning: cfg.warning } : {}), warnings: cfg.warnings, ...(cfg.override ? { configOverride: cfg.override } : {}) };
 }
 
 const refOf = (g: ResolvedGeneration): GenerationRef => ({ label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}) });

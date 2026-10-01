@@ -169,6 +169,14 @@
       "kind": "type"
     },
     {
+      "name": "ConfigOverride",
+      "kind": "type"
+    },
+    {
+      "name": "ConfigOverrideSchema",
+      "kind": "value"
+    },
+    {
       "name": "ConstraintState",
       "kind": "type"
     },
@@ -637,6 +645,10 @@
       "kind": "type"
     },
     {
+      "name": "LoadedOverride",
+      "kind": "type"
+    },
+    {
       "name": "LogMeta",
       "kind": "type"
     },
@@ -769,6 +781,10 @@
       "kind": "type"
     },
     {
+      "name": "MergeableConfig",
+      "kind": "type"
+    },
+    {
       "name": "NotAFusionOrder",
       "kind": "value+type"
     },
@@ -793,6 +809,14 @@
       "kind": "value"
     },
     {
+      "name": "OVERRIDE_ACTIVE_CODE",
+      "kind": "value"
+    },
+    {
+      "name": "OVERRIDE_INVALID_CODE",
+      "kind": "value"
+    },
+    {
       "name": "OracleModeName",
       "kind": "type"
     },
@@ -802,6 +826,10 @@
     },
     {
       "name": "OtherLog",
+      "kind": "type"
+    },
+    {
+      "name": "OverrideSummary",
       "kind": "type"
     },
     {
@@ -1433,6 +1461,10 @@
       "kind": "value"
     },
     {
+      "name": "applyOverride",
+      "kind": "value"
+    },
+    {
       "name": "approvalMissingWarning",
       "kind": "value"
     },
@@ -1805,6 +1837,10 @@
       "kind": "value"
     },
     {
+      "name": "describeOverride",
+      "kind": "value"
+    },
+    {
       "name": "diffBook",
       "kind": "value"
     },
@@ -2121,6 +2157,10 @@
       "kind": "value"
     },
     {
+      "name": "loadOverrideFrom",
+      "kind": "value"
+    },
+    {
       "name": "lopCallName",
       "kind": "value"
     },
@@ -2181,6 +2221,10 @@
       "kind": "value"
     },
     {
+      "name": "mergeConfig",
+      "kind": "value"
+    },
+    {
       "name": "min",
       "kind": "value"
     },
@@ -2221,11 +2265,19 @@
       "kind": "value"
     },
     {
+      "name": "overrideCandidatePaths",
+      "kind": "value"
+    },
+    {
       "name": "parseAuctionGetterData",
       "kind": "value"
     },
     {
       "name": "parseDefaults",
+      "kind": "value"
+    },
+    {
+      "name": "parseOverride",
       "kind": "value"
     },
     {
@@ -2370,6 +2422,10 @@
     },
     {
       "name": "realDeps",
+      "kind": "value"
+    },
+    {
+      "name": "realLoadOverride",
       "kind": "value"
     },
     {
@@ -3079,6 +3135,14 @@
       "kind": "type"
     },
     {
+      "name": "ConfigOverride",
+      "kind": "type"
+    },
+    {
+      "name": "ConfigOverrideSchema",
+      "kind": "value"
+    },
+    {
       "name": "CorkDefaults",
       "kind": "type"
     },
@@ -3207,6 +3271,10 @@
       "kind": "value"
     },
     {
+      "name": "LoadedOverride",
+      "kind": "type"
+    },
+    {
       "name": "MAINNET_DEPLOYMENT",
       "kind": "value"
     },
@@ -3224,6 +3292,22 @@
     },
     {
       "name": "MarketRegistryWire",
+      "kind": "type"
+    },
+    {
+      "name": "MergeableConfig",
+      "kind": "type"
+    },
+    {
+      "name": "OVERRIDE_ACTIVE_CODE",
+      "kind": "value"
+    },
+    {
+      "name": "OVERRIDE_INVALID_CODE",
+      "kind": "value"
+    },
+    {
+      "name": "OverrideSummary",
       "kind": "type"
     },
     {
@@ -3307,6 +3391,10 @@
       "kind": "type"
     },
     {
+      "name": "applyOverride",
+      "kind": "value"
+    },
+    {
       "name": "approvedImplementationChecks",
       "kind": "value"
     },
@@ -3347,6 +3435,10 @@
       "kind": "value"
     },
     {
+      "name": "describeOverride",
+      "kind": "value"
+    },
+    {
       "name": "extractDockerComposeFile",
       "kind": "value"
     },
@@ -3371,11 +3463,27 @@
       "kind": "value"
     },
     {
+      "name": "loadOverrideFrom",
+      "kind": "value"
+    },
+    {
       "name": "marketRegistryForWire",
       "kind": "value"
     },
     {
+      "name": "mergeConfig",
+      "kind": "value"
+    },
+    {
+      "name": "overrideCandidatePaths",
+      "kind": "value"
+    },
+    {
       "name": "parseDefaults",
+      "kind": "value"
+    },
+    {
+      "name": "parseOverride",
       "kind": "value"
     },
     {
@@ -3388,6 +3496,10 @@
     },
     {
       "name": "realConfigDeps",
+      "kind": "value"
+    },
+    {
+      "name": "realLoadOverride",
       "kind": "value"
     },
     {

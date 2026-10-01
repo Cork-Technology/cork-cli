@@ -121,6 +121,7 @@ const T = {
   generations: "packages/core/test/generations.test.ts",
   configRemote: "packages/core/test/config-remote.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
+  configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
 };
 
@@ -274,6 +275,38 @@ const CATALOG: Mutant[] = [
     find: "  if (recovered.signer !== null && isAddressEqual(recovered.signer, a.maker)) return { kind: \"eoa\", recoveredSigner: recovered.signer, codeProbe: probe };\n  if (probe === \"has-code\") return checkContractMakerSignature(client!, a);",
     replace: "  if (probe === \"has-code\") return checkContractMakerSignature(client!, a);\n  if (recovered.signer !== null && isAddressEqual(recovered.signer, a.maker)) return { kind: \"eoa\", recoveredSigner: recovered.signer, codeProbe: probe };",
     tests: [T.makerCodeProbe],
+  },
+  {
+    // the override must WIN: keeping the base set on a key collision silently inverts precedence.
+    id: "config-override-precedence-flipped",
+    file: "packages/core/src/config-override.ts",
+    find: "      sets[key] = set;",
+    replace: "      if (!(key in sets)) sets[key] = set;",
+    tests: [T.configOverride],
+  },
+  {
+    // `only` must FILTER: dropping the filter hands a partner every set it asked to hide.
+    id: "config-override-only-ignored",
+    file: "packages/core/src/config-override.ts",
+    find: "      kept = Object.fromEntries(Object.entries(sets).filter(([k]) => keep.has(k)));",
+    replace: "      kept = sets;",
+    tests: [T.configOverride],
+  },
+  {
+    // approvedImplementations must be REFUSED by presence — an override that carries it must never parse.
+    id: "config-override-allowlist-accepted",
+    file: "packages/core/src/config-override.ts",
+    find: "    approvedImplementations: z.never(",
+    replace: "    approvedImplementations: z.unknown(",
+    tests: [T.configOverride],
+  },
+  {
+    // a refused override must serve the default ALONE — applying a merge whose invariants failed is a partial application.
+    id: "config-override-invalid-applied",
+    file: "packages/core/src/config-remote.ts",
+    find: '    return { ...layer, warnings: [...warnings, { code: "config_override_invalid", message: `local configuration override ${loaded.path} was REFUSED whole and cork-defaults.v2.json serves alone: ${err instanceof Error ? err.message : String(err)}` }] };',
+    replace: '    return { ...layer, override: { path: loaded.path, sets: [], primaryMoved: [], filtered: [], chainEntries: [] }, warnings: [...warnings, { code: "config_override_invalid", message: `local configuration override ${loaded.path} was REFUSED whole and cork-defaults.v2.json serves alone: ${err instanceof Error ? err.message : String(err)}` }] };',
+    tests: [T.configOverride],
   },
   {
     // decode must trust EVERY generation's Cork adapter: dropping the per-generation book turns a

@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 /** Paths that exist only in the private tree. Prefix match on repo-relative paths. */
 export const EXCLUDED_PREFIXES = ["notes/", "experiments/", "rfc/", "misc/", "slack-drafts"] as const;
-export const EXCLUDED_FILES = [".DS_Store"] as const;
+export const EXCLUDED_FILES = [".DS_Store", "config.json"] as const; // config.json = the PRIVATE operator override (internal deployment sets); the public tree ships config.default.json only
 
 /** The sanctioned private→public line substitutions. `from` must appear (or `to` already —
  *  idempotence) in each listed file, or the port fails loudly: a reworded private line means
