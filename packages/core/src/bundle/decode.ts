@@ -22,6 +22,7 @@ import { marketCreatorAbi, marketCreatorNestedAbi, marketRegistryAbi, marketRegi
 import { decodeLopCall, lopCallName, type DecodedLopCall } from "../orders.ts";
 import type { LopLegLabel } from "../handlers/decode.ts";
 import { decodeMulticall, isBundlerMulticall, ZERO_CALLBACK_HASH, type Call } from "./bundler3.ts";
+import { envelopeFunctionName, envelopeSingletonAt, isEnvelopeSelector, unwrapEnvelope, type EnvelopeScheme } from "./envelopes.ts";
 
 /** The contracts a decode may treat as authoritative for each label. Every field optional: an
  *  absent target makes that role's legs `unverified`, never `trusted`. */
@@ -41,6 +42,11 @@ export interface DecodeTrustTargets {
   lop?: `0x${string}` | undefined;
   /** An integrator-deployed ForSelf adapter, once the caller has verified its bindings. */
   forSelf?: `0x${string}` | undefined;
+  /** Every configured generation's REFERENCE ForSelf adapter (the Distribution record's
+   *  `forSelf.adapter`), each with its generation label (2026-10-01, cork-cli-private#24 item 2):
+   *  a call to one of them is trusted and labeled with the generation; an integrator's own
+   *  adapter (Zyfai's) stays `unverified` — verify it with cork_track verify kind forSelfAdapter. */
+  forSelfAdapters?: readonly { address: `0x${string}`; label: string }[] | undefined;
   /** Token contracts a plain ERC-20 leg (approve/transfer/transferFrom) may be trusted at —
    *  the pool's own tokens, from the pool read the bundle was built against. */
   erc20?: readonly `0x${string}`[] | undefined;
@@ -66,6 +72,10 @@ type LegBase = {
   /** For a trusted Cork/adapter leg matched through `corkAdapters`: the generation label of
    *  the adapter it targets (absent when it targets the primary's, or nobody could vouch). */
   generation?: string;
+  /** The leg runs as a DELEGATECALL from a smart account (a Safe operation 1, a MultiSend
+   *  operation byte 1, an ERC-7579 callType 0xff): foreign code in the wallet's own storage
+   *  context. Set by the envelope that carries it; absent on a plain call. */
+  delegatecall?: true;
 };
 
 export type DecodedLeg =
@@ -83,6 +93,12 @@ export type DecodedLeg =
    *  UNREADABLE. */
   | (LegBase & { kind: "market"; role: "marketRegistry" | "marketCreator"; action: string; params: readonly unknown[] })
   | (LegBase & { kind: "bundle"; legs: DecodedLeg[] })
+  /** A smart-account ENVELOPE (envelopes.ts): a wallet-infrastructure call that wraps the calls
+   *  the account actually makes — `legs` are those calls, decoded and verified like any other.
+   *  `account` is the smart account they run from when the envelope names it. A byte-verified
+   *  singleton target (an EntryPoint, a MultiSend) is `trusted`; a wallet's own contract is
+   *  `unverified` by construction and NOT a target_unverified finding. */
+  | (LegBase & { kind: "envelope"; scheme: EnvelopeScheme; version: string; account?: `0x${string}`; note?: string; legs: DecodedLeg[] })
   | (LegBase & { kind: "unknown"; selector: `0x${string}`; data: `0x${string}`; note?: string });
 
 /** Nested-bundle depth cap: untrusted calldata must not be able to blow the stack (and a
@@ -161,49 +177,91 @@ function verifyAdapter(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBa
   return verifyAgainst(to, trust.corkAdapter);
 }
 
+/** Verdict for the ForSelf role: a configured generation's REFERENCE adapter is trusted and
+ *  labeled with its generation; the caller-vouched adapter (`trust.forSelf`, a prepare's own
+ *  target) is trusted plain; anything else is unverified — an integrator-deployed adapter is
+ *  nobody's to vouch for here (never a mismatch: there is no single right ForSelf adapter). */
+function verifyForSelf(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBase, "verification" | "generation"> {
+  const reference = trust.forSelfAdapters?.find((a) => a.address.toLowerCase() === to.toLowerCase());
+  if (reference !== undefined) return { verification: "trusted", generation: reference.label };
+  if (trust.forSelf !== undefined && trust.forSelf.toLowerCase() === to.toLowerCase()) return { verification: "trusted" };
+  return { verification: "unverified" };
+}
+
+/** Verdict for an envelope target: a byte-verified singleton is trusted; everything else — a
+ *  wallet's own contract, EntryPoint v0.8 whose code differs per chain — is unverified. */
+function verifyEnvelope(to: `0x${string}`): Pick<LegBase, "verification"> {
+  const s = envelopeSingletonAt(to);
+  return { verification: s?.byteVerified ? "trusted" : "unverified" };
+}
+
 const base = (c: Call): Omit<LegBase, "verification"> => ({ to: c.to, value: c.value, skipRevert: c.skipRevert, callbackHash: c.callbackHash });
 
-function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets): DecodedLeg {
+/** An envelope's inner call as a bundler-shaped Call (no callback; `skipRevert` from a 7579 "try"). */
+const innerCall = (to: `0x${string}`, value: bigint, data: `0x${string}`, skipRevert: boolean): Call => ({ to, value, data, skipRevert, callbackHash: ZERO_CALLBACK_HASH });
+
+function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets, delegatecall = false): DecodedLeg {
   const selector = c.data.slice(0, 10).toLowerCase() as `0x${string}`;
+  const flag = delegatecall ? { delegatecall: true as const } : {};
   // A leg whose selector matches but whose body is malformed/truncated DEGRADES to `unknown`
   // with the raw bytes preserved — it must never abort the decode and hide every other leg.
   try {
     if (isBundlerMulticall(c.data)) {
       if (depth >= MAX_DEPTH) {
-        return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data, note: `nested bundle exceeds the ${MAX_DEPTH}-level decode depth cap — raw bytes preserved` };
+        return { ...base(c), ...flag, verification: "unverified", kind: "unknown", selector, data: c.data, note: `nested bundle exceeds the ${MAX_DEPTH}-level decode depth cap — raw bytes preserved` };
       }
-      return { ...base(c), ...verifyAgainst(c.to, trust.bundler3), kind: "bundle", legs: decodeMulticall(c.data).map((leg) => decodeCall(leg, depth + 1, trust)) };
+      return { ...base(c), ...flag, ...verifyAgainst(c.to, trust.bundler3), kind: "bundle", legs: decodeMulticall(c.data).map((leg) => decodeCall(leg, depth + 1, trust)) };
+    }
+    // Smart-account envelopes unwrap BEFORE the Cork ABIs: their selectors are disjoint from
+    // every Cork/LOP/ForSelf selector (asserted in decode-envelopes.test.ts), and each inner
+    // call re-enters this decoder, so a Cork leg three wallets deep is verified like a bare one.
+    if (isEnvelopeSelector(selector)) {
+      if (depth >= MAX_DEPTH) {
+        return { ...base(c), ...flag, verification: "unverified", kind: "unknown", selector, data: c.data, note: `nested envelope exceeds the ${MAX_DEPTH}-level decode depth cap — raw bytes preserved` };
+      }
+      const hop = unwrapEnvelope(c.to, c.data)!;
+      return {
+        ...base(c),
+        ...flag,
+        ...verifyEnvelope(c.to),
+        kind: "envelope",
+        scheme: hop.scheme,
+        version: hop.version,
+        ...(hop.account !== undefined ? { account: hop.account } : {}),
+        ...(hop.note !== undefined ? { note: hop.note } : {}),
+        legs: hop.calls.map((inner) => decodeCall(innerCall(inner.to, inner.value, inner.data, inner.skipRevert), depth + 1, trust, inner.delegatecall)),
+      };
     }
     if (CORK_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: corkAdapterAbi, data: c.data });
-      return { ...base(c), ...verifyAdapter(c.to, trust), kind: "cork", action: functionName, params: args[0] };
+      return { ...base(c), ...flag, ...verifyAdapter(c.to, trust), kind: "cork", action: functionName, params: args[0] };
     }
     if (LEG_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: bundlerLegAbi, data: c.data });
       const role = ADAPTER_LEG_FUNCTIONS.has(functionName) ? "adapter" : "erc20";
       const verdict = role === "adapter" ? verifyAdapter(c.to, trust) : verifyToken(c.to, trust.erc20);
-      return { ...base(c), ...verdict, kind: "leg", role, fn: functionName, args: args as readonly unknown[] };
+      return { ...base(c), ...flag, ...verdict, kind: "leg", role, fn: functionName, args: args as readonly unknown[] };
     }
     if (FORSELF_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: forSelfAbi, data: c.data });
-      return { ...base(c), ...verifyAgainst(c.to, trust.forSelf), kind: "forself", action: functionName, params: args[0] };
+      return { ...base(c), ...flag, ...verifyForSelf(c.to, trust), kind: "forself", action: functionName, params: args[0] };
     }
     if (MARKET_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: MARKET_ABI, data: c.data });
       const role = CREATOR_FUNCTIONS.has(functionName) ? "marketCreator" : "marketRegistry";
       const verdict = verifyAgainst(c.to, role === "marketCreator" ? trust.marketCreator : trust.marketRegistry);
-      return { ...base(c), ...verdict, kind: "market", role, action: functionName, params: args as readonly unknown[] };
+      return { ...base(c), ...flag, ...verdict, kind: "market", role, action: functionName, params: args as readonly unknown[] };
     }
     // The 1inch LOP fill/cancel surface this tool's own taker-fill and cancel produce: labeled
     // by selector so the validate-before-broadcast decode of those bytes names the order, the
     // amounts, and the hooks instead of calling the tool's own output UNREADABLE.
     if (lopCallName(selector) !== undefined) {
-      return { ...base(c), ...verifyAgainst(c.to, trust.lop), kind: "lop", call: decodeLopCall(c.data) };
+      return { ...base(c), ...flag, ...verifyAgainst(c.to, trust.lop), kind: "lop", call: decodeLopCall(c.data) };
     }
   } catch (err) {
-    return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? MARKET_SELECTORS.get(selector) ?? lopCallName(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — malformed or truncated` };
+    return { ...base(c), ...flag, verification: "unverified", kind: "unknown", selector, data: c.data, note: `selector matches ${CORK_SELECTORS.get(selector) ?? LEG_SELECTORS.get(selector) ?? FORSELF_SELECTORS.get(selector) ?? MARKET_SELECTORS.get(selector) ?? lopCallName(selector) ?? envelopeFunctionName(selector) ?? "a bundle"} but the body failed to decode (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) — malformed or truncated` };
   }
-  return { ...base(c), verification: "unverified", kind: "unknown", selector, data: c.data };
+  return { ...base(c), ...flag, verification: "unverified", kind: "unknown", selector, data: c.data };
 }
 
 /** Decode ONE call (any target) into a labeled leg — a Bundler3 multicall nests as kind
@@ -232,8 +290,10 @@ export function collectVerification(legs: DecodedLeg[]): { mismatches: DecodedLe
   const walk = (list: DecodedLeg[]) => {
     for (const leg of list) {
       if (leg.verification === "mismatch") mismatches.push(leg);
-      else if (leg.verification === "unverified" && leg.kind !== "unknown") unverified.push(leg);
-      if (leg.kind === "bundle") walk(leg.legs);
+      // An unknown leg already says it is unreadable; an envelope's target is wallet
+      // infrastructure, not a Cork role — its INNER legs carry the verdicts that matter.
+      else if (leg.verification === "unverified" && leg.kind !== "unknown" && leg.kind !== "envelope") unverified.push(leg);
+      if (leg.kind === "bundle" || leg.kind === "envelope") walk(leg.legs);
     }
   };
   walk(legs);
@@ -243,4 +303,30 @@ export function collectVerification(legs: DecodedLeg[]): { mismatches: DecodedLe
 /** True when a leg's Bundler3 callback hash is set — the target may re-enter the bundler. */
 export function hasCallback(leg: { callbackHash: `0x${string}` }): boolean {
   return leg.callbackHash.toLowerCase() !== ZERO_CALLBACK_HASH;
+}
+
+/** Every envelope layer in a decoded tree, outermost first — the handler names them once. */
+export function collectEnvelopes(legs: DecodedLeg[]): Array<Extract<DecodedLeg, { kind: "envelope" }>> {
+  const out: Array<Extract<DecodedLeg, { kind: "envelope" }>> = [];
+  const walk = (list: DecodedLeg[]) => {
+    for (const leg of list) {
+      if (leg.kind === "envelope") { out.push(leg); walk(leg.legs); }
+      else if (leg.kind === "bundle") walk(leg.legs);
+    }
+  };
+  walk(legs);
+  return out;
+}
+
+/** Every leg that runs as a DELEGATECALL from a smart account, anywhere in the tree. */
+export function collectDelegatecalls(legs: DecodedLeg[]): DecodedLeg[] {
+  const out: DecodedLeg[] = [];
+  const walk = (list: DecodedLeg[]) => {
+    for (const leg of list) {
+      if (leg.delegatecall) out.push(leg);
+      if (leg.kind === "bundle" || leg.kind === "envelope") walk(leg.legs);
+    }
+  };
+  walk(legs);
+  return out;
 }

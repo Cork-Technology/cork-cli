@@ -293,6 +293,10 @@
       "kind": "value"
     },
     {
+      "name": "ENVELOPE_SINGLETONS",
+      "kind": "value"
+    },
+    {
       "name": "ERC1271_MAGIC",
       "kind": "value"
     },
@@ -306,6 +310,22 @@
     },
     {
       "name": "EmitterRole",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeCall",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeHop",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeScheme",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeSingleton",
       "kind": "type"
     },
     {
@@ -1653,6 +1673,14 @@
       "kind": "value"
     },
     {
+      "name": "collectDelegatecalls",
+      "kind": "value"
+    },
+    {
+      "name": "collectEnvelopes",
+      "kind": "value"
+    },
+    {
       "name": "collectPagedLogs",
       "kind": "value"
     },
@@ -1757,6 +1785,10 @@
       "kind": "value"
     },
     {
+      "name": "decodeErc7579Executions",
+      "kind": "value"
+    },
+    {
       "name": "decodeExtensionFields",
       "kind": "value"
     },
@@ -1797,11 +1829,19 @@
       "kind": "value"
     },
     {
+      "name": "decodeMultiSendTransactions",
+      "kind": "value"
+    },
+    {
       "name": "decodeMulticall",
       "kind": "value"
     },
     {
       "name": "decodeOrderTuple",
+      "kind": "value"
+    },
+    {
+      "name": "decodeRhinestoneOperation",
       "kind": "value"
     },
     {
@@ -1889,6 +1929,18 @@
       "kind": "value"
     },
     {
+      "name": "entryPointAbi",
+      "kind": "value"
+    },
+    {
+      "name": "envelopeFunctionName",
+      "kind": "value"
+    },
+    {
+      "name": "envelopeSingletonAt",
+      "kind": "value"
+    },
+    {
       "name": "envioToken",
       "kind": "value"
     },
@@ -1906,6 +1958,14 @@
     },
     {
       "name": "erc20MetadataAbi",
+      "kind": "value"
+    },
+    {
+      "name": "erc7579Abi",
+      "kind": "value"
+    },
+    {
+      "name": "erc7579ExecutorModuleAbi",
       "kind": "value"
     },
     {
@@ -2109,6 +2169,10 @@
       "kind": "value"
     },
     {
+      "name": "isEnvelopeSelector",
+      "kind": "value"
+    },
+    {
       "name": "isGenerationAlias",
       "kind": "value"
     },
@@ -2234,6 +2298,10 @@
     },
     {
       "name": "mulDiv",
+      "kind": "value"
+    },
+    {
+      "name": "multiSendAbi",
       "kind": "value"
     },
     {
@@ -2537,6 +2605,10 @@
       "kind": "value"
     },
     {
+      "name": "rhinestoneIntentExecutorAbi",
+      "kind": "value"
+    },
+    {
       "name": "roleHolderOf",
       "kind": "value"
     },
@@ -2570,6 +2642,14 @@
     },
     {
       "name": "runTool",
+      "kind": "value"
+    },
+    {
+      "name": "safe4337ModuleAbi",
+      "kind": "value"
+    },
+    {
+      "name": "safeAbi",
       "kind": "value"
     },
     {
@@ -2622,6 +2702,10 @@
     },
     {
       "name": "unapprovedCodeAllowed",
+      "kind": "value"
+    },
+    {
+      "name": "unwrapEnvelope",
       "kind": "value"
     },
     {
@@ -2688,6 +2772,26 @@
     },
     {
       "name": "DecodedLeg",
+      "kind": "type"
+    },
+    {
+      "name": "ENVELOPE_SINGLETONS",
+      "kind": "value"
+    },
+    {
+      "name": "EnvelopeCall",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeHop",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeScheme",
+      "kind": "type"
+    },
+    {
+      "name": "EnvelopeSingleton",
       "kind": "type"
     },
     {
@@ -2819,6 +2923,14 @@
       "kind": "value"
     },
     {
+      "name": "collectDelegatecalls",
+      "kind": "value"
+    },
+    {
+      "name": "collectEnvelopes",
+      "kind": "value"
+    },
+    {
       "name": "collectVerification",
       "kind": "value"
     },
@@ -2835,7 +2947,19 @@
       "kind": "value"
     },
     {
+      "name": "decodeErc7579Executions",
+      "kind": "value"
+    },
+    {
+      "name": "decodeMultiSendTransactions",
+      "kind": "value"
+    },
+    {
       "name": "decodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "decodeRhinestoneOperation",
       "kind": "value"
     },
     {
@@ -2848,6 +2972,26 @@
     },
     {
       "name": "encodeMulticall",
+      "kind": "value"
+    },
+    {
+      "name": "entryPointAbi",
+      "kind": "value"
+    },
+    {
+      "name": "envelopeFunctionName",
+      "kind": "value"
+    },
+    {
+      "name": "envelopeSingletonAt",
+      "kind": "value"
+    },
+    {
+      "name": "erc7579Abi",
+      "kind": "value"
+    },
+    {
+      "name": "erc7579ExecutorModuleAbi",
       "kind": "value"
     },
     {
@@ -2875,7 +3019,27 @@
       "kind": "value"
     },
     {
+      "name": "isEnvelopeSelector",
+      "kind": "value"
+    },
+    {
+      "name": "multiSendAbi",
+      "kind": "value"
+    },
+    {
       "name": "poolPreflightWarnings",
+      "kind": "value"
+    },
+    {
+      "name": "rhinestoneIntentExecutorAbi",
+      "kind": "value"
+    },
+    {
+      "name": "safe4337ModuleAbi",
+      "kind": "value"
+    },
+    {
+      "name": "safeAbi",
       "kind": "value"
     },
     {
@@ -2884,6 +3048,10 @@
     },
     {
       "name": "summarizeBundle",
+      "kind": "value"
+    },
+    {
+      "name": "unwrapEnvelope",
       "kind": "value"
     }
   ],

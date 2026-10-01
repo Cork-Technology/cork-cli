@@ -5,10 +5,21 @@
 // is called out as unreadable rather than glossed over, because the value of this summary comes
 // entirely from being trustworthy when it matters.
 import { type DecodedLeg, hasCallback } from "./decode.ts";
+import type { EnvelopeScheme } from "./envelopes.ts";
 import { U256_MAX } from "../math/fixed.ts";
 import { lopInvalidatorPlan } from "../orders.ts";
 
 const MAX_UINT = U256_MAX;
+
+const ENVELOPE_SCHEME_TEXT: Record<EnvelopeScheme, string> = {
+  "erc4337-entrypoint": "ERC-4337 bundle via the EntryPoint",
+  "safe-4337-module": "Safe ERC-4337 module execution",
+  "safe-exec-transaction": "Safe transaction",
+  "safe-multisend": "Safe MultiSend batch",
+  "erc7579-execute": "ERC-7579 account execution",
+  "erc7579-executor-module": "ERC-7579 executor-module batch",
+  "rhinestone-intent-executor": "Rhinestone intent",
+};
 
 export interface SummaryOptions {
   /**
@@ -131,6 +142,14 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
     }
     case "bundle":
       return `a nested bundle on ${who(leg.to, o)} (${leg.legs.length} leg${leg.legs.length === 1 ? "" : "s"}):`;
+    case "envelope": {
+      // The envelope is the wallet's plumbing; the signer's question is what the account DOES.
+      // Name the scheme and the account once, then the inner legs follow, indented.
+      const scheme = ENVELOPE_SCHEME_TEXT[leg.scheme];
+      const account = leg.account ? ` from account ${who(leg.account, o)}` : "";
+      const n = leg.legs.length;
+      return `${scheme} (${leg.version}) on ${who(leg.to, o)}${account}${leg.note ? ` — ${leg.note}` : ""}: ${n} call${n === 1 ? "" : "s"}${n === 0 ? " (nothing executes)" : ":"}`;
+    }
     case "unknown":
       return `UNREADABLE leg on ${who(leg.to, o)} — selector ${leg.selector}${leg.note ? `; ${leg.note}` : ""}. Do not sign until you have identified it`;
   }
@@ -153,6 +172,9 @@ function verdict(leg: DecodedLeg): string {
 /** Per-leg caveats that change what signing means, appended to the leg's own line. */
 function caveats(leg: DecodedLeg): string {
   const notes: string[] = [];
+  // A delegatecall runs the target's code INSIDE the smart account — it can change the
+  // account's storage, owners and modules, whatever the calldata's label says it does.
+  if (leg.delegatecall) notes.push("DELEGATECALL: this code runs inside the smart account's own context");
   if (leg.skipRevert) notes.push("MAY FAIL SILENTLY (skipRevert)");
   if (leg.value > 0n) notes.push(`sends ${leg.value} wei`);
   // A non-zero callbackHash lets the target call back into Bundler3 (reenter) during this leg
@@ -172,7 +194,7 @@ export function summarizeBundle(legs: DecodedLeg[], options: SummaryOptions = {}
   const walk = (list: DecodedLeg[], prefix: string) => {
     list.forEach((leg, i) => {
       out.push(`${prefix}${i + 1}. ${verdict(leg)}${describeLeg(leg, options)}${caveats(leg)}`);
-      if (leg.kind === "bundle") walk(leg.legs, `${prefix}   `);
+      if (leg.kind === "bundle" || leg.kind === "envelope") walk(leg.legs, `${prefix}   `);
     });
   };
   walk(legs, "");

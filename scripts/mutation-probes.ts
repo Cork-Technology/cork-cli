@@ -120,6 +120,7 @@ const T = {
   impairment: "packages/core/test/impairment-recipe.test.ts",
   generations: "packages/core/test/generations.test.ts",
   configRemote: "packages/core/test/config-remote.test.ts",
+  decodeEnvelopes: "packages/core/test/decode-envelopes.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
@@ -231,6 +232,65 @@ const CATALOG: Mutant[] = [
     find: "...(action.ocoGroup !== undefined ? { ocoGroup: action.ocoGroup } : {}),",
     replace: "",
     tests: [T.handlers],
+  },
+  {
+    // MultiSend packed layout: operation byte FIRST (op ‖ to ‖ value ‖ len ‖ data). Reading the
+    // operation after the address would turn every delegatecall batch into a plain call.
+    id: "envelope-multisend-operation-offset",
+    file: "packages/core/src/bundle/envelopes.ts",
+    find: "    const operation = Number.parseInt(hex.slice(i, i + 2), 16);\n    const to = `0x${hex.slice(i + 2, i + 42)}` as `0x${string}`;",
+    replace: "    const operation = 0;\n    const to = `0x${hex.slice(i + 2, i + 42)}` as `0x${string}`;",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // ERC-7579 callType 0xff is a DELEGATECALL; labeling it a call hides code that runs inside the wallet.
+    id: "envelope-7579-delegatecall-flag-dropped",
+    file: "packages/core/src/bundle/envelopes.ts",
+    find: "      return { version: \"delegatecall\", calls: [call(`0x${hex.slice(0, 40)}`, 0n, `0x${hex.slice(40)}`, true, skipRevert)] };",
+    replace: "      return { version: \"delegatecall\", calls: [call(`0x${hex.slice(0, 40)}`, 0n, `0x${hex.slice(40)}`, false, skipRevert)] };",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // ERC-7579 execType 0x01 ("try") lets a failing call be skipped — the leg must say MAY FAIL SILENTLY.
+    id: "envelope-7579-try-skiprevert-dropped",
+    file: "packages/core/src/bundle/envelopes.ts",
+    find: "    const { calls, version } = decodeErc7579Executions(callType, executionCalldata, execType === 0x01);",
+    replace: "    const { calls, version } = decodeErc7579Executions(callType, executionCalldata, false);",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // Rhinestone Operation.data = [Type][SigMode][payload]: the payload starts at byte 2, not 1.
+    id: "envelope-rhinestone-payload-offset",
+    file: "packages/core/src/bundle/envelopes.ts",
+    find: "  const payload = `0x${hex.slice(4)}` as `0x${string}`;",
+    replace: "  const payload = `0x${hex.slice(2)}` as `0x${string}`;",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // Only a BYTE-VERIFIED singleton may be trusted; EntryPoint v0.8 (code differs per chain) must not.
+    id: "envelope-singleton-trust-ignores-byteverified",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "  return { verification: s?.byteVerified ? \"trusted\" : \"unverified\" };",
+    replace: "  return { verification: s !== undefined ? \"trusted\" : \"unverified\" };",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // The verification walk must descend INTO envelopes: a look-alike adapter three wallets deep
+    // is still a mismatch, or an envelope would hide the exact substitution the decoder exists for.
+    id: "envelope-verification-walk-stops-at-envelope",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "      if (leg.kind === \"bundle\" || leg.kind === \"envelope\") walk(leg.legs);\n    }\n  };\n  walk(legs);\n  return { mismatches, unverified };",
+    replace: "      if (leg.kind === \"bundle\") walk(leg.legs);\n    }\n  };\n  walk(legs);\n  return { mismatches, unverified };",
+    tests: [T.decodeEnvelopes],
+  },
+  {
+    // A generation's REFERENCE ForSelf adapter is trusted AND labeled with its generation; losing
+    // the label turns the primary's and the previous set's adapters into the same anonymous thing.
+    id: "forself-reference-generation-label-dropped",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "  if (reference !== undefined) return { verification: \"trusted\", generation: reference.label };",
+    replace: "  if (reference !== undefined) return { verification: \"trusted\" };",
+    tests: [T.decodeEnvelopes],
   },
   {
     // R5c: a released binary reads its line's config branch, never main (the development branch).

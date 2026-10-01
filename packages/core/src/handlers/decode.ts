@@ -9,7 +9,8 @@ import { type ExtensionTarget, extensionTargets, foreignExtensionTargets } from 
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { decodeKnownLog, type RawLogLike } from "../event-decode.ts";
 import { decodeFusionOrder, NotAFusionOrder } from "../fusion.ts";
-import { collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTargets, decodeSingleCall } from "../bundle/decode.ts";
+import { collectDelegatecalls, collectEnvelopes, collectVerification, decodeBundle, type DecodedLeg, type DecodeTrustTargets, decodeSingleCall } from "../bundle/decode.ts";
+import { ENVELOPE_SINGLETONS, envelopeSingletonAt } from "../bundle/envelopes.ts";
 import { isBundlerMulticall } from "../bundle/bundler3.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
 import { resolveGenerations, resolveMarketRegistry, resolveRollover } from "../config-remote.ts";
@@ -313,12 +314,16 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   // adapter, a flat one at the flat adapter, a mode-string one at the legacy adapter) instead of
   // trial-decoding — and a genuine Cork adapter of any generation is trusted, never accused.
   const corkAdapters = generations.flatMap((g) => (g.phoenix?.corkAdapter ? [{ address: g.phoenix.corkAdapter as `0x${string}`, label: g.label }] : []));
+  // The REFERENCE ForSelf adapter of each generation (the Distribution record's forSelf block) is
+  // Cork's own deployment and may be called trusted, labeled with its generation; an integrator's
+  // adapter is not in any config and stays unverified (cork-cli-private#24 item 2, 2026-10-01).
+  const forSelfAdapters = generations.flatMap((g) => (g.forSelf?.adapter ? [{ address: g.forSelf.adapter as `0x${string}`, label: g.label }] : []));
   const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {
     // The Phoenix adapter book is PER GENERATION too: a bundle built for a pool on an older
     // generation runs at THAT generation's adapter (every pool the venue serves today), so each
     // configured generation's corkAdapter is trusted and the matched leg carries its label.
-    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, corkAdapters, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
+    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, corkAdapters, forSelfAdapters, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
     jitTrust: { adapters, generations },
     dep,
     depWarn,
@@ -330,6 +335,7 @@ const describeTarget = (leg: DecodedLeg): string => {
   switch (leg.kind) {
     case "cork": return `Cork '${leg.action}'`;
     case "forself": return `ForSelf '${leg.action}'`;
+    case "envelope": return `${leg.scheme} envelope`;
     case "leg": return leg.role === "adapter" ? `adapter '${leg.fn}'` : `ERC-20 '${leg.fn}'`;
     case "lop": return `1inch '${leg.call.fn}'`;
     case "market": return `${leg.role === "marketCreator" ? "market creator" : "market registry"} '${leg.action}'`;
@@ -369,6 +375,36 @@ function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: strin
     warnings.push({ code: "target_unverified", message: `${names.length} labeled leg(s)/target(s) could not be checked against a configured contract: ${names.join("; ")}. ${opts.unverifiedHint ?? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"}` });
   }
   return { mismatch: mismatches.length > 0 || jitMismatch.length > 0, warnings };
+}
+
+/** The envelope disclosures of a decoded tree (2026-10-01): ONE `envelope_unwrapped` info naming
+ *  every smart-account layer, outermost first, with the account it runs from — so a reader knows
+ *  the inner legs were read THROUGH wallet plumbing, and which wallet. Plus ONE
+ *  `delegatecall_in_envelope` info when any inner leg runs as a delegatecall: code inside the
+ *  wallet's own context is a different thing to sign than a call, whatever the leg's label says.
+ *  Chain-free, from the bytes. */
+function envelopeWarnings(legs: DecodedLeg[]): Array<{ code: string; message: string }> {
+  const out: Array<{ code: string; message: string }> = [];
+  const envelopes = collectEnvelopes(legs);
+  if (envelopes.length === 0) return out;
+  const layers = envelopes.map((e) => {
+    const singleton = envelopeSingletonAt(e.to);
+    const where = singleton ? `${singleton.label}${singleton.byteVerified ? "" : " (address recognized, code NOT byte-verified across chains)"}` : `${e.to} (the account's own contract)`;
+    return `${e.scheme} [${e.version}] at ${where}${e.account ? `, account ${e.account}` : ""}`;
+  });
+  out.push({ code: "envelope_unwrapped", message: `${envelopes.length} smart-account envelope layer(s) unwrapped, outermost first: ${layers.join(" → ")}. The legs inside were decoded and verified like a bare transaction's; the envelope contracts themselves are wallet infrastructure, not Cork roles` });
+  const dc = collectDelegatecalls(legs);
+  if (dc.length > 0) out.push({ code: "delegatecall_in_envelope", message: `${dc.length} inner leg(s) run as a DELEGATECALL from the smart account (${dc.map((l) => `${describeTarget(l)} at ${l.to}`).join("; ")}) — the target's code executes inside the account's own storage context and can change its owners, modules or balances regardless of what the calldata is labeled. Treat as unverified unless you audited that code` });
+  return out;
+}
+
+/** The outermost decoded call when it is an envelope whose target is the account itself (a Safe
+ *  `execTransaction`, an ERC-7579 `execute`): the tx `to` is the WALLET, and `unknown_target`
+ *  would accuse the signer's own account. */
+function outerEnvelopeIsWallet(legs: DecodedLeg[] | undefined): Extract<DecodedLeg, { kind: "envelope" }> | undefined {
+  const outer = legs?.[0];
+  if (legs?.length !== 1 || outer?.kind !== "envelope") return undefined;
+  return envelopeSingletonAt(outer.to) === undefined ? outer : undefined;
 }
 
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
@@ -587,6 +623,12 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ["marketRegistry", mr?.registry],
       ["corkMarketCreator", mr?.marketCreator],
       ["corkLimitOrderAdapter (JIT)", mr?.adapter],
+      // The reference ForSelf adapter of each generation (Cork's own deployment per the
+      // Distribution record): named with its generation, like the rollover sets below.
+      ...(trust.jitTrust.generations ?? []).flatMap((g): Array<[string, string | undefined]> => (g.forSelf?.adapter ? [[`forSelfAdapter (reference, ${g.label} generation)`, g.forSelf.adapter]] : [])),
+      // Wallet-infrastructure singletons (envelopes.ts): a tx to an EntryPoint or a MultiSend
+      // is a smart-account envelope, not an unknown target — its inner legs are verified.
+      ...ENVELOPE_SINGLETONS.map((e): [string, string | undefined] => [e.label, e.address]),
       // Every rollover generation stays NAMED — the primary set plainly, every other set with
       // its standing and label: other active sets are genuine Cork traffic the venue admits,
       // and retired contracts still hold live orders (cancel/settle txs are genuine Cork
@@ -632,7 +674,15 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
   if (legs && legs.length === 1 && legs[0]!.kind === "forself" && to !== null) {
     const idx = warnings.findIndex((w) => w.code === "unknown_target");
     if (idx >= 0) {
-      warnings[idx] = { code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract — but the calldata IS a Cork ForSelf adapter call ('${(legs[0] as { action: string }).action}'). ForSelf adapters are deployed by the INTEGRATOR, not Cork, so an unknown target is expected here: verify ${to} is your integrator's audited adapter (its CORK()/LOP() bindings must name the real protocols) before broadcasting` };
+      warnings[idx] = { code: "unknown_target", message: `\`to\` ${to} is not a known Cork deployment contract — but the calldata IS a Cork ForSelf adapter call ('${(legs[0] as { action: string }).action}'). ForSelf adapters are deployed by the INTEGRATOR, not Cork, so an unknown target is expected here: verify ${to} with cork_track verify (subject kind "forSelfAdapter" — reads its CORK()/LOP()/WHITELIST() bindings and names the generation they belong to) before broadcasting` };
+    }
+  }
+  if (legs) warnings.push(...envelopeWarnings(legs));
+  const walletEnvelope = outerEnvelopeIsWallet(legs);
+  if (walletEnvelope !== undefined && to !== null) {
+    const idx = warnings.findIndex((w) => w.code === "unknown_target");
+    if (idx >= 0) {
+      warnings[idx] = { code: "unknown_target", message: `\`to\` ${to} is not a Cork contract — it is the smart account itself (a ${walletEnvelope.scheme} envelope, ${walletEnvelope.version}), which this decoder has no authority for: confirm it is YOUR wallet. The calls the account makes are decoded below and verified against the Cork address book` };
     }
   }
 
@@ -723,7 +773,7 @@ export async function handleDecode(input: DecodeInput, ctx: HandlerContext): Pro
           ? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"
           : "Raw calldata names no target contract, so nothing here can be verified — decode the SIGNED transaction (kind \"tx\") to check the target too, or pass `to` (the address you intend to send to) to verify the claim now",
   });
-  warnings.push(...v.warnings);
+  warnings.push(...v.warnings, ...envelopeWarnings(legs));
   if (input.chainId === undefined && legs.some((l) => l.kind === "lop")) {
     warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — defaulted to 1 (mainnet). The EIP-712 orderHash on a 1inch fill/cancel leg is CHAIN-SPECIFIC; pass chainId if these bytes are for another chain (e.g. 8453)" });
   }
