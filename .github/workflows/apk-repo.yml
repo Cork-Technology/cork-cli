@@ -151,10 +151,18 @@ jobs:
       # own node24 into the container to execute the JS actions (checkout, upload-artifact),
       # and that binary dynamically links libstdc++.so.6, which minimal wolfi-base does not
       # ship (checkout died on exactly that, run 32225158751).
+      # openssl-4.0, not `openssl`: the base image is digest-pinned but Wolfi's repository
+      # rolls. On 2026-10-01 git's dependencies moved to libcrypto.so.4, and the unversioned
+      # `openssl` name resolved to a 3.x CLI whose /etc/ssl/openssl.cnf collides with
+      # openssl-4.0-libcrypto (run 36909569737: v0.6.1-rc.3 published, then this step failed).
+      # The versioned CLI links the libcrypto that is already there and owns no config file.
+      # The tripwire's three commands were run on Wolfi's own 4.0.3 binary: same SPKI PEM,
+      # and the committed public key canonicalizes to itself. When this name stops resolving,
+      # pick the CLI that matches the libcrypto git pulls in — never two majors at once.
       - name: Install the build toolchain (Wolfi signed apk repo)
         shell: sh
         run: |
-          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl yq
+          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl-4.0 yq
           # The bind-mounted workspace belongs to the HOST runner user while container steps
           # run as root, so every git command in later run steps refuses with "dubious
           # ownership" — and on run 32225918023 that SILENTLY emptied both COMMIT (the
