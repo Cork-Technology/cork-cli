@@ -94,6 +94,7 @@
             },
             "seededAtBlock": 503918966,
             "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
+            "modules": { "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990", "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f" },
             "contractsVersion": "v0.2.0",
             "wire": "0.2"
           },
@@ -238,6 +239,7 @@
             },
             "seededAtBlock": 51153216,
             "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
+            "modules": { "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990", "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f" },
             "contractsVersion": "v0.2.0",
             "wire": "0.2"
           },
