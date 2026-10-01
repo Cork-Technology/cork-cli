@@ -5,7 +5,9 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
-## [Unreleased]
+## [0.6.1-rc.2] — 2026-10-01
+
+A patch candidate of the 0.6 line, built from the cork-cli-private#24 triage and the Zyfai integration pass. It adds the filler side of a rollover (the fill, the clone deploy, the intent hooks the maker side never produced), smart-account envelope unwrapping in decode, a ForSelf adapter verifier in track, the grant list on every pool action, and the rfq-open pre-flights. Every new path is fork-proven or live-verified and mutation-checked. The covered surface grows additively (new variants, new fields, new SDK exports); nothing is removed or renamed.
 
 ### Added
 
