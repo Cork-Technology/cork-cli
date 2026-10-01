@@ -30,7 +30,7 @@ function rpc(adapter: string, views: { CORK?: string | (() => never); LOP?: stri
     throw new Error(`no stub for ${c.functionName}`);
   }, { code: noCode ? {} : { [adapter.toLowerCase()]: TOKEN_CODE } });
 }
-const verify = (adapter: `0x${string}`, resolveRpc: HandlerContext["resolveRpc"]) =>
+const verify = (adapter: `0x${string}`, resolveRpc: NonNullable<HandlerContext["resolveRpc"]>) =>
   runTool("cork_track", { mode: "verify", chainId: 8453, subject: { kind: "forSelfAdapter", adapter } }, { nowSeconds: NOW, resolveRpc });
 type Data = { verified: boolean; reference?: boolean; surface?: string; callerGate?: boolean; bindings?: Record<string, string>; generation?: { label: string }; code?: boolean };
 const codes = (env: { warnings: Array<{ code: string }> }) => env.warnings.map((w) => w.code).sort();

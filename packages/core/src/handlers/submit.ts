@@ -3,7 +3,8 @@
 import { isAddressEqual, recoverAddress } from "viem";
 import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
-import { resolveRollover } from "../config-remote.ts";
+import { resolveGenerations, resolveRollover } from "../config-remote.ts";
+import { classifyAddress, primaryOf } from "../generations.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -629,6 +630,20 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (action.expiryWindow.notBefore > action.expiryWindow.notAfter) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow is inverted: notBefore (${action.expiryWindow.notBefore}) is after notAfter (${action.expiryWindow.notAfter})`, ctx);
       }
+      // The venue's rule is STRICT (`expiry_window.not_before must be < not_after`, cork-api
+      // 400 on equality; MIRRORED_VENUE_LOGIC) — a requester asking for ONE exact expiry sends
+      // the same value twice and learned the rule from a raw venue rejection (cork-cli-private#24
+      // item 5). Refused here with the recipe instead. Equality as "exactly this expiry" is the
+      // natural request; relaxing the venue rule is raised with its owner.
+      if (action.expiryWindow.notBefore === action.expiryWindow.notAfter) {
+        return unavailable(chainId, "invalid_order_terms", `expiryWindow is EMPTY under the venue's rule: not_before must be strictly before not_after, and both are ${action.expiryWindow.notAfter}. For one exact pool expiry send notBefore = expiry − 1 (the window then admits only that expiry second); the venue rejects equality with a 400`, ctx);
+      }
+      // The recipe an inline market template names decides which GENERATION the cover is created
+      // on, and an underwriter quoting only the primary passes on a previous-generation recipe
+      // silently. Classified chain-free against the configured recipe hints; an address no
+      // generation hints at is said so (the registry's isRecipe is the on-chain authority —
+      // cork_query registry-recipes).
+      const recipeWarnings = await inlineRecipeWarnings(chainId, action.marketTemplate);
       if (BigInt(action.expiryWindow.notAfter) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow.notAfter (${action.expiryWindow.notAfter}) is not in the future (now ${nowSecs}) — no pool expiry could ever satisfy this window`, ctx);
       }
@@ -650,7 +665,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         valid_until: action.validUntil,
         signature: action.signature,
       });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }));
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }), recipeWarnings);
     }
 
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
@@ -724,4 +739,25 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
   } catch (err) {
     return venueFailed(chainId, err, ctx);
   }
+}
+
+/** rfq-open: which generation the inline template's `oracle_recipe` belongs to, chain-free from
+ *  the configured recipe hints. Info on the primary's recipe (named), info on a previous
+ *  generation's (named, with the pass it invites), `recipe_not_found` info when no generation
+ *  hints at the address — never a refusal: the registry's `isRecipe` is the authority. */
+async function inlineRecipeWarnings(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<Array<{ code: string; message: string }>> {
+  const inline = marketTemplate?.["inline"];
+  const recipe = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;
+  if (typeof recipe !== "string" || !/^0x[0-9a-fA-F]{40}$/u.test(recipe)) return [];
+  const { generations } = await resolveGenerations(chainId);
+  const hit = classifyAddress(generations, recipe).find((c) => c.role === "recipe");
+  const primary = primaryOf(generations);
+  if (hit === undefined) {
+    return [{ code: "recipe_not_found", message: `the inline template's oracle_recipe ${recipe} matches no configured generation's recipe hints on chainId ${chainId} — an underwriter can only quote a recipe approved on its registry (cork_query resource:"registry-recipes" lists them per generation); relayed as asked` }];
+  }
+  const which = hit.recipeName ? `${hit.recipeName} recipe` : "recipe";
+  if (primary !== undefined && hit.label !== primary.label) {
+    return [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the ${hit.label} generation (${hit.status}), not the primary ${primary.label}: the cover is created on ${hit.label}, which only an adapter bound to that generation can fill or exercise, and an underwriter quoting the primary alone passes on this RFQ silently. Pass the primary's recipe from cork_query resource:"registry-recipes" if the adapter you fill through is bound to the primary` }];
+  }
+  return [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the primary ${hit.label} generation: the cover is created there, and the adapter you fill through must be bound to that generation's pool manager` }];
 }

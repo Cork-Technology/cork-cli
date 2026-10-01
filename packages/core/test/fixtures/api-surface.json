@@ -2017,6 +2017,10 @@
       "kind": "value"
     },
     {
+      "name": "fundingApprovals",
+      "kind": "value"
+    },
+    {
       "name": "fundingLegs",
       "kind": "value"
     },
@@ -2992,6 +2996,10 @@
     },
     {
       "name": "erc7579ExecutorModuleAbi",
+      "kind": "value"
+    },
+    {
+      "name": "fundingApprovals",
       "kind": "value"
     },
     {

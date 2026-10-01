@@ -7,7 +7,7 @@ import { zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, parseAbi } from "viem";
 import { normalizeRfqRow } from "../src/datasources/venue.ts";
-import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
+import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, BUNDLED_DEFAULTS, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, generationsOf, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, primaryOf, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { ORDERS_TOPIC_REFERENCE, TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
 
@@ -626,6 +626,43 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(r2.state).toBe("unavailable");
     expect(r2.warnings[0]?.message).toContain("validUntil");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("rfq-open: an EQUAL window is refused locally with the venue's strict rule and the one-expiry recipe (cork-cli-private#24 item 5)", async () => {
+    const seen: Seen[] = [];
+    const equal = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
+    (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
+    (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notAfter = 1795604800;
+    const r = await runTool("cork_submit", equal, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
+    expect(r.state).toBe("unavailable");
+    expect(r.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(r.warnings[0]?.message).toMatch(/strictly before not_after.*notBefore = expiry − 1/u);
+    expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
+  });
+
+  it("rfq-open: the inline template's oracle_recipe is classified by generation — the primary's is named, a previous generation's warns about the pass it invites, an unknown one is said so; all three RELAY", async () => {
+    const gens = generationsOf(BUNDLED_DEFAULTS, 42161);
+    const primaryLiq = primaryOf(gens)!.marketRegistry!.recipes!["liquidity"]!;
+    const previousLiq = gens.find((g) => g.label === "phoenix/v0.3-rc.1")!.marketRegistry!.recipes!["liquidity"]!;
+    const open = async (recipe: string) => {
+      const seen: Seen[] = [];
+      const input = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
+      input.action.marketTemplate = { inline: { oracle_recipe: recipe, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: "1000000000000000000", expiry: "1795604800", swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } };
+      const env = await runTool("cork_submit", input, ctxWith([{ match: "/rfqs/v1", status: 201, body: { rfq_id: "rfq_r", state: "open" } }], seen));
+      return { env, posted: seen.filter((s) => s.method === "POST").length };
+    };
+    const p = await open(primaryLiq);
+    expect(p.env.state).toBe("ok");
+    expect(p.posted).toBe(1);
+    expect(p.env.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice"]);
+    expect(p.env.warnings[0]!.message).toMatch(/liquidity recipe of the primary phoenix\/v0\.4-rc\.1 generation/u);
+    const q = await open(previousLiq);
+    expect(q.env.state).toBe("ok");
+    expect(q.env.warnings[0]!.message).toMatch(/liquidity recipe of the phoenix\/v0\.3-rc\.1 generation \(active\), not the primary phoenix\/v0\.4-rc\.1.*passes on this RFQ silently/u);
+    const u = await open("0x00000000000000000000000000000000000000ee");
+    expect(u.env.state).toBe("ok");
+    expect(u.env.warnings.map((w) => w.code)).toEqual(["recipe_not_found"]);
+    expect(u.posted).toBe(1);
   });
 });
 

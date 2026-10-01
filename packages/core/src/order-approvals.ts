@@ -39,10 +39,13 @@ export interface UnsignedApprovalTx {
 }
 
 export interface ApprovalRequirement {
-  role: "maker" | "taker";
+  /** maker/taker on the LOP lifecycle; initiator (the bundle's funding puller) / owner (the
+   *  share holder a burn-side pool action burns from) on the Phoenix pool actions. */
+  role: "maker" | "taker" | "initiator" | "owner";
   /** When the grant must exist. Maker allowances belong BEFORE the order rests — a resting
-   *  order without them looks fillable but reverts; permits are signed WITH the order. */
-  stage: "before-listing" | "before-fill" | "with-order-signature";
+   *  order without them looks fillable but reverts; permits are signed WITH the order; a pool
+   *  bundle's pulls and burns need theirs before the bundle is broadcast. */
+  stage: "before-listing" | "before-fill" | "with-order-signature" | "before-bundle";
   /** The account that must grant (and, for a tx, send it — allowances key on msg.sender). */
   holder: `0x${string}`;
   token: `0x${string}`;
@@ -50,7 +53,7 @@ export interface ApprovalRequirement {
   /** The party being authorized to pull. For permit2-approve this is the Permit2 INTERNAL
    *  spender (the LOP); the tx itself goes to the Permit2 contract (unsignedTx.to). */
   spender: `0x${string}`;
-  spenderRole: "1inch LOP" | "Permit2" | "Cork JIT adapter" | "ForSelf adapter";
+  spenderRole: "1inch LOP" | "Permit2" | "Cork JIT adapter" | "ForSelf adapter" | "Cork adapter";
   mechanism: "erc20-approve" | "permit2-approve" | "erc2612-permit";
   /** Required minimum in the token's base units; null = size via simulation (JIT mint funding). */
   amount: string | null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData, toFunctionSelector } from "viem";
-import { bundlerSweepAbi, canAutoFund, fundingLegs, fundingPlan, generalAdapterAbi, isBurnAction, type PoolTokens } from "@cork/core";
+import { bundlerSweepAbi, canAutoFund, fundingApprovals, fundingLegs, fundingPlan, generalAdapterAbi, isBurnAction, PERMIT2_ADDRESS, type PoolTokens } from "@cork/core";
 import type { PhoenixAction } from "@cork/schemas";
 
 const ADP = "0xccccccccccccbad6f772a511b337d9ccc9570407" as const;
@@ -193,5 +193,29 @@ describe("fundingPlan: sweep-back legs", () => {
     const plan = fundingPlan(action, tokens, ADP, "erc20-approve", ADP);
     expect(plan.refusal).toBeUndefined();
     expect(plan.legs).toHaveLength(1);
+  });
+});
+
+describe("fundingApprovals: the grants a bundle needs, from the same tables as its legs", () => {
+  const deposit: PhoenixAction = { type: "deposit", poolId: POOL, collateralAssetsIn: "100", receiver: RCV, minCptAndCstSharesOut: "1" };
+  it("a value-in action: initiator → adapter, exact amount, erc20-approve; permit2 mode adds Permit2's two layers in order", () => {
+    const one = fundingApprovals(deposit, tokens, ADP, "erc20-approve", INIT);
+    expect(one.map((e) => [e.role, e.holder, e.token, e.spender, e.spenderRole, e.mechanism, e.amount, e.kind])).toEqual([["initiator", INIT, tokens.collateral, ADP, "Cork adapter", "erc20-approve", "100", "exact"]]);
+    const two = fundingApprovals(deposit, tokens, ADP, "permit2", INIT);
+    expect(two.map((e) => [e.spender, e.spenderRole, e.mechanism, e.unsignedTx?.to])).toEqual([
+      [PERMIT2_ADDRESS, "Permit2", "erc20-approve", tokens.collateral],
+      [ADP, "Cork adapter", "permit2-approve", PERMIT2_ADDRESS],
+    ]);
+  });
+  it("a burn from a foreign owner: the OWNER → adapter, never the pool manager, whatever the funding mode", () => {
+    const redeem: PhoenixAction = { type: "redeem", poolId: POOL, cptSharesIn: "9", owner: OTHER, receiver: RCV, minReferenceAssetsOut: "1", minCollateralAssetsOut: "1" };
+    for (const mode of ["erc20-approve", "permit2"] as const) {
+      const a = fundingApprovals(redeem, tokens, ADP, mode, INIT);
+      expect(a.map((e) => [e.role, e.holder, e.token, e.spender, e.mechanism, e.amount, e.kind])).toEqual([["owner", OTHER, tokens.cpt, ADP, "erc20-approve", "9", "exact"]]);
+    }
+  });
+  it("a burn from the adapter itself is the initiator's pull; a capped two-share burn yields one grant per token", () => {
+    const ud: PhoenixAction = { type: "unwind-deposit", poolId: POOL, collateralAssetsOut: "1", owner: ADP, receiver: RCV, maxCptAndCstSharesIn: "50" };
+    expect(fundingApprovals(ud, tokens, ADP, "erc20-approve", INIT).map((e) => [e.role, e.token, e.amount, e.kind])).toEqual([["initiator", tokens.cpt, "50", "cap"], ["initiator", tokens.cst, "50", "cap"]]);
   });
 });

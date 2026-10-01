@@ -122,6 +122,7 @@ const T = {
   configRemote: "packages/core/test/config-remote.test.ts",
   decodeEnvelopes: "packages/core/test/decode-envelopes.test.ts",
   trackForSelfAdapter: "packages/core/test/track-forself-adapter.test.ts",
+  phoenixApprovals: "packages/core/test/phoenix-approvals.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
@@ -319,6 +320,40 @@ const CATALOG: Mutant[] = [
     find: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\" && c.label === gen.label);",
     replace: "  const reference = classifyAddress(generations, adapter).some((c) => c.role === \"forSelfAdapter\");",
     tests: [T.trackForSelfAdapter],
+  },
+  {
+    // An owner-side burn allowance must name the CORK ADAPTER (the pool burns with the adapter as
+    // caller); naming the initiator instead loses the owner's grant — the 0.6.0 hint defect, now
+    // in the approvals list.
+    id: "approvals-owner-burn-holder-not-owner",
+    file: "packages/core/src/bundle/funding.ts",
+    find: "    if (owner && owner.toLowerCase() !== adapter.toLowerCase()) return pulled(burnReqs, owner, \"owner\");",
+    replace: "    if (owner && owner.toLowerCase() !== adapter.toLowerCase()) return pulled(burnReqs, account, \"initiator\");",
+    tests: [T.funding, T.phoenixApprovals],
+  },
+  {
+    // Permit2 needs BOTH layers; dropping the internal allowance leaves a bundle that reverts.
+    id: "approvals-permit2-second-layer-dropped",
+    file: "packages/core/src/bundle/funding.ts",
+    find: "          unsignedTx: permit2ApproveTx(token, adapter, amount > UINT160_MAX ? UINT160_MAX : amount, PERMIT2_EXPIRATION_NEVER),\n        });",
+    replace: "          unsignedTx: permit2ApproveTx(token, adapter, amount > UINT160_MAX ? UINT160_MAX : amount, PERMIT2_EXPIRATION_NEVER),\n        });\n        out.pop();",
+    tests: [T.funding, T.phoenixApprovals],
+  },
+  {
+    // The venue's window rule is STRICT: equality must be refused locally, or the requester meets a raw 400.
+    id: "rfq-open-equal-window-relayed",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      if (action.expiryWindow.notBefore === action.expiryWindow.notAfter) {",
+    replace: "      if (false) {",
+    tests: [T.venue],
+  },
+  {
+    // A previous-generation recipe must be told apart from the primary's: that is the pass Zyfai met.
+    id: "rfq-open-recipe-generation-collapsed",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "  if (primary !== undefined && hit.label !== primary.label) {",
+    replace: "  if (false) {",
+    tests: [T.venue],
   },
   {
     // R5c: a released binary reads its line's config branch, never main (the development branch).

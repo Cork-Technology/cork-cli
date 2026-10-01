@@ -8,7 +8,9 @@ import { type CorkDeployment } from "../config.ts";
 import { encodeMulticall } from "../bundle/bundler3.ts";
 import { decodeBundle } from "../bundle/decode.ts";
 import { summarizeBundle } from "../bundle/summary.ts";
-import { canAutoFund, fundingPlan } from "../bundle/funding.ts";
+import { canAutoFund, fundingApprovals, fundingPlan } from "../bundle/funding.ts";
+import { annotateApprovalStatus, approvalMissingWarning } from "../order-approvals.ts";
+import { UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { POST_EXPIRY_ACTIONS, poolPreflightWarnings } from "../bundle/preflight.ts";
 import { approvedImplementationGuard, PHOENIX_IMPLEMENTATION_ROLES } from "../implementations.ts";
 import { resolvePoolTokens } from "../chain/reads.ts";
@@ -235,6 +237,11 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   const funding = plan.legs;
   const sweepBack = plan.sweepLegs;
   if (plan.note) warnings.push({ code: "owner_managed_funding", message: plan.note });
+  // The grants this bundle needs (the initiator's pulls, an owner's burn allowance), each
+  // annotated with the live allowance — the client is in hand, so this is never skipped.
+  const approvals = await annotateApprovalStatus(resolved.client, { entries: fundingApprovals(input.action, tokens, corkAdapter, mode, input.account), nowSeconds: nowSecs, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+  const approvalWarn = approvalMissingWarning(approvals, "before broadcasting this bundle (simulate it first — cork_track simulate)");
+  if (approvalWarn) warnings.push(approvalWarn);
   if (sweepBack.length) {
     warnings.push({
       code: "sweep_back",
@@ -253,7 +260,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
   );
   return envelope({
     state: "ok",
-    data: { ...generationData(gen), bundler3, corkAdapter, deadline, action: ACTION_MAP[poolAction.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
+    data: { ...generationData(gen), bundler3, corkAdapter, deadline, action: ACTION_MAP[poolAction.type], fundingMode: mode, fundingLegs: funding.length, sweepBackLegs: sweepBack.length, approvals, scales: { approvalsAmount: "approvals[].amount is base units of that entry's own token", unitsTopic: UNITS_TOPIC_REFERENCE }, summary, bundle, multicall, execution: executionEthTransaction(), clientRequestId: input.clientRequestId },
     chainId: input.chainId,
     source: "chain",
     warnings: [...rpcWarn(resolved), ...warnings],

@@ -11,6 +11,7 @@ import { encodeFunctionData, parseAbi, zeroAddress } from "viem";
 import { U256_MAX } from "../math/fixed.ts";
 import { call, type Call } from "./bundler3.ts";
 import type { PhoenixAction } from "@cork/schemas";
+import { type ApprovalRequirement, erc20ApproveTx, PERMIT2_ADDRESS, PERMIT2_EXPIRATION_NEVER, permit2ApproveTx } from "../order-approvals.ts";
 
 export type FundingMode = "permit2" | "erc20-approve";
 export type TokenRole = "collateral" | "reference" | "cst" | "cpt";
@@ -217,4 +218,81 @@ export function fundingPlan(
  *  is only meaningful with its sweep target. */
 export function fundingLegs(action: PhoenixAction, tokens: PoolTokens, adapter: `0x${string}`, mode: FundingMode, sweepTo: `0x${string}`): Call[] {
   return fundingPlan(action, tokens, adapter, mode, sweepTo).legs;
+}
+
+const UINT160_MAX = (1n << 160n) - 1n;
+
+/**
+ * The token grants a pool bundle needs BEFORE it is broadcast, derived from the same tables the
+ * funding legs come from (2026-10-01, cork-cli-private#24 item 3): every pulled input is an
+ * allowance from the INITIATOR to the Cork adapter — a plain ERC-20 allowance in erc20-approve
+ * mode, the two Permit2 layers in permit2 mode (the ERC-20 allowance to the Permit2 contract,
+ * plus Permit2's internal (initiator, token, spender = adapter) allowance the adapter's
+ * permit2TransferFrom consumes) — and a burn from an `owner` that is not the adapter is an
+ * ERC-20 allowance from THAT OWNER to the adapter: the pool burns the shares with the adapter as
+ * the caller, so an allowance to the pool manager is never spent (the 0.6.1 hint fix). Same
+ * shape as the order-lifecycle grants, so a caller reads one list on every prepare; the handler
+ * annotates each entry with the live allowance when a client exists.
+ */
+export function fundingApprovals(
+  action: PhoenixAction,
+  tokens: PoolTokens,
+  adapter: `0x${string}`,
+  mode: FundingMode,
+  account: `0x${string}`,
+): ApprovalRequirement[] {
+  const roleName: Record<TokenRole, string> = { collateral: "collateral", reference: "reference", cst: "cST", cpt: "cPT" };
+  const pulled = (reqs: FundReq[], holder: `0x${string}`, role: "initiator" | "owner"): ApprovalRequirement[] => {
+    const out: ApprovalRequirement[] = [];
+    const seen = new Set<string>();
+    for (const req of reqs) {
+      const raw = actionField(action, req.field);
+      if (raw === undefined) continue;
+      const token = tokenFor(req.role, tokens);
+      // One grant per token: unwind-deposit/unwind-mint pull cPT and cST under the same field.
+      if (seen.has(token.toLowerCase())) continue;
+      seen.add(token.toLowerCase());
+      const amount = BigInt(raw);
+      const kind = isCapped(req) ? "cap" : "exact";
+      const capNote = kind === "cap" ? " (a slippage CAP: the pool consumes the true amount and the bundle sweeps the remainder back)" : "";
+      if (role === "owner") {
+        out.push({
+          role, stage: "before-bundle", holder, token, tokenRole: roleName[req.role], spender: adapter, spenderRole: "Cork adapter",
+          mechanism: "erc20-approve", amount: amount.toString(), kind, wallets: "eoa+contract",
+          note: `the pool burns ${roleName[req.role]} from owner ${holder} with the ADAPTER as the caller, so the owner's allowance must name the cork adapter — an allowance to the pool manager is never spent${capNote}`,
+          unsignedTx: erc20ApproveTx(token, adapter, amount),
+        });
+      } else if (mode === "permit2") {
+        out.push({
+          role, stage: "before-bundle", holder, token, tokenRole: roleName[req.role], spender: PERMIT2_ADDRESS, spenderRole: "Permit2",
+          mechanism: "erc20-approve", amount: amount.toString(), kind, wallets: "eoa+contract",
+          note: `Permit2 layer 1 of 2: the ERC-20 allowance that lets the Permit2 contract move ${roleName[req.role]}${capNote}`,
+          unsignedTx: erc20ApproveTx(token, PERMIT2_ADDRESS, amount),
+        });
+        out.push({
+          role, stage: "before-bundle", holder, token, tokenRole: roleName[req.role], spender: adapter, spenderRole: "Cork adapter",
+          mechanism: "permit2-approve", amount: amount.toString(), kind, wallets: "eoa+contract",
+          note: `Permit2 layer 2 of 2: the internal allowance (initiator, ${roleName[req.role]}, spender = the cork adapter) the bundle's permit2TransferFrom leg consumes; amount capped at uint160, expiration must be LIVE${capNote}`,
+          unsignedTx: permit2ApproveTx(token, adapter, amount > UINT160_MAX ? UINT160_MAX : amount, PERMIT2_EXPIRATION_NEVER),
+        });
+      } else {
+        out.push({
+          role, stage: "before-bundle", holder, token, tokenRole: roleName[req.role], spender: adapter, spenderRole: "Cork adapter",
+          mechanism: "erc20-approve", amount: amount.toString(), kind, wallets: "eoa+contract",
+          note: `the bundle's erc20TransferFrom leg pulls ${roleName[req.role]} from the initiator into the cork adapter against this allowance${capNote}`,
+          unsignedTx: erc20ApproveTx(token, adapter, amount),
+        });
+      }
+    }
+    return out;
+  };
+  const valueReqs = FUNDING_TABLE[action.type];
+  if (valueReqs) return pulled(valueReqs, account, "initiator");
+  const burnReqs = BURN_TABLE[action.type];
+  if (burnReqs) {
+    const owner = "owner" in action ? action.owner : undefined;
+    if (owner && owner.toLowerCase() !== adapter.toLowerCase()) return pulled(burnReqs, owner, "owner");
+    return pulled(burnReqs, account, "initiator");
+  }
+  return [];
 }
