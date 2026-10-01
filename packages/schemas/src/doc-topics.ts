@@ -696,17 +696,27 @@ Every cover but fixed-rate reads the rate oracle, and a NAV oracle reads the vau
 share price. So "a loss" in the table means a loss the share price reports. Some vaults keep
 losses out of it. MetaMorpho v1.1 adds realized bad debt to a \`lostAssets\` counter and
 reports total assets as real assets plus that counter, so its share price never falls on bad
-debt. On Base (2026-10-01) two registered references do this: YCSUSDC (lostAssets 131.38 USDC,
-0.019% of the vault) and sparkUSDC (0).
+debt. This is accrual accounting kept apart from cash accounting: the vault records the loss
+and does not charge it to its shareholders.
 
-On such a vault the pool's rate does not move on that loss, in a liquidity pool and in an
+The counter is not the hole. It never decreases. Anyone can cover a loss by supplying assets
+on behalf of \`address(1)\`: those shares can never be redeemed, so their backing belongs to
+every other holder. The open shortfall is the counter less the value of those shares, floored
+at zero. On Base (2026-10-01) two registered references use this accounting. YCSUSDC records
+131.38 USDC lost; its owner covered that the next day, the shares of \`address(1)\` are
+worth 140.55 USDC, and the open shortfall is 0. sparkUSDC records 0.
+
+While a shortfall is open, the pool's rate does not move on it, in a liquidity pool and in an
 impairment pool alike. The holder can still swap at the reported price while the pool has
 collateral. The cPT side receives shares backed by less than that price, so the UNDERWRITER
-carries the hidden shortfall, and no rate window prices it. Only a fixed rate does not read
-the feed. \`rfq-open\` and \`answer-rfq\` read \`lostAssets()\` when an RPC resolves and
-warn \`reference_loss_unreported\` to the side reading the result. A vault that does not
-expose that view is not thereby proven to report every loss: each vault family books losses
-its own way.
+carries the open shortfall, and no rate window prices it. In the vault itself an open
+shortfall falls on the last holders to redeem: the early ones leave at the reported price. So
+it shows first as a risk of a run (duration risk) and then as a loss (credit risk). Only a
+fixed rate does not read the feed. \`rfq-open\` and \`answer-rfq\` read \`lostAssets()\`
+and the shares of \`address(1)\` when an RPC resolves, and warn
+\`reference_loss_unreported\` to the side reading the result: the message says if a
+shortfall is open, covered, or absent. A vault that does not expose that view is not thereby
+proven to report every loss: each vault family books losses its own way.
 
 ## Ask for impairment (credit-risk) cover (\`cork_submit rfq-open\`)
 

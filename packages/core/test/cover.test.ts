@@ -170,26 +170,50 @@ describe("a reference whose share price does not report its losses (MetaMorpho v
   const REF = "0xE74c499fA461AF1844fCa84204490877787cED56" as const; // YCSUSDC on Base
   const client = (answers: Record<string, bigint | Error>) => ({ readContract: async (a: { functionName: string }) => { const v = answers[a.functionName]; if (v === undefined || v instanceof Error) throw v ?? new Error("execution reverted"); return v; } });
 
-  it("reads lostAssets and totalAssets; a vault without the view, or a failed read, is `undefined` — nothing known, nothing claimed", async () => {
-    expect(await readUnreportedLoss(client({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n }), REF)).toEqual({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n });
+  // YCSUSDC read on Base 2026-10-01: the counter, the reported total, and the value of the shares
+  // the vault owner supplied to address(1) the day after the loss.
+  const YCS = { lostAssets: 131_382_052n, totalAssets: 701_852_210_909n, balanceOf: 130_677_114_637_008_347_797n, convertToAssets: 140_548_086n };
+
+  it("reads the counter AND the cover held by address(1): the open shortfall is their difference, floored at zero; a vault without the view is `undefined` — nothing known, nothing claimed", async () => {
+    // The counter never decreases; the loss it records was covered, so nothing is open.
+    expect(await readUnreportedLoss(client(YCS), REF)).toEqual({ lostAssets: 131_382_052n, totalAssets: 701_852_210_909n, coveredAssets: 140_548_086n, openShortfall: 0n });
+    // A cover smaller than the counter leaves the difference open.
+    expect(await readUnreportedLoss(client({ ...YCS, convertToAssets: 31_382_052n }), REF)).toMatchObject({ coveredAssets: 31_382_052n, openShortfall: 100_000_000n });
+    // Nobody supplied to address(1): the whole counter is open, and convertToAssets is not asked.
+    expect(await readUnreportedLoss(client({ lostAssets: 131_382_052n, totalAssets: 701_852_210_909n, balanceOf: 0n }), REF)).toMatchObject({ coveredAssets: 0n, openShortfall: 131_382_052n });
+    // The cover could not be read: the conservative reading, LABELED by coveredAssets null.
+    expect(await readUnreportedLoss(client({ lostAssets: 131_382_052n, totalAssets: 701_852_210_909n }), REF)).toEqual({ lostAssets: 131_382_052n, totalAssets: 701_852_210_909n, coveredAssets: null, openShortfall: 131_382_052n });
     expect(await readUnreportedLoss(client({ totalAssets: 5n }), REF)).toBeUndefined();
     expect(await readUnreportedLoss(client({ lostAssets: 0n }), REF)).toBeUndefined();
     // A vault that HAS the counter at zero still keeps future bad debt out of its price.
-    expect(await readUnreportedLoss(client({ lostAssets: 0n, totalAssets: 329_960_189_000_000n }), REF)).toEqual({ lostAssets: 0n, totalAssets: 329_960_189_000_000n });
+    expect(await readUnreportedLoss(client({ lostAssets: 0n, totalAssets: 329_960_189_000_000n, balanceOf: 965_394_656_240n, convertToAssets: 1n }), REF)).toEqual({ lostAssets: 0n, totalAssets: 329_960_189_000_000n, coveredAssets: 1n, openShortfall: 0n });
   });
 
-  it("the share is exact integer math (1e8 = 100%), and each side reads its own consequence", () => {
-    const l = { lostAssets: 131_382_052n, totalAssets: 701_674_000_000n };
-    expect(unreportedLossShare(l)).toBe(18_724n); // 0.018724%
-    expect(unreportedLossShare({ lostAssets: 1n, totalAssets: 0n })).toBe(0n);
-    expect(unreportedLossShare({ lostAssets: 5n, totalAssets: 10n })).toBe(50_000_000n);
-    const req = unreportedLossWarning(REF, l, "requester");
+  it("the share is exact integer math over the OPEN shortfall (1e8 = 100%), and each side reads its own consequence in each of the three states", () => {
+    const open = { lostAssets: 131_382_052n, totalAssets: 701_674_000_000n, coveredAssets: 0n, openShortfall: 131_382_052n };
+    expect(unreportedLossShare(open)).toBe(18_724n); // 0.018724%
+    expect(unreportedLossShare({ openShortfall: 1n, totalAssets: 0n })).toBe(0n);
+    expect(unreportedLossShare({ openShortfall: 5n, totalAssets: 10n })).toBe(50_000_000n);
+    const req = unreportedLossWarning(REF, open, "requester");
     expect(req.code).toBe("reference_loss_unreported");
-    expect(req.message).toMatch(/\(0\.018724%/u);
-    expect(req.message).toMatch(/you can still swap at the reported price.*the underwriter carries the hidden shortfall/u);
-    const uw = unreportedLossWarning(REF, l, "underwriter");
-    expect(uw.message).toMatch(/You carry the hidden shortfall/u);
+    expect(req.message).toMatch(/cover 0 of it, and 131382052 of 701674000000 reported total assets is OPEN shortfall \(0\.018724%/u);
+    expect(req.message).toMatch(/you can still swap at the reported price.*the underwriter carries an open shortfall/u);
+    const uw = unreportedLossWarning(REF, open, "underwriter");
+    expect(uw.message).toMatch(/You carry an open shortfall/u);
     expect(uw.message).not.toMatch(/you can still swap/u);
+    // Covered: the counter is named as a counter, and no shortfall is claimed.
+    const covered = unreportedLossWarning(REF, { lostAssets: 131_382_052n, totalAssets: 701_852_210_909n, coveredAssets: 140_548_086n, openShortfall: 0n }, "underwriter");
+    expect(covered.message).toMatch(/counter reads 131382052 \(the counter never decreases\) and the shares held by address\(1\) are worth 140548086, so that loss is COVERED: no shortfall is open today/u);
+    expect(covered.message).not.toMatch(/is OPEN shortfall|treated as OPEN/u);
+    expect(covered.message).toMatch(/You would carry a future uncovered loss/u);
+    expect(covered.message).not.toMatch(/You carry an open shortfall/u);
+    // A zero counter records no loss; only the accounting is disclosed.
+    const none = unreportedLossWarning(REF, { lostAssets: 0n, totalAssets: 329_960_189_000_000n, coveredAssets: 1n, openShortfall: 0n }, "requester");
+    expect(none.message).toMatch(/counter reads 0: no loss is recorded today/u);
+    expect(none.message).not.toMatch(/COVERED/u);
+    // Cover unread: said, not guessed.
+    const unread = unreportedLossWarning(REF, { lostAssets: 131_382_052n, totalAssets: 701_674_000_000n, coveredAssets: null, openShortfall: 131_382_052n }, "requester");
+    expect(unread.message).toMatch(/could not be read, so the whole counter is treated as OPEN \(0\.018724%\)/u);
   });
 
   it("rfq-open reads it when an RPC resolves: data.cover.referenceLoss + the requester's warning; silent without an RPC or without the view", async () => {
@@ -197,9 +221,12 @@ describe("a reference whose share price does not report its losses (MetaMorpho v
     const run = (resolveRpc: NonNullable<HandlerContext["resolveRpc"]>) =>
       runTool("cork_submit", JSON.parse(JSON.stringify(example.input)), { nowSeconds: NOW, resolveRpc, venueFetch: async () => new Response(JSON.stringify({ rfq_id: "rfq_loss", state: "open" }), { status: 201 }) });
     const rpc = (answers: Record<string, bigint>) => (async () => ({ client: client(answers), source: "explicit", host: "stub" })) as unknown as NonNullable<HandlerContext["resolveRpc"]>;
-    const hit = await run(rpc({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n }));
+    const hit = await run(rpc(YCS));
     expect(hit.state).toBe("ok");
-    expect((hit.data as { cover: { referenceLoss: unknown } }).cover.referenceLoss).toMatchObject({ reportedInSharePrice: false, lostAssets: "131382052", totalAssets: "701674000000" });
+    expect((hit.data as { cover: { referenceLoss: unknown } }).cover.referenceLoss).toMatchObject({ reportedInSharePrice: false, lostAssets: "131382052", totalAssets: "701852210909", coveredAssets: "140548086", openShortfall: "0" });
+    expect(hit.warnings.find((w) => w.code === "reference_loss_unreported")!.message).toMatch(/no shortfall is open today/u);
+    const unread = await run(rpc({ lostAssets: 131_382_052n, totalAssets: 701_674_000_000n }));
+    expect((unread.data as { cover: { referenceLoss: unknown } }).cover.referenceLoss).toMatchObject({ coveredAssets: null, openShortfall: "131382052" });
     expect(hit.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice", "reference_loss_unreported"]);
     const clean = await run(rpc({ totalAssets: 9n }));
     expect((clean.data as { cover: { referenceLoss?: unknown } }).cover.referenceLoss).toBeUndefined();
@@ -272,7 +299,9 @@ describe("the cover doc topic", () => {
     expect(t.body).toMatch(/\*\*Liquidity \(duration-risk\) cover\*\*/u);
     expect(t.body).toMatch(/\*\*Impairment \(credit-risk\) cover\*\*/u);
     expect(t.body).toMatch(/## A loss the share price does not report/u);
-    expect(t.body).toMatch(/UNDERWRITER\s+carries the hidden shortfall/u);
+    expect(t.body).toMatch(/UNDERWRITER\s+carries the open shortfall/u);
+    expect(t.body).toMatch(/The counter is not the hole/u);
+    expect(t.body).toMatch(/the open shortfall is 0/u);
     expect(t.body).toMatch(/\*\*0\.000 USDC\*\*/u);
     expect(t.body).toMatch(/\*\*9\.827 USDC\*\*/u);
     expect(t.body).toMatch(/cover_mode_mismatch/u);

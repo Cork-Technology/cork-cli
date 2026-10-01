@@ -663,7 +663,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         const rpc = await getRpc(ctx, chainId);
         const loss = rpc ? await readUnreportedLoss(rpc.client, action.referenceAsset) : undefined;
         if (loss !== undefined) {
-          cover.referenceLoss = { reportedInSharePrice: false, lostAssets: loss.lostAssets.toString(), totalAssets: loss.totalAssets.toString(), note: "lostAssets and totalAssets are base units of the vault's own asset; the rate oracle reads the reported price" };
+          cover.referenceLoss = { reportedInSharePrice: false, lostAssets: loss.lostAssets.toString(), totalAssets: loss.totalAssets.toString(), coveredAssets: loss.coveredAssets === null ? null : loss.coveredAssets.toString(), openShortfall: loss.openShortfall.toString(), note: "base units of the vault's own asset. lostAssets is a counter that never decreases; coveredAssets is the value of the shares held by address(1) (null = not read); openShortfall = max(0, lostAssets − coveredAssets) is what the share price hides today" };
           lossWarnings.push(unreportedLossWarning(action.referenceAsset, loss, "requester"));
         }
       } catch {

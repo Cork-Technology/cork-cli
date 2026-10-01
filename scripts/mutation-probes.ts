@@ -3253,8 +3253,43 @@ const CATALOG: Mutant[] = [
     // of the vault is unreported loss.
     id: "nav-loss-share-base",
     file: "packages/core/src/chain/nav-loss.ts",
-    find: "(l.lostAssets * 100_000_000n) / l.totalAssets;",
-    replace: "(l.lostAssets * 100_000_000n) / (l.totalAssets - l.lostAssets + 1n);",
+    find: "(l.openShortfall * 100_000_000n) / l.totalAssets;",
+    replace: "(l.openShortfall * 100_000_000n) / (l.totalAssets - l.openShortfall + 1n);",
+    tests: [T.cover],
+  },
+  {
+    // The cover held by address(1) ignored: a loss the curator covered is reported as an open
+    // shortfall (the 2026-10-01 YCSUSDC misreading — the counter never decreases).
+    id: "nav-loss-cover-ignored",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "const openShortfall = coveredAssets === null ? lost : lost > coveredAssets ? lost - coveredAssets : 0n;",
+    replace: "const openShortfall = lost;",
+    tests: [T.cover],
+  },
+  {
+    // The floor dropped: a cover larger than the counter underflows into a negative shortfall.
+    id: "nav-loss-open-floor-dropped",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "const openShortfall = coveredAssets === null ? lost : lost > coveredAssets ? lost - coveredAssets : 0n;",
+    replace: "const openShortfall = coveredAssets === null ? lost : lost - coveredAssets;",
+    tests: [T.cover],
+  },
+  {
+    // An unread cover passed off as "nothing covered": the label that says the reading is
+    // conservative is lost.
+    id: "nav-loss-unread-cover-as-zero",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    let coveredAssets: bigint | null = null;",
+    replace: "    let coveredAssets: bigint | null = 0n;",
+    tests: [T.cover],
+  },
+  {
+    // The covered state worded as an open one: the underwriter is told to price a hole that
+    // does not exist.
+    id: "nav-loss-covered-state-dropped",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "    : l.openShortfall === 0n\n      ? `its",
+    replace: "    : l.openShortfall < 0n\n      ? `its",
     tests: [T.cover],
   },
   {
@@ -3279,6 +3314,15 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/chain/nav-loss.ts",
     find: 'const consequence = side === "underwriter"',
     replace: 'const consequence = side !== "underwriter"',
+    tests: [T.cover],
+  },
+  {
+    // A covered vault worded as a present shortfall: the underwriter is told it carries a hole
+    // that does not exist.
+    id: "nav-loss-open-claim-unconditional",
+    file: "packages/core/src/chain/nav-loss.ts",
+    find: "  const open = l.openShortfall > 0n;",
+    replace: "  const open = l.openShortfall >= 0n;",
     tests: [T.cover],
   },
 

@@ -101,13 +101,14 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
       resolveRpc: async (chainId, url) => {
         const r = (await ctx.resolveRpc!(chainId, url))!;
         const inner = r.client.readContract.bind(r.client) as (a: { functionName: string }) => Promise<unknown>;
-        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lostAssets" ? 131_382_052n : a.functionName === "totalAssets" ? 701_674_000_000n : inner(a))) as never } };
+        return { ...r, client: { ...r.client, readContract: (async (a: { functionName: string }) => (a.functionName === "lostAssets" ? 131_382_052n : a.functionName === "totalAssets" ? 701_674_000_000n : a.functionName === "balanceOf" ? 10n ** 18n : a.functionName === "convertToAssets" ? 31_382_052n : inner(a))) as never } };
       },
     };
     const warned = await answer(withLoss);
     expect(warned.state, JSON.stringify(warned.warnings)).toBe("ok");
     const w = warned.warnings.find((x) => x.code === "reference_loss_unreported")!;
-    expect(w.message).toMatch(/lostAssets is 131382052 of 701674000000 reported total assets \(0\.018724%/u);
+    // 131.38 lost, 31.38 covered through address(1): 100.00 is open.
+    expect(w.message).toMatch(/cover 31382052 of it, and 100000000 of 701674000000 reported total assets is OPEN shortfall \(0\.014251%/u);
     expect(w.message).toMatch(/your cPT side receives shares backed by less.*price it yourself, or pass/u);
   });
 

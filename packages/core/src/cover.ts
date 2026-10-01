@@ -107,7 +107,7 @@ export interface CoverReading {
   /** Whether the requested pricing modes name the cover the recipe gives (null = cannot tell). */
   modesAgree: boolean | null;
   /** Present when a chain read found the reference keeps losses out of its share price. */
-  referenceLoss?: { reportedInSharePrice: false; lostAssets: string; totalAssets: string; note: string };
+  referenceLoss?: { reportedInSharePrice: false; lostAssets: string; totalAssets: string; coveredAssets: string | null; openShortfall: string; note: string };
   band?: {
     apySpreadPercentage: string;
     durationSeconds: string;

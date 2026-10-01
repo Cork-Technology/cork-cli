@@ -1393,6 +1393,10 @@
       "kind": "value"
     },
     {
+      "name": "UNREDEEMABLE_HOLDER",
+      "kind": "value"
+    },
+    {
       "name": "UnattributedEvent",
       "kind": "type"
     },
@@ -3339,6 +3343,10 @@
     {
       "name": "TransportRequest",
       "kind": "type"
+    },
+    {
+      "name": "UNREDEEMABLE_HOLDER",
+      "kind": "value"
     },
     {
       "name": "UnreportedLoss",

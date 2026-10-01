@@ -186,9 +186,11 @@ liquidity cover.
 a NAV oracle reads the vault's reported share price. MetaMorpho v1.1 vaults keep realized bad
 debt out of that price (they add it to `lostAssets`), so on those vaults the pool's rate does not
 move on bad debt under either recipe. You can still swap at the reported price while the pool has
-collateral, and the underwriter carries the hidden shortfall, so expect it to price that risk or
-to pass. YCSUSDC and sparkUSDC are such vaults on Base today. `ch submit rfq-open` reads
-`lostAssets()` and warns `reference_loss_unreported` when the reference has it.
+collateral, and the underwriter carries any open shortfall, so expect it to price that risk or
+to pass. YCSUSDC and sparkUSDC are such vaults on Base today. Neither has an open shortfall: the
+`lostAssets` counter never decreases, and the owner of YCSUSDC covered its 131.38 USDC loss
+through `address(1)` (read 2026-10-01). `ch submit rfq-open` reads `lostAssets()` and that cover,
+and warns `reference_loss_unreported` with the open shortfall when the reference has the counter.
 
 A recipe is an approved contract address. Copy it from the registry, never from a chat message:
 
