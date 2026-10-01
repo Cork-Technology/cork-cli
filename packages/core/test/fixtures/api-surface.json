@@ -125,6 +125,14 @@
       "kind": "value"
     },
     {
+      "name": "COVER_KINDS",
+      "kind": "value"
+    },
+    {
+      "name": "COVER_PROTECTION",
+      "kind": "value"
+    },
+    {
       "name": "CREATE2_ATTESTATIONS",
       "kind": "value"
     },
@@ -218,6 +226,14 @@
     },
     {
       "name": "CorkSettlerDomain",
+      "kind": "type"
+    },
+    {
+      "name": "CoverKind",
+      "kind": "type"
+    },
+    {
+      "name": "CoverReading",
       "kind": "type"
     },
     {
@@ -551,6 +567,14 @@
     {
       "name": "HyperSyncSource",
       "kind": "type"
+    },
+    {
+      "name": "IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE",
+      "kind": "value"
+    },
+    {
+      "name": "IMPAIRMENT_MAX_BAND_PERCENTAGE",
+      "kind": "value"
     },
     {
       "name": "IMPLEMENTATION_ROLES",
@@ -1013,6 +1037,10 @@
       "kind": "value"
     },
     {
+      "name": "RFQ_MODE_COVER",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_FILL_TOPICS",
       "kind": "value"
     },
@@ -1098,6 +1126,10 @@
     },
     {
       "name": "RfqListParams",
+      "kind": "type"
+    },
+    {
+      "name": "RfqMode",
       "kind": "type"
     },
     {
@@ -1801,6 +1833,14 @@
       "kind": "value"
     },
     {
+      "name": "coverKindOfConstraint",
+      "kind": "value"
+    },
+    {
+      "name": "coverKindOfRecipeName",
+      "kind": "value"
+    },
+    {
       "name": "coverMakingAmount",
       "kind": "value"
     },
@@ -2205,7 +2245,15 @@
       "kind": "value"
     },
     {
+      "name": "impairmentBandPercentage",
+      "kind": "value"
+    },
+    {
       "name": "impairmentFloor",
+      "kind": "value"
+    },
+    {
+      "name": "impairmentWindow",
       "kind": "value"
     },
     {
@@ -2574,6 +2622,10 @@
     },
     {
       "name": "readPoolState",
+      "kind": "value"
+    },
+    {
+      "name": "readRfqCover",
       "kind": "value"
     },
     {
@@ -4353,6 +4405,14 @@
       "kind": "value"
     },
     {
+      "name": "COVER_KINDS",
+      "kind": "value"
+    },
+    {
+      "name": "COVER_PROTECTION",
+      "kind": "value"
+    },
+    {
       "name": "ChainOrderStatus",
       "kind": "type"
     },
@@ -4362,6 +4422,14 @@
     },
     {
       "name": "CorkSettlerDomain",
+      "kind": "type"
+    },
+    {
+      "name": "CoverKind",
+      "kind": "type"
+    },
+    {
+      "name": "CoverReading",
       "kind": "type"
     },
     {
@@ -4471,6 +4539,14 @@
     {
       "name": "GaslessCrossChainOrder",
       "kind": "type"
+    },
+    {
+      "name": "IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE",
+      "kind": "value"
+    },
+    {
+      "name": "IMPAIRMENT_MAX_BAND_PERCENTAGE",
+      "kind": "value"
     },
     {
       "name": "INLINE_IMPAIRMENT_SCHEMA",
@@ -4629,6 +4705,10 @@
       "kind": "value"
     },
     {
+      "name": "RFQ_MODE_COVER",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_INTENT_TYPEHASH",
       "kind": "value"
     },
@@ -4662,6 +4742,10 @@
     },
     {
       "name": "RawLog",
+      "kind": "type"
+    },
+    {
+      "name": "RfqMode",
       "kind": "type"
     },
     {
@@ -4905,6 +4989,14 @@
       "kind": "value"
     },
     {
+      "name": "coverKindOfConstraint",
+      "kind": "value"
+    },
+    {
+      "name": "coverKindOfRecipeName",
+      "kind": "value"
+    },
+    {
       "name": "coverMakingAmount",
       "kind": "value"
     },
@@ -5057,6 +5149,14 @@
       "kind": "value"
     },
     {
+      "name": "impairmentBandPercentage",
+      "kind": "value"
+    },
+    {
+      "name": "impairmentWindow",
+      "kind": "value"
+    },
+    {
       "name": "impliedPremiumWad",
       "kind": "value"
     },
@@ -5178,6 +5278,10 @@
     },
     {
       "name": "readLopInvalidator",
+      "kind": "value"
+    },
+    {
+      "name": "readRfqCover",
       "kind": "value"
     },
     {

@@ -647,6 +647,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const open = async (recipe: string) => {
       const seen: Seen[] = [];
       const input = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
+      input.action.modes = ["liquidity_only"]; // a liquidity recipe priced as liquidity cover: no cover_mode_mismatch (cover.test.ts owns that rule)
       input.action.marketTemplate = { inline: { oracle_recipe: recipe, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: "1000000000000000000", expiry: "1795604800", swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } };
       const env = await runTool("cork_submit", input, ctxWith([{ match: "/rfqs/v1", status: 201, body: { rfq_id: "rfq_r", state: "open" } }], seen));
       return { env, posted: seen.filter((s) => s.method === "POST").length };

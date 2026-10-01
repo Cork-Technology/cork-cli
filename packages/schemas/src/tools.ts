@@ -897,7 +897,7 @@ export const SubmitAction = z.discriminatedUnion("type", [
       z.strictObject({ exact: Address }).describe("exactly this collateral token"),
       z.strictObject({ one_of: z.array(Address).min(1).max(8) }).describe("any of these collateral tokens is acceptable"),
     ]),
-    modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1),
+    modes: z.array(z.enum(["liquidity_only", "liquidity_impairment"])).min(1).describe("PRICING labels the underwriter's model reads — the venue never interprets them and nothing on chain reads them. The COVER is decided by the recipe in marketTemplate: a liquidity recipe gives an exit that pays nothing for a loss in the reference, the impairment recipe gives downside protection with a deductible band. Name the mode that matches the recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe); a mismatch is warned cover_mode_mismatch (cork_capabilities topic:'cover')"),
     packageIds: z.array(z.string()).min(1).max(8),
     expiryWindow: z.strictObject({
       notBefore: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).describe("earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"),

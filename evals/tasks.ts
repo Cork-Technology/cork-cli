@@ -734,6 +734,24 @@ export const TASKS: EvalTask[] = [
     },
   },
   {
+    // WHICH COVER a request buys (2026-10-01, planning#88): the first live partner trade asked
+    // for downside protection and bought exit-only cover, because nothing on the request path
+    // said the RECIPE decides the cover and the RFQ mode is only a pricing label. An agent
+    // answering from priors says "liquidity cover protects the position" — the surface must
+    // teach otherwise. The band formula and the mode-vs-recipe rule exist only in these tools.
+    id: "cover-topic",
+    prompt: "A partner holds shares of an ERC-4626 vault and wants Cork cover that pays out if the vault itself loses value (its NAV is written down by 10%). They plan to open an RFQ in liquidity_only mode with the nav liquidity recipe. Using the Cork tools' own documentation: would that cover pay anything for such a loss? If not, which kind of cover does, which RFQ mode prices it, and how is its deductible determined?",
+    expect: {
+      tool: "cork_capabilities",
+      // Unpinned params: topic:"cover", an alias (impairment, downside, cover-types) or a search.
+      state: "ok",
+      // Four facts: liquidity pays nothing for the loss; impairment cover does; the mode that
+      // prices it; the deductible is the band = spread x duration (/ 365 d).
+      answer: /(?=[\s\S]*(nothing|not pa(y|id)|no payout|does not pay|doesn't pay|would not pay|won't pay|zero|0\.000|exit))(?=[\s\S]*impairment)(?=[\s\S]*liquidity_impairment)(?=[\s\S]*(band|deductible))(?=[\s\S]*(spread|duration|365))/i,
+      maxCalls: 2,
+    },
+  },
+  {
     // Post-broadcast: "what actually happened in my transaction?" Pure local log labeling
     // against the source-verified ABI set — the question every integrator asks once a tx lands.
     id: "decode-receipt",

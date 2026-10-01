@@ -5,6 +5,7 @@ import { Envelope, SubmitInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { decodeMakerTraits, ERC1271_MAGIC, erc1271Abi, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding } from "../orders.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
 import { classifyAddress, primaryOf } from "../generations.ts";
+import { readRfqCover } from "../cover.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -645,7 +646,12 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (BigInt(action.expiryWindow.notAfter) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `expiryWindow.notAfter (${action.expiryWindow.notAfter}) is not in the future (now ${nowSecs}) — no pool expiry could ever satisfy this window`, ctx);
       }
-      const recipeWarnings = await inlineRecipeWarnings(chainId, action.marketTemplate);
+      const { warnings: recipeWarnings, hint: recipeHint } = await inlineRecipeWarnings(chainId, action.marketTemplate);
+      // WHICH cover this request buys is decided by the template's recipe, never by `modes`
+      // (pricing labels nothing on chain reads). Zyfai's first trade asked for downside cover
+      // and got an exit-only pool because the request path never said so (planning#88): the
+      // reading rides the result, and a request that contradicts itself is named before relay.
+      const { cover, warnings: coverWarnings } = readRfqCover({ modes: action.modes, marketTemplate: action.marketTemplate, recipeHint, nowSeconds: nowSecs });
       if (BigInt(action.validUntil) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
       }
@@ -664,7 +670,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         valid_until: action.validUntil,
         signature: action.signature,
       });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null }), recipeWarnings);
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings]);
     }
 
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
@@ -755,19 +761,25 @@ export function rfqOpenWindowViolation(window: { notBefore: number; notAfter: nu
   return null;
 }
 
-async function inlineRecipeWarnings(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<Array<{ code: string; message: string }>> {
+async function inlineRecipeWarnings(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<{ warnings: Array<{ code: string; message: string }>; hint: { recipeName?: string | undefined; generation: string } | undefined }> {
+  const { warnings, hit } = await classifyInlineRecipe(chainId, marketTemplate);
+  return { warnings, hint: hit === undefined ? undefined : { recipeName: hit.recipeName, generation: hit.label } };
+}
+
+async function classifyInlineRecipe(chainId: number, marketTemplate: Record<string, unknown> | undefined): Promise<{ warnings: Array<{ code: string; message: string }>; hit: { label: string; status: string; recipeName?: string } | undefined }> {
+  const none = { warnings: [], hit: undefined };
   const inline = marketTemplate?.["inline"];
   const recipe = inline && typeof inline === "object" ? (inline as { oracle_recipe?: unknown }).oracle_recipe : undefined;
-  if (typeof recipe !== "string" || !/^0x[0-9a-fA-F]{40}$/u.test(recipe)) return [];
+  if (typeof recipe !== "string" || !/^0x[0-9a-fA-F]{40}$/u.test(recipe)) return none;
   const { generations } = await resolveGenerations(chainId);
   const hit = classifyAddress(generations, recipe).find((c) => c.role === "recipe");
   const primary = primaryOf(generations);
   if (hit === undefined) {
-    return [{ code: "recipe_not_found", message: `the inline template's oracle_recipe ${recipe} matches no configured generation's recipe hints on chainId ${chainId} — an underwriter can only quote a recipe approved on its registry (cork_query resource:"registry-recipes" lists them per generation); relayed as asked` }];
+    return { hit, warnings: [{ code: "recipe_not_found", message: `the inline template's oracle_recipe ${recipe} matches no configured generation's recipe hints on chainId ${chainId} — an underwriter can only quote a recipe approved on its registry (cork_query resource:"registry-recipes" lists them per generation); relayed as asked` }] };
   }
   const which = hit.recipeName ? `${hit.recipeName} recipe` : "recipe";
   if (primary !== undefined && hit.label !== primary.label) {
-    return [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the ${hit.label} generation (${hit.status}), not the primary ${primary.label}: the cover is created on ${hit.label}, which only an adapter bound to that generation can fill or exercise, and an underwriter quoting the primary alone passes on this RFQ silently. Pass the primary's recipe from cork_query resource:"registry-recipes" if the adapter you fill through is bound to the primary` }];
+    return { hit, warnings: [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the ${hit.label} generation (${hit.status}), not the primary ${primary.label}: the cover is created on ${hit.label}, which only an adapter bound to that generation can fill or exercise, and an underwriter quoting the primary alone passes on this RFQ silently. Pass the primary's recipe from cork_query resource:"registry-recipes" if the adapter you fill through is bound to the primary` }] };
   }
-  return [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the primary ${hit.label} generation: the cover is created there, and the adapter you fill through must be bound to that generation's pool manager` }];
+  return { hit, warnings: [{ code: "recipe_generation_notice", message: `the inline template's oracle_recipe ${recipe} is the ${which} of the primary ${hit.label} generation: the cover is created there, and the adapter you fill through must be bound to that generation's pool manager` }] };
 }

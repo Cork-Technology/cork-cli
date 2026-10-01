@@ -125,6 +125,7 @@ const T = {
   phoenixApprovals: "packages/core/test/phoenix-approvals.test.ts",
   rolloverFill: "packages/core/test/rollover-fill.test.ts",
   rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
+  cover: "packages/core/test/cover.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
@@ -3172,6 +3173,78 @@ const CATALOG: Mutant[] = [
     find: 'new Set(["safe-exec-transaction", "safe-4337-module", "erc7579-execute"])',
     replace: 'new Set(["safe-exec-transaction", "safe-4337-module", "erc7579-execute", "erc7579-executor-module", "safe-multisend"])',
     tests: [T.decodeEnvelopes],
+  },
+
+  // ── which cover an RFQ buys: the recipe decides, the mode is a pricing label (cover.ts) ────
+  {
+    // The 1-wei floor IS the liquidity recipes' signature: an exclusive comparator reads a
+    // liquidity pool as a band and tells an exit-only holder it is protected.
+    id: "cover-liquidity-floor-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "  if (c.rateMin <= 1n) return \"liquidity\";",
+    replace: "  if (c.rateMin < 1n) return \"liquidity\";",
+    tests: [T.cover],
+  },
+  {
+    // The nav-sourced liquidity recipe read as something else: the very recipe Zyfai traded
+    // (nav) would stop being named exit-only cover.
+    id: "cover-nav-recipe-not-liquidity",
+    file: "packages/core/src/cover.ts",
+    find: 'if (name === "liquidity" || name === "nav") return "liquidity";',
+    replace: 'if (name === "liquidity") return "liquidity";',
+    tests: [T.cover],
+  },
+  {
+    // A fixed-rate pool needs BOTH allowances at zero; an OR calls a one-sided band frozen.
+    id: "cover-fixed-shape-either-zero",
+    file: "packages/core/src/cover.ts",
+    find: "if (c.rateChangePerDayMax === 0n && c.rateChangeCapacityMax === 0n) return \"fixed-rate\";",
+    replace: "if (c.rateChangePerDayMax === 0n || c.rateChangeCapacityMax === 0n) return \"fixed-rate\";",
+    tests: [T.cover],
+  },
+  {
+    // The band divides by the recipe's 365-day year; any other year misstates the deductible
+    // and the rate floor against the deployed recipe's own resolve.
+    id: "cover-band-year",
+    file: "packages/core/src/cover.ts",
+    find: "  return (apySpreadPercentage * durationSeconds) / YEAR_SECONDS;",
+    replace: "  return (apySpreadPercentage * durationSeconds) / (YEAR_SECONDS + 86_400n);",
+    tests: [T.cover],
+  },
+  {
+    // THE TRAP unwarned: an impairment mode on a liquidity recipe relays silently — the buyer
+    // pays a downside price for a pool that pays nothing on a loss.
+    id: "cover-trap-mismatch-dropped",
+    file: "packages/core/src/cover.ts",
+    find: '  if (kind === "liquidity" && wantsImpairment) {',
+    replace: "  if (false) {",
+    tests: [T.cover],
+  },
+  {
+    // The duration bound is inclusive of the pool's remaining life: >= refuses a duration the
+    // recipe admits; a dropped check lets DurationTooLong reach the fill.
+    id: "cover-duration-bound-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "params.durationSeconds > params.expiry - a.nowSeconds) {",
+    replace: "params.durationSeconds >= params.expiry - a.nowSeconds) {",
+    tests: [T.cover],
+  },
+  {
+    // The spread cap is inclusive (100% a year is admissible).
+    id: "cover-spread-cap-exclusive",
+    file: "packages/core/src/cover.ts",
+    find: "if (params.apySpreadPercentage > IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE) {",
+    replace: "if (params.apySpreadPercentage >= IMPAIRMENT_MAX_APY_SPREAD_PERCENTAGE) {",
+    tests: [T.cover],
+  },
+  {
+    // rfq-open stops returning the cover reading: the request path is silent again about what
+    // the buyer is asking for.
+    id: "cover-rfq-open-reading-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...recipeWarnings, ...coverWarnings]);",
+    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...recipeWarnings]);",
+    tests: [T.cover],
   },
 
   // ── ForSelf caller-gate generation (WHITELIST() binding + account pre-flight) ─────────────

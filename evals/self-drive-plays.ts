@@ -159,6 +159,7 @@ export const PLAYS: Play[] = [
   // ── discovery ──
   { id: "discover-unwind", calls: [{ tool: "cork_capabilities", input: { search: "unwind" } }], finalText: "Use cork_prepare_phoenix with an unwind-* action (unwind-deposit, unwind-mint, unwind-swap, unwind-exercise); the worked example is shown above." },
   { id: "signing-topic", calls: [{ tool: "cork_capabilities", input: { topic: "signing" } }], finalText: "Simulate with cork_track, sign the transaction client-side (eth_signTransaction or signTypedData for orders), decode the signed bytes with cork_decode kind tx, then broadcast with eth_sendRawTransaction through your own RPC and track the hash." },
+  { id: "cover-topic", calls: [{ tool: "cork_capabilities", input: { topic: "cover" } }], finalText: "No: liquidity cover is an exit and pays nothing for a NAV loss, because the pool rate follows the oracle down. Impairment cover does; ask for it with the liquidity_impairment mode and the impairment recipe. Its deductible is the band: apy spread times duration over 365 days." },
   { id: "warnings-topic", calls: [{ tool: "cork_capabilities", input: { topic: "warnings" } }], finalText: "Codes are grouped into families; branch on state first: ok means use data, unavailable means do not retry unchanged, conflict means the tool found a disagreement." },
   // ── held-out ──
   { id: "ho-mode-reject", calls: [q({ resource: "cork-pool", chainId: 1, mode: "hybrid", filters: { poolId: P } })], finalText: "The hybrid mode is not available for a chain resource; omit mode or use lite-decentralized." },

@@ -48,8 +48,10 @@ the pool exists. Markets are short-dated; you pick the term. The rate rules come
 **recipe**, an approved contract. Four are live: **fixed** (the rate never moves), **liquidity** in
 two flavors that share one policy and differ only in the rate's source, **price** (a market feed,
 the depeg view) and **nav** (the vault's own accounting, the book-value view), and **impairment**
-(a window sized from an annual yield spread). The registry bounds market life: `maxExpiryDuration`
-is 30 days, and a fill that would create a longer market reverts.
+(a window sized from an annual yield spread). **The recipe decides what the cover pays**: a
+liquidity recipe gives an exit, the impairment recipe gives downside protection (step 1b). The
+registry bounds market life: `maxExpiryDuration` is 30 days, and a fill that would create a
+longer market reverts.
 
 **You are the demand side.** You buy cST cover on a position your yield agent manages, and you
 exercise it on impairment. The underwriter is the supply side. It prices and sells the cover and
@@ -154,7 +156,30 @@ ch query registry-denominations --chain-id 8453 --json
 ch query registry-feeds --chain-id 8453 --json
 ```
 
-#### 1b. Pick the recipe
+#### 1b. Pick the cover, and with it the recipe
+
+Decide first what you want the cover to pay. The recipe decides that, not the RFQ `modes`: the
+modes are pricing labels for the underwriter's model, and nothing on chain reads them.
+
+| Cover | Recipe | The pool's rate | A loss in the reference | RFQ mode to name |
+|---|---|---|---|---|
+| **Liquidity** (an exit) | LiquidityPriceRecipe, LiquidityNavRecipe | follows the oracle: window 1 wei to 2x the anchor, one whole anchor of movement a day | **not paid**. The rate falls with the reference, so you hand in more reference for the same collateral | `liquidity_only` |
+| **Impairment** (downside, with a deductible) | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **paid beyond the band**. The band is your deductible | `liquidity_impairment` |
+| **Fixed-rate** (downside, frozen) | FixedRateRecipe | never moves | paid below the frozen rate | none: the venue has no fixed-rate mode, so it cannot be requested through an RFQ today |
+
+We measured the difference on a Base fork against the deployed `phoenix/v0.4-rc.1` contracts
+(2026-10-01): two pools over USDC and baseUSD with the same expiry and the same NAV oracle, one per
+recipe. The reference vault took a real 10% loss. One hour later the holder exercised 100 cST on
+each pool:
+
+| | Reference handed in | Its value after the loss | Collateral received | Paid by the cover |
+|---|---|---|---|---|
+| Liquidity cover | 101.836 baseUSD | 100.000 USDC | 100.000 USDC | **0.000 USDC** |
+| Impairment cover (10% a year over 14.5 days: a 0.397% band) | 91.829 baseUSD | 90.173 USDC | 100.000 USDC | **9.827 USDC** |
+
+Liquidity cover is worth buying when the risk is that you cannot sell or redeem the reference at
+its book value in time. It is not protection against the reference losing value. The cover bought
+in the first live trade (Base, 2026-09-10) was liquidity cover.
 
 A recipe is an approved contract address. Copy it from the registry, never from a chat message:
 
@@ -173,8 +198,34 @@ ch query registry-recipes --chain-id 8453 --json
 
 The liquidity policy: the rate may fall to 1 wei (`rateMin`), may never exceed twice the anchor
 (`rateMax`), may move one anchor per day (`rateChangePerDayMax`) with a total budget of three
-(`rateChangeCapacityMax`). A slow bleed is tracked; a flash crash is rate-limited. That is what
-makes the worst case computable (`ch compute impairment-floor`).
+(`rateChangeCapacityMax`). In practice the rate follows the oracle: in the measurement above it
+had tracked the whole 10% loss within the hour.
+
+The impairment policy: you choose a duration and an annual spread. The band is
+`apy_spread × duration / 365 d`, the rate may move one day of the spread per day, with seven days
+of it available as a burst. The recipe caps the spread at 100% a year and the band at 50%, and
+the duration may not exceed the pool's remaining life at the fill that creates the pool. Ask the
+recipe what a choice commits you to. Pass three words: the anchor, the duration in seconds, and
+the spread on the percentage scale (1e18 = 1%, so 10% a year is `10000000000000000000`):
+
+```sh
+ch compute recipe-rate-constraint --chain-id 8453 --json \
+  --recipe 0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9 \
+  --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
+  --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
+  --args-uints '["871637111019090856","1209600","10000000000000000000"]'
+```
+```jsonc
+// captured 2026-10-01: 14 days at 10% a year around the anchor 0.871637 = a 0.3836% band
+{ "recipe": "0xd5e8F76A…0Ed9", "source": "nav",
+  "constraint": { "rateMin": "868293845387784755", "rateMax": "874980376650396957",
+                  "rateChangePerDayMax": "238804687950435", "rateChangeCapacityMax": "1671632815653050" },
+  "rateOracle": { "address": "0x6df4a5EE…5836", "status": "predicted", "mode": "nav", "rate": null } }
+```
+
+`rateMin` is the worst rate you would ever swap at. For a pool that exists, `ch compute
+impairment-floor --pool-id …` returns the worst rate over a horizon, and `ch query cork-pool`
+shows the four limits: a `rateMin` of 1 wei means the pool is liquidity cover.
 
 #### 1c. Check the pair's oracle, then derive the market
 
@@ -287,17 +338,41 @@ ch submit rfq-open --chain-id 8453 --client-request-id rfq-0001 --json \
 
 Conventions the live flow uses:
 
-- `modes: ["liquidity_only"]` and `packageIds: ["balanced-v1"]` are the live package. Confirm the
-  catalog and the `notionalAssets` units with your Cork contact before your first post.
+- `modes` must match the recipe (step 1b): `["liquidity_only"]` with a liquidity recipe,
+  `["liquidity_impairment"]` with the impairment recipe. The result carries `data.cover`: the
+  kind of cover the request buys and, for impairment, the band and the rate floor. A request
+  whose mode and recipe disagree is relayed with a `cover_mode_mismatch` warning; an impairment
+  mode on a liquidity recipe is priced as downside cover and creates an exit-only pool.
+- `packageIds: ["balanced-v1"]` is the live package. Confirm the catalog and the
+  `notionalAssets` units with your Cork contact before your first post.
 - Pin an exact expiry with `notBefore = notAfter - 1`.
 - `oracle_recipe` carries the recipe's contract address. The venue stores it as free text, so a
   typo posts fine and fails only at fill time. Copy it from `registry-recipes`.
 - `oracle_params` carries the pool identity, the `cork-inline-liquidity/1` block: `anchor_rate`
   from 1c, the `expiry` you derived with, and the two fees as decimal strings. Never send `{}`.
   Without the block an underwriter falls back to the window's end and zero fees, and a different
-  expiry or fee names a different pool. For the impairment recipe use
-  `cork-inline-impairment/1` and add `duration_seconds` and `apy_spread_percentage` (1e18 = 1%).
+  expiry or fee names a different pool.
 - You sign the RFQ with your own stack. `ch submit` only relays.
+
+To ask for **impairment cover** instead, change three things: the mode, the recipe, and the
+block. The block is `cork-inline-impairment/1`: the liquidity block plus `duration_seconds` and
+`apy_spread_percentage` (1e18 = 1%). All three words are required; a partial block is never
+filled in with zeros.
+
+```sh
+ch submit rfq-open --chain-id 8453 --client-request-id rfq-0002 --json \
+  --requester 0xYOUR_SAFE \
+  --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
+  --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
+  --modes '["liquidity_impairment"]' --package-ids '["balanced-v1"]' \
+  --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
+  --market-template "{\"inline\":{\"oracle_recipe\":\"0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9\",\"oracle_params\":{\"schema\":\"cork-inline-impairment/1\",\"anchor_rate\":\"871637111019090856\",\"expiry\":\"$EXP\",\"swap_fee_wad\":\"0\",\"unwind_swap_fee_wad\":\"0\",\"duration_seconds\":\"1209600\",\"apy_spread_percentage\":\"10000000000000000000\"}}}" \
+  --notional-assets … --valid-until $VU --signature 0x…
+```
+
+Read the answers before you rely on the cover. Supply is each underwriter's own decision: a
+`pass` means no underwriter quotes that recipe for the pair yet. Raise it with your Cork contact;
+do not fall back to a liquidity recipe under the impairment mode.
 
 Then watch for answers:
 
