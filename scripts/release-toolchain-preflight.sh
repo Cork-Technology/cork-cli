@@ -15,16 +15,23 @@
 # the job that holds the signing key — so the answer to an aging pin is to keep it young:
 # scripts/bump-wolfi-pin.sh moves it, and --max-age-days makes the weekly run say when.
 #
-# The workflow file is the single source: this script reads the image and the install lines
-# from it, so the two cannot drift apart.
+# The workflow files are the single source: this script reads the image and the install lines
+# from every workflow that runs a job in the wolfi-base image (the apk and image build, the
+# CVM deploy, the rehearsal), so the two cannot drift apart. ONE digest across all of them.
 #
 #   sh scripts/release-toolchain-preflight.sh                     run each install in a fresh container
 #   sh scripts/release-toolchain-preflight.sh --max-age-days 30   ...and fail when the image is older
 #   sh scripts/release-toolchain-preflight.sh --list              print the image and the lines, run nothing
 set -eu
 
-workflow="${RELEASE_WORKFLOW:-.github/workflows/apk-repo.yml}"
 runtime="${CONTAINER_RUNTIME:-docker}"
+# RELEASE_WORKFLOWS: a space-separated list of files (the tests name their own). By default,
+# every workflow that names the image — found, not listed, so a new one cannot be forgotten.
+if [ -n "${RELEASE_WORKFLOWS:-}" ]; then
+  workflows="$RELEASE_WORKFLOWS"
+else
+  workflows="$(grep -l '^ *image: *cgr\.dev/chainguard/wolfi-base' .github/workflows/*.yml 2>/dev/null | tr '\n' ' ' || true)"
+fi
 
 list=0; max_age=""
 while [ $# -gt 0 ]; do
@@ -39,12 +46,16 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-test -f "$workflow" || { echo "release-toolchain: $workflow not found" >&2; exit 1; }
+[ -n "$(printf '%s' "$workflows" | tr -d ' ')" ] || { echo "release-toolchain: no workflow names the wolfi-base image" >&2; exit 1; }
+for workflow in $workflows; do
+  test -f "$workflow" || { echo "release-toolchain: $workflow not found" >&2; exit 1; }
+done
 
-images="$(sed -n 's/^ *image: *\([^ ]*\) *$/\1/p' "$workflow" | sort -u)"
+# shellcheck disable=SC2086 # $workflows is a deliberate word list
+images="$(sed -n 's/^ *image: *\([^ ]*\) *$/\1/p' $workflows | sort -u)"
 count="$(printf '%s\n' "$images" | grep -c . || true)"
 if [ "$count" != 1 ]; then
-  echo "release-toolchain: expected ONE job-container image in $workflow, found $count:" >&2
+  echo "release-toolchain: expected ONE job-container image across $workflows, found $count:" >&2
   printf '%s\n' "$images" >&2
   exit 1
 fi
@@ -53,8 +64,11 @@ case "$images" in
   *) echo "release-toolchain: the job-container image is not digest-pinned: $images" >&2; exit 1 ;;
 esac
 
-lines="$(sed -n 's/^.*\(apk add --no-cache [a-z0-9 .+_-]*\)$/\1/p' "$workflow")"
-test -n "$lines" || { echo "release-toolchain: no \`apk add --no-cache\` line found in $workflow" >&2; exit 1; }
+# Each distinct line once, in first-seen order: the rehearsal installs the same sets the
+# release does, and one container per set is the whole question.
+# shellcheck disable=SC2086
+lines="$(sed -n 's/^.*\(apk add --no-cache [a-z0-9 .+_-]*\)$/\1/p' $workflows | awk '!seen[$0]++')"
+test -n "$lines" || { echo "release-toolchain: no \`apk add --no-cache\` line found in $workflows" >&2; exit 1; }
 
 if [ "$list" = 1 ]; then
   echo "image: $images"

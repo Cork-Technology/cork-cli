@@ -15,7 +15,11 @@
 # must hash to it. Every job container moves together (the preflight refuses two pins).
 set -eu
 
-workflow="${RELEASE_WORKFLOW:-.github/workflows/apk-repo.yml}"
+if [ -n "${RELEASE_WORKFLOWS:-}" ]; then
+  workflows="$RELEASE_WORKFLOWS"
+else
+  workflows="$(grep -l '^ *image: *cgr\.dev/chainguard/wolfi-base' .github/workflows/*.yml 2>/dev/null | tr '\n' ' ' || true)"
+fi
 registry="${WOLFI_REGISTRY:-https://cgr.dev}"
 repo="chainguard/wolfi-base"
 image="cgr.dev/$repo"
@@ -32,9 +36,11 @@ die() { echo "bump-wolfi-pin: $*" >&2; exit 1; }
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-64; else shasum -a 256 | cut -c1-64; fi; }
 is_digest() { case "$1" in sha256:????????????????????????????????????????????????????????????????) case "${1#sha256:}" in *[!0-9a-f]*) return 1 ;; *) return 0 ;; esac ;; *) return 1 ;; esac; }
 
-test -f "$workflow" || die "$workflow not found"
-old="$(sed -n "s|^ *image: *$image@\\(sha256:[0-9a-f]*\\) *\$|\\1|p" "$workflow" | sort -u)"
-[ "$(printf '%s\n' "$old" | grep -c .)" = 1 ] || die "expected ONE $image pin in $workflow, found: $(printf '%s' "$old" | tr '\n' ' ')"
+[ -n "$(printf '%s' "$workflows" | tr -d ' ')" ] || die "no workflow names the $image image"
+for workflow in $workflows; do test -f "$workflow" || die "$workflow not found"; done
+# shellcheck disable=SC2086 # $workflows is a deliberate word list
+old="$(sed -n "s|^ *image: *$image@\\(sha256:[0-9a-f]*\\) *\$|\\1|p" $workflows | sort -u)"
+[ "$(printf '%s\n' "$old" | grep -c .)" = 1 ] || die "expected ONE $image pin across $workflows, found: $(printf '%s' "$old" | tr '\n' ' ')"
 is_digest "$old" || die "the current pin is not a full sha256 digest: $old"
 
 accept="Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
@@ -44,7 +50,7 @@ new="$(curl -fsSI -H "Authorization: Bearer $token" -H "$accept" "$registry/v2/$
   | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p')"
 is_digest "$new" || die "the registry did not name a sha256 digest for $repo:latest (got: '$new')"
 
-tmp="$(mktemp)"; trap 'rm -f "$tmp" "$tmp.wf"' EXIT
+tmp="$(mktemp)"; trap 'rm -f "$tmp" "$tmp".wf.*' EXIT
 curl -fsS -H "Authorization: Bearer $token" -H "$accept" "$registry/v2/$repo/manifests/$new" -o "$tmp"
 got="sha256:$(sha256 < "$tmp")"
 [ "$got" = "$new" ] || die "the manifest served for $new hashes to $got — refusing a digest the content does not prove"
@@ -63,15 +69,26 @@ if [ "$dry" = 1 ]; then
 fi
 
 today="$(date -u +%Y-%m-%d)"
-sed -e "s|$image@$old|$image@$new|g" \
-    -e "s|^\\( *# Pinned \\)[0-9-]*: the image built .*\\.\$|\\1$today: the image built $created.|" \
-    "$workflow" > "$tmp.wf"
-grep -q "$old" "$tmp.wf" && die "the old digest is still in $workflow after the rewrite"
-cat "$tmp.wf" > "$workflow"
-echo "bump-wolfi-pin: $(grep -c "$image@$new" "$workflow") pins moved in $workflow"
+# Every file is rewritten to a temporary copy and checked BEFORE any file is replaced: the
+# pins move together or not at all.
+n=0
+for workflow in $workflows; do
+  n=$((n + 1))
+  sed -e "s|$image@$old|$image@$new|g" \
+      -e "s|^\\( *# Pinned \\)[0-9-]*: the image built .*\\.\$|\\1$today: the image built $created.|" \
+      "$workflow" > "$tmp.wf.$n"
+  grep -q "$old" "$tmp.wf.$n" && die "the old digest is still in $workflow after the rewrite"
+done
+n=0; moved=0
+for workflow in $workflows; do
+  n=$((n + 1))
+  cat "$tmp.wf.$n" > "$workflow"
+  moved=$((moved + $(grep -c "$image@$new" "$workflow")))
+done
+echo "bump-wolfi-pin: $moved pins moved in $workflows"
 
 if command -v "${CONTAINER_RUNTIME:-docker}" >/dev/null 2>&1; then
-  # The preflight reads the same RELEASE_WORKFLOW (or the same default path) this script did.
+  # The preflight finds the same files this script did (RELEASE_WORKFLOWS, or by discovery).
   sh "$here/release-toolchain-preflight.sh" \
     || die "the preflight FAILED on the new image — the pins are moved in the file; fix the install lines or revert before you commit"
   echo "bump-wolfi-pin: the preflight passed on the new image. Review the diff and commit."

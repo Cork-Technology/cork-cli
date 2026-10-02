@@ -75,7 +75,10 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
 ## Deploy pipeline (what produces all of the above)
 
 - `.github/workflows/release.yml` — determinism gate (two independent byte-identical builds),
-  immutable release from attested bytes.
+  then the apk and image build, then the immutable release from the attested bytes, then the
+  CVM deploy. The Release is published LAST among the covered channels: the image (and for a
+  production tag the apk channel) exists before the Release that names it. The release asset
+  `image.txt` names the image by digest, so the release attestation binds it to the tag.
 - `.github/workflows/apk-repo.yml` — `melange-build` (SLSA provenance; the only job that
   holds the signing key — for a production tag it also merges the new apk into the cumulative
   per-arch channel under the immutability rule and signs that index; a candidate indexes an
@@ -83,10 +86,16 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
   ungated `publish` job — one job for both kinds: for production, Pages publish (the
   pre-signed slices, refused if `gh-pages` moved since they were indexed) and `:latest`; for a
   candidate, compose from the slices as a local repository, `:vX.Y.Z-rc.N` only; for both,
-  apko publish (version-pinned, SBOM, digest attested). Production then runs the separately
-  gated `deploy-cvm` job: digest substituted into `packaging/phala-compose.yml`,
+  apko publish (version-pinned, SBOM, digest attested). The workflow hands the image digest to
+  its caller.
+- `.github/workflows/deploy-cvm.yml` — production only, called by `release.yml` after the
+  Release, separately gated: digest substituted into `packaging/phala-compose.yml`,
   `phala deploy -c … -n cork-mcp --wait`, name-keyed in-place update; a deploy failure never
-  blocks or undoes the publishes, and that job can be re-run alone.
+  blocks or undoes the publishes, and that job can be re-run alone. It has no manual trigger:
+  the digest comes from the publish job of the same run.
+- `.github/workflows/release-toolchain.yml` — runs on every push to `main`: the release's
+  `apk add` lines in the pinned image, and a REHEARSAL that builds the apk and the image with
+  the release's own scripts, a throwaway key and no push.
 - Runtime secrets (`CORK_MCP_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 

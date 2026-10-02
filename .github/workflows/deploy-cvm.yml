@@ -1,0 +1,78 @@
+# The Phala CVM deploy of a production release: run one attested image digest on the hosted
+# MCP machine.
+#
+# Called by release.yml AFTER the GitHub Release is published. The hosted deployment is an
+# EXCLUDED channel of a release (the Release body says so, policy G18): the Release's claims
+# cover the binaries, the SDK tarballs, the image and the apk channel, and all of those exist
+# before the Release is public. So this job comes last, and its failure leaves a complete,
+# published release — re-run THIS job alone to retry. (Until 2026-10-02 it was the last job
+# of apk-repo.yml, and the Release was published BEFORE that workflow ran; v0.6.1-rc.3 then
+# published a Release whose image did not exist. The order changed, and the deploy moved here
+# so that a Phala failure cannot hold a Release back.)
+#
+# The gate: `environment: release` (v*-only deployment rule + required reviewers). By the time
+# it asks, the image is published and attested; approving means exactly "run this attested
+# digest on the production CVM". The caller passes `secrets: inherit` — required for the
+# environment secret to resolve in a called workflow's job (actions/runner#4453).
+#
+# There is deliberately NO workflow_dispatch: a dispatch input would be a way to put an
+# arbitrary digest on the production machine. The digest comes from the publish job of the
+# same run, nowhere else.
+#
+# Phala notes (Phase 2b of the remote-MCP plan): the CVM runs the EXACT attested digest — the
+# compose is digest-pinned (verification breaks on tags) and its runtime secrets live as
+# encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
+# Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
+# quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
+name: deploy-cvm
+
+on:
+  workflow_call:
+    inputs:
+      image-digest:
+        description: "sha256 digest of the attested ghcr image to run (from apk-repo.yml's publish job)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-cvm:
+    environment: release # PHALA_CLOUD_API_KEY
+    runs-on: ubuntu-latest
+    # The same digest-pinned toolchain image as apk-repo.yml's jobs: one pin for the whole
+    # release path (scripts/release-toolchain-preflight.sh refuses two, and
+    # scripts/bump-wolfi-pin.sh moves them together).
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
+    timeout-minutes: 20
+    steps:
+      # nodejs + npm: the phala CLI (exact-pinned below); GNU sed/grep for the digest
+      # substitution and its check; libgcc + libstdc++ for the runner's mounted node.
+      - name: Install the deploy toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash coreutils git grep libgcc libstdc++ nodejs npm sed
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — the tag: for packaging/phala-compose.yml
+
+      - name: Substitute the attested digest into the compose
+        env:
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+        run: |
+          # A full sha256 digest or nothing: this value names what runs on the production machine.
+          printf '%s' "$IMAGE_DIGEST" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "::error::no image digest handed over from the publish job (got: '$IMAGE_DIGEST')" >&2; exit 1; }
+          sed "s|\${DIGEST}|$IMAGE_DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
+          grep -q "@sha256:[0-9a-f]\{64\}" phala-compose.deploy.yml || { echo "compose image is not digest-pinned after substitution" >&2; exit 1; }
+          grep "image:" phala-compose.deploy.yml
+
+      - name: Deploy the CVM (name-keyed in-place update)
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: |
+          test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY is not set in the 'release' environment — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
+          # Exact-pinned + scripts disabled: this job holds PHALA_CLOUD_API_KEY, so a floating
+          # `latest` here would hand deploy credentials to whoever ships the next phala release.
+          # Bump deliberately, next to the lockfile pins.
+          npm install -g --ignore-scripts phala@1.1.20
+          phala deploy -c phala-compose.deploy.yml -n cork-mcp --wait

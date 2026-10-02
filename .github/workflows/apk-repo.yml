@@ -10,7 +10,7 @@
 #      ghcr.io/cork-technology/cork-cli, SBOM on, image digest attested.
 #
 # Toolchain sourcing (the wolfi-dev/os shape, zero sudo anywhere): every tool-running job —
-# melange-build, publish, deploy-cvm — runs inside a digest-pinned cgr.dev/chainguard/wolfi-base
+# melange-build, publish, and deploy-cvm.yml's job — runs inside a digest-pinned cgr.dev/chainguard/wolfi-base
 # job container and `apk add`s its tools from Wolfi's SIGNED repository — the supply chain for
 # the whole build toolchain is one image digest plus one signing key the image already trusts.
 # (The production publish path was the last to migrate, after its first real run on v0.4.0
@@ -29,9 +29,9 @@
 #     the caller must also pass `secrets: inherit` or the environment secrets resolve EMPTY
 #     (actions/runner#4453; proven live on v0.3.0-rc.1, 2026-08-18). A production
 #     release gates once for signing (melange-build, the only job that holds the key; it also
-#     builds and signs the cumulative channel index) and once for the deploy (deploy-cvm: run
-#     this attested digest on the production machine); publishing in between holds no secret
-#     and asks nobody. A candidate gates once (melange-build). `plan` is deliberately ungated
+#     builds and signs the cumulative channel index) and once for the deploy (deploy-cvm.yml,
+#     called by release.yml AFTER the GitHub Release: run this attested digest on the
+#     production machine); publishing in between holds no secret and asks nobody. A candidate gates once (melange-build). `plan` is deliberately ungated
 #     so tag parsing fails fast before anyone is asked to approve.
 #
 # Three triggers, one gate:
@@ -53,6 +53,8 @@
 #     `main` to the environment's deployment rule, dispatch from main with the tag as input
 #     (melange still checks out the TAG's source, so the package bytes are the tag's), approve
 #     the gates, then remove `main` from the rule again.
+#     A dispatch builds and publishes the channels only: the CVM deploy lives in
+#     deploy-cvm.yml, which release.yml alone can call.
 #   The candidate split (one discriminator everywhere: a `-` in the tag marks the candidate
 #   space, the same rule release.yml uses for the prerelease flag):
 #     - candidates (vX.Y.Z-rc.N) BUILD AND PUBLISH the OCI image (ghcr, :vX.Y.Z-rc.N tag only,
@@ -60,8 +62,9 @@
 #       docker/podman pull a candidate without the apk repository ever carrying it.
 #     - production tags additionally publish the slices to the cumulative Pages repository
 #       (index built and signed in melange-build), compose the image FROM that published
-#       channel, move :latest (v1.0.0+ only — a v0.x stable never does), and then — in the separately gated deploy-cvm job — deploy the
-#       Phala CVM. Same `publish` job either way; the kind gates four steps and one tag.
+#       channel, and move :latest (v1.0.0+ only — a v0.x stable never does). The Phala CVM
+#       deploy is NOT in this file: release.yml calls deploy-cvm.yml after the Release is
+#       published. Same `publish` job either way; the kind gates four steps and one tag.
 #   apk version grammar has no hyphen: vX.Y.Z-rc.N maps to X.Y.Z_rcN (apk pre-release ordering
 #   keeps it below X.Y.Z); any OTHER hyphen suffix fails loudly instead of guessing.
 name: apk-repo
@@ -75,6 +78,16 @@ on:
         description: "release tag to package (vX.Y.Z or vX.Y.Z-rc.N — candidates build the OCI image only)"
         required: true
         type: string
+    # What the caller needs after this workflow: the digest to name in the release and to
+    # deploy, and the release kind. release.yml publishes the GitHub Release only AFTER these
+    # exist, and runs the CVM deploy (deploy-cvm.yml) after the Release.
+    outputs:
+      image-digest:
+        description: "sha256 digest of the pushed ghcr image index"
+        value: ${{ jobs.publish.outputs.image-digest }}
+      candidate:
+        description: "'true' for a vX.Y.Z-rc.N tag, 'false' for a production tag"
+        value: ${{ jobs.plan.outputs.candidate }}
   workflow_dispatch:
     inputs:
       tag:
@@ -258,37 +271,10 @@ jobs:
             exit 1
           fi
           umask 077 && printf '%s' "$MELANGE_SIGNING_KEY" > melange.rsa
-          # Stolen from the wolfi-dev/os Makefile (surfaced as the official actions'
-          # source-date-epoch input): pin the build clock to the TAG COMMIT. melange stamps
-          # file times and the package build_date from SOURCE_DATE_EPOCH, and the compiled
-          # `ch` binary is already deterministic (release.yml's double-build gate) — so a
-          # later re-dispatch has a real shot at rebuilding byte-identical apks, which is
-          # exactly what production-publish's immutability check (cmp, refuse different
-          # bytes) needs in order to pass on a partial-publish retry instead of bricking.
-          # Plain assignment + guard, NOT `export X="$(...)"` — export returns 0 even when
-          # the substitution fails, and run 32225918023 shipped an empty epoch that way.
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          test -n "$SOURCE_DATE_EPOCH" || { echo "::error::could not read the tag commit's timestamp for SOURCE_DATE_EPOCH"; exit 1; }
-          export SOURCE_DATE_EPOCH
-          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (tag commit)"
-          # bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the
-          # runner this job container exists to restore): as in-container root the bwrap
-          # probe that refused the unprivileged runner user (run 32178646153) passes, and no
-          # daemon socket is involved. The docker runner is NOT usable in here even though
-          # the host socket is mounted: a sibling container's bind mounts resolve against
-          # the HOST filesystem, where this job's /__w workspace path does not exist. The
-          # flag stays EXPLICIT so an upstream default change cannot silently move the
-          # isolation model.
-          melange build packaging/melange.yaml \
-            --runner bubblewrap \
-            --arch "${{ matrix.arch }}" \
-            --signing-key melange.rsa \
-            --generate-provenance \
-            --out-dir packages
-          # `melange build` already generates AND signs the per-arch APKINDEX.tar.gz with the
-          # same key (observed in the v0.3.0-rc.1 backfill log, 2026-08-18). That local index
-          # is what CANDIDATES ship; production builds its CUMULATIVE index in the next step.
-          ls -l "packages/${{ matrix.arch }}/"
+          # The build clock, the runner and the flags live in ONE script that the rehearsal
+          # (release-toolchain.yml, every push to main, throwaway key) runs too — a rehearsal
+          # that passes has run this exact command line.
+          sh scripts/apk-melange-build.sh "${{ matrix.arch }}" melange.rsa
 
       # The new apk joins the per-arch channel HERE, where the key already is, so the publish job
       # holds no secret and needs no reviewer click. Production merges against the PUBLISHED
@@ -326,18 +312,9 @@ jobs:
               *) echo "::error::could not query origin for the gh-pages branch (git ls-remote exit $rc) — not building a cumulative index blind"; exit 1 ;;
             esac
           fi
-          # The immutability rule lives in ONE tested script (packages/cli/test/apk-channel-merge.test.ts):
-          # identical bytes skip, differing provenance keeps the first, differing apk REFUSES
-          # before anything is copied. It writes the names it added.
-          sh scripts/apk-channel-merge.sh "site/apk/$ARCH" "packages/$ARCH" added.txt
-          (cd "site/apk/$ARCH" && melange index -o APKINDEX.tar.gz --signing-key "$GITHUB_WORKSPACE/melange.rsa" ./*.apk)
-          # The slice the publish job places: ONLY what this merge added plus the re-signed
-          # index — never the whole channel, which would make every artifact grow with history.
-          rm -rf slice && mkdir -p slice
-          cp "site/apk/$ARCH/APKINDEX.tar.gz" slice/
-          while IFS= read -r name; do cp "site/apk/$ARCH/$name" slice/; done < added.txt
-          printf '%s\n' "$base" > slice-base.sha
-          echo "slice for $ARCH: $(wc -l < added.txt) added file(s) + signed index, indexed against gh-pages $base"
+          # Merge under the immutability rule, sign ONE index, cut the slice — shared with the
+          # rehearsal (scripts/apk-slice.sh).
+          sh scripts/apk-slice.sh "$ARCH" melange.rsa "$base"
 
       - name: Scrub the signing key
         if: ${{ always() }}
@@ -499,39 +476,26 @@ jobs:
           done
           echo "Pages never served ${APKVER}" >&2; exit 1
 
-      - name: Point the spec at the local slices (candidate)
-        if: ${{ needs.plan.outputs.candidate == 'true' }}
-        run: |
-          # The Pages channel never carries a candidate: each slice IS a signed per-arch
-          # repository (apks + APKINDEX.tar.gz), so the image composes from them as a local repo.
-          # The wolfi repo stays as-is; only the cork-cli repo/keyring pair is swapped.
-          for arch in x86_64 aarch64; do
-            mkdir -p "local/$arch" && cp -a "incoming/$arch/slice/." "local/$arch/"
-          done
-          yq -i '(.contents.repositories[] | select(. == "https://cork-technology.github.io/cork-cli/apk")) = "./local"' packaging/cork-cli.apko.yaml
-          yq -i '(.contents.keyring[] | select(. == "https://cork-technology.github.io/cork-cli/melange.rsa.pub")) = "./packaging/melange.rsa.pub"' packaging/cork-cli.apko.yaml
-          yq '.contents.repositories, .contents.keyring' packaging/cork-cli.apko.yaml
-
-      - name: Pin the apk version and stamp the annotations
+      - name: Write the release identity into the image spec
         env:
           APKVER: ${{ needs.plan.outputs.apkver }}
           TAG: ${{ needs.plan.outputs.tag }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
         run: |
-          # An independent `apko build` of this spec must resolve the SAME package as this run —
-          # pin cork-cli to the exact version-revision instead of floating on the index head.
-          # (epoch is 0 in melange.yaml; a future epoch bump must be mirrored here.)
-          PIN="cork-cli=${APKVER}-r0" \
-          yq -i '(.contents.packages[] | select(. == "cork-cli")) = strenv(PIN)' packaging/cork-cli.apko.yaml
-          yq '.contents.packages' packaging/cork-cli.apko.yaml
-          # OCI annotations a verifier reads without pulling the SBOM: the static ones live in the
-          # spec; version and revision are the RELEASE's. The revision is the tag's commit, not
-          # github.sha — on a backfill dispatched from main they differ, and the image must name
-          # the source it was built from.
+          # The revision is the tag's commit, not github.sha — on a backfill dispatched from
+          # main they differ, and the image must name the source it was built from.
           git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
           rev="$(git rev-parse "$TAG^{commit}")"
-          ANN_VERSION="$TAG" ANN_REVISION="$rev" \
-          yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' packaging/cork-cli.apko.yaml
-          yq '.annotations' packaging/cork-cli.apko.yaml
+          test -n "$rev" || { echo "::error::could not resolve the commit of $TAG"; exit 1; }
+          # Where the apk comes from, the exact version pin, and the two release annotations —
+          # ONE script, shared with the rehearsal. A candidate composes from its slices as a
+          # local repository (the Pages channel never carries a candidate); production composes
+          # from the channel it just published.
+          if [ "$CANDIDATE" = "true" ]; then
+            sh scripts/apk-image-spec.sh local "$APKVER" "$TAG" "$rev" packaging/melange.rsa.pub
+          else
+            sh scripts/apk-image-spec.sh pages "$APKVER" "$TAG" "$rev"
+          fi
 
       - name: Build + push the image
         id: image
@@ -555,7 +519,8 @@ jobs:
           # shellcheck disable=SC2086 # $tags is a deliberate word list
           apko publish packaging/cork-cli.apko.yaml $tags --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation
-          # (env, this job) and for the deploy job (step output → job output).
+          # (env, this job) and for the caller (step output → job output → workflow output:
+          # release.yml names it in the Release and hands it to deploy-cvm.yml).
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
           test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
@@ -568,53 +533,3 @@ jobs:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
-
-  deploy-cvm:
-    # The ONE reviewer gate of a production release. By the time this asks, the apk channel
-    # and the image are published and attested; approving means exactly "run this attested
-    # digest on the production CVM". A Phala failure marks the run red and undoes nothing —
-    # re-run THIS job alone to retry (the publish job need not repeat). Split out of
-    # production-publish on 2026-08-21 so the deploy credential lives in one small job.
-    #
-    # Phala notes (Phase 2b of the remote-MCP plan): the CVM runs the EXACT attested digest —
-    # the compose is digest-pinned (verification breaks on tags) and its runtime secrets live
-    # as encrypted CVM secrets in the Phala dashboard, never in the compose or this workflow.
-    # Third-party verification: packaging/VERIFY.md + scripts/verify-deployment.ts (six checks:
-    # quote signature, RTMR3 replay, compose-hash, digest pinning, gh attestation link).
-    needs: [plan, publish]
-    if: ${{ needs.plan.outputs.candidate == 'false' }}
-    environment: release # PHALA_CLOUD_API_KEY
-    runs-on: ubuntu-latest
-    container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      # nodejs + npm: the phala CLI (exact-pinned below); GNU sed/grep for the digest
-      # substitution and its check; libgcc + libstdc++ for the runner's mounted node.
-      - name: Install the deploy toolchain (Wolfi signed apk repo)
-        shell: sh
-        run: apk add --no-cache bash coreutils git grep libgcc libstdc++ nodejs npm sed
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/phala-compose.yml
-
-      - name: Substitute the attested digest into the compose
-        env:
-          IMAGE_DIGEST: ${{ needs.publish.outputs.image-digest }}
-        run: |
-          test -n "$IMAGE_DIGEST" || { echo "::error::no image digest handed over from production-publish" >&2; exit 1; }
-          sed "s|\${DIGEST}|$IMAGE_DIGEST|" packaging/phala-compose.yml > phala-compose.deploy.yml
-          grep -q "@sha256:[0-9a-f]\{64\}" phala-compose.deploy.yml || { echo "compose image is not digest-pinned after substitution" >&2; exit 1; }
-          grep "image:" phala-compose.deploy.yml
-
-      - name: Deploy the CVM (name-keyed in-place update)
-        env:
-          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
-        run: |
-          test -n "$PHALA_CLOUD_API_KEY" || { echo "PHALA_CLOUD_API_KEY is not set in the 'release' environment — see the blocked-on-owner list in packaging/VERIFY.md" >&2; exit 1; }
-          # Exact-pinned + scripts disabled: this job holds PHALA_CLOUD_API_KEY, so a floating
-          # `latest` here would hand deploy credentials to whoever ships the next phala release.
-          # Bump deliberately, next to the lockfile pins.
-          npm install -g --ignore-scripts phala@1.1.20
-          phala deploy -c phala-compose.deploy.yml -n cork-mcp --wait

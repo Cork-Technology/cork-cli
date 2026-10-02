@@ -82,6 +82,8 @@ const T = {
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
   toolchainPreflight: "packages/cli/test/release-toolchain-preflight.test.ts",
+  releaseWorkflows: "packages/cli/test/release-workflows.test.ts",
+  apkBuildScripts: "packages/cli/test/apk-build-scripts.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
   migration: "packages/core/test/migration.test.ts",
   instant: "packages/schemas/test/instant.test.ts",
@@ -7063,14 +7065,6 @@ const CATALOG: Mutant[] = [
     tests: [T.toolchainPreflight],
   },
   {
-    // A workflow whose install lines the pattern no longer finds must refuse, not pass with nothing checked.
-    id: "toolchain-preflight-no-lines-admitted",
-    file: "scripts/release-toolchain-preflight.sh",
-    find: "test -n \"$lines\" || { echo \"release-toolchain: no \\`apk add --no-cache\\` line found in $workflow\" >&2; exit 1; }",
-    replace: "test -n \"$lines\" || true",
-    tests: [T.toolchainPreflight],
-  },
-  {
     // A missing workflow file is a refusal with its own message.
     id: "toolchain-preflight-missing-workflow-admitted",
     file: "scripts/release-toolchain-preflight.sh",
@@ -7236,6 +7230,510 @@ const CATALOG: Mutant[] = [
     file: "scripts/bump-wolfi-pin.sh",
     find: "  *) echo \"bump-wolfi-pin: unknown argument: $1\" >&2; exit 2 ;;",
     replace: "  *) ;;",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A release path whose install lines the pattern no longer finds must refuse, not pass with nothing checked.
+    id: "toolchain-preflight-no-lines-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "test -n \"$lines\" || { echo \"release-toolchain: no \\`apk add --no-cache\\` line found in $workflows\" >&2; exit 1; }",
+    replace: "test -n \"$lines\" || true",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Discovery that finds no workflow is a refusal: a moved workflows directory must not read as 'nothing to check'.
+    id: "toolchain-preflight-no-workflow-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "[ -n \"$(printf '%s' \"$workflows\" | tr -d ' ')\" ] || { echo \"release-toolchain: no workflow names the wolfi-base image\" >&2; exit 1; }",
+    replace: "[ -n \"$(printf '%s' \"$workflows\" | tr -d ' ')\" ] || exit 0",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Each distinct install line once: the rehearsal repeats the release's lines, and a second container for the same set proves nothing.
+    id: "toolchain-preflight-duplicate-lines-rerun",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: " | awk '!seen[$0]++')\"",
+    replace: " | awk '{print}')\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Every release workflow's install lines are read, not the first file's.
+    id: "toolchain-preflight-first-file-only",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "lines=\"$(sed -n 's/^.*\\(apk add --no-cache [a-z0-9 .+_-]*\\)$/\\1/p' $workflows",
+    replace: "lines=\"$(sed -n 's/^.*\\(apk add --no-cache [a-z0-9 .+_-]*\\)$/\\1/p' ${workflows%% *}",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // ONE digest across every release workflow: two files that each carry one pin, but different ones, must refuse.
+    id: "toolchain-preflight-pins-per-file",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "images=\"$(sed -n 's/^ *image: *\\([^ ]*\\) *$/\\1/p' $workflows | sort -u)\"",
+    replace: "images=\"$(sed -n 's/^ *image: *\\([^ ]*\\) *$/\\1/p' ${workflows%% *} | sort -u)\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The pins of every workflow move together: a bump that rewrites one file leaves two images in the release path.
+    id: "bump-first-file-only",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "n=0; moved=0\nfor workflow in $workflows; do",
+    replace: "n=0; moved=0\nfor workflow in ${workflows%% *}; do",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The single-pin check spans every workflow file.
+    id: "bump-pins-per-file",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "old=\"$(sed -n \"s|^ *image: *$image@\\\\(sha256:[0-9a-f]*\\\\) *\\$|\\\\1|p\" $workflows | sort -u)\"",
+    replace: "old=\"$(sed -n \"s|^ *image: *$image@\\\\(sha256:[0-9a-f]*\\\\) *\\$|\\\\1|p\" ${workflows%% *} | sort -u)\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The bubblewrap runner is explicit: an upstream default change must not move the isolation model.
+    id: "apk-build-runner-dropped",
+    file: "scripts/apk-melange-build.sh",
+    find: "  --runner bubblewrap \\\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // Every apk is built with its SLSA provenance beside it.
+    id: "apk-build-provenance-dropped",
+    file: "scripts/apk-melange-build.sh",
+    find: "  --generate-provenance \\\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The build clock is the packaged commit's time: without the export melange stamps the wall clock and a re-run cannot rebuild the same bytes.
+    id: "apk-build-epoch-not-exported",
+    file: "scripts/apk-melange-build.sh",
+    find: "export SOURCE_DATE_EPOCH\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // No build without the clock: an empty epoch once shipped silently (run 32225918023).
+    id: "apk-build-empty-epoch-admitted",
+    file: "scripts/apk-melange-build.sh",
+    find: "test -n \"$SOURCE_DATE_EPOCH\" || { echo \"::error::could not read the commit's timestamp for SOURCE_DATE_EPOCH\" >&2; exit 1; }",
+    replace: "test -n \"$SOURCE_DATE_EPOCH\" || true",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // An empty key file is the unset-secret case: stop with the reason, before melange dies on a 0-byte key.
+    id: "apk-build-empty-key-admitted",
+    file: "scripts/apk-melange-build.sh",
+    find: "test -s \"$key\" || { echo \"apk-melange-build: the signing key file is missing or empty: $key\" >&2; exit 1; }",
+    replace: "test -e \"$key\" || { echo \"apk-melange-build: the signing key file is missing or empty: $key\" >&2; exit 1; }",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // Only the two architectures the release builds.
+    id: "apk-build-arch-unchecked",
+    file: "scripts/apk-melange-build.sh",
+    find: "case \"$arch\" in x86_64|aarch64) ;; *) echo \"apk-melange-build: unmapped arch $arch\" >&2; exit 2 ;; esac",
+    replace: "case \"$arch\" in *) ;; esac",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The apk and its index are signed with the key the caller named.
+    id: "apk-build-key-not-passed",
+    file: "scripts/apk-melange-build.sh",
+    find: "  --signing-key \"$key\" \\\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // melange index runs inside the channel directory: a relative key path would not resolve there.
+    id: "apk-slice-relative-key",
+    file: "scripts/apk-slice.sh",
+    find: "case \"$key\" in /*) keyabs=\"$key\" ;; *) keyabs=\"$(pwd)/$key\" ;; esac",
+    replace: "keyabs=\"$key\"",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The slice carries only what this build added: the whole channel would make every artifact grow with history.
+    id: "apk-slice-whole-channel",
+    file: "scripts/apk-slice.sh",
+    find: "while IFS= read -r name; do cp \"site/apk/$arch/$name\" slice/; done < added.txt",
+    replace: "cp \"site/apk/$arch\"/*.apk slice/",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A slice directory from an earlier step never leaks into the new slice.
+    id: "apk-slice-stale-slice-kept",
+    file: "scripts/apk-slice.sh",
+    find: "rm -rf slice && mkdir -p slice",
+    replace: "mkdir -p slice",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The slice records the gh-pages commit its index was computed against: the publish job refuses a stale merge by it.
+    id: "apk-slice-base-not-recorded",
+    file: "scripts/apk-slice.sh",
+    find: "printf '%s\\n' \"$base\" > slice-base.sha",
+    replace: "printf '%s\\n' none > slice-base.sha",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The slice's index is the one signed over the CHANNEL, not melange build's own local index.
+    id: "apk-slice-index-of-build",
+    file: "scripts/apk-slice.sh",
+    find: "cp \"site/apk/$arch/APKINDEX.tar.gz\" slice/",
+    replace: "cp \"packages/$arch/APKINDEX.tar.gz\" slice/",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The immutability rule runs before anything is indexed: different bytes under a published name refuse.
+    id: "apk-slice-merge-skipped",
+    file: "scripts/apk-slice.sh",
+    find: "sh \"$here/apk-channel-merge.sh\" \"site/apk/$arch\" \"packages/$arch\" added.txt",
+    replace: "cp \"packages/$arch\"/cork-cli-* \"site/apk/$arch/\" && ls \"packages/$arch\" | grep -v APKINDEX > added.txt",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A local image trusts the key(s) its slices were signed with, not the published key.
+    id: "apk-image-pages-key-kept",
+    file: "scripts/apk-image-spec.sh",
+    find: "    KEY=\"$PAGES_KEY\" yq -i '.contents.keyring |= map(select(. != strenv(KEY)))' \"$spec\"\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // Each slice's key enters the keyring: the rehearsal signs each architecture with its own.
+    id: "apk-image-only-first-key",
+    file: "scripts/apk-image-spec.sh",
+    find: "    for pub in \"$@\"; do\n      case \"$pub\" in",
+    replace: "    for pub in \"$1\"; do\n      case \"$pub\" in",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The image installs the exact version-revision of this release, never the index head.
+    id: "apk-image-version-floats",
+    file: "scripts/apk-image-spec.sh",
+    find: "PIN=\"cork-cli=${apkver}-r0\" yq -i '(.contents.packages[] | select(. == \"cork-cli\")) = strenv(PIN)' \"$spec\"",
+    replace: "true",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The revision annotation names the commit the image was built from.
+    id: "apk-image-revision-not-stamped",
+    file: "scripts/apk-image-spec.sh",
+    find: " | .annotations[\"org.opencontainers.image.revision\"] = strenv(ANN_REVISION)'",
+    replace: "'",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // Version and revision are two facts: the tag, and the commit.
+    id: "apk-image-version-as-revision",
+    file: "scripts/apk-image-spec.sh",
+    find: "ANN_VERSION=\"$tag\" ANN_REVISION=\"$revision\" \\",
+    replace: "ANN_VERSION=\"$tag\" ANN_REVISION=\"$tag\" \\",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A revision that is not a full commit is refused: it becomes a public annotation.
+    id: "apk-image-bad-revision-admitted",
+    file: "scripts/apk-image-spec.sh",
+    find: "case \"$revision\" in *[!0-9a-f]*) echo \"apk-image-spec: revision must be a 40-hex commit (got: $revision)\" >&2; exit 2 ;; esac",
+    replace: "case \"$revision\" in *) ;; esac",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The production spec keeps the published key: a key argument there is a mistake, refused.
+    id: "apk-image-pages-takes-key",
+    file: "scripts/apk-image-spec.sh",
+    find: "    [ $# -eq 4 ] || { echo \"apk-image-spec: pages takes no public key \u2014 the spec's own keyring names the published one\" >&2; exit 2; } ;;",
+    replace: "    : ;;",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A slice without a signed index is not a repository: refuse before the spec points at it.
+    id: "apk-image-missing-index-admitted",
+    file: "scripts/apk-image-spec.sh",
+    find: "      test -f \"incoming/$arch/slice/APKINDEX.tar.gz\" || { echo \"apk-image-spec: incoming/$arch/slice has no signed index\" >&2; exit 1; }",
+    replace: "      : \"incoming/$arch/slice/APKINDEX.tar.gz\"",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // If the spec lost the Pages repository line, `local` has nothing to swap: refuse, never compose from the wrong place.
+    id: "apk-image-local-repo-unchecked",
+    file: "scripts/apk-image-spec.sh",
+    find: "      || { echo \"apk-image-spec: the spec does not name ./local exactly once \u2014 the Pages repository line it replaces is gone from the spec\" >&2; exit 1; }",
+    replace: "      || true",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A spec without the cork-cli package cannot be pinned: refuse instead of building an image without it.
+    id: "apk-image-pin-unchecked",
+    file: "scripts/apk-image-spec.sh",
+    find: "  || { echo \"apk-image-spec: the spec's cork-cli package was not pinned to ${apkver}-r0\" >&2; exit 1; }",
+    replace: "  || true",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // Every input is checked before anything is written: a refusal leaves the spec as it was.
+    id: "apk-image-key-checked-late",
+    file: "scripts/apk-image-spec.sh",
+    find: "    for pub in \"$@\"; do\n      test -s \"$pub\" || { echo \"apk-image-spec: public key file is missing or empty: $pub\" >&2; exit 1; }\n    done\n",
+    replace: "",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // A rehearsal fetches the branch: with the tag still in the step melange looks for a tag that does not exist.
+    id: "apk-rehearsal-tag-kept",
+    file: "scripts/apk-rehearsal-spec.sh",
+    find: "BRANCH=\"$branch\" yq -i 'del(.pipeline[0].with.tag) | .pipeline[0].with.branch = strenv(BRANCH)' \"$spec\"",
+    replace: "BRANCH=\"$branch\" yq -i '.pipeline[0].with.branch = strenv(BRANCH)' \"$spec\"; exit 0",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The commit pin stays: the rehearsal packages exactly the commit under test.
+    id: "apk-rehearsal-pin-dropped",
+    file: "scripts/apk-rehearsal-spec.sh",
+    find: "BRANCH=\"$branch\" yq -i 'del(.pipeline[0].with.tag) | .pipeline[0].with.branch = strenv(BRANCH)' \"$spec\"",
+    replace: "BRANCH=\"$branch\" yq -i 'del(.pipeline[0].with.tag) | del(.pipeline[0].with.expected-commit) | .pipeline[0].with.branch = strenv(BRANCH)' \"$spec\"; exit 0",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // No rehearsal of a spec the identity script has not written.
+    id: "apk-rehearsal-unpinned-admitted",
+    file: "scripts/apk-rehearsal-spec.sh",
+    find: "  0000000000000000000000000000000000000000|null|\"\") echo \"apk-rehearsal-spec: the spec carries no commit pin \u2014 run scripts/apk-spec-identity.sh first\" >&2; exit 1 ;;",
+    replace: "  never) ;;",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // The branch is a ref name, nothing else: it is written into a build spec.
+    id: "apk-rehearsal-branch-unchecked",
+    file: "scripts/apk-rehearsal-spec.sh",
+    find: "case \"$branch\" in *[!A-Za-z0-9._/-]*|\"\") echo \"apk-rehearsal-spec: not a branch name: $branch\" >&2; exit 2 ;; esac",
+    replace: "case \"$branch\" in \"\") echo \"apk-rehearsal-spec: not a branch name: $branch\" >&2; exit 2 ;; esac",
+    tests: [T.apkBuildScripts],
+  },
+  {
+    // PUBLISH LAST: the Release must not exist before the image and apk channel it names (v0.6.1-rc.3).
+    id: "release-publish-before-apk",
+    file: ".github/workflows/release.yml",
+    find: "    needs: [determinism, smoke, config-branch, apk-repo]\n",
+    replace: "    needs: [determinism, smoke, config-branch]\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The apk and image build does not wait for the Release.
+    id: "release-apk-after-publish",
+    file: ".github/workflows/release.yml",
+    find: "  apk-repo:\n    needs: [determinism, smoke, config-branch]\n",
+    replace: "  apk-repo:\n    needs: [determinism, smoke, config-branch, publish]\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The hosted deployment is an excluded channel: it runs after the Release and cannot hold it back.
+    id: "release-deploy-before-publish",
+    file: ".github/workflows/release.yml",
+    find: "    needs: [publish, apk-repo]\n",
+    replace: "    needs: [apk-repo]\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // Only a production tag deploys to the production machine.
+    id: "release-deploy-for-candidates",
+    file: ".github/workflows/release.yml",
+    find: "    if: ${{ needs.apk-repo.outputs.candidate == 'false' }}\n",
+    replace: "    if: ${{ needs.apk-repo.outputs.candidate != 'x' }}\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // No Release that names an image nobody pushed: an empty digest from apk-repo stops the publish job.
+    id: "release-image-digest-unchecked",
+    file: ".github/workflows/release.yml",
+    find: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo \"::error::apk-repo handed over no image digest (got: '$IMAGE_DIGEST') \u2014 refusing to publish a Release that names an image nobody pushed\"; exit 1; }",
+    replace: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || true",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // image.txt is a release asset: the release attestation then binds the image digest to the tag.
+    id: "release-image-asset-dropped",
+    file: ".github/workflows/release.yml",
+    find: "            dist/ch-* dist/cork-*.tgz dist/checksums.txt dist/image.txt\n",
+    replace: "            dist/ch-* dist/cork-*.tgz dist/checksums.txt\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The deploy gets the digest apk-repo pushed in this run, nothing else.
+    id: "release-deploy-digest-from-elsewhere",
+    file: ".github/workflows/release.yml",
+    find: "      image-digest: ${{ needs.apk-repo.outputs.image-digest }}\n",
+    replace: "      image-digest: ${{ github.sha }}\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // A called workflow's job reads environment secrets only when the caller passes `secrets: inherit` (actions/runner#4453).
+    id: "release-apk-secrets-not-inherited",
+    file: ".github/workflows/release.yml",
+    find: "    uses: ./.github/workflows/apk-repo.yml\n    secrets: inherit\n",
+    replace: "    uses: ./.github/workflows/apk-repo.yml\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The image digest leaves the workflow as an output: the Release and the deploy both need it.
+    id: "apkrepo-digest-output-dropped",
+    file: ".github/workflows/apk-repo.yml",
+    find: "        value: ${{ jobs.publish.outputs.image-digest }}\n",
+    replace: "        value: ${{ jobs.plan.outputs.tag }}\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The release kind the caller gates the deploy on is the plan's.
+    id: "apkrepo-candidate-output-wrong",
+    file: ".github/workflows/apk-repo.yml",
+    find: "        value: ${{ jobs.plan.outputs.candidate }}\n",
+    replace: "        value: ${{ jobs.plan.outputs.apkver }}\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // A candidate composes its image from its local slices: the Pages channel never carries a candidate.
+    id: "apkrepo-candidate-composes-from-pages",
+    file: ".github/workflows/apk-repo.yml",
+    find: "            sh scripts/apk-image-spec.sh local \"$APKVER\" \"$TAG\" \"$rev\" packaging/melange.rsa.pub\n",
+    replace: "            sh scripts/apk-image-spec.sh pages \"$APKVER\" \"$TAG\" \"$rev\"\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The image revision is the TAG's commit: on a backfill from main github.sha is another commit.
+    id: "apkrepo-revision-is-github-sha",
+    file: ".github/workflows/apk-repo.yml",
+    find: "          rev=\"$(git rev-parse \"$TAG^{commit}\")\"\n",
+    replace: "          rev=\"$GITHUB_SHA\"\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The build command has ONE spelling, shared with the rehearsal.
+    id: "apkrepo-inline-melange-build",
+    file: ".github/workflows/apk-repo.yml",
+    find: "          sh scripts/apk-melange-build.sh \"${{ matrix.arch }}\" melange.rsa\n",
+    replace: "          melange build packaging/melange.yaml --arch \"${{ matrix.arch }}\" --signing-key melange.rsa --out-dir packages\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The publish job holds no secret and no environment: only the signing build is gated.
+    id: "apkrepo-publish-gated",
+    file: ".github/workflows/apk-repo.yml",
+    find: "    needs: [plan, melange-build]\n    outputs:\n",
+    replace: "    needs: [plan, melange-build]\n    environment: release\n    outputs:\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // No dispatch: an input would be a way to put an arbitrary digest on the production machine.
+    id: "deploycvm-dispatchable",
+    file: ".github/workflows/deploy-cvm.yml",
+    find: "on:\n  workflow_call:\n",
+    replace: "on:\n  workflow_dispatch:\n  workflow_call:\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The production deploy is behind the release environment's reviewers.
+    id: "deploycvm-ungated",
+    file: ".github/workflows/deploy-cvm.yml",
+    find: "    environment: release # PHALA_CLOUD_API_KEY\n",
+    replace: "",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // A full sha256 digest or nothing: this value names what runs on the production machine.
+    id: "deploycvm-digest-unchecked",
+    file: ".github/workflows/deploy-cvm.yml",
+    find: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo \"::error::no image digest handed over from the publish job (got: '$IMAGE_DIGEST')\" >&2; exit 1; }",
+    replace: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || true",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The job that holds the deploy credential installs an exact CLI version.
+    id: "deploycvm-phala-unpinned",
+    file: ".github/workflows/deploy-cvm.yml",
+    find: "          npm install -g --ignore-scripts phala@1.1.20\n",
+    replace: "          npm install -g --ignore-scripts phala\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The rehearsal installs exactly what the release job installs: another package set rehearses another build.
+    id: "rehearsal-installs-differ",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl-4.0 yq\n          git config",
+    replace: "          apk add --no-cache bash bubblewrap git libgcc libstdc++ melange yq\n          git config",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The rehearsal runs the release's build script, not its own copy of the flags.
+    id: "rehearsal-own-build-command",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "          sh scripts/apk-melange-build.sh \"$ARCH\" \"rehearsal-$ARCH.rsa\"\n",
+    replace: "          melange build packaging/melange.yaml --arch \"$ARCH\" --signing-key \"rehearsal-$ARCH.rsa\" --out-dir packages\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The throwaway PRIVATE key never leaves the job.
+    id: "rehearsal-private-key-uploaded",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "            rehearsal-${{ matrix.arch }}.rsa.pub\n",
+    replace: "            rehearsal-${{ matrix.arch }}.rsa\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The private key is removed before the upload step, also when the build failed.
+    id: "rehearsal-key-not-dropped",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "      - name: Drop the throwaway private key\n        if: ${{ always() }}\n",
+    replace: "      - name: Drop the throwaway private key\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The rehearsal builds the image to a file: `apko publish` would push.
+    id: "rehearsal-pushes-image",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "          apko build packaging/cork-cli.apko.yaml cork-cli:rehearsal rehearsal-image.tar --sbom-path sboms/\n",
+    replace: "          apko publish packaging/cork-cli.apko.yaml ghcr.io/cork-technology/cork-cli:rehearsal --sbom-path sboms/\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The whole file holds a read-only token: nothing in it can publish.
+    id: "rehearsal-gets-write-token",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "permissions:\n  contents: read\n",
+    replace: "permissions:\n  contents: read\n  packages: write\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // A pull request's commit is on no branch the build could fetch; and the private repository's commits are not in the public one.
+    id: "rehearsal-runs-on-pull-requests",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "    if: ${{ github.repository == 'Cork-Technology/cork-cli' && github.event_name != 'pull_request' }}\n",
+    replace: "    if: ${{ github.repository == 'Cork-Technology/cork-cli' }}\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // The identity script writes the commit pin FIRST; the rehearsal script then swaps tag for branch.
+    id: "rehearsal-identity-after-flip",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "          sh scripts/apk-spec-identity.sh packaging/melange.yaml \"$REHEARSAL_TAG\" \"$REHEARSAL_APKVER\" \"$COMMIT\"\n          sh scripts/apk-rehearsal-spec.sh packaging/melange.yaml \"$GITHUB_REF_NAME\"\n",
+    replace: "          sh scripts/apk-rehearsal-spec.sh packaging/melange.yaml \"$GITHUB_REF_NAME\"\n          sh scripts/apk-spec-identity.sh packaging/melange.yaml \"$REHEARSAL_TAG\" \"$REHEARSAL_APKVER\" \"$COMMIT\"\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // Each slice is signed with its own throwaway key; the image trusts both.
+    id: "rehearsal-one-key-for-image",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "            incoming/x86_64/rehearsal-x86_64.rsa.pub incoming/aarch64/rehearsal-aarch64.rsa.pub\n",
+    replace: "            incoming/x86_64/rehearsal-x86_64.rsa.pub\n",
+    tests: [T.releaseWorkflows],
+  },
+  {
+    // actionlint comes from an image pinned by version AND digest.
+    id: "toolchain-actionlint-unpinned",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667",
+    replace: "rhysd/actionlint:latest",
     tests: [T.toolchainPreflight],
   },
 ];

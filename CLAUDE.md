@@ -730,6 +730,25 @@ commit would publish it and its history (audit SUPPLY-001). Port and push to pub
 binaries; `apk-spec-identity.sh` turns it into the melange `bun~<pin>` constraint and the spec
 re-asserts it at build time through the same parser.
 
+**The release pipeline publishes last, and main rehearses it** (2026-10-02, after v0.6.1-rc.3
+published a Release whose image did not exist for nine hours). `release.yml`: version-gate →
+two builds → determinism → smoke → config-branch → `apk-repo` (apk + image; the `release`
+environment gate is here) → `publish` (the GitHub Release, refused without a full image digest
+from apk-repo; asset `image.txt` binds that digest to the tag through the release attestation)
+→ `deploy-cvm.yml` (production only, an EXCLUDED channel, no manual trigger). Do not put a
+covered channel after `publish`. `release-toolchain.yml` runs on every push: actionlint over
+every workflow, each `apk add` of the release workflows in the pinned image
+(`scripts/release-toolchain-preflight.sh`; Mondays with `--max-age-days 30`), and — public
+repository only — the REHEARSAL: `melange build` for both architectures and `apko build`,
+with a throwaway key and no push. Release and rehearsal share `scripts/apk-melange-build.sh`,
+`apk-slice.sh`, `apk-image-spec.sh`; the rehearsal adds `apk-rehearsal-spec.sh` (a branch at a
+pinned commit in place of a tag). Never give the build a second spelling in a workflow. The
+wolfi-base digest is ONE pin across `apk-repo.yml`, `deploy-cvm.yml` and
+`release-toolchain.yml`; move it with `sh scripts/bump-wolfi-pin.sh`. Before a tag, the
+`release-toolchain` run on the candidate commit must be green. Tests:
+`packages/cli/test/release-workflows.test.ts` (the job graph, read with yq),
+`apk-build-scripts.test.ts`, `release-toolchain-preflight.test.ts`; all mutation-probed.
+
 ## Commit messages (release policy G8)
 
 No AI co-author trailer on any commit in this repo — not `Co-Authored-By: Claude …`, not any

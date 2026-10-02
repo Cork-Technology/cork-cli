@@ -3,12 +3,22 @@
 # A tag cannot be fixed after the fact, and a release that fails at `apk add` fails AFTER the
 # GitHub Release is published (v0.6.1-rc.3, 2026-10-01: a six-week-old wolfi-base pin). So main
 # learns it first, and learns it on a clock:
-#   - every push and pull request: each `apk add` of apk-repo.yml must install in the pinned
-#     image (scripts/release-toolchain-preflight.sh reads both from that file);
+#   - every push and pull request: each `apk add` of the release workflows must install in the
+#     pinned image (scripts/release-toolchain-preflight.sh reads both from those files), and
+#     every workflow must be valid as GitHub reads it (actionlint);
 #   - every Monday, and on demand: the same, PLUS the image must be at most 30 days old. A
 #     quiet week must not hide an aging pin, and an old pin keeps the signing job on old base
 #     libraries. The fix is one command: sh scripts/bump-wolfi-pin.sh, then commit.
-# No secrets and no environment: it only asks Wolfi's repository a question.
+#   - on every push to main, on Mondays and on demand, in the PUBLIC repository: the REHEARSAL.
+#     It builds the apk for both architectures and the image, with the release's own scripts
+#     and command lines, a throwaway signing key, and no push. The preflight proves that the
+#     tools install; the rehearsal proves that they still build this commit (melange moved
+#     from 0.56 to 0.61 under the old pin and no test saw it). A green rehearsal on the commit
+#     to be tagged is the evidence the cut asks for before a tag.
+# No secrets and no environment anywhere in this file, and `contents: read` only: nothing here
+# CAN publish. The rehearsal differs from a release build in exactly three ways — the key is
+# generated in the job, the spec fetches a branch at a pinned commit instead of a tag
+# (scripts/apk-rehearsal-spec.sh), and the image is built to a file instead of pushed.
 name: release-toolchain
 
 on:
@@ -32,9 +42,138 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Every `apk add` of apk-repo.yml installs in its pinned image
+      # The release workflows only RUN on a tag, so a wrong `needs`, a renamed output or a
+      # missing input of a reusable workflow would first show in a release. actionlint reads
+      # them as GitHub does (it is what found nothing wrong — and what catches a renamed
+      # output — when the publish order changed on 2026-10-02). Version-tagged AND
+      # digest-pinned; shellcheck is off here: this step is about the wiring.
+      - name: Every workflow is valid as GitHub reads it (actionlint)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -shellcheck= -pyflakes=
+      - name: Every `apk add` of the release workflows installs in its pinned image
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         run: sh scripts/release-toolchain-preflight.sh
       - name: The same, and the pinned image is at most 30 days old
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: sh scripts/release-toolchain-preflight.sh --max-age-days 30
+
+  # The apk build of the release, rehearsed: same job container, same install line, same
+  # scripts (apk-spec-identity, apk-melange-build, apk-slice) as apk-repo.yml's melange-build.
+  # Public repository only: melange's git-checkout step clones the PUBLIC repository, where a
+  # private commit does not exist. No pull requests: a pull request's commit is on no branch
+  # that step could fetch.
+  rehearsal-build:
+    if: ${{ github.repository == 'Cork-Technology/cork-cli' && github.event_name != 'pull_request' }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
+      options: --privileged # melange's bubblewrap runner, as in apk-repo.yml
+    timeout-minutes: 30
+    env:
+      # A synthetic identity: a version no release can carry. The tag never exists; the spec
+      # fetches the branch at the pinned commit instead.
+      REHEARSAL_TAG: v0.0.0-rc.0
+      REHEARSAL_APKVER: 0.0.0_rc0
+    steps:
+      - name: Install the build toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: |
+          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl-4.0 yq
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Sandbox preflight — bwrap must work in this container
+        run: |
+          bwrap --unshare-user --bind / / true || { echo "::error::bwrap cannot create its sandbox in this container"; exit 1; }
+          echo "bubblewrap sandbox OK"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Write the rehearsal identity into the spec (this commit, fetched from its branch)
+        run: |
+          COMMIT="$(git rev-parse HEAD)"
+          test -n "$COMMIT" || { echo "::error::could not resolve HEAD"; exit 1; }
+          sh scripts/apk-spec-identity.sh packaging/melange.yaml "$REHEARSAL_TAG" "$REHEARSAL_APKVER" "$COMMIT"
+          sh scripts/apk-rehearsal-spec.sh packaging/melange.yaml "$GITHUB_REF_NAME"
+
+      - name: Build the apk with a throwaway key (the release's command line)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # The key is named per architecture: apk matches a signature to a key by FILE NAME,
+          # and the image job trusts one public key per slice.
+          melange keygen "rehearsal-$ARCH.rsa"
+          sh scripts/apk-melange-build.sh "$ARCH" "rehearsal-$ARCH.rsa"
+
+      - name: Index the slice, signed (an empty channel, as for a candidate)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "site/apk/$ARCH"
+          sh scripts/apk-slice.sh "$ARCH" "rehearsal-$ARCH.rsa" none
+          # What a candidate's slice must hold: the apk, its provenance, the signed index.
+          ls -l slice
+          test -f "slice/cork-cli-$REHEARSAL_APKVER-r0.apk" || { echo "::error::the slice holds no cork-cli apk"; exit 1; }
+          ls slice/*.attest.tar.gz >/dev/null 2>&1 || { echo "::error::the slice holds no SLSA provenance beside the apk"; exit 1; }
+
+      - name: Drop the throwaway private key
+        if: ${{ always() }}
+        run: rm -f rehearsal-*.rsa
+
+      - name: Upload the slice (added files + signed index + base + the throwaway PUBLIC key)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-apk-${{ matrix.arch }}
+          path: |
+            slice/*
+            slice-base.sha
+            rehearsal-${{ matrix.arch }}.rsa.pub
+          if-no-files-found: error
+          retention-days: 1
+
+  # The image build of the release, rehearsed: same job container, same install line, same
+  # spec script as apk-repo.yml's publish job on its candidate path — then `apko build` to a
+  # file where the release runs `apko publish`. No registry login, no push, no attestation.
+  rehearsal-image:
+    needs: rehearsal-build
+    runs-on: ubuntu-latest
+    container:
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
+    timeout-minutes: 20
+    steps:
+      - name: Install the publish toolchain (Wolfi signed apk repo)
+        shell: sh
+        run: apk add --no-cache bash apko coreutils curl git grep libgcc libstdc++ sed yq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Trust the bind-mounted workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rehearsal-apk-x86_64
+          path: incoming/x86_64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rehearsal-apk-aarch64
+          path: incoming/aarch64
+
+      - name: Write the rehearsal identity into the image spec (local slices, throwaway keys)
+        run: |
+          rev="$(git rev-parse HEAD)"
+          sh scripts/apk-image-spec.sh local 0.0.0_rc0 v0.0.0-rc.0 "$rev" \
+            incoming/x86_64/rehearsal-x86_64.rsa.pub incoming/aarch64/rehearsal-aarch64.rsa.pub
+
+      - name: Build the image for both architectures — to a file, never to a registry
+        run: |
+          mkdir -p sboms
+          apko build packaging/cork-cli.apko.yaml cork-cli:rehearsal rehearsal-image.tar --sbom-path sboms/
+          test -s rehearsal-image.tar || { echo "::error::apko built no image"; exit 1; }
+          ls -l rehearsal-image.tar sboms/
+          echo "rehearsal: the apk and the image build for this commit; nothing was pushed"
