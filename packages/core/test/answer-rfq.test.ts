@@ -694,6 +694,56 @@ describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate ride
     expect(bytes.warnings[0]!.message).toMatch(/answer-rfq could not derive the pool the cover creates.*UnexpectedExtraData\(1\)/u);
   });
 
+  /** The stub's fixed-rate RFQ with its one answer's first option changed. */
+  const withOption = (change: (oracleParams: Record<string, unknown>) => void): HandlerContext => ({
+    ...ctx,
+    venueFetch: async (url: string, init?: RequestInit) => {
+      const res = await ctx.venueFetch!(url, init);
+      if (!new URL(url).pathname.endsWith(`/rfqs/v1/${RFQ_FIXED_ID}`)) return res;
+      const row = (await res.json()) as { answers: Array<{ answer: { options: Array<{ market_template: { inline: { oracle_params: Record<string, unknown> } } }> } }> };
+      change(row.answers[0]!.answer.options[0]!.market_template.inline.oracle_params);
+      return new Response(JSON.stringify(row), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const cite = (id: string, c: HandlerContext, over: Record<string, unknown> = {}) =>
+    runTool("cork_prepare_orders", { ...base, account: SIGNED_LOP_PAYLOAD.order.maker as `0x${string}`, clientRequestId: `answer-fixed-${id}`, action: { type: "answer-rfq", rfqId: RFQ_FIXED_ID, answerId: RFQ_FIXED_ANSWER_ID, optionId: "opt1", ...over } }, c);
+
+  it("a CITED option brings its own rate: one without a rate is refused, and the RFQ's rate is never used in its place", async () => {
+    // Building at the REQUEST's rate would sign an order that cites a quote and creates a pool
+    // the quote never named.
+    const noRate = withOption((op) => { delete op["rate_override"]; });
+    const refused = await cite("0020", noRate);
+    expect(refused.state).toBe("unavailable");
+    expect(refused.warnings[0]).toMatchObject({ code: "invalid_order_terms" });
+    expect(refused.warnings[0]!.message).toMatch(/neither the cited option nor this call names the frozen rate/u);
+    for (const bad of ["0", "01", 750000000000000000]) {
+      expect((await cite("0021", withOption((op) => { op["rate_override"] = bad; }))).state, JSON.stringify(bad)).toBe("unavailable");
+    }
+    // The caller's own rate is the way out the message names.
+    const own = await cite("0022", noRate, { jitMarket: { rateOverride: "730000000000000000" } });
+    expect(own.state, JSON.stringify(own.warnings)).toBe("ok");
+    expect((await hookOf(own.data as Answered)).rateOverride).toBe("730000000000000000");
+    // A cited option's rate is labeled as the option's, also when it equals the RFQ's.
+    const same = await cite("0023", withOption((op) => { op["rate_override"] = RFQ_FIXED_RATE; }));
+    expect((same.data as Answered).answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_RATE, rateFrom: "cited option" });
+  });
+
+  it("an explicit rate that differs from the CITED option's is named: the order then cites a quote it does not back", async () => {
+    // The explicit rate EQUALS the RFQ's, so the request-side comparison is silent — and the
+    // order still builds another pool than the cited quote (RFQ_FIXED_OPTION_RATE) names.
+    const other = await cite("0024", ctx, { jitMarket: { rateOverride: RFQ_FIXED_RATE } });
+    expect(other.state, JSON.stringify(other.warnings)).toBe("ok");
+    const said = other.warnings.filter((x) => x.code === "invalid_order_terms").map((x) => x.message);
+    expect(said.some((m) => new RegExp(`the cited option quotes the frozen rate ${RFQ_FIXED_OPTION_RATE}, and jitMarket\\.rateOverride builds this order at ${RFQ_FIXED_RATE} .*a different pool than the quote it cites.*The order still builds`, "u").test(m))).toBe(true);
+    expect((await hookOf(other.data as Answered)).rateOverride).toBe(RFQ_FIXED_RATE);
+    // The option's own rate, passed explicitly, is no difference; uncited, there is no quote to differ from.
+    const equal = await cite("0025", ctx, { jitMarket: { rateOverride: RFQ_FIXED_OPTION_RATE } });
+    expect(equal.warnings.some((x) => /the cited option quotes the frozen rate/u.test(x.message))).toBe(false);
+    const uncited = await answer("0026", RFQ_FIXED_ID, { jitMarket: { rateOverride: "730000000000000000" } });
+    expect(uncited.state, JSON.stringify(uncited.warnings)).toBe("ok");
+    expect(uncited.warnings.some((x) => /the cited option quotes the frozen rate/u.test(x.message))).toBe(false);
+  });
+
   it("when the reference's rate cannot be read the order still builds and the answer says the comparison was not made", async () => {
     const wrappers = (lookup: () => string): HandlerContext => ({
       ...ctx,

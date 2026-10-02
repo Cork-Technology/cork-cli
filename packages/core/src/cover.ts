@@ -225,12 +225,14 @@ function modeWarnings(kind: CoverKind, recipe: `0x${string}`, modes: readonly Rf
  *  on a recipe that takes none. Shared by rfq-open (the requester's request) and answer-rfq
  *  (the underwriter's order), so both name the same contradiction; only the way out differs.
  *  `rate.raw` is the template's `oracle_params.rate_override` as written; `rate.admissible` is
- *  that value when it passes the venue's rule. */
+ *  that value when it passes the venue's rule. Pass `undefined` for a rate that HAS a reader —
+ *  the rate of a request that names `fixed_rate`, which the venue requires whatever recipe the
+ *  template names: there is then nothing about the rate to judge. */
 export function inlineBlockWarnings(
   kind: CoverKind,
   recipe: `0x${string}`,
   params: InlineTemplateParams | undefined,
-  rate: { raw: unknown; admissible: bigint | undefined },
+  rate: { raw: unknown; admissible: bigint | undefined } | undefined,
   audience: "requester" | "underwriter",
 ): Warning[] {
   const out: Warning[] = [];
@@ -240,7 +242,7 @@ export function inlineBlockWarnings(
       : `The block's bytes are NOT carried into this order; pass jitMarket.extraData for this recipe, or answer with the recipe the block belongs to`;
     out.push({ code: "invalid_order_terms", message: `the inline block is ${params.schema}, the parameter block of ${COVER_LABELS[INLINE_SCHEMA_COVER[params.schema]]}, but the recipe ${recipe} gives ${COVER_LABELS[kind]}: the recipe reads none of that block's own parameters, so an underwriter cannot build the pool the requester means from it. ${wayOut}` });
   }
-  if (kind !== "fixed-rate") {
+  if (kind !== "fixed-rate" && rate !== undefined) {
     if (rate.admissible !== undefined) {
       const wayOut = audience === "requester" ? "Remove rate_override, or name the fixed recipe" : "The rate is NOT carried into this order; for fixed-rate cover answer with the fixed recipe (jitMarket.recipe)";
       out.push({ code: "invalid_order_terms", message: `the template carries rate_override ${rate.admissible}, but the recipe ${recipe} gives ${COVER_LABELS[kind]} and reads a rate oracle: a fill that carries a non-zero rateOverride on such a recipe REVERTS (UnexpectedRateOverride), and the venue does not check this. ${wayOut}` });
@@ -352,7 +354,16 @@ export function readRfqCover(a: {
     modesAgree: a.modes.length === 1 && a.modes[0] === COVER_RFQ_MODE[kind],
   };
   const params = inlineParamsOfTemplate(a.marketTemplate);
-  const warnings = [...modeWarnings(kind, recipe, a.modes), ...inlineBlockWarnings(kind, recipe, params, { raw: oracleParamsOf(a.marketTemplate)?.["rate_override"], admissible: fixedRateOverrideOfTemplate(a.marketTemplate) }, "requester"), ...inlineExpiryWarnings(params, a.expiryWindow, a.nowSeconds)];
+  // A request that names fixed_rate MUST carry the rate, whatever recipe its template names: the
+  // venue refuses it otherwise (measured against cork-api 0.4.4: 201 with the rate, 400 without;
+  // "in mixed-mode requests it specifies the fixed-rate alternative"). So the rate has a reader
+  // there and is not judged. Without that mode nobody reads it, and it is named.
+  // The underwriter's side (answer-rfq) keeps its statement in both cases on purpose: "the rate
+  // is NOT carried into this order" is a fact about the order, not advice about the request.
+  const strayRate = a.modes.includes(COVER_RFQ_MODE["fixed-rate"])
+    ? undefined
+    : { raw: oracleParamsOf(a.marketTemplate)?.["rate_override"], admissible: fixedRateOverrideOfTemplate(a.marketTemplate) };
+  const warnings = [...modeWarnings(kind, recipe, a.modes), ...inlineBlockWarnings(kind, recipe, params, strayRate, "requester"), ...inlineExpiryWarnings(params, a.expiryWindow, a.nowSeconds)];
   if (kind === "impairment") {
     const r = impairmentReading(recipe, params);
     if (r.band) cover.band = r.band;

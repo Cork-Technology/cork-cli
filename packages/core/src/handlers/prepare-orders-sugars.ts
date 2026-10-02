@@ -112,8 +112,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   let expiryTimestamp: bigint;
   let quoteRef: { rfqId: string; answerId: string; optionId: string } | undefined;
   let templateRecipe: `0x${string}` | undefined = recipeAddressOfTemplate(rfq.market_template);
-  // The frozen rate the REQUEST names (cork-api 0.4.4 `rate_override`); a cited option's own
-  // rate, when it carries one, is the rate this answer builds at.
+  // The frozen rate the REQUEST names (cork-api 0.4.4 `rate_override`). An uncited answer builds
+  // at it. A CITED answer builds at the cited option's own rate and never at the request's:
+  // every option carries its own template, so an option without a rate quoted no rate.
   const requestedRate = fixedRateOverrideOfTemplate(rfq.market_template);
   let templateRate = requestedRate;
   // The requester's inline block (anchor, expiry, fees) — the cited option's when it carries one.
@@ -135,7 +136,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     expiryTimestamp = BigInt(e);
     quoteRef = { rfqId: action.rfqId, answerId: action.answerId!, optionId: action.optionId! };
     templateRecipe = recipeAddressOfTemplate(found.option.market_template) ?? templateRecipe;
-    templateRate = fixedRateOverrideOfTemplate(found.option.market_template) ?? templateRate;
+    templateRate = fixedRateOverrideOfTemplate(found.option.market_template);
     const optionInline = inlineParamsOfTemplate(found.option.market_template);
     if (optionInline) {
       inline = optionInline;
@@ -179,12 +180,17 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     return unavailable(chainId, "invalid_order_terms", `jitMarket.rateOverride ${explicitRate} with recipe ${recipe}, which reads a ${recipeSource} oracle: a fill that carries a non-zero rateOverride on such a recipe reverts UnexpectedRateOverride. Remove jitMarket.rateOverride, or answer with the fixed recipe (jitMarket.recipe) for fixed-rate cover`, ctx);
   }
   const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);
-  const rateFrom = explicitRate !== undefined ? "jitMarket.rateOverride" : cited && templateRate !== requestedRate ? "cited option" : "rfq";
+  const rateFrom = explicitRate !== undefined ? "jitMarket.rateOverride" : cited ? "cited option" : "rfq";
   if (isFixed && rateOverride === undefined) {
     return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is the FIXED-rate recipe, and neither the ${cited ? "cited option" : "RFQ"} nor this call names the frozen rate: the template carries no admissible market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0). Pass jitMarket.rateOverride — the rate the pool freezes at`, ctx);
   }
   if (isFixed && requestedRate !== undefined && rateOverride !== requestedRate) {
     warnings.push({ code: "invalid_order_terms", message: `the RFQ asks for the frozen rate ${requestedRate}, and this answer builds at ${rateOverride} (${rateFrom}) — a different FixedRateOracle and so a different pool: a visible counter-proposal the requester may ignore. The order still builds` });
+  }
+  // The order CITES an option, and the venue cross-checks the cited premium only: a rate of the
+  // caller's own builds another pool than the one the cited quote names.
+  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {
+    warnings.push({ code: "invalid_order_terms", message: `the cited option quotes the frozen rate ${templateRate}, and jitMarket.rateOverride builds this order at ${explicitRate} — a different FixedRateOracle and so a different pool than the quote it cites (the venue checks the cited premium, not the rate). Post a revised answer at ${explicitRate} and cite that option, or drop jitMarket.rateOverride. The order still builds` });
   }
   // The template against the recipe, in the words rfq-open uses for the same contradiction: a
   // block written for another cover, a rate on a recipe that reads an oracle.

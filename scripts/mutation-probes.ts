@@ -3669,8 +3669,8 @@ const CATALOG: Mutant[] = [
     // The same warning on the FIXED recipe accuses the one field that recipe needs.
     id: "cover-stray-rate-on-fixed",
     file: "packages/core/src/cover.ts",
-    find: "  if (kind !== \"fixed-rate\") {\n    if (rate.admissible",
-    replace: "  if (true) {\n    if (rate.admissible",
+    find: "  if (kind !== \"fixed-rate\" && rate !== undefined) {\n    if (rate.admissible",
+    replace: "  if (rate !== undefined) {\n    if (rate.admissible",
     tests: [T.cover],
   },
   {
@@ -7735,6 +7735,62 @@ const CATALOG: Mutant[] = [
     find: "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667",
     replace: "rhysd/actionlint:latest",
     tests: [T.toolchainPreflight],
+  },
+  {
+    // A cited option brings its OWN rate: falling back to the request's rate signs an order for a pool the cited quote never named.
+    id: "answer-fixed-cited-falls-back-to-rfq-rate",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    templateRate = fixedRateOverrideOfTemplate(found.option.market_template);\n",
+    replace: "    templateRate = fixedRateOverrideOfTemplate(found.option.market_template) ?? templateRate;\n",
+    tests: [T.answer],
+  },
+  {
+    // A cited answer's rate is the cited option's, and the echo says so whether or not it equals the request's.
+    id: "answer-fixed-cited-rate-source-mislabeled",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited ? \"cited option\" : \"rfq\";",
+    replace: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited && templateRate !== requestedRate ? \"cited option\" : \"rfq\";",
+    tests: [T.answer],
+  },
+  {
+    // An explicit rate that differs from the cited option's makes the order cite a quote it does not back: the venue checks the premium only.
+    id: "answer-fixed-explicit-vs-cited-unsaid",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
+    replace: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== requestedRate) {",
+    tests: [T.answer],
+  },
+  {
+    // Uncited, there is no cited quote to differ from.
+    id: "answer-fixed-explicit-vs-cited-when-uncited",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
+    replace: "  if (isFixed && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
+    tests: [T.answer],
+  },
+  {
+    // A request that names fixed_rate must carry the rate whatever recipe its template names: telling it to remove the rate is advice the venue refuses.
+    id: "cover-fixed-requested-rate-called-stray",
+    file: "packages/core/src/cover.ts",
+    find: "  const strayRate = a.modes.includes(COVER_RFQ_MODE[\"fixed-rate\"])\n",
+    replace: "  const strayRate = a.modes.length === 0\n",
+    tests: [T.cover],
+  },
+  {
+    // Without fixed_rate among the modes a rate on an oracle-reading recipe has no reader: it is still named.
+    id: "cover-stray-rate-never-named",
+    file: "packages/core/src/cover.ts",
+    find: "  const strayRate = a.modes.includes(COVER_RFQ_MODE[\"fixed-rate\"])\n",
+    replace: "  const strayRate = a.modes.length > 0\n",
+    tests: [T.cover],
+  },
+  {
+    // A rate that HAS a reader is passed as `undefined`: judging it anyway would throw on the first field read, or accuse a rate the venue requires.
+    id: "cover-rate-with-a-reader-judged",
+    file: "packages/core/src/cover.ts",
+    find: "  if (kind !== \"fixed-rate\" && rate !== undefined) {\n",
+    replace: "  if (kind !== \"fixed-rate\") {\n    rate = rate ?? { raw: \"1\", admissible: 1n };\n",
+    tests: [T.cover],
   },
 ];
 
