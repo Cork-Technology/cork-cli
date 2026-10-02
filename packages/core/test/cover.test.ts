@@ -30,6 +30,7 @@ import {
   INLINE_SCHEMA_COVER,
   INLINE_TEMPLATE_SCHEMAS,
   inlineAdditionalData,
+  inlineBlockWarnings,
   inlineParamsOfTemplate,
   primaryOf,
   readRfqCover,
@@ -283,6 +284,22 @@ describe("readRfqCover — what the request itself contradicts (pure, chain-free
     expect(notARate.warnings[0]!.message).not.toMatch(/REVERTS/u);
     // On the fixed recipe the key is the point, not a stray.
     expect(read(["fixed_rate"], FIX, fixBlock()).warnings).toEqual([]);
+    // ...also when the request never names fixed_rate: the modes are named, the rate is not.
+    expect(read(["liquidity_only"], FIX, fixBlock()).warnings.some((w) => /rate_override/u.test(w.message))).toBe(false);
+    // A request that NAMES fixed_rate must carry the rate whatever recipe its template names
+    // (the venue's rule), so there the rate is no stray: "remove rate_override" would be advice
+    // the venue refuses. The mode that asks for another cover is still listed.
+    const mixed = read(["liquidity_impairment", "fixed_rate"], IMP, impBlock({ rate_override: "1075000000000000000" }));
+    expect(codes(mixed.warnings)).toEqual(["cover_mode_mismatch"]);
+    expect(mixed.warnings.some((w) => /rate_override/u.test(w.message))).toBe(false);
+    // The reader itself: a rate with a reader is passed as `undefined` and nothing is said; a
+    // rate without one is judged, for the requester and for the underwriter alike.
+    const rate = { raw: "1075000000000000000", admissible: 1075000000000000000n };
+    expect(inlineBlockWarnings("liquidity", LIQ.address, undefined, undefined, "requester")).toEqual([]);
+    expect(inlineBlockWarnings("liquidity", LIQ.address, undefined, rate, "requester").map((w) => w.code)).toEqual(["invalid_order_terms"]);
+    expect(inlineBlockWarnings("liquidity", LIQ.address, undefined, rate, "underwriter")[0]!.message).toMatch(/The rate is NOT carried into this order/u);
+    // A block of another cover is still named when the rate is not judged.
+    expect(inlineBlockWarnings("liquidity", LIQ.address, inlineParamsOfTemplate({ inline: { oracle_params: impBlock() } }), undefined, "requester").map((w) => w.code)).toEqual(["invalid_order_terms"]);
   });
 
   it("an impairment block the band cannot be read from: missing, partial, or a band with no window left", () => {
