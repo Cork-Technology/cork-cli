@@ -1,31 +1,38 @@
 // scripts/release-toolchain-preflight.sh runs every `apk add` of the release workflow in the
 // image that workflow pins, on main, before a tag exists. On 2026-10-01 a six-week-old image pin
 // broke v0.6.1-rc.3 after its GitHub Release was published: the image's world file held
-// libcrypto3 back while Wolfi's repository rolled on. These tests run the real script with a
-// recording stand-in for the container runtime (CI has docker; this suite must not need it), and
-// hold the script to the REAL workflow file — the single source of the image and the lines.
-import { describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
+// libcrypto3 back while Wolfi's repository rolled on. scripts/bump-wolfi-pin.sh is the other
+// half: it moves the pin to the image the registry serves now.
+//
+// These tests run the real scripts. The container runtime is a recording stand-in (CI has docker;
+// this suite must not need it); the registry is a real HTTP server on localhost that the script's
+// own curl talks to. The first block holds both scripts to the REAL workflow files.
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
-const script = join(root, "scripts/release-toolchain-preflight.sh");
+const preflight = join(root, "scripts/release-toolchain-preflight.sh");
+const bump = join(root, "scripts/bump-wolfi-pin.sh");
 const workflow = readFileSync(join(root, ".github/workflows/apk-repo.yml"), "utf8");
 const DIGEST = "a".repeat(64);
+const epoch = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 
 function run(args: string[], env: Record<string, string> = {}) {
-  const r = spawnSync("sh", [script, ...args], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...env } });
+  const r = spawnSync("sh", [preflight, ...args], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...env } });
   return { status: r.status, out: r.stdout, err: r.stderr };
 }
 
-/** A workflow file with the given images and install lines, in the two shapes apk-repo.yml uses. */
-function workflowFile(images: string[], lines: string[]) {
-  const dir = mkdtempSync(join(tmpdir(), "toolchain-preflight-"));
+/** The text of a workflow with the given images and install lines, in the two shapes apk-repo.yml uses. */
+function workflowText(images: string[], lines: string[]) {
   const body = images.map((image, i) => [
     `  job${i}:`,
+    "    # Pinned 2026-08-19: the image built 2026-08-18T11:02:13Z.",
     "    container:",
     `      image: ${image}`,
     "    steps:",
@@ -33,23 +40,43 @@ function workflowFile(images: string[], lines: string[]) {
       ? ["      - shell: sh", "        run: |", `          ${lines[i] ?? "true"}`, "          git config --global --add safe.directory x"]
       : ["      - shell: sh", `        run: ${lines[i] ?? "true"}`]),
   ].join("\n")).join("\n");
+  return `# a comment that says \`apk add\`s its tools\njobs:\n${body}\n`;
+}
+function workflowFile(images: string[], lines: string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "toolchain-preflight-"));
   const file = join(dir, "apk-repo.yml");
-  writeFileSync(file, `# a comment that says \`apk add\`s its tools\njobs:\n${body}\n`);
+  writeFileSync(file, workflowText(images, lines));
   return { dir, file };
 }
 
-/** A stand-in runtime: appends its argv to a log, one argument per line, and fails when the install line contains `failOn`. */
-function runtime(dir: string, failOn = "@@never@@") {
+/**
+ * A stand-in runtime. `run`: appends its argv to a log, one argument per line, and fails when the
+ * install line contains `failOn`. `image inspect`: prints `created` (the image's build time).
+ */
+function runtime(dir: string, opts: { failOn?: string; created?: string } = {}) {
   const log = join(dir, "calls.log");
   const bin = join(dir, "runtime.sh");
-  writeFileSync(bin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> "${log}"; done\nprintf -- '--\\n' >> "${log}"\ncase "$6" in *"${failOn}"*) echo "ERROR: simulated file conflict"; exit 1 ;; esac\nexit 0\n`);
+  writeFileSync(bin, [
+    "#!/bin/sh",
+    `if [ "$1" = image ]; then printf '%s\\n' "$*" >> "${log}.inspect"; ${opts.created === undefined ? "exit 1" : `echo "${opts.created}"; exit 0`}; fi`,
+    `for a in "$@"; do printf '%s\\n' "$a" >> "${log}"; done`,
+    `printf -- '--\\n' >> "${log}"`,
+    `case "$6" in *"${opts.failOn ?? "@@never@@"}"*) echo "ERROR: simulated file conflict"; exit 1 ;; esac`,
+    "exit 0",
+    "",
+  ].join("\n"));
   chmodSync(bin, 0o755);
-  return { bin, calls: () => readFileSync(log, "utf8").split("--\n").filter(Boolean).map((c) => c.trimEnd().split("\n")) };
+  const read = (f: string) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
+  return {
+    bin,
+    calls: () => read(log).split("--\n").filter(Boolean).map((c) => c.trimEnd().split("\n")),
+    inspects: () => read(`${log}.inspect`).trimEnd().split("\n").filter(Boolean),
+  };
 }
 
 const image = (digest = DIGEST) => `cgr.dev/chainguard/wolfi-base@sha256:${digest}`;
 
-describe("release-toolchain preflight — the real workflow", () => {
+describe("release-toolchain preflight — the real workflow files", () => {
   const listed = run(["--list"]);
   const [imageLine, ...lines] = listed.out.trimEnd().split("\n");
 
@@ -75,14 +102,28 @@ describe("release-toolchain preflight — the real workflow", () => {
     expect(lines.flatMap((l) => l.split(" "))).not.toContain("openssl");
   });
 
-  it("CI runs the script on main, without a container of its own", () => {
-    const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-    const job = ci.slice(ci.indexOf("  release-toolchain:"), ci.indexOf("  live-smoke:"));
-    // The exact command, to the end of the line: `--list` would print and check nothing.
-    expect(job).toMatch(/^ {8}run: sh scripts\/release-toolchain-preflight\.sh$/m);
-    expect(job).toContain("runs-on: ubuntu-latest");
-    expect(job).not.toContain("container:");
-    expect(job).not.toContain("needs:");
+  it("the pin carries the dated line the bump script rewrites", () => {
+    expect(workflow.match(/^ *# Pinned \d{4}-\d{2}-\d{2}: the image built \S+\.$/gm)?.length).toBe(1);
+  });
+
+  it("the release-toolchain workflow runs the script on push, on pull requests, and weekly with the age limit", () => {
+    const wf = readFileSync(join(root, ".github/workflows/release-toolchain.yml"), "utf8");
+    const triggers = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\npermissions:"));
+    expect(triggers).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(triggers).toMatch(/^ {2}pull_request:$/m);
+    expect(triggers).toMatch(/^ {2}schedule:\n {4}- cron: "\d+ \d+ \* \* [0-6]"/m);
+    expect(triggers).toMatch(/^ {2}workflow_dispatch:$/m);
+    // The exact commands, to the end of the line: `--list` would print and check nothing.
+    const steps = [...wf.matchAll(/^ {8}if: (.+)\n {8}run: (.+)$/gm)].map((m) => [m[1], m[2]]);
+    expect(steps).toEqual([
+      ["github.event_name == 'push' || github.event_name == 'pull_request'", "sh scripts/release-toolchain-preflight.sh"],
+      ["github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "sh scripts/release-toolchain-preflight.sh --max-age-days 30"],
+    ]);
+    // As YAML keys (the header comment may use the words): no job container, no secret, no environment.
+    expect(wf).not.toMatch(/^\s+container:/m);
+    expect(wf).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(wf).not.toMatch(/^\s+environment:/m);
+    expect(wf).toMatch(/^permissions:\n {2}contents: read$/m);
   });
 });
 
@@ -105,17 +146,20 @@ describe("release-toolchain preflight — the run", () => {
 
   it("fails when one install fails, names the line, and stops there", () => {
     const wf = workflowFile([image(), image()], [A, B]);
-    const rt = runtime(wf.dir, "melange");
+    const rt = runtime(wf.dir, { failOn: "melange", created: "2026-09-29T20:55:55Z" });
     const r = run([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
     expect(r.status).toBe(1);
     expect(r.out).toContain(`::error::release-toolchain: FAILED in the pinned image: ${A}`);
+    expect(r.out).toContain("sh scripts/bump-wolfi-pin.sh");
     expect(rt.calls().length).toBe(1);
     expect(r.out).not.toContain("OK    ");
+    // A failed install is the verdict; the age is not asked for after it.
+    expect(rt.inspects()).toEqual([]);
   });
 
   it("fails when a LATER install fails, after the earlier one passed", () => {
     const wf = workflowFile([image(), image()], [A, B]);
-    const rt = runtime(wf.dir, "apko");
+    const rt = runtime(wf.dir, { failOn: "apko" });
     const r = run([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
     expect(r.status).toBe(1);
     expect(r.out).toContain(`release-toolchain: OK    ${A}`);
@@ -127,6 +171,63 @@ describe("release-toolchain preflight — the run", () => {
     const r = run(["--list"], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: join(wf.dir, "absent") });
     expect(r.status).toBe(0);
     expect(r.out).toBe(`image: ${image()}\n${A}\n`);
+  });
+});
+
+describe("release-toolchain preflight — the image's age", () => {
+  const A = "apk add --no-cache bash";
+  const built = "2026-08-18T11:02:13Z";
+  const go = (args: string[], created: string | undefined, now: string) => {
+    const wf = workflowFile([image()], [A]);
+    const rt = runtime(wf.dir, created === undefined ? {} : { created });
+    return { ...run(args, { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin, PREFLIGHT_NOW_EPOCH: String(epoch(now)) }), rt };
+  };
+
+  it("reports the age in whole days, from the image the runs pulled", () => {
+    const r = go([], built, "2026-10-01T18:54:00Z");
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(`the pinned image was built ${built} — 44 days ago`);
+    expect(r.rt.inspects()).toEqual([`image inspect --format {{.Created}} ${image()}`]);
+  });
+
+  it("counts calendar days across a month end, a year end and a leap day", () => {
+    const days = (created: string, now: string) => Number(/— (-?\d+) days ago/.exec(go([], created, now).out)?.[1]);
+    expect(days("2026-01-31T23:59:59Z", "2026-02-01T00:00:00Z")).toBe(1);
+    expect(days("2026-12-31T00:00:00Z", "2027-01-01T12:00:00Z")).toBe(1);
+    expect(days("2028-02-28T00:00:00Z", "2028-03-01T00:00:00Z")).toBe(2); // 2028 is a leap year
+    expect(days("2027-02-28T00:00:00Z", "2027-03-01T00:00:00Z")).toBe(1);
+    expect(days("2026-10-01T00:00:00Z", "2026-10-01T23:59:59Z")).toBe(0);
+    expect(days("2024-10-01T00:00:00Z", "2026-10-01T00:00:00Z")).toBe(730);
+  });
+
+  it("without a limit an old image passes: a push must not fail for the calendar", () => {
+    expect(go([], built, "2027-10-01T00:00:00Z").status).toBe(0);
+  });
+
+  it("--max-age-days: the limit itself passes, one day more fails and names the fix", () => {
+    const on = go(["--max-age-days", "30"], built, "2026-09-17T11:00:00Z"); // 30 days
+    expect(on.out).toContain("— 30 days ago");
+    expect(on.status).toBe(0);
+    const over = go(["--max-age-days", "30"], built, "2026-09-18T00:00:00Z"); // 31 days
+    expect(over.status).toBe(1);
+    expect(over.out).toContain("::error::release-toolchain: the pinned wolfi-base image is 31 days old (limit 30)");
+    expect(over.out).toContain("sh scripts/bump-wolfi-pin.sh");
+  });
+
+  it("an unreadable build date fails only when a limit was asked for", () => {
+    const quiet = go([], undefined, "2026-10-01T00:00:00Z");
+    expect(quiet.status).toBe(0);
+    expect(quiet.out).toContain("build date is not readable; age not checked");
+    const asked = go(["--max-age-days", "30"], undefined, "2026-10-01T00:00:00Z");
+    expect(asked.status).toBe(1);
+    expect(asked.out).toContain("the age limit cannot be checked");
+    expect(go(["--max-age-days", "30"], "yesterday", "2026-10-01T00:00:00Z").status).toBe(1);
+  });
+
+  it("refuses a limit that is not a whole number, and an unknown argument", () => {
+    for (const bad of [["--max-age-days"], ["--max-age-days", "soon"], ["--max-age-days", "3.5"], ["--max-age-days", "-1"], ["--frobnicate"]]) {
+      expect(run(bad).status, bad.join(" ")).toBe(2);
+    }
   });
 });
 
@@ -159,5 +260,172 @@ describe("release-toolchain preflight — refusals", () => {
     const missing = run(["--list"], { RELEASE_WORKFLOW: join(wf.dir, "absent.yml") });
     expect(missing.status).toBe(1);
     expect(missing.err).toContain("not found");
+  });
+});
+
+// ── bump-wolfi-pin.sh ────────────────────────────────────────────────────────────────────────
+
+/** What the registry serves: the manifest body for `latest`, and the digest it CLAIMS for it. */
+type Served = { body: string; claimed?: string };
+const manifest = (created: string) => JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [], annotations: { "org.opencontainers.image.created": created, "org.opencontainers.image.title": "wolfi-base" } });
+const digestOf = (body: string) => `sha256:${createHash("sha256").update(body).digest("hex")}`;
+
+describe("bump-wolfi-pin", () => {
+  let server: Server;
+  let base = "";
+  let served: Served = { body: "" };
+  const seen: string[] = [];
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url} auth=${req.headers.authorization ?? ""}`);
+      const claimed = served.claimed ?? digestOf(served.body);
+      if (req.url?.startsWith("/token?scope=repository:chainguard/wolfi-base:pull")) {
+        res.setHeader("content-type", "application/json");
+        return res.end(JSON.stringify({ token: "tok-123" }));
+      }
+      if (req.headers.authorization !== "Bearer tok-123") { res.statusCode = 401; return res.end(); }
+      if (req.url === "/v2/chainguard/wolfi-base/manifests/latest" && req.method === "HEAD") {
+        if (claimed) res.setHeader("docker-content-digest", claimed);
+        return res.end();
+      }
+      if (req.url === `/v2/chainguard/wolfi-base/manifests/${claimed}`) return res.end(served.body);
+      res.statusCode = 404; res.end();
+    });
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    const addr = server.address();
+    base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+  });
+  afterAll(() => new Promise<void>((ok) => server.close(() => ok())));
+
+  /** Async: the registry lives in this process, so a blocking spawn would starve it. */
+  function runBump(args: string[], env: Record<string, string>) {
+    return new Promise<{ status: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn("sh", [bump, ...args], { cwd: root, env: { PATH: process.env.PATH ?? "", WOLFI_REGISTRY: base, ...env } });
+      let out = ""; let err = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (err += d));
+      child.on("close", (status) => resolve({ status, out, err }));
+    });
+  }
+  const A = "apk add --no-cache bash git";
+  const B = "apk add --no-cache bash apko";
+  const C = "apk add --no-cache bash nodejs";
+  const three = () => workflowFile([image(), image(), image()], [A, B, C]);
+  const BUILT = "2026-09-29T20:55:55Z";
+
+  it("moves every pin to the digest the registry serves, proves it, dates the line, and runs the preflight on the NEW image", async () => {
+    served = { body: manifest(BUILT) };
+    const next = digestOf(served.body);
+    const wf = three();
+    const rt = runtime(wf.dir, { created: BUILT });
+    seen.length = 0;
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
+    expect(r.err).toBe("");
+    expect(r.status).toBe(0);
+    // The file is the original with ONLY the digest and the dated line replaced.
+    const today = new Date().toISOString().slice(0, 10);
+    const expected = workflowText([image(), image(), image()], [A, B, C])
+      .replaceAll(`sha256:${DIGEST}`, next)
+      .replaceAll("# Pinned 2026-08-19: the image built 2026-08-18T11:02:13Z.", `# Pinned ${today}: the image built ${BUILT}.`);
+    expect(readFileSync(wf.file, "utf8")).toBe(expected);
+    expect(expected).not.toContain(DIGEST);
+    expect(r.out).toContain(`pinned:  ${image()}`);
+    expect(r.out).toContain(`current: cgr.dev/chainguard/wolfi-base@${next}   (built ${BUILT})`);
+    expect(r.out).toContain("3 pins moved");
+    const moved = `cgr.dev/chainguard/wolfi-base@${next}`;
+    expect(rt.calls()).toEqual([A, B, C].map((line) => ["run", "--rm", moved, "sh", "-ec", line]));
+    expect(r.out).toContain("the preflight passed on the new image");
+    // The token is asked for once and sent on both registry reads.
+    expect(seen).toEqual([
+      "GET /token?scope=repository:chainguard/wolfi-base:pull auth=",
+      "HEAD /v2/chainguard/wolfi-base/manifests/latest auth=Bearer tok-123",
+      `GET /v2/chainguard/wolfi-base/manifests/${next} auth=Bearer tok-123`,
+    ]);
+  });
+
+  it("--dry-run reports both digests and changes nothing", async () => {
+    served = { body: manifest(BUILT) };
+    const wf = three();
+    const rt = runtime(wf.dir);
+    const before = readFileSync(wf.file, "utf8");
+    const r = await runBump(["--dry-run"], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(digestOf(served.body));
+    expect(r.out).toContain("--dry-run, nothing changed");
+    expect(readFileSync(wf.file, "utf8")).toBe(before);
+    expect(rt.calls()).toEqual([]);
+  });
+
+  it("a pin that is already the current image is left alone", async () => {
+    served = { body: manifest(BUILT) };
+    const current = digestOf(served.body).slice("sha256:".length);
+    const wf = workflowFile([image(current), image(current)], [A, B]);
+    const rt = runtime(wf.dir);
+    const before = readFileSync(wf.file, "utf8");
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("nothing to change");
+    expect(readFileSync(wf.file, "utf8")).toBe(before);
+    expect(rt.calls()).toEqual([]);
+  });
+
+  it("refuses a digest the served content does not hash to", async () => {
+    served = { body: manifest(BUILT), claimed: `sha256:${"c".repeat(64)}` };
+    const wf = three();
+    const before = readFileSync(wf.file, "utf8");
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: runtime(wf.dir).bin });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("refusing a digest the content does not prove");
+    expect(readFileSync(wf.file, "utf8")).toBe(before);
+  });
+
+  it("refuses when the registry names no digest, or one that is not a full sha256", async () => {
+    for (const claimed of ["", "sha256:abc", `sha512:${"a".repeat(64)}`, `sha256:${"G".repeat(64)}`]) {
+      served = { body: manifest(BUILT), claimed };
+      const wf = three();
+      const before = readFileSync(wf.file, "utf8");
+      const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: runtime(wf.dir).bin });
+      expect(r.status, claimed).toBe(1);
+      expect(r.err, claimed).toContain("did not name a sha256 digest");
+      expect(readFileSync(wf.file, "utf8"), claimed).toBe(before);
+    }
+  });
+
+  it("refuses a workflow whose job containers carry two different pins", async () => {
+    served = { body: manifest(BUILT) };
+    const wf = workflowFile([image(), image("b".repeat(64))], [A, B]);
+    const before = readFileSync(wf.file, "utf8");
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: runtime(wf.dir).bin });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("expected ONE cgr.dev/chainguard/wolfi-base pin");
+    expect(readFileSync(wf.file, "utf8")).toBe(before);
+  });
+
+  it("a preflight that fails on the new image fails the bump and says the file is already moved", async () => {
+    served = { body: manifest(BUILT) };
+    const wf = three();
+    const rt = runtime(wf.dir, { failOn: "apko" });
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: rt.bin });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("the preflight FAILED on the new image");
+    expect(readFileSync(wf.file, "utf8")).toContain(digestOf(served.body));
+  });
+
+  it("without a container runtime it moves the pins and says that CI runs the preflight", async () => {
+    served = { body: manifest(BUILT) };
+    const wf = three();
+    const r = await runBump([], { RELEASE_WORKFLOW: wf.file, CONTAINER_RUNTIME: "no-such-container-runtime" });
+    expect(r.status).toBe(0);
+    expect(readFileSync(wf.file, "utf8")).toContain(digestOf(served.body));
+    expect(r.out).toContain("no container runtime here, so the preflight did not run");
+    expect(r.out).not.toContain("the preflight passed");
+  });
+
+  it("refuses an unknown argument before it asks the registry anything", async () => {
+    seen.length = 0;
+    const r = await runBump(["--force"], { RELEASE_WORKFLOW: three().file });
+    expect(r.status).toBe(2);
+    expect(seen).toEqual([]);
   });
 });

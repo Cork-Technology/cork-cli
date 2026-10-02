@@ -7034,16 +7034,16 @@ const CATALOG: Mutant[] = [
     // A failed install must fail the script: a green preflight over a red install is the incident again.
     id: "toolchain-preflight-failure-swallowed",
     file: "scripts/release-toolchain-preflight.sh",
-    find: "done || failed=1",
-    replace: "done || failed=0",
+    find: "[ \"$failed\" = 0 ] || exit 1",
+    replace: "[ \"$failed\" = 0 ] || true",
     tests: [T.toolchainPreflight],
   },
   {
     // The first failing line stops the run and is the one named.
     id: "toolchain-preflight-continues-after-failure",
     file: "scripts/release-toolchain-preflight.sh",
-    find: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Re-resolve the wolfi-base digest (the image is older than the repository it installs from) or fix the package name, then re-run.\"\n    exit 1",
-    replace: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Re-resolve the wolfi-base digest (the image is older than the repository it installs from) or fix the package name, then re-run.\"",
+    find: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Move the pin (sh scripts/bump-wolfi-pin.sh: the image is older than the repository it installs from) or fix the package name, then re-run.\"\n    exit 1",
+    replace: "    echo \"::error::release-toolchain: FAILED in the pinned image: $line \u2014 the release workflow would fail at this step. Move the pin (sh scripts/bump-wolfi-pin.sh: the image is older than the repository it installs from) or fix the package name, then re-run.\"",
     tests: [T.toolchainPreflight],
   },
   {
@@ -7079,6 +7079,62 @@ const CATALOG: Mutant[] = [
     tests: [T.toolchainPreflight],
   },
   {
+    // The limit is inclusive: an image exactly at the limit passes, one day more fails.
+    id: "toolchain-preflight-age-limit-off-by-one",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "if [ -n \"$max_age\" ] && [ \"$age\" -gt \"$max_age\" ]; then",
+    replace: "if [ -n \"$max_age\" ] && [ \"$age\" -ge \"$max_age\" ]; then",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // With a limit, an older image must FAIL the run: the weekly job exists for this exit code.
+    id: "toolchain-preflight-age-limit-ignored",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "if [ -n \"$max_age\" ] && [ \"$age\" -gt \"$max_age\" ]; then",
+    replace: "if [ -z \"$max_age\" ] && [ \"$age\" -gt 0 ]; then",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Days from a civil date: the century/leap terms decide a leap day and a year end.
+    id: "toolchain-preflight-age-leap-year",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "  doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy",
+    replace: "  doe = yoe * 365 + doy",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // January and February count as months 13 and 14 of the year before; without the shift a year end is wrong.
+    id: "toolchain-preflight-age-month-shift",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "  if (m <= 2) { y -= 1; m += 12 }",
+    replace: "  if (m <= 2) { m += 12 }",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // An age limit that cannot be checked is a failure, never a pass.
+    id: "toolchain-preflight-unreadable-date-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "    echo \"::error::release-toolchain: could not read the pinned image's build date (got: '${created}') \u2014 the age limit cannot be checked.\"\n    exit 1",
+    replace: "    echo \"::error::release-toolchain: could not read the pinned image's build date (got: '${created}') \u2014 the age limit cannot be checked.\"\n    exit 0",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A failed install is the verdict: nothing runs after it, the age read included.
+    id: "toolchain-preflight-age-asked-after-failure",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "[ \"$failed\" = 0 ] || exit 1",
+    replace: "[ \"$failed\" = 0 ] || failed=1",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A limit that is not a whole number is a usage error, not a silent zero or a shell error later.
+    id: "toolchain-preflight-bad-limit-admitted",
+    file: "scripts/release-toolchain-preflight.sh",
+    find: "      case \"$max_age\" in ''|*[!0-9]*) echo \"release-toolchain: --max-age-days takes a whole number of days\" >&2; exit 2 ;; esac",
+    replace: "      case \"$max_age\" in '') echo \"release-toolchain: --max-age-days takes a whole number of days\" >&2; exit 2 ;; esac",
+    tests: [T.toolchainPreflight],
+  },
+  {
     // The unversioned openssl name is what an aged image's world pin turns into an old, colliding CLI build (v0.6.1-rc.3).
     id: "toolchain-workflow-openssl-unversioned",
     file: ".github/workflows/apk-repo.yml",
@@ -7087,11 +7143,99 @@ const CATALOG: Mutant[] = [
     tests: [T.toolchainPreflight],
   },
   {
-    // CI must actually run the preflight on main; a job that lists is a job that checks nothing.
-    id: "toolchain-ci-preflight-list-only",
-    file: ".github/workflows/ci.yml",
-    find: "        run: sh scripts/release-toolchain-preflight.sh",
-    replace: "        run: sh scripts/release-toolchain-preflight.sh --list",
+    // The push run must actually install; a job that lists is a job that checks nothing.
+    id: "toolchain-workflow-push-list-only",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "        run: sh scripts/release-toolchain-preflight.sh\n",
+    replace: "        run: sh scripts/release-toolchain-preflight.sh --list\n",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The weekly run carries the age limit: without it a quiet repo never hears about an aging pin.
+    id: "toolchain-workflow-weekly-limit-dropped",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "        run: sh scripts/release-toolchain-preflight.sh --max-age-days 30",
+    replace: "        run: sh scripts/release-toolchain-preflight.sh",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The schedule is the clock: a pin ages while nobody pushes.
+    id: "toolchain-workflow-schedule-dropped",
+    file: ".github/workflows/release-toolchain.yml",
+    find: "  schedule:\n    - cron: \"17 6 * * 1\" # Mondays 06:17 UTC \u2014 off the hour, where scheduled runs queue\n",
+    replace: "",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The digest is PROVEN: the manifest fetched by it must hash to it. A header alone is the registry's word.
+    id: "bump-digest-unproven",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "[ \"$got\" = \"$new\" ] || die",
+    replace: "[ -n \"$got\" ] || die",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Only a full lowercase-hex sha256 digest is a pin; anything else from the registry is refused before the file is touched.
+    id: "bump-digest-shape-unchecked",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "is_digest \"$new\" || die",
+    replace: "[ -n \"$new\" ] || die",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // Every job container moves together: a file with two pins is refused, not half-moved.
+    id: "bump-two-pins-admitted",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "[ \"$(printf '%s\\n' \"$old\" | grep -c .)\" = 1 ] || die",
+    replace: "[ \"$(printf '%s\\n' \"$old\" | grep -c .)\" != 0 ] || die",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // --dry-run changes nothing.
+    id: "bump-dry-run-writes",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "if [ \"$dry\" = 1 ]; then\n  echo \"bump-wolfi-pin: --dry-run, nothing changed\"\n  exit 0\nfi",
+    replace: "if [ \"$dry\" = 1 ]; then\n  echo \"bump-wolfi-pin: --dry-run, nothing changed\"\nfi",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A pin that is already current is left alone: no write, no preflight, no new date on the line.
+    id: "bump-current-pin-rewritten",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "  echo \"bump-wolfi-pin: the pin is the current image; nothing to change\"\n  exit 0",
+    replace: "  echo \"bump-wolfi-pin: the pin is the current image; nothing to change\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The dated line beside the pin states when it moved and what was built: a stale line misdates the pin.
+    id: "bump-date-line-not-rewritten",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "    -e \"s|^\\\\( *# Pinned \\\\)[0-9-]*: the image built .*\\\\.\\$|\\\\1$today: the image built $created.|\" \\\n",
+    replace: "",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // A preflight that fails on the new image fails the bump: the moved file must not look ready to commit.
+    id: "bump-preflight-failure-swallowed",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "    || die \"the preflight FAILED on the new image",
+    replace: "    || echo \"the preflight FAILED on the new image",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // The pull token is sent on the registry reads; cgr.dev answers 401 without it.
+    id: "bump-token-not-sent",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "new=\"$(curl -fsSI -H \"Authorization: Bearer $token\" -H \"$accept\"",
+    replace: "new=\"$(curl -fsSI -H \"$accept\"",
+    tests: [T.toolchainPreflight],
+  },
+  {
+    // An unknown argument is refused before the registry is asked: --force must not read as a plain bump.
+    id: "bump-unknown-argument-admitted",
+    file: "scripts/bump-wolfi-pin.sh",
+    find: "  *) echo \"bump-wolfi-pin: unknown argument: $1\" >&2; exit 2 ;;",
+    replace: "  *) ;;",
     tests: [T.toolchainPreflight],
   },
 ];

@@ -135,12 +135,14 @@ jobs:
     # The pin AGES, and age is a fault here: the image's /etc/apk/world pins every base
     # package to the version it was built with, while `apk add` below installs from Wolfi's
     # rolling repository. The older the image, the older the tool builds the solver must
-    # fall back to, until one collides (v0.6.1-rc.3, 2026-10-01, a six-week-old pin). CI on
-    # main runs scripts/release-toolchain-preflight.sh — every install line below, in this
-    # image — so a stale pin fails there and not after a release is published.
-    # Pinned 2026-10-01: the image built 2026-09-29T20:55:55Z.
+    # fall back to, until one collides (v0.6.1-rc.3, 2026-10-01, a six-week-old pin). The
+    # release-toolchain workflow runs scripts/release-toolchain-preflight.sh — every install
+    # line below, in this image — on each push and every Monday (then with a 30-day age
+    # limit), so a stale pin fails there and not after a release is published. Move the pin
+    # with `sh scripts/bump-wolfi-pin.sh`; it rewrites the three digests and the line below.
+    # Pinned 2026-10-02: the image built 2026-10-01T15:12:42Z.
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
       # melange's documented in-docker shape (its own docs run the melange image with
       # --privileged): bubblewrap needs mount + namespace privileges, and the default
       # seccomp/AppArmor container profile blocks those even for in-container root. Scope
@@ -378,7 +380,7 @@ jobs:
     # (it assembles the OCI image from apks and pushes over HTTPS). Tools come from Wolfi's
     # signed repo; nothing here has a config file to resolve.
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
     timeout-minutes: 45
     permissions:
       contents: write # gh-pages push — the production step; a candidate run never reaches it
@@ -584,7 +586,7 @@ jobs:
     environment: release # PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
     container:
-      image: cgr.dev/chainguard/wolfi-base@sha256:d59fd2d1d21e913b12a8d56064e9aaf61f818289bd18b17132a0c4fde2358cea
+      image: cgr.dev/chainguard/wolfi-base@sha256:fd536778d12e19bff29cfcf73265a14f585152a49d7f7cd6739ebe48dff01e26
     timeout-minutes: 20
     permissions:
       contents: read

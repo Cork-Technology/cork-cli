@@ -7,6 +7,10 @@ covered.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release pipeline: the apk and image build no longer fails on an aged base-image pin.** The v0.6.1-rc.3 run published the GitHub Release and then failed at the toolchain install. The job container was pinned to a six-week-old `wolfi-base` image. That image holds its base packages at their build versions, and Wolfi's repository had moved on. The pin is now current, the build asks for the versioned `openssl-4.0` CLI, and three things keep the pin young: a `release-toolchain` workflow runs every install line of the release workflow in the pinned image on each push and every Monday; the Monday run fails when the image is more than 30 days old; `sh scripts/bump-wolfi-pin.sh` moves the pin and proves the new digest against the content the registry serves. No shipped artifact changes.
+
 ## [0.6.1-rc.3] — 2026-10-01
 
 A patch candidate of the 0.6 line. It aligns the tool with venue cork-api 0.4.4, which adds fixed-rate cover as a third RFQ mode, and it makes the tool say which cover a request buys. The recipe decides the cover; the tool now asks the recipe on chain instead of restating its rules, and it reports an endpoint failure as a read that did not happen, not as a refusal. The covered surface gains one enum value (`fixed_rate`) and additive fields; nothing is removed. A binary older than this one refuses the new mode as invalid input.

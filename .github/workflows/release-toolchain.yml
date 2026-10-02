@@ -1,0 +1,40 @@
+# The release workflow's toolchain installs, run in the image that workflow pins.
+#
+# A tag cannot be fixed after the fact, and a release that fails at `apk add` fails AFTER the
+# GitHub Release is published (v0.6.1-rc.3, 2026-10-01: a six-week-old wolfi-base pin). So main
+# learns it first, and learns it on a clock:
+#   - every push and pull request: each `apk add` of apk-repo.yml must install in the pinned
+#     image (scripts/release-toolchain-preflight.sh reads both from that file);
+#   - every Monday, and on demand: the same, PLUS the image must be at most 30 days old. A
+#     quiet week must not hide an aging pin, and an old pin keeps the signing job on old base
+#     libraries. The fix is one command: sh scripts/bump-wolfi-pin.sh, then commit.
+# No secrets and no environment: it only asks Wolfi's repository a question.
+name: release-toolchain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — off the hour, where scheduled runs queue
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every `apk add` of apk-repo.yml installs in its pinned image
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        run: sh scripts/release-toolchain-preflight.sh
+      - name: The same, and the pinned image is at most 30 days old
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: sh scripts/release-toolchain-preflight.sh --max-age-days 30
