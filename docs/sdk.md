@@ -28,25 +28,17 @@ verified wei-for-wei on live chains. Trust the SDK's numbers over hand-derived o
 You need Node 22 or later, or Bun 1.3 or later. The packages are ESM-only and ship their own types.
 
 The packages are not on a public registry. A release ships three attested tarballs beside the
-binaries: schemas, core and the optional MCP server package. Choose the **intended repository**:
-private candidates live in `Cork-Technology/cork-cli-private`; approved public releases live in
-`Cork-Technology/cork-cli`. This preparation PR has not published v0.7.0-rc.1.
+binaries: schemas, core and the optional MCP server package. Public releases and release
+candidates are published in `Cork-Technology/cork-cli`.
 
 Download an already-published tag and verify every archive against its repository, builder,
 tag and approved source commit. Never put a private credential in a package URL or lockfile.
 
 ```sh
-REPO=Cork-Technology/cork-cli-private # use Cork-Technology/cork-cli for a public release
+REPO=Cork-Technology/cork-cli
 : "${TAG:?Set the published release tag}"
 : "${SOURCE_COMMIT:?Set its approved 40-character source commit}"
 export GH_HOST=github.com GH_DEBUG=
-case "$REPO" in
-  Cork-Technology/cork-cli-private)
-    : "${CORK_GITHUB_TOKEN:?Explicit repository/attestation read access is required}"
-    export GH_TOKEN="$CORK_GITHUB_TOKEN" ;;
-  Cork-Technology/cork-cli) ;;
-  *) echo 'Unknown release repository' >&2; exit 1 ;;
-esac
 gh release download "$TAG" --repo "$REPO" --pattern 'cork-*.tgz'
 for asset in cork-*.tgz; do
   gh attestation verify "$asset" --repo "$REPO" \
