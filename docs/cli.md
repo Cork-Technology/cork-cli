@@ -479,19 +479,22 @@ export CORK_CONFIG_FILE=~/.config/cork-helper-cli/staging.json
 ```
 
 `staging.json` adds the staging deployment as a whole set and makes it the primary for that
-chain; every other set stays readable. Fill the addresses from the staging Distribution record
-(the file must carry complete sets — a half-merged set is refused):
+chain; every other set stays readable. Fill the addresses from the staging Distribution record.
+The file must carry `schemaVersion: 2` and complete sets: a set is refused whole when a required
+field is missing, and an unknown field name is dropped silently, so copy the field names exactly
+(a test parses this very block through the override schema):
 
 ```json
 {
+  "schemaVersion": 2,
   "generations": {
     "8453": {
       "primary": "phoenix/staging",
       "sets": {
         "phoenix/staging": {
           "status": "active",
-          "phoenix": { "wire": "10-field", "poolManager": "0x…", "corkAdapter": "0x…", "whitelistManager": "0x…", "controller": "0x…" },
-          "marketRegistry": { "wire": "nested", "registry": "0x…", "adapter": "0x…", "creator": "0x…", "recipes": { "liquidity": "0x…", "nav": "0x…", "fixed": "0x…", "impairment": "0x…" } }
+          "phoenix": { "wire": "10-field", "poolManager": "0x…", "constraintAdapter": "0x…", "corkAdapter": "0x…", "whitelistManager": "0x…", "controller": "0x…" },
+          "marketRegistry": { "wire": "nested", "registry": "0x…", "adapter": "0x…", "marketCreator": "0x…", "recipes": { "liquidity": "0x…", "nav": "0x…", "fixed": "0x…", "impairment": "0x…" } }
         }
       }
     }

@@ -6,6 +6,8 @@
 // the doc refresh becomes part of the change, not a partner-filed issue.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_DEFAULTS } from "../src/config-remote.ts";
+import { ConfigOverrideSchema, mergeConfig } from "../src/config-override.ts";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 const quickstart = read("../../../docs/zyfai-quickstart.md");
@@ -108,5 +110,38 @@ describe("docs freshness: jit-order-anatomy.md is address-free by design", () =>
     for (const needle of ["`flat`", "`nested`", "bytes32 oracleSalt", "bytes   extraData", "bool         enableJitMint", "InvalidFees", "MARKET_CREATOR"]) {
       expect(anatomy, `anatomy must mention ${needle}`).toContain(needle);
     }
+  });
+});
+
+describe("docs freshness: docs/cli.md's staging config.json example parses and merges (cork-cli-private#35, #9)", () => {
+  const cli = read("../../../docs/cli.md");
+  const section = cli.slice(cli.indexOf("### Point one install at staging"));
+  const block = /```json\n([\s\S]*?)\n```/u.exec(section)?.[1];
+
+  it("the section carries one fenced JSON block, and it is valid JSON once the address placeholders are filled", () => {
+    expect(block).toBeDefined();
+    expect(() => JSON.parse(block!.replaceAll("0x…", "0x1111111111111111111111111111111111111111"))).not.toThrow();
+  });
+
+  it("the block passes the override schema as written — schemaVersion, every required field, the field NAMES the schema knows (an unknown name is stripped silently, so a typo here would ship a half-set)", () => {
+    const doc = JSON.parse(block!.replaceAll("0x…", "0x1111111111111111111111111111111111111111")) as Record<string, unknown>;
+    const parsed = ConfigOverrideSchema.safeParse(doc);
+    expect(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues)).toBe(true);
+    // Strict on names: every key the doc writes must survive the parse (`.strip()` would drop a
+    // misspelled one, as `creator` was before this test existed).
+    const docSet = ((doc.generations as Record<string, { sets: Record<string, Record<string, Record<string, unknown>>> }>)["8453"]!).sets["phoenix/staging"]!;
+    const parsedSet = parsed.success ? (parsed.data.generations!["8453"]!.sets!["phoenix/staging"]! as unknown as Record<string, Record<string, unknown>>) : {};
+    for (const blockName of ["phoenix", "marketRegistry"]) {
+      expect(Object.keys(parsedSet[blockName]!).sort(), blockName).toEqual(Object.keys(docSet[blockName]!).sort());
+    }
+  });
+
+  it("merged onto the bundled defaults it adds the set and moves Base's primary, and leaves every production set readable", () => {
+    const doc = JSON.parse(block!.replaceAll("0x…", "0x1111111111111111111111111111111111111111")) as Record<string, unknown>;
+    const { merged, summary } = mergeConfig(BUNDLED_DEFAULTS, ConfigOverrideSchema.parse(doc));
+    const base = (merged as unknown as { generations: Record<string, { primary: string; sets: Record<string, unknown> }> }).generations["8453"]!;
+    expect(base.primary).toBe("phoenix/staging");
+    expect(Object.keys(base.sets)).toEqual(expect.arrayContaining(["phoenix/staging", ...Object.keys(BUNDLED_DEFAULTS.generations["8453"]!.sets)]));
+    expect(JSON.stringify(summary)).toContain("phoenix/staging");
   });
 });

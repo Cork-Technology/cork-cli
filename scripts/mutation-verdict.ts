@@ -11,7 +11,11 @@
 // the mutant breaking its own module at load (a syntax- or import-level mutation), which the
 // suite did detect; that counts as caught.
 export interface VitestJsonReport {
+  /** Every test the run knew of — SKIPPED ones included (vitest counts pending tests here). */
   numTotalTests: number;
+  /** Tests that ran and passed. Optional because older fixtures of this type omit it; a report
+   *  without it is judged on numTotalTests alone. */
+  numPassedTests?: number;
   numFailedTests: number;
   numFailedTestSuites: number;
   testResults: ReadonlyArray<{ name: string; status: string; message?: string }>;
