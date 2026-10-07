@@ -464,6 +464,50 @@ warns `config_override_active`. `CORK_CONFIG_NO_OVERRIDE=1` turns the layer off.
 fetches `cork-defaults.v2.json` from its line's config branch (`config/0.7` for this candidate),
 so a redeployed address reaches you within an hour without an upgrade.
 
+### Point one install at staging
+
+Staging and production share chain ids, so the switch is two settings, not a flag: the venue URL
+and the contract set. Both read from the environment, so one shell profile per environment is
+the whole mechanism; the default is production.
+
+```sh
+# production: nothing to set.
+
+# staging: the staging venue plus a config.json that names the staging deployment.
+export CORK_VENUE_URL=https://breaking.cork.tech
+export CORK_CONFIG_FILE=~/.config/cork-helper-cli/staging.json
+```
+
+`staging.json` adds the staging deployment as a whole set and makes it the primary for that
+chain; every other set stays readable. Fill the addresses from the staging Distribution record
+(the file must carry complete sets — a half-merged set is refused):
+
+```json
+{
+  "generations": {
+    "8453": {
+      "primary": "phoenix/staging",
+      "sets": {
+        "phoenix/staging": {
+          "status": "active",
+          "phoenix": { "wire": "10-field", "poolManager": "0x…", "corkAdapter": "0x…", "whitelistManager": "0x…", "controller": "0x…" },
+          "marketRegistry": { "wire": "nested", "registry": "0x…", "adapter": "0x…", "creator": "0x…", "recipes": { "liquidity": "0x…", "nav": "0x…", "fixed": "0x…", "impairment": "0x…" } }
+        }
+      }
+    }
+  }
+}
+```
+
+`ch query protocol-config --chain-id base` shows which layer is live under `data.config`, and
+every result the override shaped warns `config_override_active`, so a staging answer can never be
+mistaken for a production one. Add `"only": ["phoenix/staging"]` to hide the production sets
+from that install. `CORK_CONFIG_NO_OVERRIDE=1` returns to production without editing anything.
+The code-hash allowlist (`approvedImplementations`) is never overridable: a staging adapter whose
+code is not in the build's allowlist warns `implementation_not_approved` on ABI-typed prepares and
+refuses the JIT hook paths unless `CORK_ALLOW_UNAPPROVED_CODE=1` is set — expected for a staging
+deployment ahead of the release that ships its hash.
+
 The build's repository identity also selects its release/update channel; it is shown by
 `ch version --json`. A private build uses only that repository, never the public channel.
 Set `CORK_GITHUB_TOKEN` explicitly to an authorized, read-only GitHub credential for private
