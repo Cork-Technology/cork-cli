@@ -9,7 +9,7 @@ import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirem
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
 import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, premiumAmount, premiumFraction, reRestExpirySeconds } from "../orders-answer.ts";
-import { COVER_RFQ_MODE, type CoverKind, coverKindOfRecipeName, inlineBlockWarnings } from "../cover.ts";
+import { COVER_RFQ_MODE, type CoverKind, coverKindOfRecipeName, inlineBlockWarnings, RFQ_MODE_COVER } from "../cover.ts";
 import { quotedOrderWire } from "../rfq-quotes.ts";
 import { impairmentDurationOfArgs } from "../market-registry.ts";
 import type { MarketRegistryWire } from "../generations.ts";
@@ -440,8 +440,16 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   if (mode === undefined) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "mode"], message: `the recipe ${recipe} is not one a configured generation names, so its cover — and the option's mode — cannot be read; pass mode (one of ${RFQ_MODES.join(", ")}) for the cover this recipe gives` }]);
   }
-  if (rfqModes.length > 0 && !rfqModes.includes(mode)) {
-    warnings.push({ code: "invalid_order_terms", message: `this answer quotes mode ${mode}, which RFQ ${action.rfqId} does not ask for (${rfqModes.join(", ")}) — a visible counter-proposal the requester may ignore; the option still builds` });
+  // The cover the RECIPE gives is what the order delivers; a caller's label that says otherwise
+  // misdescribes it (the venue relays labels as written), and the request is judged against the
+  // delivered cover, never the label (cork-cli#6).
+  const deliveredMode: RfqMode | undefined = kind !== undefined ? COVER_RFQ_MODE[kind] : undefined;
+  if (deliveredMode !== undefined && mode !== deliveredMode) {
+    warnings.push({ code: "cover_mode_mismatch", message: `this option is labelled ${mode} (${RFQ_MODE_COVER[mode]} cover), but the recipe ${recipe} gives ${kind} cover: the label misdescribes the cover the order creates, and the venue relays it as written — label the option ${deliveredMode}, or quote a recipe that gives ${RFQ_MODE_COVER[mode]} cover` });
+  }
+  const judged = deliveredMode ?? mode;
+  if (rfqModes.length > 0 && !rfqModes.includes(judged)) {
+    warnings.push({ code: "cover_mode_mismatch", message: `this answer quotes mode ${judged}${kind !== undefined ? ` (${kind} cover, decided by the recipe ${recipe})` : ""}, which RFQ ${action.rfqId} does not ask for (${rfqModes.join(", ")}) — a visible counter-proposal the requester may ignore, or refuse at fill time (its fill is told the same); the option still builds` });
   }
   const rfqPackages = (Array.isArray(rfq.package_ids) ? (rfq.package_ids as unknown[]) : []).filter((p): p is string => typeof p === "string");
   const packageId = action.packageId ?? (rfqPackages.length === 1 ? rfqPackages[0] : undefined);
@@ -506,6 +514,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         expirySeconds,
         expiryRule: action.expirySeconds !== undefined ? "caller" : "venue re-rest rule: max(90 s, min(600 s, remaining RFQ validity / 2))",
         ocoGroup,
+        // The cover this order DELIVERS, from the recipe (not from any label), against the
+        // covers the request asks for — the same reading the requester's fill makes (cork-cli#6).
+        cover: { kind: kind ?? null, mode, deliveredMode: deliveredMode ?? null, requestedModes: rfqModes, agrees: rfqModes.length === 0 ? null : rfqModes.includes(judged), recipe, by: isFixed ? "the recipe's source()" : kind !== undefined ? "the configured recipe hint" : "not classified (mode passed by the caller)" },
         pool: { poolId: dd.pool.poolId, exists: dd.pool.exists, corkSwapToken: cst, recipe: dd.recipe, oracleDeployed: dd.oracle.deployed, ...(liveRate !== undefined ? { oracleRate: liveRate.toString() } : {}) },
         inline: inline
           ? {

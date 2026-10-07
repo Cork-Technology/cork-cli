@@ -395,6 +395,92 @@ const CATALOG: Mutant[] = [
     tests: [T.trackForSelfAdapter],
   },
   {
+    // cork-cli#6: a fill that buys another cover than the request asked for must be told.
+    id: "cover-fill-mismatch-dropped",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "if (requested.length > 0 && !requested.includes(deliveredMode)) {",
+    replace: "if (false) {",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // The LABEL the cited option carries is not the cover: judging by it hides a mislabelled quote.
+    id: "cover-fill-label-as-delivered",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "const deliveredMode = COVER_RFQ_MODE[a.delivered.kind];",
+    replace: "const deliveredMode = (a.citedOptionMode ?? COVER_RFQ_MODE[a.delivered.kind]) as RfqMode;",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // A recipe no generation names still carries its limits: the chain's own reading, not null.
+    id: "cover-fill-constraint-fallback-dropped",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "const byConstraint = coverKindOfConstraint(dec.params.constraint);",
+    replace: "const byConstraint = undefined as unknown as CoverKind;",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // A label that misdescribes the cover inside the request's modes is still named.
+    id: "cover-fill-label-mismatch-dropped",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "} else if (labelKind !== undefined && labelKind !== a.delivered.kind) {",
+    replace: "} else if (false) {",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // The answer side: a fixed_rate label on a NAV template must be named before relay.
+    id: "cover-answer-label-mismatch-dropped",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "if (templateKind !== undefined && labelled !== undefined && templateKind !== labelled) {",
+    replace: "if (false) {",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // The answer side: a mode the request did not ask for is a counter-proposal, said so.
+    id: "cover-answer-counter-proposal-dropped",
+    file: "packages/core/src/handlers/cover-mode.ts",
+    find: "if (mode !== undefined && requested.length > 0 && !requested.includes(mode as RfqMode)) {",
+    replace: "if (false) {",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // answer-rfq's counter-proposal rides the cover code, so every side speaks one code.
+    id: "answer-cover-code-regressed",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: 'warnings.push({ code: "cover_mode_mismatch", message: `this answer quotes mode ${judged}',
+    replace: 'warnings.push({ code: "invalid_order_terms", message: `this answer quotes mode ${judged}',
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // answer-rfq judges the request against the cover the recipe gives, never the caller's label.
+    id: "answer-cover-label-judged",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "const judged = deliveredMode ?? mode;",
+    replace: "const judged = mode;",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // A label that misdescribes the recipe's cover is named at build time, before any relay.
+    id: "answer-cover-label-mismatch-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "if (deliveredMode !== undefined && mode !== deliveredMode) {",
+    replace: "if (false) {",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // cork-cli#5: the boundary note rides the derive refusal at uint256's maximum.
+    id: "fixed-max-boundary-note-dropped",
+    file: "packages/core/src/handlers/registry.ts",
+    find: "const boundary = filters.rate !== undefined ? fixedRateBoundaryNote(filters.rate) : undefined;",
+    replace: "const boundary = undefined;",
+    tests: ["packages/core/test/cover-mode.test.ts"],
+  },
+  {
+    // The note is for the maximum alone: MAX − 1 resolves and must not be told otherwise.
+    id: "fixed-max-boundary-off-by-one",
+    file: "packages/core/src/cover.ts",
+    find: "if (rate !== UINT256_MAX) return undefined;",
+    replace: "if (rate !== UINT256_MAX - 1n && rate !== UINT256_MAX) return undefined;",
+    tests: ["packages/core/test/cover-mode.test.ts"],
     // A missing collateral floor must be named: the holder signs 0 without a word otherwise.
     id: "rollover-floor-notice-ca-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
@@ -4368,7 +4454,7 @@ const CATALOG: Mutant[] = [
     // INCOMPLETE records (false refusals of legitimately-cited superseded answers) and
     // complete records relay unchecked — both quote_ref and optionRef paths break at once.
     id: "citation-truncated-gate-flipped",
-    file: "packages/core/src/handlers/submit.ts",
+    file: "packages/core/src/handlers/rfq-citation.ts",
     find: "return { answer, option, unresolved: answer === undefined && rfq.truncated === true };",
     replace: "return { answer, option, unresolved: answer === undefined && rfq.truncated !== true };",
     tests: [T.venue],
@@ -4378,7 +4464,7 @@ const CATALOG: Mutant[] = [
     // but lacks the cited option relays on a truncated record — an embedded answer row carries
     // its whole payload, so that absence is proven and the venue 400s it.
     id: "citation-unresolved-keyed-on-option",
-    file: "packages/core/src/handlers/submit.ts",
+    file: "packages/core/src/handlers/rfq-citation.ts",
     find: "return { answer, option, unresolved: answer === undefined && rfq.truncated === true };",
     replace: "return { answer, option, unresolved: option === undefined && rfq.truncated === true };",
     tests: [T.venue],
