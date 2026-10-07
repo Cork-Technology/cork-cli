@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Compile the single-executable release binaries (CLI + MCP in one: `ch`, `ch mcp`).
 //
-//   bun scripts/compile-binaries.mjs --version v0.1.0 [--commit <sha>] [--targets a,b] [--outdir dist] [--native]
+//   bun scripts/compile-binaries.mjs --version v0.1.0 [--repo owner/repo] [--commit <sha>] [--targets a,b] [--outdir dist] [--native]
 //
 // Invariants this script owns:
 //  - FIXED asset names: bun embeds the --outfile basename as the binary's bunfs virtual path,
@@ -23,6 +23,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+
+const SOURCE_REPO = "Cork-Technology/cork-cli";
 const RELEASE_TARGETS = [
   "bun-linux-x64",
   "bun-linux-arm64",
@@ -66,12 +68,14 @@ export function hyperSyncBindingForTarget(target) {
 }
 
 /** The `--define` pairs a target is compiled with: build identity plus the embedded binding. */
-export function compileDefines({ version, commit, target }) {
+export function compileDefines({ version, commit, target, repo = SOURCE_REPO }) {
+  if (!["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"].includes(repo)) throw new Error("unsupported --repo identity");
   const binding = hyperSyncBindingForTarget(target);
   return [
     "--define", `process.env.CH_BUILD_VERSION=${JSON.stringify(version)}`,
     "--define", `process.env.CH_BUILD_COMMIT=${JSON.stringify(commit)}`,
     "--define", `process.env.CH_BUILD_TARGET=${JSON.stringify(target)}`,
+    "--define", `process.env.CH_BUILD_REPO=${JSON.stringify(repo)}`,
     // A JS expression: the quoted specifier, or the literal `undefined` so the guarded require
     // in hypersync.ts is inert on a target without a binding.
     "--define", `process.env.CH_HYPERSYNC_BINDING=${binding ? JSON.stringify(binding) : "undefined"}`,
@@ -79,16 +83,18 @@ export function compileDefines({ version, commit, target }) {
 }
 
 function parseArgs(argv) {
-  const out = { targets: RELEASE_TARGETS, outdir: "dist", commit: "unknown", native: false };
+  const out = { targets: RELEASE_TARGETS, outdir: "dist", commit: "unknown", repo: SOURCE_REPO, native: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--version") out.version = argv[++i];
     else if (a === "--commit") out.commit = argv[++i];
+    else if (a === "--repo") out.repo = argv[++i];
     else if (a === "--targets") out.targets = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--outdir") out.outdir = argv[++i];
     else if (a === "--native") out.native = true;
     else throw new Error(`unknown argument: ${a}`);
   }
+  if (!["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"].includes(out.repo)) throw new Error("--repo must name a supported repository");
   if (!out.version || !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(out.version)) {
     throw new Error(`--version is required and must look like v1.2.3[-rc.N] (got: ${out.version ?? "<absent>"})`);
   }
@@ -100,7 +106,7 @@ function parseArgs(argv) {
 
 const isMain = import.meta.main ?? process.argv[1]?.endsWith("compile-binaries.mjs");
 if (isMain) {
-  const { version, commit, targets, outdir, native } = parseArgs(process.argv.slice(2));
+  const { version, commit, repo, targets, outdir, native } = parseArgs(process.argv.slice(2));
   mkdirSync(outdir, { recursive: true });
   const sums = [];
   // Bindings resolve from @cork/core, the package that declares them (isolated linker: they are
@@ -124,7 +130,7 @@ if (isMain) {
       ...(native ? [] : [`--target=${target}`]),
       // spawnSync passes args verbatim (no shell), so each define VALUE is the bare JS
       // expression — the extra shell quoting seen in docs examples must NOT be added here.
-      ...compileDefines({ version, commit, target }),
+      ...compileDefines({ version, commit, target, repo }),
       "packages/cli/src/bin.ts",
       "--outfile", outfile,
     ];

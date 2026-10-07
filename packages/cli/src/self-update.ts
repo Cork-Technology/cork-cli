@@ -2,13 +2,13 @@
 // binary replacement is a supply-chain event: nothing is swapped in until the downloaded bytes
 // pass verification, and there is deliberately NO unprompted/background variant.
 //
-// Verification ladder (strongest available wins, and the output names which ran):
+// Verification ladder (private requires provenance; public uses strongest available):
 //   1. `gh attestation verify` — cryptographic build provenance (GitHub Sigstore): proves the
 //      bytes were built by the release workflow of the canonical repo, at a specific commit.
-//   2. sha256 against the release's checksums.txt — integrity only (the checksums file is an
-//      immutable release asset fetched over TLS), honestly labelled as the weaker check.
+//   2. PUBLIC ONLY: sha256 against the release checksums — integrity only, honestly labelled
+//      as weaker. A private update never downgrades to checksums.
 // Both paths then run the STAGED binary's own offline `version --json` and require its embedded
-// version, commit and target to match the release we resolved, before the swap (audit
+// version, commit and target (plus private repository/channel) to match before the swap (audit
 // SUPPLY-004): provenance says "this artifact came from our workflow", identity says "and it is
 // the build we just asked for" — anyone who can write a release asset can otherwise serve a
 // genuine-but-different one. The tag is peeled to its commit first, so the attestation binds to
@@ -20,6 +20,7 @@ import { accessSync, chmodSync, constants, renameSync, rmSync, writeFileSync } f
 import { dirname, join } from "node:path";
 import { BUILD_TARGET, BUILD_VERSION, compareVersions } from "@cork/core";
 import { RELEASE_REPO } from "./update-notify.ts";
+import { channelFetch, githubToken, latestReleaseTag, PRIVATE_CHANNEL } from "../../core/src/release-channel.ts";
 
 /** Release asset name for a bun compile target ("bun-linux-x64" → "ch-linux-x64"). */
 export function assetForTarget(target: string): string | null {
@@ -46,7 +47,7 @@ export interface SelfUpdateResult {
 }
 
 const SIGNER_WORKFLOW = `${RELEASE_REPO}/.github/workflows/build-binaries.yml`;
-const GITHUB_HEADERS = { accept: "application/vnd.github+json", "user-agent": "ch-self-update" } as const;
+// API metadata and private assets share the repository-scoped credential boundary.
 /** An annotated tag points at a tag object; peel until a commit. Bounded so a cycle cannot spin. */
 const MAX_TAG_PEELS = 5;
 /** How long the staged binary gets to answer `version --json` before it is killed and discarded. */
@@ -59,14 +60,14 @@ type GitObject = { type: string; sha: string };
 async function githubJson(url: string, fetchImpl: typeof fetch): Promise<Record<string, unknown> | { error: string }> {
   let res: Response;
   try {
-    res = await fetchImpl(url, { headers: GITHUB_HEADERS, signal: AbortSignal.timeout(15_000) });
-  } catch (err) {
-    return { error: (err as Error).message };
+    res = await channelFetch(url, { timeoutMs: 15_000 }, fetchImpl);
+  } catch {
+    return { error: "GitHub request failed (private reads require an authorized CORK_GITHUB_TOKEN)" };
   }
   if (!res.ok) return { error: `GitHub API ${res.status}` };
   try {
     const value: unknown = await res.json();
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : { error: "malformed JSON" };
+    return typeof value === "object" && value !== null && !Array.isArray(value) && !("error" in value) ? (value as Record<string, unknown>) : { error: "malformed JSON" };
   } catch {
     return { error: "malformed JSON" };
   }
@@ -83,7 +84,7 @@ export async function resolveTagCommit(tag: string, fetchImpl: typeof fetch): Pr
   const sourceRef = `refs/tags/${tag}`;
   const ref = await githubJson(`https://api.github.com/repos/${RELEASE_REPO}/git/ref/tags/${encodeURIComponent(tag)}`, fetchImpl);
   if ("error" in ref) return { error: `could not resolve tag ${tag} (${ref.error})` };
-  if (ref.ref !== sourceRef) return { error: `could not resolve tag ${tag}: GitHub answered for ref ${String(ref.ref)}` };
+  if (ref.ref !== sourceRef) return { error: `could not resolve tag ${tag}: GitHub answered for ref ${PRIVATE_CHANNEL ? "other than the requested tag" : String(ref.ref)}` };
   let object = gitObject(ref.object);
   if (!object) return { error: `could not resolve tag ${tag}: malformed ref object` };
   for (let peels = 0; object.type === "tag"; peels++) {
@@ -93,7 +94,7 @@ export async function resolveTagCommit(tag: string, fetchImpl: typeof fetch): Pr
     object = gitObject(annotated.object);
     if (!object) return { error: `could not peel tag ${tag}: malformed tag object` };
   }
-  if (object.type !== "commit") return { error: `tag ${tag} does not resolve to a commit (got ${object.type})` };
+  if (object.type !== "commit") return { error: `tag ${tag} does not resolve to a commit${PRIVATE_CHANNEL ? "" : ` (got ${object.type})`}` };
   return { commit: object.sha, sourceRef };
 }
 
@@ -129,14 +130,19 @@ function killTree(pid: number | undefined): void {
  *  resolved. Bounded in time and output; the process tree is killed on either bound. */
 export async function verifyStagedIdentity(
   path: string,
-  expected: { version: string; commit: string; target: string },
+  expected: { version: string; commit: string; target: string; repository?: string },
   timeoutMs: number = IDENTITY_TIMEOUT_MS,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   let stdout = "";
   let stderr = "";
   let timedOut = false;
   let tooMuchOutput = false;
-  const child = spawn(path, ["version", "--json"], { detached: process.platform !== "win32", env: identityEnv(), stdio: ["ignore", "pipe", "pipe"] });
+  let child;
+  try {
+    child = spawn(path, ["version", "--json"], { detached: process.platform !== "win32", env: identityEnv(), stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    return { ok: false, error: "the staged binary could not be run" };
+  }
   const append = (cur: string, chunk: Buffer): string => {
     const next = cur + chunk.toString("utf8");
     if (Buffer.byteLength(next) > MAX_IDENTITY_BYTES) {
@@ -166,7 +172,7 @@ export async function verifyStagedIdentity(
   clearTimeout(timer);
   if (timedOut) return { ok: false, error: `the staged binary did not answer version --json within ${timeoutMs}ms` };
   if (tooMuchOutput) return { ok: false, error: "the staged binary wrote more than 64 KiB answering version --json" };
-  if (code !== 0) return { ok: false, error: `the staged binary exited ${code ?? "on a signal"} for version --json${stderr.trim() ? `: ${stderr.trim().split("\n")[0]}` : ""}` };
+  if (code !== 0) return { ok: false, error: `the staged binary exited ${code ?? "on a signal"} for version --json${expected.repository === undefined && stderr.trim() ? `: ${stderr.trim().split("\n")[0]}` : ""}` };
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -179,9 +185,10 @@ export async function verifyStagedIdentity(
   const identity = parsed as Record<string, unknown>;
   for (const field of ["version", "commit", "target"] as const) {
     if (identity[field] !== expected[field]) {
-      return { ok: false, error: `the staged binary reports ${field} ${String(identity[field])}, not the ${expected[field]} we resolved` };
+      return { ok: false, error: expected.repository === undefined ? `the staged binary reports ${field} ${String(identity[field])}, not the ${expected[field]} we resolved` : `the staged binary ${field} does not match the private release we resolved` };
     }
   }
+  if (expected.repository !== undefined && identity.repository !== expected.repository) return { ok: false, error: "the staged binary belongs to another repository/channel" };
   return { ok: true };
 }
 
@@ -191,10 +198,24 @@ function discard(tmp: string, error: string): SelfUpdateResult {
   return { code: 1, out: "", err: `${error} — the downloaded bytes were discarded, nothing was changed.\n` };
 }
 
+/** Private assets use the API asset id with octet-stream Accept, never the browser URL. */
+export async function downloadReleaseAsset(tag: string, asset: string, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  let url = `https://github.com/${RELEASE_REPO}/releases/download/${encodeURIComponent(tag)}/${asset}`;
+  if (PRIVATE_CHANNEL) {
+    const release = await githubJson(`https://api.github.com/repos/${RELEASE_REPO}/releases/tags/${encodeURIComponent(tag)}`, fetchImpl);
+    if ("error" in release || release.tag_name !== tag || release.draft !== false || release.prerelease !== true || !Array.isArray(release.assets)) throw new Error("published private prerelease metadata unavailable");
+    const matches = release.assets.filter((a: unknown) => typeof a === "object" && a !== null && (a as Record<string, unknown>).name === asset) as Record<string, unknown>[];
+    const id = matches.length === 1 ? matches[0]!.id : undefined;
+    if (!Number.isSafeInteger(id) || Number(id) <= 0) throw new Error("private release asset missing or ambiguous");
+    url = `https://api.github.com/repos/${RELEASE_REPO}/releases/assets/${id}`;
+  }
+  return channelFetch(url, { asset: true, accept: "application/octet-stream", timeoutMs: 300_000 }, fetchImpl);
+}
+
 export async function runSelfUpdate(
   opts: { tag?: string; dryRun?: boolean; allowDowngrade?: boolean },
   fetchImpl: typeof fetch = fetch,
-  deps: { identityTimeoutMs?: number } = {},
+  deps: { identityTimeoutMs?: number; installPath?: string } = {},
 ): Promise<SelfUpdateResult> {
   if (BUILD_TARGET === "" || BUILD_VERSION === "dev") {
     return {
@@ -210,14 +231,19 @@ export async function runSelfUpdate(
     return { code: 1, out: "", err: `unrecognized build target "${BUILD_TARGET}" — cannot pick a release asset\n` };
   }
 
+  if (PRIVATE_CHANNEL) {
+    try { githubToken(); } catch { return { code: 1, out: "", err: "private self-update requires an authorized CORK_GITHUB_TOKEN\n" }; }
+    const gh = spawnSync("gh", ["--version"], { stdio: "ignore", timeout: 5_000 });
+    if (gh.status !== 0) return { code: 1, out: "", err: "private self-update requires gh build-provenance verification; checksum-only updates are refused\n" };
+  }
   // Resolve the target release.
   let tag = opts.tag;
   if (!tag) {
-    const latest = await githubJson(`https://api.github.com/repos/${RELEASE_REPO}/releases/latest`, fetchImpl);
-    if ("error" in latest) return { code: 1, out: "", err: `could not resolve the latest release (${latest.error})\n` };
-    tag = typeof latest.tag_name === "string" ? latest.tag_name : undefined;
-    if (!tag) return { code: 1, out: "", err: "GitHub API returned no tag for the latest release\n" };
+    try { tag = await latestReleaseTag(RELEASE_REPO, process.env, fetchImpl); }
+    catch { return { code: 1, out: "", err: "could not resolve the current release for this channel; check CORK_GITHUB_TOKEN or select --tag explicitly\n" }; }
   }
+  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) return { code: 1, out: "", err: "invalid release tag\n" };
+  if (PRIVATE_CHANNEL && !/^v\d+\.\d+\.\d+-rc\.\d+$/.test(tag)) return { code: 1, out: "", err: "private self-update accepts RC tags only\n" };
   const order = compareVersions(tag, BUILD_VERSION);
   if (order === 0) {
     return { code: 0, out: `already up to date (${BUILD_VERSION})\n`, err: "" };
@@ -235,7 +261,7 @@ export async function runSelfUpdate(
     };
   }
 
-  const binPath = process.execPath;
+  const binPath = deps.installPath ?? process.execPath;
   const dir = dirname(binPath);
   try {
     accessSync(dir, constants.W_OK);
@@ -259,27 +285,27 @@ export async function runSelfUpdate(
   if ("error" in resolution) return { code: 1, out: "", err: `${resolution.error}\n` };
 
   // Download beside the current binary so the final rename is atomic (same filesystem).
-  const assetUrl = `https://github.com/${RELEASE_REPO}/releases/download/${tag}/${asset}`;
+  const assetUrl = `https://github.com/${RELEASE_REPO}/releases/download/${encodeURIComponent(tag)}/${asset}`;
   const tmp = join(dir, `.ch-update-${process.pid}`);
   let dl: Response;
   try {
-    dl = await fetchImpl(assetUrl, { signal: AbortSignal.timeout(300_000) });
-  } catch (err) {
-    return { code: 1, out: "", err: `download failed for ${assetUrl} (${(err as Error).message})\n` };
+    dl = await downloadReleaseAsset(tag, asset, fetchImpl);
+  } catch {
+    return { code: 1, out: "", err: "GitHub asset download failed; nothing was changed\n" };
   }
   if (!dl.ok) return { code: 1, out: "", err: `download failed (${dl.status}) for ${assetUrl}\n` };
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await dl.arrayBuffer());
-  } catch (err) {
-    return { code: 1, out: "", err: `download failed for ${assetUrl} (${(err as Error).message})\n` };
+  } catch {
+    return { code: 1, out: "", err: "GitHub asset body download failed; nothing was changed\n" };
   }
   rmSync(tmp, { force: true }); // a leftover from an interrupted run must not be swapped in
   writeFileSync(tmp, bytes);
 
   // Verify BEFORE swap.
   let verification: string;
-  const gh = spawnSync("gh", ["--version"], { stdio: "ignore" });
+  const gh = spawnSync("gh", ["--version"], { stdio: "ignore", timeout: 5_000 });
   if (gh.status === 0) {
     const v = spawnSync(
       "gh",
@@ -298,16 +324,17 @@ export async function runSelfUpdate(
         "--source-ref",
         resolution.sourceRef,
       ],
-      { encoding: "utf8", timeout: 120_000 },
+      { encoding: "utf8", timeout: 120_000, maxBuffer: 64 * 1024, env: PRIVATE_CHANNEL ? { ...process.env, GH_TOKEN: githubToken(), GH_HOST: "github.com", GH_ENTERPRISE_TOKEN: undefined, GITHUB_ENTERPRISE_TOKEN: undefined, GITHUB_TOKEN: undefined, GH_DEBUG: "" } : process.env },
     );
     if (v.status !== 0) {
-      return discard(tmp, `ATTESTATION VERIFICATION FAILED for ${asset}@${tag}\n${(v.stderr || v.stdout || "").trim()}`);
+      return discard(tmp, `ATTESTATION VERIFICATION FAILED for ${asset}@${tag}\n${PRIVATE_CHANNEL ? "verifier output withheld" : (v.stderr || v.stdout || "").trim()}`);
     }
     verification = "GitHub build-provenance attestation (repo + workflow, bound to the peeled tag commit and ref)";
   } else {
-    const sumsRes = await fetchImpl(`https://github.com/${RELEASE_REPO}/releases/download/${tag}/checksums.txt`, {
-      signal: AbortSignal.timeout(30_000),
-    });
+    if (PRIVATE_CHANNEL) return discard(tmp, "private build-provenance verification unavailable; checksum-only update refused");
+    let sumsRes: Response;
+    try { sumsRes = await downloadReleaseAsset(tag, "checksums.txt", fetchImpl); }
+    catch { return discard(tmp, "could not fetch release checksums"); }
     if (!sumsRes.ok) {
       return discard(tmp, `could not fetch checksums.txt for ${tag} (${sumsRes.status}) and \`gh\` is not installed — refusing to update unverified bytes`);
     }
@@ -322,7 +349,7 @@ export async function runSelfUpdate(
   chmodSync(tmp, 0o755);
   // Provenance proved where the bytes came FROM; identity proves they are the build we asked
   // for. Run the staged binary's own offline `version --json` and compare (audit SUPPLY-004).
-  const identity = await verifyStagedIdentity(tmp, { version: tag, commit: resolution.commit, target: BUILD_TARGET }, deps.identityTimeoutMs);
+  const identity = await verifyStagedIdentity(tmp, { version: tag, commit: resolution.commit, target: BUILD_TARGET, ...(PRIVATE_CHANNEL ? { repository: RELEASE_REPO } : {}) }, deps.identityTimeoutMs);
   if (!identity.ok) return discard(tmp, identity.error);
   verification += `; staged identity matched ${tag}@${resolution.commit} (${BUILD_TARGET})`;
 

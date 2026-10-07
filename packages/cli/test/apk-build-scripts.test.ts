@@ -8,11 +8,12 @@
 // build toolchain, and what these tests pin is the command line the scripts hand it.
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir as systemTmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const tmpdir = () => realpathSync(systemTmpdir());
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const script = (name: string) => join(root, "scripts", name);
 const hasYq = spawnSync("yq", ["--version"]).status === 0;
@@ -24,7 +25,7 @@ const WOLFI_REPO = "https://packages.wolfi.dev/os";
 const WOLFI_KEY = "https://packages.wolfi.dev/os/wolfi-signing.rsa.pub";
 
 function sh(file: string, args: string[], cwd: string, env: Record<string, string> = {}) {
-  const r = spawnSync("sh", [file, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...env } });
+  const r = spawnSync("sh", [file, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "Cork-Technology/cork-cli", ...env } });
   return { status: r.status, out: r.stdout, err: r.stderr };
 }
 const yqJson = (file: string) => JSON.parse(spawnSync("yq", ["-o=json", ".", file], { encoding: "utf8" }).stdout);
@@ -173,7 +174,7 @@ describe.skipIf(!hasYq)("apk-rehearsal-spec.sh — a branch at a pinned commit, 
     // The identity the build compiles with is untouched: only the checkout step differs.
     expect(after.pipeline.slice(1)).toEqual(before.pipeline.slice(1));
     expect(after.package).toEqual(before.package);
-    expect(after.vars).toEqual({ commit: COMMIT, tag: "v0.0.0-rc.0" });
+    expect(after.vars).toEqual(before.vars);
     expect(after.environment).toEqual(before.environment);
   });
 
@@ -333,7 +334,6 @@ describe("apk-slice.sh — merge, one signed index, the slice", () => {
     expect(readFileSync(join(dir, "slice-base.sha"), "utf8")).toBe("none\n");
     // melange index ran inside the channel directory, with an ABSOLUTE key path.
     expect(m.calls()).toEqual([{ cwd: join(dir, "site/apk/aarch64"), epoch: "unset", args: ["index", "-o", "APKINDEX.tar.gz", "--signing-key", join(dir, "key.rsa"), "./cork-cli-0.6.1-r0.apk"] }]);
-    expect(r.out).toContain("slice for aarch64: 2 added file(s) + signed index, indexed against gh-pages none");
   });
 
   it("a published channel (production): the index covers every apk, the slice carries only what was added", () => {

@@ -29,7 +29,9 @@ function commitAll(msg: string): string {
 /** Every repoint file in its PRIVATE form, with a neighbor line above the anchor (the adjacency
  *  that broke the patch-based port), plus private-only trees and a normal source file. */
 function seedPrivateBaseline(): void {
-  for (const r of REPOINTS) write(r.file, `neighbor line above\n${r.from}\nbody of ${r.file}\n`);
+  const files = new Map<string, string>();
+  for (const r of REPOINTS) files.set(r.file, `${files.get(r.file) ?? "neighbor line above\n"}${r.from}\n`);
+  for (const [file, content] of files) write(file, `${content}body of ${file}\n`);
   write("notes/secret-plan.md", "private notes\n");
   write("experiments/lab.txt", "private experiment\n");
   write("rfc/001.md", "private rfc\n");
@@ -64,7 +66,7 @@ describe("port-to-public: the transform is a pure function of the private tree",
     for (const r of REPOINTS) {
       const content = git(["show", `${tree}:${r.file}`]);
       expect(content).toContain(r.to);
-      expect(content).not.toContain(r.from);
+      if (r.from !== r.to) expect(content).not.toContain(r.from);
     }
   });
 

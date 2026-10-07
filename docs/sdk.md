@@ -3,9 +3,10 @@
 This guide takes you from zero to your first Cork call in a few minutes. You read live protocol
 state, run bit-exact math and build unsigned transactions, all from typed TypeScript.
 
-One safety property shapes everything here: **the SDK never signs and never holds keys.** Every
-prepare returns unsigned bytes or typed data. You sign with your own wallet and broadcast through
-your own RPC. The one call with a side effect, `cork_submit`, relays a payload you already signed.
+One safety property shapes everything here: **the SDK never signs or holds wallet private keys.**
+Every prepare returns unsigned bytes or typed data. You sign with your own wallet and broadcast
+through your own RPC. `cork_submit` relays caller-signed or API-key-authenticated venue payloads;
+it does not broadcast on-chain transactions.
 
 Make one trade-off on purpose before you import anything. A library runs in-process, with your
 backend's full authority. The `ch` binary runs behind an OS process boundary you can sandbox. If
@@ -26,35 +27,77 @@ verified wei-for-wei on live chains. Trust the SDK's numbers over hand-derived o
 
 You need Node 22 or later, or Bun 1.3 or later. The packages are ESM-only and ship their own types.
 
-The packages are not on a public registry yet. Every release ships them as attested tarballs
-beside the binaries: `cork-schemas-<version>.tgz` and `cork-core-<version>.tgz` on the
-[releases page](https://github.com/Cork-Technology/cork-cli/releases). Verify, then install both
-by URL:
+The packages are not on a public registry. A release ships three attested tarballs beside the
+binaries: schemas, core and the optional MCP server package. Choose the **intended repository**:
+private candidates live in `Cork-Technology/cork-cli-private`; approved public releases live in
+`Cork-Technology/cork-cli`. This preparation PR has not published v0.7.0-rc.1.
+
+Download an already-published tag and verify every archive against its repository, builder,
+tag and approved source commit. Never put a private credential in a package URL or lockfile.
 
 ```sh
-# 1. Verify the provenance (the same recipe as the binaries: Sigstore-signed, SLSA Build L3)
-gh attestation verify cork-core-<version>.tgz --repo Cork-Technology/cork-cli \
-  --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml
-
-# 2. Add BOTH tarball URLs to your dependencies (core depends on schemas)
-npm install \
-  https://github.com/Cork-Technology/cork-cli/releases/download/<tag>/cork-schemas-<version>.tgz \
-  https://github.com/Cork-Technology/cork-cli/releases/download/<tag>/cork-core-<version>.tgz
+REPO=Cork-Technology/cork-cli-private # use Cork-Technology/cork-cli for a public release
+: "${TAG:?Set the published release tag}"
+: "${SOURCE_COMMIT:?Set its approved 40-character source commit}"
+export GH_HOST=github.com GH_DEBUG=
+case "$REPO" in
+  Cork-Technology/cork-cli-private)
+    : "${CORK_GITHUB_TOKEN:?Explicit repository/attestation read access is required}"
+    export GH_TOKEN="$CORK_GITHUB_TOKEN" ;;
+  Cork-Technology/cork-cli) ;;
+  *) echo 'Unknown release repository' >&2; exit 1 ;;
+esac
+gh release download "$TAG" --repo "$REPO" --pattern 'cork-*.tgz'
+for asset in cork-*.tgz; do
+  gh attestation verify "$asset" --repo "$REPO" \
+    --signer-workflow "$REPO/.github/workflows/build-binaries.yml" \
+    --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_COMMIT"
+done
 ```
 
-Core's dependency on `@cork/schemas` resolves to the sibling tarball you installed. No registry is
-contacted for either package. Your lockfile pins each tarball's sha512, and releases are
-immutable, so the bytes behind a URL can never change. Every upgrade is an explicit decision: you
-change the URL, verify the new tarball, and review the lockfile diff.
+Merge dependencies **and overrides** into your consumer's package.json. This example is for
+0.7.0-rc.1 after publication; use the archive version of the tag you actually downloaded.
+The overrides keep transitive Cork dependencies on those same verified archives rather than
+trying unpublished npm versions. MCP is optional: omit both of its entries if you need only core.
 
-Working from a clone? `bun pm pack` produces the identical bytes and rewrites the workspace
-versions so the tarballs install with npm, pnpm or bun:
+```json
+{
+  "dependencies": {
+    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.1.tgz",
+    "@cork/core": "file:./cork-core-0.7.0-rc.1.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.1.tgz"
+  },
+  "overrides": {
+    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.1.tgz",
+    "@cork/core": "file:./cork-core-0.7.0-rc.1.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.1.tgz"
+  }
+}
+```
 
 ```sh
-cd packages/schemas && bun pm pack --destination /tmp/cork-pkgs
-cd ../core        && bun pm pack --destination /tmp/cork-pkgs
-npm install /tmp/cork-pkgs/cork-schemas-*.tgz /tmp/cork-pkgs/cork-core-*.tgz
+bun install --ignore-scripts
 ```
+
+Other, third-party dependencies still come from their registries. Review the lockfile's archive
+integrities on each upgrade. For private remote config and release reads, set CORK_GITHUB_TOKEN
+in the SDK process environment; this is separate from CORK_RFQ_API_KEY for venue authentication.
+
+Working from a clone? Build and validate with the repository's pinned Bun before packing:
+
+```sh
+mise exec -- bun install --frozen-lockfile --os='*' --cpu='*'
+mise exec -- bun run verify:publish # local build/layout/type checks, not publication
+SDK_DIR="$(mktemp -d)"
+for package in schemas core mcp; do
+  (cd "packages/$package" && mise exec -- bun pm pack --quiet --destination "$SDK_DIR")
+done
+printf 'Local archives: %s\n' "$SDK_DIR"
+```
+
+Copy those local archives into your consumer and use the dependency/override recipe above.
+Locally packed bytes are not attested release assets; the release's independent-build checksum
+comparison and provenance gates must prove release reproducibility separately.
 
 Why tarballs and not npm? [sdk-roadmap.md](sdk-roadmap.md) explains the distribution posture, the
 verification chain, and when the npm stage arrives.

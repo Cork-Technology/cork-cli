@@ -40,6 +40,7 @@ export interface Repoint {
   from: string;
   to: string;
   history?: ReadonlyArray<{ from: string; to: string }>;
+  absentInHistory?: boolean;
 }
 export const REPOINTS: ReadonlyArray<Repoint> = [
   {
@@ -63,18 +64,14 @@ export const REPOINTS: ReadonlyArray<Repoint> = [
     to: "# the Bun version is part of the reproducible-build statement.",
   },
   {
+    // No current substitution: identity now comes from release-channel.ts. Retain old ports.
     file: "packages/core/src/config-remote.ts",
-    from: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli";',
-    to: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";',
+    from: 'export const CORK_DEFAULTS_REPO = `https://raw.githubusercontent.com/${BUILD_REPO}`;',
+    to: 'export const CORK_DEFAULTS_REPO = `https://raw.githubusercontent.com/${BUILD_REPO}`;',
     history: [
-      {
-        from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";',
-        to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";',
-      },
-      {
-        from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";',
-        to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";',
-      },
+      { from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.v2.json";', to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.v2.json";' },
+      { from: '  "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli/main/cork-defaults.json";', to: '  "https://raw.githubusercontent.com/Cork-Technology/cork-cli/main/cork-defaults.json";' },
+      { from: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-helper-cli";', to: 'export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";' },
     ],
   },
   {
@@ -91,6 +88,53 @@ export const REPOINTS: ReadonlyArray<Repoint> = [
     file: "scripts/compile-binaries.mjs",
     from: "// Invariants this script owns (notes/single-binary-release-plan.md):",
     to: "// Invariants this script owns:",
+  },
+  {
+    file: "packages/core/src/release-channel.ts",
+    absentInHistory: true,
+    from: 'export const SOURCE_REPO = "Cork-Technology/cork-cli-private";',
+    to: 'export const SOURCE_REPO = "Cork-Technology/cork-cli";',
+  },
+  {
+    file: "scripts/compile-binaries.mjs",
+    from: 'const SOURCE_REPO = "Cork-Technology/cork-cli-private";',
+    to: 'const SOURCE_REPO = "Cork-Technology/cork-cli";',
+    history: [{ from: "export function compileDefines({ version, commit, target }) {", to: "export function compileDefines({ version, commit, target }) {" }],
+  },
+  ...["schemas", "core", "mcp"].map((name) => ({
+    file: `packages/${name}/package.json`,
+    from: '    "url": "https://github.com/Cork-Technology/cork-cli-private"',
+    to: '    "url": "https://github.com/Cork-Technology/cork-cli"',
+  })),
+  {
+    file: "scripts/apk-spec-identity.sh",
+    from: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli-private}\"",
+    to: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}\"",
+    history: [{ from: "mise=\"${5:-$(dirname \"$0\")/../mise.toml}\"\ncase \"$tag\" in v[0-9]*) ;; *) echo \"apk-spec-identity: tag must start with v (got: $tag)\" >&2; exit 2 ;; esac", to: "mise=\"${5:-$(dirname \"$0\")/../mise.toml}\"\ncase \"$tag\" in v[0-9]*) ;; *) echo \"apk-spec-identity: tag must start with v (got: $tag)\" >&2; exit 2 ;; esac" }],
+  },
+  {
+    file: "scripts/apk-image-spec.sh",
+    from: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli-private}\"",
+    to: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}\"",
+    history: [{ from: "PAGES_KEY=\"https://cork-technology.github.io/cork-cli/melange.rsa.pub\"\ncase \"$revision\" in ????????????????????????????????????????) ;; *) echo \"apk-image-spec: revision must be a 40-hex commit (got: $revision)\" >&2; exit 2 ;; esac", to: "PAGES_KEY=\"https://cork-technology.github.io/cork-cli/melange.rsa.pub\"\ncase \"$revision\" in ????????????????????????????????????????) ;; *) echo \"apk-image-spec: revision must be a 40-hex commit (got: $revision)\" >&2; exit 2 ;; esac" }],
+  },
+  {
+    file: "scripts/apk-melange-build.sh",
+    from: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli-private}\"",
+    to: "repo=\"${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}\"",
+    history: [{ from: "echo \"SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (the packaged commit)\"\n\n# bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the runner the job", to: "echo \"SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (the packaged commit)\"\n\n# bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the runner the job" }],
+  },
+  {
+    file: "CLAUDE.md",
+    from: "approved private candidate, use `CORK_RELEASE_REPO=github.com/cork-technology/cork-cli-private`",
+    to: "approved private candidate, set `CORK_RELEASE_REPO` to its normalized repository identity",
+    history: [{ from: "Tags live only on the public remote (`cork-cli`) and are cut only on an explicit ask. Create", to: "Tags live only on the public remote (`cork-cli`) and are cut only on an explicit ask. Create" }],
+  },
+  {
+    file: "scripts/release-graph.ts",
+    absentInHistory: true,
+    from: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli-private", process.env.RELEASE_TAG);',
+    to: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli", process.env.RELEASE_TAG);',
   },
 ];
 
@@ -123,11 +167,13 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
   }
 
   // Apply the repoint substitutions, loudly.
+  const repointed = new Map<string, string>();
   for (const r of REPOINTS) {
     let content: string;
     try {
-      content = git(repo, ["show", `${privateCommit}:${r.file}`]);
+      content = repointed.get(r.file) ?? git(repo, ["show", `${privateCommit}:${r.file}`]);
     } catch {
+      if (r.absentInHistory && !listed.includes(r.file)) continue;
       throw new Error(`repoint file ${r.file} is missing from ${privateCommit} — if it was renamed or deleted deliberately, update REPOINTS first`);
     }
     // The current spelling first, then each historical one: the FIRST pair whose private form
@@ -139,6 +185,7 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
       throw new Error(`repoint anchor not found in ${r.file} at ${privateCommit}:\n  expected: ${r.from}${r.history ? ` (or an earlier spelling: ${r.history.map((h) => h.from).join(" | ")})` : ""}\nThe private line was reworded — update REPOINTS deliberately, then re-run`);
     }
     const replaced = content.replace(applicable.from, applicable.to);
+    repointed.set(r.file, replaced);
     const blob = git(repo, ["hash-object", "-w", "--stdin"], { input: replaced }).trim();
     git(repo, ["update-index", "--cacheinfo", `100644,${blob},${r.file}`], { env });
   }
@@ -156,7 +203,7 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
     if (!diff.includes(r.file)) continue; // untouched relative to private (already-public content)
     const fileDiff = git(repo, ["diff", `${privateCommit}^{tree}`, tree, "--", r.file]);
     const changed = fileDiff.split("\n").filter((l) => /^[-+][^-+]/.test(l));
-    const expected = new Set([{ from: r.from, to: r.to }, ...(r.history ?? [])].flatMap((p) => [`-${p.from}`, `+${p.to}`]));
+    const expected = new Set(REPOINTS.filter((p) => p.file === r.file).flatMap((p) => [{ from: p.from, to: p.to }, ...(p.history ?? [])]).flatMap((p) => [`-${p.from}`, `+${p.to}`]));
     const extra = changed.filter((l) => !expected.has(l));
     if (extra.length > 0) {
       throw new Error(`fidelity gate: ${r.file} changed beyond its sanctioned repoint line:\n  ${extra.join("\n  ")}`);

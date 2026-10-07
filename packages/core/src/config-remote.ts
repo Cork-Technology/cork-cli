@@ -14,16 +14,14 @@
 // addresses, closed shape) — a malformed or tampered remote file is treated as a fetch failure and
 // the bundled fallback is used, with a warning.
 //
-// Noise policy (owner direction 2026-07-20): HTTP 404/410 means the file is NOT PUBLISHED at the
-// canonical URL (private repo, or the commit not pushed yet) — a deliberate state, not a transient
-// failure — so the bundled copy is served SILENTLY. Only transient failures (network, 5xx,
-// tampered/invalid content) warn, with a one-line message. Either negative outcome is cached on
-// disk for 10 minutes so fresh CLI processes don't re-attempt the fetch on every invocation.
+// Public 404/410 means not published and serves the bundle silently. Private GitHub masks
+// unauthorized reads as 404: every private failure warns; never claim it is a current remote.
+// Both negative outcomes back off for ten minutes; caches bind the build repo and resource.
 import { z } from "zod";
 import { Address } from "@cork/schemas";
 import { readFileSync, mkdirSync } from "node:fs";
 import { atomicWriteFileSync } from "./atomic-file.ts";
-import { fetchWithTimeout } from "./fetch-timeout.ts";
+import { BUILD_REPO, channelCacheKey, channelFetch, configResource } from "./release-channel.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
@@ -48,7 +46,7 @@ import {
 import { rolloverGenerations, type RolloverGeneration } from "./rollover.ts";
 
 /** The repository a released binary fetches its defaults from. */
-export const CORK_DEFAULTS_REPO = "https://raw.githubusercontent.com/Cork-Technology/cork-cli";
+export const CORK_DEFAULTS_REPO = `https://raw.githubusercontent.com/${BUILD_REPO}`;
 
 /** The release line of a build version: `<major>.<minor>`. Accepts the tag spelling the release
  *  pipeline stamps (`v0.6.1-rc.1`) and the bare one (`0.6.1`); anything else ("dev", "") has no
@@ -229,16 +227,19 @@ export interface ConfigDeps {
 const TTL_MS = 3_600_000; // success: re-check GitHub at most hourly
 const FAILURE_TTL_MS = 600_000; // negative outcome: don't re-attempt for 10 min (shared across CLI processes via disk)
 
-// The v2 document caches under its own file name: a 0.5.x binary sharing the cache dir keeps
-// its v1 copy at `cork-defaults.json`, and neither line can serve the other's shape.
+// Every disk entry (including an explicit cache-file override) binds repo + resource/ref.
+function cacheScope(): string {
+  return channelCacheKey(BUILD_REPO, process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL);
+}
 function cachePath(): string {
-  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", "cork-defaults.v2.json");
+  return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", BUILD_REPO.split("/")[1]!, "cork-defaults.v2.json");
 }
 
 async function realFetchRemote(): Promise<RemoteFetchResult> {
-  const res = await fetchWithTimeout(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL, {}, 8_000);
-  if (res.status === 404 || res.status === 410) return { kind: "absent" };
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const resource = configResource(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL);
+  const res = await channelFetch(resource.url, { authenticated: resource.authenticated, accept: "application/vnd.github.raw+json" });
+  if (!resource.authenticated && (res.status === 404 || res.status === 410)) return { kind: "absent" };
+  if (!res.ok) throw new Error(`GitHub config HTTP ${res.status}`);
   return { kind: "ok", data: await res.json() };
 }
 
@@ -254,7 +255,8 @@ export function realConfigDeps(): ConfigDeps {
     loadOverride: realLoadOverride,
     loadCache: () => {
       try {
-        return JSON.parse(readFileSync(cachePath(), "utf8")) as StoredCache;
+        const stored = JSON.parse(readFileSync(cachePath(), "utf8")) as { scope?: string; entry?: StoredCache };
+        return stored.scope === cacheScope() ? stored.entry ?? null : null;
       } catch {
         return null;
       }
@@ -262,7 +264,7 @@ export function realConfigDeps(): ConfigDeps {
     saveCache: (entry) => {
       try {
         mkdirSync(dirname(cachePath()), { recursive: true });
-        atomicWriteFileSync(cachePath(), JSON.stringify(entry));
+        atomicWriteFileSync(cachePath(), JSON.stringify({ scope: cacheScope(), entry }));
       } catch {
         /* best-effort; in-memory result still stands */
       }
@@ -279,10 +281,10 @@ export const STALE_CACHE_WARNING = {
 export const FETCH_FAILED_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale if Cork has redeployed (private repo? check for updates with an authenticated `gh`/GitHub MCP)",
+    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale (private reads require an authorized CORK_GITHUB_TOKEN)",
 } as const;
 
-let memo: { at: number; ttl: number; resolved: ResolvedConfig } | null = null;
+let memo: { at: number; ttl: number; scope: string; resolved: ResolvedConfig } | null = null;
 
 /** Parse+validate an untrusted defaults payload; throws on any shape/checksum violation. A
  *  schema-1 document is rejected here too: the 0.6 line reads only v2, by design. */
@@ -346,11 +348,12 @@ export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promis
   // layer still applies: offline means "no network", not "no operator".
   if (process.env.CORK_CONFIG_NO_FETCH) return applyOverride({ defaults: BUNDLED, source: "bundled" }, loadOverride());
   const now = deps.now();
-  if (memo && now - memo.at < memo.ttl) return memo.resolved;
+  const scope = cacheScope();
+  if (memo && memo.scope === scope && now - memo.at < memo.ttl) return memo.resolved;
 
   const remember = (layer: DefaultLayer, ttl: number): ResolvedConfig => {
     const resolved = applyOverride(layer, loadOverride());
-    memo = { at: now, ttl, resolved };
+    memo = { at: now, ttl, scope, resolved };
     return resolved;
   };
 

@@ -1,8 +1,9 @@
 # `ch` — CLI reference
 
 `ch` is the Cork command line. One command per tool, one subcommand per action, one flag per
-field. Every command either reads state or builds an **unsigned** artifact. You sign and
-broadcast with your own wallet and your own RPC. `ch` never holds a key.
+field. Tool commands read state, build **unsigned** artifacts, or relay caller-authorized venue
+payloads. The optional CLI keystore commands can sign after human confirmation and a terminal-only
+password prompt. MCP never holds keys or signs. Broadcast onchain transactions through your own RPC.
 
 This page is the map. `ch <command> --explain` prints the exact contract of any command, with
 every field and its meaning. `ch capabilities` is the searchable manual.
@@ -306,8 +307,9 @@ outranks the venue. A disagreement is `conflict`.
 
 ## 9. Relay signed payloads — `ch submit`
 
-The only command with a side effect. It relays a payload you already signed to the venue. It
-never signs.
+The venue-relay command. It sends caller-signed payloads or RFQ writes authorized with an API key.
+Without `--account` it never signs; the optional CLI-only `--account` flow signs an RFQ write after
+human confirmation and a terminal password prompt. Local wallet/auth management also writes files.
 
 ```sh
 ch submit lop-order      --chain-id <id> --client-request-id <id> --action '{…}'   # rest a signed order; the payload is finalize-maker-order's submitInput
@@ -407,6 +409,8 @@ For otherwise valid inputs, the JSON-mode contract is:
 | Duplicate modes within the one-to-three length bound | Local domain/preflight, before relay | `3` | JSON result: `state: "unavailable"`, warning code `invalid_order_terms` | Empty |
 | `rfq-open` succeeds with `recipe_generation_notice` or `cover_mode_mismatch` | Relay with warnings | `0` | JSON result: `state: "ok"`, RFQ data and warnings | Empty |
 
+The domain-refusal row assumes authorization resolves and the other required fields are valid. With `auth.method: "apiKey"` but no available key, credential resolution instead returns `api_key_missing` (exit 3) before domain preflight. Neither path relays a venue write.
+
 Local rejection is not a venue response: do not expect `venue_rejected` for either invalid
 mode-list case. `venue_rejected` reports a venue refusal of a relayed request, not these local
 checks. Scripts must handle exit `2` and stderr as well as exit `3` result envelopes.
@@ -435,7 +439,7 @@ ch <command> --explain                   # the exact contract, per subcommand
 ## 11. Run and maintain
 
 ```sh
-ch version [--json]                      # version, commit, embedded HyperSync binding
+ch version [--json]                      # version, commit, repository, embedded HyperSync binding
 ch mcp                                   # MCP server on stdio: claude mcp add cork-defi -- ch mcp
 ch mcp --http [--port 8080] [--host 0.0.0.0] [--trust-forwarded-for]   # Streamable HTTP: /mcp, /healthz, /readyz, /docs/<topic>
 ch self-update [--tag <vX.Y.Z>] [--dry-run] [--allow-downgrade]         # verifies provenance before it swaps the binary
@@ -448,8 +452,91 @@ an ingress you control; without it every caller behind a proxy shares one client
 deployment set per key, the primary, or an `only` list of the sets you want to see. `ch query
 protocol-config` shows both layers under `data.config`, and every result an override actually shaped
 warns `config_override_active`. `CORK_CONFIG_NO_OVERRIDE=1` turns the layer off. A released build
-fetches `cork-defaults.v2.json` from its line's config branch (`config/0.6` for 0.6.1 and later),
+fetches `cork-defaults.v2.json` from its line's config branch (`config/0.7` for this candidate),
 so a redeployed address reaches you within an hour without an upgrade.
+
+The build's repository identity also selects its release/update channel; it is shown by
+`ch version --json`. A private build uses only that repository, never the public channel.
+Set `CORK_GITHUB_TOKEN` explicitly to an authorized, read-only GitHub credential for private
+repository contents, releases/assets and attestation reads. It is a process environment value,
+not a CLI argument or URL parameter; do not paste it into logs, configuration files or notes.
+The RFQ API key is unrelated and cannot authorize GitHub downloads. GitHub credentials are sent
+only to the authorized API origin, never to a redirected asset host.
+
+Private self-update requires the GitHub CLI (`gh`) and successful artifact-attestation
+verification against the build's repository, release workflow, tag and commit. Release
+checksums remain available for manual comparison, but private self-update never substitutes
+them for provenance verification. A dry run reports the selected tag, asset and installation path; it does
+not download, attest or replace the binary.
+Repository-specific caches keep private and public release/config results separate.
 
 Accepted synonyms, and the pre-rename names that answer with their new name, are listed in the
 README's synonym table.
+
+## 12. Migrate from 0.6 to 0.7
+
+This candidate breaks covered RFQ input contracts, so it starts the 0.7 minor line below 1.0.
+Do not upgrade an unattended RFQ writer without updating its payloads and error handling.
+The production API serves both versions, but this CLI, MCP server and SDK RFQ tooling use
+**only /rfqs/v2**. There is no v1 shim and a v2 query does not expose v1-opened RFQs. Keep an
+appropriate v1 client for existing v1 negotiations, or open a new v2 request with a fresh id;
+do not silently reinterpret a prior request as v2. Existing onchain orders and generation
+addresses are not migrated or retired by this release.
+
+| 0.6 input or flow | 0.7 replacement |
+|---|---|
+| RFQ v1 read/write | RFQ v2 with `schema_version: "2"` in the venue body |
+| `rfq-open` without kind | Explicit `kind: "new_position"` or `"rollover"` |
+| Free `signature` on an RFQ submit | `auth: { method: "signature", signature }` |
+| Unsigned RFQ write | Prepare `rfq-write`, sign its exact typed data, submit the same request/id; an authorized API key is optional |
+| Quote option without its order | Include the underwriter's exact signed order per quoted new-position option |
+| Rest order before quoting it | Sign order → finalize → prepare/sign RFQ write → submit answer → submit listing with quoteRef |
+
+The RFQ write signature binds the entire canonical answer body, operation, target and chain.
+An order signature alone does not authorize an answer's quotation terms. A signature-authorized
+quoted answer needs **both** its full-answer signature and each order's signature. API-key
+mode authorizes the venue write; this tool still checks quoted order signatures before relay.
+Sign the body returned by `rfq-write`, not a separately assembled body. Reuse the same
+`clientRequestId` for a retry of the same intent; a changed body needs a fresh id.
+
+A rollover RFQ uses `source { poolId, shares }` and `premiumToken`, not new-position
+modes/packageIds/notionalAssets. Options name an existing destination pool or a just-in-time
+market; prices are raw premium-token units per 1e18 destination shares. `rollover-intent`
+accepts `quoteRef` and checks the quoted terms; a reserved rollover fill may additionally
+need the exclusive filler's signature, distinct from the RFQ write authorization.
+
+API keys are **optional**, never provisioned by installing or releasing this CLI. Use
+`ch auth set-key` with a hidden prompt or pipe, never argv. Stored keys are host-bound;
+environment/process keys apply to the configured venue. HTTP MCP refuses the operator's
+stored/API keys. A human may instead use `ch wallet` and `ch sign --account <name>`;
+passwords come only from a terminal. CLI signing never broadcasts and MCP never signs.
+A prepare transaction missing nonce/gas/fees is not a complete transaction to sign.
+
+Handle both JSON channels: invalid input exits 2 with empty stdout and an error on stderr;
+a domain refusal exits 3 with an unavailable result on stdout. In particular, four or more
+new-position modes are invalid input, while duplicate modes within the size limit are a
+domain refusal. Successful results may carry warnings and still exit 0; read the envelope
+state and warning evidence before proceeding. See the failure table above.
+
+This is preparation, not evidence of removal-notice compliance or human compatibility
+approval. Those decisions, independent review of the signing exposure, and private-release
+platform/signing prerequisites must be recorded before an actual cut. Publishing a release
+does not deploy the hosted MCP service.
+
+
+### Reference: terminology
+
+| Term | Meaning |
+|---|---|
+| RPC (remote procedure call) | The chain endpoint used for reads and broadcasting. |
+| JSON (JavaScript Object Notation) | The machine-readable input/output format. |
+| LOP (Limit Order Protocol) | The 1inch order execution protocol. |
+| NAV (net asset value) | A vault/share valuation source. |
+| RFQ (request for quote) | The venue negotiation record. |
+| SDK (software development kit) | The typed library packages. |
+| JIT (just in time) | A market created during execution. |
+| AWS (Amazon Web Services) | The credential-resolution model used as a reference. |
+| HTTP (Hypertext Transfer Protocol) | The network MCP transport and venue protocol. |
+| ISO (International Organization for Standardization), UTC (Coordinated Universal Time) | The ISO-8601 timestamp standard and explicit UTC timezone. |
+| RATE (rate), MIN (minimum), TARGET (target contract) | Literal constant/error-word fragments, not additional APIs. |
+| FILE (file), DIR (directory), CONFIG (configuration), TOKEN (token), NO (disable), ENVIO (Envio prefix), GITHUB (GitHub prefix) | Literal environment-variable name fragments; use the complete names shown above. |

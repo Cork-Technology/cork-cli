@@ -6,10 +6,9 @@
 // the surface-drift gate, pointed outward: on an EXPECTED change, review the fixture diff and
 // re-capture deliberately with UPDATE_VENUE_SPEC=1.
 //
-// The committed capture is the STAGING venue (breaking.cork.tech, cork-api 0.4.5, RFQ v2). Production
-// (api-phoenix, 0.4.4) has no /rfqs/v2, so this gate FAILS against production until the venue
-// ships RFQ v2 there — that red is the release blocker, not a flake. Check it against staging with
-// CORK_VENUE_URL=https://breaking.cork.tech.
+// The committed capture is PRODUCTION (api-phoenix.cork.tech, cork-api 0.4.5, commit 4fb7eb3,
+// 2026-10-07), including RFQ v2 and its full-answer proof fix. Release evidence must run against
+// the production default, without a staging override; a staging success is not production proof.
 //
 // Self-skips unless CORK_RPC_LIVE=1 (the offline suite stays deterministic), and self-skips
 // with a loud log when the venue itself is unreachable — an outage is not a contract change.

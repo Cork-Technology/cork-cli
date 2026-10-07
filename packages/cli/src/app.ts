@@ -26,6 +26,7 @@ import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError, renderWatchTick } from "./render.ts";
 import { diffRfqWatch, rfqWatchRows, type RfqWatchRow } from "./watch-rfqs.ts";
 import { applyAccountSugar, registerWalletCommands, type WalletIo } from "./wallet.ts";
+import { BUILD_REPO } from "../../core/src/release-channel.ts";
 
 /** The CLI's own pause for --watch (the core's default sleep is handler-internal): a timer that resolves early on abort. */
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1082,6 +1083,7 @@ export async function runCli(
       const info = {
         version: BUILD_VERSION,
         commit: BUILD_COMMIT,
+        repository: BUILD_REPO,
         target: BUILD_TARGET || null,
         schemaVersion: SCHEMA_VERSION,
         runtime: (globalThis as { Bun?: { version: string } }).Bun ? `bun ${(globalThis as { Bun?: { version: string } }).Bun!.version}` : `node ${process.versions.node}`,

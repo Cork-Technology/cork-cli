@@ -10,6 +10,7 @@ import { updateDecision, type UpdateCache } from "../src/update-notify.ts";
 import { assetForTarget as scriptAssetForTarget, compileDefines, hyperSyncBindingForTarget } from "../../../scripts/compile-binaries.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { SOURCE_REPO } from "../../core/src/release-channel.ts";
 
 describe("compareVersions", () => {
   it("orders releases numerically, not lexically", () => {
@@ -110,13 +111,19 @@ describe("embedded HyperSync binding per release target", () => {
   });
   it("compileDefines stamps identity plus the binding — the literal `undefined` where there is none", () => {
     const withBinding = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-linux-x64" });
-    expect(withBinding.filter((a) => a === "--define")).toHaveLength(4);
+    expect(withBinding.filter((a) => a === "--define")).toHaveLength(5);
     expect(withBinding).toContain('process.env.CH_BUILD_VERSION="v1.2.3"');
     expect(withBinding).toContain('process.env.CH_BUILD_COMMIT="abc"');
     expect(withBinding).toContain('process.env.CH_BUILD_TARGET="bun-linux-x64"');
+    expect(withBinding).toContain(`process.env.CH_BUILD_REPO=${JSON.stringify(SOURCE_REPO)}`);
     expect(withBinding).toContain(`process.env.CH_HYPERSYNC_BINDING="${spec("linux-x64-gnu")}"`);
     const without = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-windows-x64" });
     expect(without).toContain("process.env.CH_HYPERSYNC_BINDING=undefined");
+  });
+  it("stamps the requested public/private channel and refuses foreign repositories", () => {
+    const identity = { version: "v0.7.0-rc.1", commit: "a".repeat(40), target: "bun-darwin-arm64" };
+    for (const repo of ["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"]) expect(compileDefines({ ...identity, repo })).toContain(`process.env.CH_BUILD_REPO=${JSON.stringify(repo)}`);
+    expect(() => compileDefines({ ...identity, repo: "other/foreign" })).toThrow("unsupported");
   });
 });
 

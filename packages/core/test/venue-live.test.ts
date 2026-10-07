@@ -5,8 +5,8 @@
 // CORK_RPC_LIVE=1 (same convention as rpc-live.test.ts); tolerates an unreachable venue and an
 // empty RFQ table (structural assertions only run over what exists — live data is never
 // value-pinned, only shape-and-invariant pinned).
-// Reads /rfqs/v2: red against production (api-phoenix, 0.4.4) until the venue ships RFQ v2 there;
-// run it against staging with CORK_VENUE_URL=https://breaking.cork.tech.
+// Reads /rfqs/v2 on the production default (api-phoenix, 0.4.5 as of 2026-10-07).
+// Release acceptance must not substitute a staging CORK_VENUE_URL override.
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
 import type { Envelope } from "@cork/schemas";

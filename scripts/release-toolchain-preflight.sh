@@ -95,7 +95,7 @@ done || failed=1
 # The image's age, from the image itself (it is local now: the runs above pulled it).
 # Days since 1970-01-01 from a civil date, so no `date -d` (GNU) / `date -j` (BSD) split.
 created="$("$runtime" image inspect --format '{{.Created}}' "$images" 2>/dev/null || true)"
-day="$(printf '%s' "$created" | sed -n 's/^\([0-9][0-9][0-9][0-9]\)-\([0-9][0-9]\)-\([0-9][0-9]\)T.*/\1 \2 \3/p')"
+day="$(printf '%s' "$created" | sed -n 's/^\([0-9][0-9][0-9][0-9]\)-\([0-9][0-9]\)-\([0-9][0-9]\)[T ].*/\1 \2 \3/p')"
 if [ -z "$day" ]; then
   if [ -n "$max_age" ]; then
     echo "::error::release-toolchain: could not read the pinned image's build date (got: '${created}') — the age limit cannot be checked."
