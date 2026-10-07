@@ -8,12 +8,21 @@
 //                            no server-initiated messages, a GET-opened SSE stream could only
 //                            dangle — connection-pinning waste on a public deployment.
 //   GET /healthz           — 200 + BUILD_VERSION (liveness for the container orchestrator)
-//   GET /readyz            — 200 + a machine-readable degradation snapshot (RPC breakers, venue
-//                            transport, config source). ALWAYS 200 while the process serves:
-//                            the pure tools (capabilities/decode/byte-building) need no upstream,
-//                            so "not ready" would lie — ingress/monitoring alert on the BODY
-//                            (subsystems.*.degraded), not the status code. Hosts only, never
-//                            full URLs: the committed default RPC URLs embed access tokens in
+//   GET /readyz            — 200 + a machine-readable degradation snapshot. ALWAYS 200 while the
+//                            process serves: the pure tools (capabilities/decode/byte-building)
+//                            need no upstream, so "not ready" would lie — ingress/monitoring
+//                            alert on the BODY (subsystems.*.degraded), not the status code.
+//                            TWO VIEWS (cork-cli-private#6, 2026-10-07): the public body is the
+//                            SUMMARY — one `degraded` flag per subsystem and the aggregate — and
+//                            nothing else; the FULL view (RPC hosts and breaker states, the venue
+//                            host and its last outcome, in-flight counts and the admission bounds,
+//                            the trust posture, the config source) is served only to a caller
+//                            presenting the MCP bearer or the diagnostics bearer
+//                            (CORK_MCP_DIAGNOSTICS_TOKEN). The full view is an operator's
+//                            reconnaissance map (which RPC vendor, when a breaker is open, how
+//                            loaded the server is right now), and a public endpoint should not
+//                            hand it to whoever asks. Hosts only, never full URLs, even in the
+//                            full view: the committed default RPC URLs embed access tokens in
 //                            their PATH, and CORK_RPC_URL may too.
 //   GET /docs/<topic>      — any DOC_TOPICS body as text/markdown, resolved by name OR alias
 //                            through the same findDocTopic the capabilities tool uses (same
@@ -21,6 +30,11 @@
 //                            drift); unknown topic 404s with the available list
 // The handler is a pure function so tests drive it without a socket; `startHttpServer` wraps it
 // in Bun.serve for the real deployment (container entrypoint: `ch mcp --http`).
+//
+// Every response — the transport's included — carries MCP_SECURITY_HEADERS (cork-cli-private#6):
+// the endpoint serves JSON and markdown to machine clients, so nothing here is ever meant to be
+// rendered, framed, cached by an intermediary, or sniffed into another type; the headers say so
+// once, in one place, instead of relying on every route and every SDK version to say it.
 //
 // Auth: when CORK_MCP_TOKEN is set the MCP endpoint requires `Authorization: Bearer <token>`;
 // unset = open — the deployed endpoint is public BY DESIGN (a workshop hands its URL to a room).
@@ -37,8 +51,14 @@ import { AdmissionController, type DeadlineScheduler, MCP_HTTP_LIMITS, principal
 
 export interface CorkHttpOptions {
   ctx?: HandlerContext;
-  /** Bearer token gating the MCP endpoint (CORK_MCP_TOKEN). Unset = open; ingress owns auth. */
+  /** Bearer token gating the MCP endpoint (CORK_MCP_TOKEN). Unset = open; ingress owns auth.
+   * Also unlocks the full /readyz view. */
   token?: string;
+  /** Bearer token that unlocks the FULL /readyz view without gating /mcp
+   * (CORK_MCP_DIAGNOSTICS_TOKEN) — for an open deployment whose operator still wants the
+   * hosts, breakers and in-flight counts remotely. Unset = the full view needs the MCP token;
+   * with neither set the summary is all anyone gets. */
+  diagnosticsToken?: string;
   /** Bind address. Default 127.0.0.1 — loopback-only, so `ch mcp --http` on a workstation never
    * exposes an open endpoint to the network by accident. Widening to 0.0.0.0 is an explicit act
    * (`--host 0.0.0.0`), which is what the container deployment passes (packaging/phala-compose.yml)
@@ -62,6 +82,91 @@ function bearerOk(header: string | null, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Does the request present ANY of the configured bearers? Each configured token is checked in
+ *  constant time; an unconfigured one never matches (so an empty header never unlocks). */
+function presentsBearer(req: Request, tokens: ReadonlyArray<string | undefined>): boolean {
+  const header = req.headers.get("authorization");
+  let ok = false;
+  for (const token of tokens) if (token !== undefined && bearerOk(header, token)) ok = true;
+  return ok;
+}
+
+/** The headers every response carries. The endpoint is machine-to-machine JSON/markdown:
+ *  - `x-content-type-options: nosniff` — a client must not reinterpret a body as another type;
+ *  - `cache-control: no-store` — nothing here is cacheable: envelopes carry live chain/venue
+ *    state and the bearer-gated views must never sit in a shared cache;
+ *  - `referrer-policy: no-referrer` — a URL on this host is never leaked onward;
+ *  - `content-security-policy: default-src 'none'; frame-ancestors 'none'` and
+ *    `x-frame-options: DENY` — no body here is a document to render or frame;
+ *  - `cross-origin-resource-policy: same-origin` — no cross-site embedding of a response.
+ *  HSTS is deliberately absent: it belongs to the TLS terminator (the ingress); set from a plain
+ *  HTTP loopback bind it would be a lie about the connection. */
+export const MCP_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  "x-content-type-options": "nosniff",
+  "cache-control": "no-store",
+  "referrer-policy": "no-referrer",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "cross-origin-resource-policy": "same-origin",
+});
+
+/** Return `res` with MCP_SECURITY_HEADERS applied. The headers WIN over whatever the route or
+ *  the SDK transport set for the same names (a transport that marked a body cacheable would
+ *  undo the posture); every other header, the status and the body stream pass through. A new
+ *  Response is built because a transport's Response may carry immutable headers. */
+export function withSecurityHeaders(res: Response): Response {
+  const headers = new Headers(res.headers);
+  for (const [name, value] of Object.entries(MCP_SECURITY_HEADERS)) headers.set(name, value);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+/** The /readyz body. `detail: "summary"` is the public view — one `degraded` flag per subsystem
+ *  and the aggregate; `detail: "full"` adds the operator's diagnostics (hosts, breakers, venue
+ *  outcome, in-flight counts, bounds, trust posture, config source). */
+export interface ReadyzBody {
+  status: "ok";
+  version: string;
+  detail: "summary" | "full";
+  degraded: boolean;
+  subsystems: Record<"rpc" | "venue" | "admission" | "config", { degraded: boolean } & Record<string, unknown>>;
+  note?: string;
+}
+
+/** The /readyz snapshot at the requested detail. Pure over the diagnostics it is handed, so the
+ *  trim is testable without a server: the summary is BUILT from the degraded flags alone, never
+ *  by deleting keys from the full view — a new diagnostic field can only ever reach the public
+ *  body by being added here on purpose. */
+export function readyzBody(detail: "summary" | "full", diag: { rpc: ReturnType<typeof rpcDiagnostics>; venue: ReturnType<typeof venueDiagnostics>; config: ReturnType<typeof configDiagnostics>; admission: Record<string, unknown>; trustForwardedFor: boolean }): ReadyzBody {
+  const rpcDegraded = diag.rpc.breakers.some((b) => b.open);
+  const venueDegraded = diag.venue.breaker?.open === true || diag.venue.lastOutcome?.ok === false;
+  // The config resolver reports its own flag (a remote fetch that fell back to the bundled copy
+  // with a warning); it is carried, never recomputed or overwritten here.
+  const configDegraded = diag.config?.degraded ?? false;
+  const degraded = rpcDegraded || venueDegraded || configDegraded;
+  if (detail === "summary") {
+    return {
+      status: "ok",
+      version: BUILD_VERSION,
+      detail,
+      degraded,
+      subsystems: { rpc: { degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: configDegraded } },
+      note: "summary view: the full snapshot (hosts, breakers, in-flight counts, bounds) is served to a request presenting the MCP bearer or the diagnostics bearer (CORK_MCP_DIAGNOSTICS_TOKEN)",
+    };
+  }
+  return {
+    status: "ok",
+    version: BUILD_VERSION,
+    detail,
+    degraded,
+    subsystems: {
+      rpc: { ...diag.rpc, degraded: rpcDegraded },
+      venue: { ...diag.venue, degraded: venueDegraded },
+      admission: { ...diag.admission, limits: MCP_HTTP_LIMITS, trustForwardedFor: diag.trustForwardedFor, degraded: false },
+      config: diag.config ? { ...diag.config } : { source: null, degraded: false, note: "no config resolution yet this process" },
+    },
+  };
+}
+
 /** The pure fetch handler — testable without a listening socket. `peerAddress` is supplied by
  *  the server wrapper (Bun knows the socket's peer; a bare Request does not). */
 export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, peerAddress?: string) => Promise<Response> {
@@ -73,25 +178,16 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
   const trustForwardedFor = opts.trustForwardedFor ?? false;
   // ONE controller per handler: the counters are the server's, not the request's.
   const admission = new AdmissionController(opts.deadlineMs, opts.scheduleDeadline);
-  return async (req: Request, peerAddress?: string): Promise<Response> => {
+  const route = async (req: Request, peerAddress?: string): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === "/healthz") {
       return new Response(`ok ${BUILD_VERSION}\n`, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
     }
     if (url.pathname === "/readyz") {
-      const rpc = rpcDiagnostics();
-      const venue = venueDiagnostics();
-      const config = configDiagnostics();
-      const body = {
-        status: "ok",
-        version: BUILD_VERSION,
-        subsystems: {
-          rpc: { ...rpc, degraded: rpc.breakers.some((b) => b.open) },
-          venue: { ...venue, degraded: venue.breaker?.open === true || venue.lastOutcome?.ok === false },
-          admission: { ...admission.inFlight(), limits: MCP_HTTP_LIMITS, trustForwardedFor, degraded: false },
-          config: config ? { ...config } : { source: null, degraded: false, note: "no config resolution yet this process" },
-        },
-      };
+      // Always 200, two views (see the header). A wrong or absent bearer is NOT a 401 here: the
+      // summary is the public contract, and a liveness probe must never be told to authenticate.
+      const detail = presentsBearer(req, [opts.token, opts.diagnosticsToken]) ? "full" : "summary";
+      const body = readyzBody(detail, { rpc: rpcDiagnostics(), venue: venueDiagnostics(), config: configDiagnostics(), admission: admission.inFlight(), trustForwardedFor });
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }
     // /docs/<topic-or-alias> resolves through the SAME lookup the capabilities tool uses, so a new
@@ -149,6 +245,9 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
     }
     return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/<topic>\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   };
+  // ONE seam for the posture: every route's response, the transport's and the admission
+  // refusals included, passes through here.
+  return async (req, peerAddress) => withSecurityHeaders(await route(req, peerAddress));
 }
 
 // Minimal ambient Bun.serve surface — the repo compiles with plain TS (no bun-types); the

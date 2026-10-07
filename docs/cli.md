@@ -449,6 +449,13 @@ ch self-update [--tag <vX.Y.Z>] [--dry-run] [--allow-downgrade]         # verifi
 
 Set `CORK_MCP_TOKEN` for bearer auth on the HTTP server. Pass `--trust-forwarded-for` only behind
 an ingress you control; without it every caller behind a proxy shares one client slot.
+`/readyz` answers a summary (one `degraded` flag per subsystem) to a bare request and the full
+snapshot (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) to a
+request that presents the MCP bearer or `CORK_MCP_DIAGNOSTICS_TOKEN` as a bearer; the second
+unlocks the view without gating `/mcp`. Every response carries `X-Content-Type-Options:
+nosniff`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a deny-all
+`Content-Security-Policy`, `X-Frame-Options: DENY` and `Cross-Origin-Resource-Policy:
+same-origin`; HSTS belongs to your TLS terminator.
 `ENVIO_HYPERSYNC_TOKEN` enables `--mode full-decentralized` over the HyperSync archive.
 `CORK_CONFIG_FILE` points at a local `config.json` that overrides `cork-defaults.v2.json`: a whole
 deployment set per key, the primary, or an `only` list of the sets you want to see. `ch query

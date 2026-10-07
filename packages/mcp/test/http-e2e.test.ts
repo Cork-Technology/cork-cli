@@ -67,12 +67,30 @@ describe("ch mcp --http (real Bun.serve socket)", () => {
 
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
     expect(ready.status).toBe(200);
-    const snapshot = (await ready.json()) as { status: string; subsystems: Record<string, unknown> };
+    const snapshot = (await ready.json()) as { status: string; detail: string; subsystems: Record<string, Record<string, unknown>> };
     expect(snapshot.status).toBe("ok");
-    // `admission` joined the snapshot with the ingress bounds (MCP-NET-003): an operator reading
-    // /readyz can see how loaded the server is, not just whether its upstreams are healthy.
+    // No bearer on the wire → the SUMMARY (cork-cli-private#6): every subsystem, flags only.
+    expect(snapshot.detail).toBe("summary");
     expect(Object.keys(snapshot.subsystems).sort()).toEqual(["admission", "config", "rpc", "venue"]);
-    expect(snapshot.subsystems.admission).toMatchObject({ global: expect.any(Number), limits: { bodyBytes: 1_048_576 } });
+    expect(snapshot.subsystems.admission).toEqual({ degraded: false });
+    // The posture reaches the socket: Bun.serve passes the rebuilt Response through unchanged.
+    for (const res of [health, docs, ready]) {
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; frame-ancestors 'none'");
+    }
+  }, 30_000);
+
+  it("CORK_MCP_DIAGNOSTICS_TOKEN unlocks the FULL /readyz view over the socket without gating /mcp", async () => {
+    const { port } = await startServer({ CORK_MCP_DIAGNOSTICS_TOKEN: "e2e-diag" });
+    const full = await fetch(`http://127.0.0.1:${port}/readyz`, { headers: { authorization: "Bearer e2e-diag" } });
+    const snapshot = (await full.json()) as { detail: string; subsystems: Record<string, Record<string, unknown>> };
+    expect(snapshot.detail).toBe("full");
+    // `admission` carries the ingress bounds (MCP-NET-003): an operator reading /readyz can see
+    // how loaded the server is, not just whether its upstreams are healthy.
+    expect(snapshot.subsystems.admission).toMatchObject({ global: expect.any(Number), limits: { bodyBytes: 1_048_576 }, trustForwardedFor: false });
+    const open = await fetch(`http://127.0.0.1:${port}/mcp`, { method: "POST", headers: MCP_HEADERS, body: INIT_BODY });
+    expect(open.status).toBe(200);
   }, 30_000);
 
   it("CORK_MCP_TOKEN gates /mcp (401 bare, 200 with bearer) but not healthz", async () => {
