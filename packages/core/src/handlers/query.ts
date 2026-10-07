@@ -18,7 +18,10 @@ import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from ".
 import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
-import { citedOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
+import { citedOptionKeys, citedRolloverOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
+
+/** How many rollover RFQs on one rfqs page get their rollover-orders firmness read. */
+const ROLLOVER_FIRMNESS_READS = 10;
 import { handleQueryWait } from "./query-watch.ts";
 import { handleAccountPositions, type PositionsEmitter, venuePoolRowsToMarketRows } from "./query-positions.ts";
 import { probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
@@ -556,6 +559,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         } else {
           traversal = await collectVenuePages(paging, (cursor) => getRfqs(deps, {
             chainId,
+            ...(filters.rfqKind ? { kind: filters.rfqKind } : {}),
             ...(filters.state ? { state: filters.state } : {}),
             ...(filters.referenceAsset ? { referenceAsset: filters.referenceAsset.toLowerCase() } : {}),
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
@@ -579,7 +583,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             if (!row) return unavailable(chainId, "order_not_found", `rollover order ${filters.orderDigest} is unknown to the venue (a normal outcome for a never-posted digest)`, ctx);
             traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
           } else {
-            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.settler ? { settler: filters.settler.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+            traversal = await collectVenuePages(paging, (cursor) => getRolloverOrders(deps, { chainId, ...(filters.account ? { user: filters.account.toLowerCase() } : {}), ...(filters.settler ? { settler: filters.settler.toLowerCase() } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.fillable !== undefined ? { fillable: filters.fillable } : {}), ...(filters.source ? { source: filters.source } : {}), ...(filters.rfqId ? { rfqId: filters.rfqId } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
           }
         } else if (kind === "fills") {
           traversal = await collectVenuePages(paging, (cursor) => getRolloverFills(deps, { chainId, ...(filters.orderDigest ? { orderDigest: filters.orderDigest } : {}), ...(filters.filler ? { filler: filters.filler.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
@@ -604,10 +608,35 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         if (book.state === "ok") {
           const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; pagination?: unknown };
           items = markFirmOptions(items as Array<Record<string, unknown>>, citedOptionKeys(bookData));
-          firmness = { source: "orderbook join — `firm` on each answer and option: a LIVE resting order cites it (quoteRef); the venue serves no firm label", orderbookPagination: bookData.pagination ?? null };
+          firmness = { source: "orderbook join — `firm` on each answer and option: a LIVE resting order cites it (quoteRef) or IS its order (the option's served order_hash); the venue serves no firm label. Rollover RFQs carry no flags: a rollover order, not this book, executes them", orderbookPagination: bookData.pagination ?? null };
         } else {
           firmWarnings.push({ code: book.warnings[0]?.code ?? "needs_service", message: `rfqs: the orderbook read that labels firm quotes did not answer (${book.warnings[0]?.message ?? book.state}); answers are served WITHOUT \`firm\` flags — read offers when the book is back` });
         }
+      }
+      // Rollover RFQs: a quote is firm when a LIVE rollover order (fillable, its settler's
+      // orderStatus confirming it) cites it — the venue filters its rollover feed by rfqId. One
+      // bounded read per rollover RFQ with answers, capped so a long page cannot fan out.
+      let rolloverFirmness: Record<string, unknown> | undefined;
+      if (input.resource === "rfqs" && (filters.withAnswers === true || filters.rfqId !== undefined)) {
+        const rolloverRows = (items as Array<Record<string, unknown>>).filter((r) => r.kind === "rollover" && Array.isArray(r.answers) && typeof r.rfq_id === "string");
+        const capped = rolloverRows.slice(0, ROLLOVER_FIRMNESS_READS);
+        const cited = new Set<string>();
+        const unread: string[] = [];
+        for (const r of capped) {
+          const orders = await handleQuery({ resource: "rollover-orders", chainId, format: input.format, pageSize: 50, maxPages: 2, filters: { kind: "orders", rfqId: r.rfq_id as string, fillable: true } }, ctx);
+          if (orders.state !== "ok") {
+            unread.push(r.rfq_id as string);
+            continue;
+          }
+          for (const k of citedRolloverOptionKeys((orders.data as { items: Array<Record<string, unknown>> }).items)) cited.add(k);
+        }
+        if (capped.length > 0) {
+          const readIds = new Set(capped.map((r) => r.rfq_id as string).filter((id) => !unread.includes(id)));
+          items = (items as Array<Record<string, unknown>>).map((r) => (r.kind === "rollover" && readIds.has(r.rfq_id as string) ? markFirmOptions([r], cited, "rollover")[0]! : r));
+          rolloverFirmness = { source: "rollover-orders join — `firm` on each rollover answer and option: a LIVE rollover order (fillable, confirmed by its settler's orderStatus) cites it by quoteRef; the 1inch book never backs a rollover quote", rfqsRead: readIds.size };
+        }
+        const skipped = rolloverRows.length - capped.length + unread.length;
+        if (skipped > 0) firmWarnings.push({ code: "pagination_incomplete", message: `rfqs: ${skipped} rollover RFQ(s) are served WITHOUT \`firm\` flags — ${unread.length > 0 ? `their rollover-orders read did not answer (${unread.join(", ")})` : ""}${unread.length > 0 && rolloverRows.length > capped.length ? "; " : ""}${rolloverRows.length > capped.length ? `only the first ${ROLLOVER_FIRMNESS_READS} rollover RFQs on a page are joined — read one with filters.rfqId` : ""}` });
       }
       // The orderbook's DEFAULT shape is the ranked view (owner ruling 2026-09-02): the taker's
       // question is "what can I fill best, as this sender?", and the venue's newest-first order
@@ -693,6 +722,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           items,
           ...ranking,
           ...(firmness ? { firmness } : {}),
+          ...(rolloverFirmness ? { rolloverFirmness } : {}),
           ...(verification
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),

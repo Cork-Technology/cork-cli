@@ -5,6 +5,7 @@ import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAdd
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
+import { planRfqWrite } from "../packages/core/src/rfq-bodies.ts";
 
 export const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
 export const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
@@ -406,6 +407,10 @@ export const RFQ_OPEN_ID = "rfq_open7";
  *  keeps its one row so every count the eval fixtures pin stays put). answer-rfq must build it
  *  OPEN with `fill_sender_unknown`, never reserved for the requester account by guess. */
 export const RFQ_NOSENDER_ID = "rfq_open8nosender";
+/** A rollover RFQ (kind "rollover") opened by the demo account, with one quote into an existing
+ *  pool — the RFQ a rollover-intent quoteRef accepts (the cork_prepare_orders example). */
+export const RFQ_ROLLOVER_ID = "rfq_0roll123";
+export const RFQ_ROLLOVER_REQUESTER = "0xc0ffee0000000000000000000000000000000001";
 /** An open RFQ whose inline template carries the `cork-inline-liquidity/1` oracle_params block
  *  (the shape the Cork status-page heartbeat RFQs carry): an anchor BELOW the stub oracle's live
  *  rate (0.7 vs 0.8), the JIT task expiry, a 1% swap fee. Its one answer (by the resting maker)
@@ -602,6 +607,51 @@ export const ANSWER_TASK_TAKING = premiumAmount("0.04", 1000n * 10n ** 18n, 20n 
 const EARLIER_BEST_HASH = `0x${"a5".repeat(32)}`;
 export const WATCH_WATERMARK = encodeBookWatermark({ v: 1, account: DEMO_ACCOUNT_ADDR.toLowerCase(), live: [EARLIER_BEST_HASH], best: { SELL: { orderHash: EARLIER_BEST_HASH, unitPrice: (RESTING_ORDER.takingAmount * 2n).toString(), reservedForAccount: false }, BUY: null } });
 
+/** The RFQ v2 writer of the relay tasks. Every v2 write is proven, so a task that relays one
+ *  hands the agent a GENUINE CorkRfqWrite signature by this fixture key over exactly the body
+ *  the task describes — the venue (and cork_submit before it) refuses any other. */
+const RFQ_WRITER = privateKeyToAccount(`0x${"0d".repeat(32)}`);
+export const RFQ_WRITER_ADDRESS = RFQ_WRITER.address;
+async function signedRfqAction(clientRequestId: string, action: Record<string, unknown>, kind?: "new_position" | "rollover"): Promise<Record<string, unknown>> {
+  const plan = planRfqWrite({ chainId: 42161, clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
+  return { ...action, auth: { method: "signature", signature: await RFQ_WRITER.signTypedData(plan.typedData as never) } };
+}
+/** submit-rfq-open: a liquidity request on the stub pair. */
+export const SIGNED_RFQ_OPEN = await signedRfqAction("eval-rfq-0001", { type: "rfq-open", kind: "new_position", requester: RFQ_WRITER.address, referenceAsset: JIT_TASK_PAIR.referenceAsset, collateralAsset: { exact: JIT_TASK_PAIR.collateralAsset }, modes: ["liquidity_only"], packageIds: ["pkg_default"], expiryWindow: { notBefore: 1900000000, notAfter: 1910000000 }, notionalAssets: "1000000000000000000000", validUntil: 1795000000 });
+/** submit-rfq-open-fixed: the fixed-rate request frozen at RFQ_FIXED_RATE. */
+export const SIGNED_RFQ_OPEN_FIXED = await signedRfqAction("eval-rfq-fixed-0001", { type: "rfq-open", kind: "new_position", requester: RFQ_WRITER.address, referenceAsset: JIT_TASK_PAIR.referenceAsset, collateralAsset: { exact: JIT_TASK_PAIR.collateralAsset }, modes: ["fixed_rate"], packageIds: ["pkg_default"], expiryWindow: { notBefore: Number(RFQ_IMPAIRMENT_EXPIRY) - 1, notAfter: Number(RFQ_IMPAIRMENT_EXPIRY) }, marketTemplate: { inline: { oracle_recipe: FIXED_RECIPE, oracle_params: { schema: "cork-inline-fixed/1", rate_override: RFQ_FIXED_RATE, expiry: RFQ_IMPAIRMENT_EXPIRY, swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } }, notionalAssets: "1000000000", validUntil: 1790086400 });
+/** submit-rfq-answer: one quoted option at 3.8%, carrying the signed limit order it stands behind
+ *  (RFQ v2: one order, one quote). A cover order: it sells cST on the stub pair for the premium in
+ *  the collateral, and its amounts are the kernel's for the option's own premium and expiry —
+ *  cork_submit holds every option to the order it carries. */
+const RFQ_ANSWER_EXPIRY = 1_900_000_000;
+const RFQ_ANSWER_ORDER: LopOrder = { salt: 3801n, maker: RFQ_WRITER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c", takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: 10n ** 21n, takingAmount: premiumAmount("0.038", 10n ** 21n, BigInt(RFQ_ANSWER_EXPIRY) - NOW), makerTraits: 0n };
+export const SIGNED_RFQ_ANSWER = await signedRfqAction(
+  "eval-ans-0001",
+  {
+    type: "rfq-answer",
+    rfqId: RFQ_OPEN_ID,
+    underwriter: RFQ_WRITER.address,
+    status: "quoted",
+    options: [{
+      option_id: "opt1",
+      chain_id: 42161,
+      collateral_asset: JIT_TASK_PAIR.collateralAsset.toLowerCase(),
+      reference_asset: JIT_TASK_PAIR.referenceAsset.toLowerCase(),
+      mode: "liquidity_only",
+      package_id: "pkg_default",
+      expiry: RFQ_ANSWER_EXPIRY,
+      market_template: { inline: { oracle_recipe: LIQUIDITY_RECIPE.toLowerCase(), oracle_params: {} } },
+      premium_annualized: "0.038",
+      notional_max_assets: "1000000000000000000000",
+      fresh_until: RFQ_ANSWER_EXPIRY,
+      order: Object.fromEntries(Object.entries(RFQ_ANSWER_ORDER).map(([k, v]) => [k, typeof v === "string" ? v.toLowerCase() : String(v)])),
+      order_signature: await RFQ_WRITER.sign({ hash: hashLopOrder(42161, LOP_ADDRESSES[42161]!, RFQ_ANSWER_ORDER) }),
+    }],
+  },
+  "new_position",
+);
+
 /** The same real signed order as a CALLER-HELD payload for the relay task (the fraction-premium
  *  translation probe): order wire fields + genuine signature, ready for cork_submit lop-order. */
 export const SIGNED_LOP_PAYLOAD = {
@@ -665,7 +715,7 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     // conflict (the local EIP-712 hash is the order's identity); the placeholder "0x" used to
     // be one, which would have graded every relay task as a failed relay.
     if (url.includes("/limit-orders")) return r(201, {});
-    // /rfqs/v1/{id}/answers answers with an ANSWER id; the open endpoint with an RFQ id. A
+    // /rfqs/v2/{id}/answers answers with an ANSWER id; the open endpoint with an RFQ id. A
     // stub that returned rfq_id for both would let the handler's `answer_id ?? null` read null
     // and still look accepted — the field the underwriter needs, quietly absent.
     if (url.includes("/answers")) return r(201, { answer_id: RFQ_ANSWER_ID, rfq_id: RFQ_OPEN_ID });
@@ -690,7 +740,7 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     return r(200, { items, nextCursor: null, hasMore: false });
   }
   if (url.includes("/rollover/")) return r(200, { items: [] });
-  if (/\/rfqs\/v1(\/|\?|$)/.test(url)) {
+  if (/\/rfqs\/v2(\/|\?|$)/.test(url)) {
     // The discovery feed: ONE open RFQ. The venue filters state server-side (default open);
     // the stub mirrors that — a state the row doesn't match answers empty, not unfiltered.
     const state = new URL(url).searchParams.get("state") ?? "open";
@@ -703,9 +753,10 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     // 2026-09-21): row-level facts beside `request`, the requester's body stored verbatim. A
     // flat row here hid a boundary defect for three rc cuts — never flatten a fixture the venue
     // does not flatten.
-    const request = { chain_id: 42161, requester: RC2_CLONE_OWNER, fill_sender: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, schema_version: "1", signature: "" };
-    const row = { rfq_id: RFQ_OPEN_ID, state: "open", received_at: 1789000000, version: 3, request };
-    // GET /rfqs/v1/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
+    const request = { chain_id: 42161, requester: RC2_CLONE_OWNER, fill_sender: RC2_CLONE_OWNER, reference_asset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateral_asset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], package_ids: ["pkg_default"], notional_assets: "1000000000000000000000", expiry_window: { not_before: 1900000000, not_after: 1910000000 }, valid_until: 1795000000, schema_version: "2", kind: "new_position" };
+    // RFQ v2 serves `kind` on the row and strips every signature from reads.
+    const row = { rfq_id: RFQ_OPEN_ID, kind: "new_position", state: "open", received_at: 1789000000, version: 3, request };
+    // GET /rfqs/v2/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
     // then reads back as rfq_not_found, and an agent that verifies before it submits is told
     // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
     // Answers embed only when asked (with_answers, or the single-record read): one FIRM answer
@@ -715,10 +766,17 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
       { answer_id: SOFT_ANSWER_ID, underwriter: SOFT_UNDERWRITER, answer: { status: "quoted", options: [{ option_id: "opt1", premium_annualized: "0.03", expiry: 1900000000 }] } },
     ];
     const withAnswers = new URL(url).searchParams.get("with_answers") === "true";
-    const single = /\/rfqs\/v1\/([^/?]+)/.exec(url)?.[1];
+    const single = /\/rfqs\/v2\/([^/?]+)/.exec(url)?.[1];
     if (single !== undefined) {
       const id = decodeURIComponent(single);
       if (id === RFQ_OPEN_ID) return r(200, { ...row, answers, answer_count: answers.length });
+      if (id === RFQ_ROLLOVER_ID) {
+        // A rollover RFQ (RFQ v2 kind "rollover") with one quote into an existing pool — what a
+        // rollover-intent quoteRef accepts.
+        const rollRequest = { schema_version: "2", kind: "rollover", chain_id: 42161, requester: RFQ_ROLLOVER_REQUESTER.toLowerCase(), source: { pool_id: `0x${"11".repeat(32)}`, shares: "250000000000000000000" }, reference_asset: "0x9d39a5de30e57443bff2a8307a4256c8797a3497", collateral_asset: { exact: "0x53e82abbb12638f09d9e624578ccb666217a765e" }, expiry_window: { not_before: 1795000000, not_after: 1797600000 }, premium_token: { exact: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" }, valid_until: 1794900000 };
+        const rollAnswers = [{ answer_id: "ans_0roll1", underwriter: RESTING_MAKER.address, answer: { schema_version: "2", kind: "rollover", status: "quoted", options: [{ option_id: "opt1", chain_id: 42161, destination: { pool_id: `0x${"22".repeat(32)}` }, premium_token: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", premium_per_share: "5000000", shares_max: "250000000000000000000", fresh_until: 1794900000 }] } }];
+        return r(200, { rfq_id: RFQ_ROLLOVER_ID, kind: "rollover", state: "open", received_at: 1789000000, version: 1, request: rollRequest, answers: rollAnswers, answer_count: 1 });
+      }
       if (id === RFQ_NOSENDER_ID) {
         const { fill_sender: _omit, ...noSender } = request;
         return r(200, { ...row, request: noSender, rfq_id: RFQ_NOSENDER_ID, answers: [], answer_count: 0 });
@@ -742,7 +800,9 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
       }
       return r(404, { message: `unknown rfq ${single}` });
     }
-    const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()));
+    // kind= (RFQ v2): the stub's one RFQ is a new-position request.
+    const kind = new URL(url).searchParams.get("kind");
+    const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase())) && (kind === null || kind === "new_position");
     return r(200, { items: listed ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });
   }
   if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW, RESERVED_ROW] });

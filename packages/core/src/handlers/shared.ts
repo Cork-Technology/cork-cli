@@ -64,6 +64,12 @@ export interface HandlerContext {
    * RPC and HyperSync clients keep their own per-call timeouts and are NOT wired to it.
    */
   signal?: AbortSignal;
+  /** The credentials-file profile an RFQ API key is read from (else CORK_PROFILE, else
+   *  "default"). */
+  profile?: string;
+  /** "refuse" turns off API-key auth for this call — the HTTP MCP endpoint sets it, because a
+   *  shared server's keys are its operator's, not its callers'. */
+  apiKeys?: "refuse";
   /**
    * Sleep between long-poll reads (`cork_query orderbook` with `wait`). Defaults to a real timer
    * that resolves early on `signal`; tests inject an instant sleep so a poll loop is driven by its

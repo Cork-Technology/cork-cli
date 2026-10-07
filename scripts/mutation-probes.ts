@@ -54,6 +54,13 @@ const T = {
   makerCodeProbe: "packages/core/test/maker-code-probe.test.ts",
   events: "packages/core/test/event-decode.test.ts",
   venue: "packages/core/test/venue.test.ts",
+  rfqWrite: "packages/core/test/rfq-write.test.ts",
+  rfqRollover: "packages/core/test/rfq-rollover.test.ts",
+  rfqQuotes: "packages/core/test/rfq-quotes.test.ts",
+  rfqSigning: "packages/core/test/rfq-signing.test.ts",
+  credentials: "packages/core/test/credentials.test.ts",
+  cliAuth: "packages/cli/test/auth.test.ts",
+  mcpHttp: "packages/mcp/test/http.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
   venueRedirect: "packages/core/test/venue-redirect.test.ts",
   venuePremium: "packages/core/test/venue-premium.test.ts",
@@ -96,6 +103,7 @@ const T = {
   rolloverVerify: "packages/core/test/rollover-verify.test.ts",
   eventAttribution: "packages/core/test/event-attribution.test.ts",
   taskFixtures: "evals/task-fixtures.test.ts",
+  keystore: "packages/cli/test/keystore.test.ts",
   warningRegistry: "packages/core/test/warning-registry.test.ts",
   marketCreator: "packages/core/test/market-creator.test.ts",
   oracleDiag: "packages/core/test/oracle-rate-diagnosis.test.ts",
@@ -136,6 +144,62 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+  {
+    // A keystore others can read is refused, the way ssh refuses a loose key.
+    id: "keystore-permission-check-dropped",
+    file: "packages/cli/src/keystore.ts",
+    find: "if ((mode & 0o077) !== 0) {",
+    replace: "if (false) {",
+    tests: [T.keystore],
+  },
+  {
+    // The MAC decides a wrong password BEFORE anything is decrypted or signed.
+    id: "keystore-mac-check-dropped",
+    file: "packages/cli/src/keystore.ts",
+    find: "if (!timingSafeEqual(macOf(dk, ciphertext), mac)) throw",
+    replace: "if (false) throw",
+    tests: [T.keystore],
+  },
+  {
+    // Keystores live in our own directory only — never another tool's folder.
+    id: "keystore-foundry-path-added",
+    file: "packages/cli/src/keystore.ts",
+    find: 'return join(env["XDG_CONFIG_HOME"] ?? join(homedir(), ".config"), "cork-helper-cli", "keystores");',
+    replace: 'return join(homedir(), ".foundry", "keystores");',
+    tests: [T.keystore],
+  },
+  {
+    // The password is read from a TERMINAL only: a plain file opened in its place is refused.
+    id: "cli-sign-tty-gate-dropped",
+    file: "packages/cli/src/prompt.ts",
+    find: "if (!isatty(fd)) {",
+    replace: "if (false) {",
+    tests: [T.keystore],
+  },
+  {
+    // No signature without an explicit yes after the summary.
+    id: "cli-sign-confirmation-skipped",
+    file: "packages/cli/src/wallet.ts",
+    find: 'if (!(await args.prompter.confirm("Sign this?"))) throw new PromptAbortedError();',
+    replace: 'await args.prompter.confirm("Sign this?");',
+    tests: [T.keystore],
+  },
+  {
+    // The wrong keystore is refused BEFORE the password is asked for.
+    id: "cli-sign-signer-precheck-dropped",
+    file: "packages/cli/src/wallet.ts",
+    find: "if (args.expectedSigner && declared && !isAddressEqual(declared, args.expectedSigner)) {",
+    replace: "if (false) {",
+    tests: [T.keystore],
+  },
+  {
+    // The MCP server can never reach the signing modules [K1]: an import from MCP is caught.
+    id: "keystore-mcp-import-guard",
+    file: "packages/mcp/src/server.ts",
+    find: 'import { Server } from "@modelcontextprotocol/sdk/server/index.js";',
+    replace: 'import { Server } from "@modelcontextprotocol/sdk/server/index.js";\nexport { keystoreDir } from "../../cli/src/keystore.ts";',
+    tests: [T.keystore],
+  },
   // ── market identity: keccak(abi.encode(Market)) — field order IS the pool id ──────────────
   {
     id: "marketid-pair-swapped",
@@ -685,15 +749,15 @@ const CATALOG: Mutant[] = [
     // the terms of a sibling option.
     id: "offers-join-answer-only",
     file: "packages/core/src/handlers/query-offers.ts",
-    find: "const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : null;",
-    replace: "const quote = ref ? ([...quotes.values()].find((q) => q.answerId === ref.answerId) ?? null) : null;",
+    find: "const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) :",
+    replace: "const quote = ref ? ([...quotes.values()].find((q) => q.answerId === ref.answerId) ?? null) :",
     tests: [T.offers],
   },
   {
     // Indicative = served options NO live order cites; counting cited ones too inflates the tally.
     id: "offers-indicative-counts-cited",
     file: "packages/core/src/handlers/query-offers.ts",
-    find: "if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push(",
+    find: "if (!cited.has(`${q.answerId}|${q.optionId}`) && !(byHash && cited.has(byHash))) indicative.push(",
     replace: "if (true) indicative.push(",
     tests: [T.offers],
   },
@@ -849,8 +913,8 @@ const CATALOG: Mutant[] = [
     // The answer is RESERVED for the requester by default — an open order is a different product.
     id: "answer-reserve-dropped",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "    ...(allowedSender !== undefined ? { allowedSender } : {}),\n    ...(quoteRef ? { quoteRef } : {}),",
-    replace: "    ...(quoteRef ? { quoteRef } : {}),",
+    find: "    ...(allowedSender !== undefined ? { allowedSender } : {}),\n    jitMarket:",
+    replace: "    jitMarket:",
     tests: [T.answer],
   },
   {
@@ -886,7 +950,7 @@ const CATALOG: Mutant[] = [
     // A firm flag that is always true turns every indicative quote into a price nobody can buy.
     id: "rfqs-firm-always-true",
     file: "packages/core/src/handlers/query-offers.ts",
-    find: "        const firm = cited.has(`${String(answer.answer_id)}|${String(option.option_id)}`);",
+    find: "        const firm = optionIsCited(cited, answer.answer_id, option);",
     replace: "        const firm = true;",
     tests: [T.rfqsFirm],
   },
@@ -895,8 +959,8 @@ const CATALOG: Mutant[] = [
     // existing, not who may lift it). Dropping the excluded pass unbacks those quotes in BOTH views.
     id: "rfqs-firm-reserved-live-ignored",
     file: "packages/core/src/handlers/query-offers.ts",
-    find: "    if ((row as { exclusion?: string }).exclusion !== \"reserved-for-other\") continue;",
-    replace: "    continue;",
+    find: "    if ((row as { exclusion?: string }).exclusion === \"reserved-for-other\") add(row);",
+    replace: "    void row;",
     tests: [T.offers, T.rfqsFirm],
   },
   {
@@ -1160,8 +1224,8 @@ const CATALOG: Mutant[] = [
     // hedger a firm price "cannot be bought" because THEY cannot lift it.
     id: "offers-reserved-live-not-firm",
     file: "packages/core/src/handlers/query-offers.ts",
-    find: 'if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;',
-    replace: "continue;",
+    find: 'if ((row as { exclusion?: string }).exclusion === "reserved-for-other") add(row);',
+    replace: "void row;",
     tests: [T.offers],
   },
   {
@@ -1565,8 +1629,8 @@ const CATALOG: Mutant[] = [
     // again — the venue's old silent-strip trap, recreated on our side.
     id: "rollover-cursor-param-lost",
     file: "packages/core/src/datasources/venue.ts",
-    find: "fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit",
-    replace: "fillable: p.fillable, source: p.source, limit: p.limit",
+    find: "fillable: p.fillable, source: p.source, rfqId: p.rfqId, cursor: p.cursor, limit: p.limit",
+    replace: "fillable: p.fillable, source: p.source, rfqId: p.rfqId, limit: p.limit",
     tests: [T.venue],
   },
   // ── hybrid mode verification gates (2026-08-13): venue discovers, chain confirms ──────────
@@ -2351,9 +2415,18 @@ const CATALOG: Mutant[] = [
     // populated — and the discovery task would grade a filter that never ran (green no-op, C13).
     id: "eval-stub-rfq-state-filter-ignored",
     file: "evals/stub.ts",
-    find: 'const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()));',
-    replace: 'const listed = underwriter === null || answeredBy.has(underwriter.toLowerCase());',
+    find: 'const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()))',
+    replace: 'const listed = (underwriter === null || answeredBy.has(underwriter.toLowerCase()))',
     tests: [T.taskFixtures],
+  },
+  {
+    // The stub's kind filter is server-side too: a stub ignoring kind= would serve its
+    // new-position RFQ to a rollover-only read, and the rfqKind test would grade a no-op.
+    id: "eval-stub-rfq-kind-filter-ignored",
+    file: "evals/stub.ts",
+    find: ' && (kind === null || kind === "new_position");',
+    replace: ";",
+    tests: [T.rfqsFirm],
   },
   {
     // The finalize fixture's signature must be over the PREPARED hash. Signing a different hash
@@ -3165,8 +3238,8 @@ const CATALOG: Mutant[] = [
     // holder who has less and reverts in transferFrom.
     id: "rollover-hooks-partial-clamp-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "const clampPull = action.allowUnderfill || action.allowPartialFills;",
-    replace: "const clampPull = action.allowUnderfill;",
+    find: "const clampPull = act.allowUnderfill || act.allowPartialFills;",
+    replace: "const clampPull = act.allowUnderfill;",
     tests: [T.rolloverHooks],
   },
   {
@@ -3414,7 +3487,7 @@ const CATALOG: Mutant[] = [
     // request id burned and no teaching.
     id: "submit-fixed-rule-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "      if (action.modes.includes(\"fixed_rate\")) {",
+    find: "      if (modes.includes(\"fixed_rate\")) {",
     replace: "      if (false) {",
     tests: [T.cover],
   },
@@ -3422,8 +3495,8 @@ const CATALOG: Mutant[] = [
     // The venue keys the rule on fixed_rate being AMONG the modes, not on it being the only one.
     id: "submit-fixed-rule-sole-mode-only",
     file: "packages/core/src/handlers/submit.ts",
-    find: "      if (action.modes.includes(\"fixed_rate\")) {",
-    replace: "      if (action.modes.length === 1 && action.modes[0] === \"fixed_rate\") {",
+    find: "      if (modes.includes(\"fixed_rate\")) {",
+    replace: "      if (modes.length === 1 && modes[0] === \"fixed_rate\") {",
     tests: [T.cover],
   },
   {
@@ -3448,8 +3521,8 @@ const CATALOG: Mutant[] = [
     // the buyer is asking for.
     id: "cover-rfq-open-reading-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...classified.warnings, ...coverWarnings, ...chainWarnings]);",
-    replace: "rfqId: body.rfq_id ?? null, state: body.state ?? null }), [...classified.warnings, ...chainWarnings]);",
+    find: "signerType: proof.how, auth: proof.disclosure, cover }), [...proof.warnings, ...classified.warnings, ...coverWarnings, ...chainWarnings]);",
+    replace: "signerType: proof.how, auth: proof.disclosure }), [...proof.warnings, ...classified.warnings, ...chainWarnings]);",
     tests: [T.cover],
   },
   {
@@ -3457,8 +3530,8 @@ const CATALOG: Mutant[] = [
     // recipe refusal, no loss disclosure.
     id: "cover-rfq-open-chain-warnings-dropped",
     file: "packages/core/src/handlers/submit.ts",
-    find: "[...classified.warnings, ...coverWarnings, ...chainWarnings]);",
-    replace: "[...classified.warnings, ...coverWarnings]);",
+    find: "...classified.warnings, ...coverWarnings, ...chainWarnings]);",
+    replace: "...classified.warnings, ...coverWarnings]);",
     tests: [T.cover],
   },
   {
@@ -4482,9 +4555,9 @@ const CATALOG: Mutant[] = [
     // option_ref wire keys swapped: the venue would 400 every counter that cites an option
     // (answer ids in the option slot and vice versa) — classic snake_case mapping transposition.
     id: "rfq-counter-optionref-keys-swapped",
-    file: "packages/core/src/handlers/submit.ts",
-    find: "option_ref: { answer_id: action.optionRef.answerId, option_id: action.optionRef.optionId }",
-    replace: "option_ref: { answer_id: action.optionRef.optionId, option_id: action.optionRef.answerId }",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "option_ref: { answer_id: a.optionRef.answerId, option_id: a.optionRef.optionId }",
+    replace: "option_ref: { answer_id: a.optionRef.optionId, option_id: a.optionRef.answerId }",
     tests: [T.venue],
   },
   {
@@ -4496,6 +4569,78 @@ const CATALOG: Mutant[] = [
     find: "with_answers: p.withAnswers, view: p.view,",
     replace: "with_answers: p.withAnswers,",
     tests: [T.venue],
+  },
+  // ── RFQ v2 (venue 0.4.5): kind, the API-key header, firmness by the option's own order ──────
+  {
+    // kind dropped from the feed URL: a rollover-only read serves every kind, nothing errors.
+    id: "rfqs-kind-param-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "chain_id: p.chainId, kind: p.kind, state: p.state,",
+    replace: "chain_id: p.chainId, state: p.state,",
+    tests: [T.venueTransport, T.rfqsFirm],
+  },
+  {
+    // Same gate one layer up: filters.rfqKind accepted and never forwarded.
+    id: "rfqs-kind-filter-unapplied",
+    file: "packages/core/src/handlers/query.ts",
+    find: "            ...(filters.rfqKind ? { kind: filters.rfqKind } : {}),\n",
+    replace: "",
+    tests: [T.rfqsFirm],
+  },
+  {
+    // The API key never reaches the venue: every key-proven write is a 401.
+    id: "rfq-api-key-header-dropped",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'return auth?.apiKey !== undefined ? { "x-cork-api-key": auth.apiKey } : {};',
+    replace: "return {};",
+    tests: [T.venueTransport],
+  },
+  {
+    // The key leaks into the relay result — a credential in tool output and logs.
+    id: "rfq-api-key-leaked-into-result",
+    file: "packages/core/src/datasources/venue.ts",
+    find: 'return postJson(deps, "/rfqs/v2", body, rfqAuthHeaders(auth));',
+    replace: 'return { ...(await postJson(deps, "/rfqs/v2", body, rfqAuthHeaders(auth))), auth } as VenuePostResult;',
+    tests: [T.venueTransport],
+  },
+  {
+    // A v2 option is backed by its OWN resting order: ignoring the hash leaves it indicative.
+    id: "rfqs-firm-order-hash-ignored",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "  return byHash !== null && cited.has(byHash);",
+    replace: "  return false;",
+    tests: [T.rfqsFirm],
+  },
+  {
+    id: "rfqs-firm-book-hash-not-collected",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "    if (byHash) cited.add(byHash);",
+    replace: "",
+    tests: [T.rfqsFirm, T.offers],
+  },
+  {
+    // A book row that IS an option's order but carries no quoteRef reads uncited.
+    id: "offers-order-hash-join-dropped",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: ": byHash ? (quotesByOrder.get(byHash) ?? null) : null;",
+    replace: ": null;",
+    tests: [T.offers],
+  },
+  {
+    // offers reads every kind: rollover answers (never on this book) inflate the indicative tally.
+    id: "offers-kind-scope-dropped",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: 'filters: { withAnswers: true, view: "current", rfqKind: "new_position" } }',
+    replace: 'filters: { withAnswers: true, view: "current" } }',
+    tests: [T.offers],
+  },
+  {
+    // Rollover answers labeled by the LOP book: always "indicative", a verdict the book cannot give.
+    id: "rfqs-firm-labels-rollover",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: ' || (rfq.kind === "rollover") !== (kind === "rollover")) return rfq;',
+    replace: ") return rfq;",
+    tests: [T.rfqsFirm, T.rfqRollover],
   },
   // ── units/scale labels: the C1 collision class — a swapped label is a silent 100x lie ──────
   {
@@ -6700,7 +6845,7 @@ const CATALOG: Mutant[] = [
     // mutant re-admits it (the commitment would be hashed on a guessed wire nobody can reproduce).
     id: "rev-a1-unknown-settler-commitment-admitted",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "      if (action.jitMarket !== undefined || (action.jitMarketHash !== undefined && action.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {",
+    find: "      if (act.jitMarket !== undefined || (act.jitMarketHash !== undefined && act.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {",
     replace: "      if (false) {",
     tests: [T.rollover],
   },
@@ -7791,6 +7936,739 @@ const CATALOG: Mutant[] = [
     find: "  if (kind !== \"fixed-rate\" && rate !== undefined) {\n",
     replace: "  if (kind !== \"fixed-rate\") {\n    rate = rate ?? { raw: \"1\", admissible: 1n };\n",
     tests: [T.cover],
+  },
+  // ── RFQ v2 proven writes (2026-10-06): the body the venue hashes, who signed it, and the
+  // refusals that keep an unproven write from leaving the process ──
+  {
+    id: "rfq-signing-keys-unsorted",
+    file: "packages/core/src/rfq-signing.ts",
+    find: ".sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));",
+    replace: ";",
+    tests: [T.rfqSigning],
+  },
+  {
+    id: "rfq-signing-order-signature-hashed",
+    file: "packages/core/src/rfq-signing.ts",
+    find: 'if (operation === "answer" && Array.isArray(rest.options)) {',
+    replace: 'if (false && Array.isArray(rest.options)) {',
+    tests: [T.rfqSigning],
+  },
+  {
+    id: "rfq-signing-signature-hashed",
+    file: "packages/core/src/rfq-signing.ts",
+    find: "const { signature: _signature, ...rest } = body as Record<string, unknown>;",
+    replace: "const { ...rest } = body as Record<string, unknown>;",
+    tests: [T.rfqSigning],
+  },
+  {
+    id: "rfq-body-addresses-not-lowercased",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "return typeof v === \"string\" && (ADDRESS.test(v) || BYTES32.test(v)) ? v.toLowerCase() : v;",
+    replace: "return v;",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-body-order-addresses-not-lowercased",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "if (out.order !== null && typeof out.order === \"object\") out.order = lowerKeys(out.order as Record<string, unknown>, ORDER_ADDRESS_KEYS);",
+    replace: "",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-body-template-recipe-not-lowercased",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "oracle_recipe: lower((inline as Record<string, unknown>).oracle_recipe) } };",
+    replace: "oracle_recipe: (inline as Record<string, unknown>).oracle_recipe } };",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-body-schema-version-v1",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: 'schema_version: "2",\n    kind: a.kind,',
+    replace: 'schema_version: "1",\n    kind: a.kind,',
+    tests: [T.venue],
+  },
+  {
+    id: "rfq-body-counter-kind-defaulted",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "const kind = a.target?.kind ?? r.kind ?? \"new_position\";",
+    replace: "const kind = \"new_position\";",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-write-signer-check-skipped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (recovered.signer !== null && isAddressEqual(recovered.signer, plan.signer)) return { ok: true, how: \"eoa\", warnings: [] };",
+    replace: "if (recovered.signer !== null) return { ok: true, how: \"eoa\", warnings: [] };",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-write-erc1271-rejection-relayed",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "case \"erc1271_rejected\":\n      return { ok: false,",
+    replace: "case \"erc1271_rejected\":\n      return { ok: true, how: \"erc1271\", warnings: [] }; return { ok: false,",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-write-eoa-mismatch-relayed",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (verdict.codeProbe === \"no-code\") {",
+    replace: "if (false) {",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-write-kind-check-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (request.kind !== undefined && request.kind !== kind) {",
+    replace: "if (false) {",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "rfq-write-target-expiry-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (rfq.state === \"expired\") {",
+    replace: "if (false) {",
+    tests: [T.rfqWrite, T.venue],
+  },
+  {
+    id: "rfq-write-counter-requester-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (typeof requester === \"string\" && requester.toLowerCase() !== request.requester.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.rfqWrite, T.venue],
+  },
+  {
+    id: "rfq-write-prepare-account-unchecked",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (!isAddressEqual(plan.signer, input.account)) {",
+    replace: "if (false) {",
+    tests: [T.rfqWrite],
+  },
+  // RFQ API keys, resolved the AWS way (credentials.ts): each guard below is what keeps a key
+  // where it belongs.
+  {
+    id: "apikey-missing-relayed-anyway",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "  if (!resolved.ok) return { ok: false, envelope: unavailable(chainId as ChainId, \"api_key_missing\"",
+    replace: "  if (false) return { ok: false, envelope: unavailable(chainId as ChainId, \"api_key_missing\"",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "apikey-http-refusal-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "  if (ctx.apiKeys === \"refuse\") {",
+    replace: "  if (false) {",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "apikey-http-endpoint-not-marked",
+    file: "packages/mcp/src/http.ts",
+    find: "const server = createCorkServer({ ...(opts.ctx ?? {}), signal, apiKeys: \"refuse\" });",
+    replace: "const server = createCorkServer({ ...(opts.ctx ?? {}), signal });",
+    tests: [T.mcpHttp],
+  },
+  {
+    id: "apikey-ctx-profile-ignored",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "...(ctx.profile !== undefined ? { profile: ctx.profile } : {})",
+    replace: "...({})",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "apikey-key-in-disclosure",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "venueAuth: { apiKey: auth.key }, disclosure: auth.disclosure };",
+    replace: "venueAuth: { apiKey: auth.key }, disclosure: { ...auth.disclosure, key: auth.key } as never };",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "credentials-env-precedence-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "  if (fromEnv !== undefined && fromEnv !== \"\") return { ok: true, key: fromEnv,",
+    replace: "  if (false) return { ok: true, key: fromEnv,",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-host-binding-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "    const stored = entryOf(lines, profile, `${STORED_KEY_PREFIX}${host}`);",
+    replace: "    const stored = (lines.find((l) => l.kind === \"entry\" && l.section === profile && l.key.startsWith(STORED_KEY_PREFIX)) as { value?: string } | undefined)?.value;",
+    tests: [T.credentials, T.rfqWrite],
+  },
+  {
+    id: "credentials-permission-check-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "  if ((mode & 0o077) !== 0) {",
+    replace: "  if (false) {",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-write-not-private",
+    file: "packages/core/src/credentials.ts",
+    find: "  atomicWriteFileSync(path, `${lines.map((l) => l.text).join(\"\\n\")}\\n`, 0o600);\n  chmodSync(path, 0o600);",
+    replace: "  atomicWriteFileSync(path, `${lines.map((l) => l.text).join(\"\\n\")}\\n`);",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-dir-not-private",
+    file: "packages/core/src/credentials.ts",
+    find: "  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });",
+    replace: "  mkdirSync(dirname(path), { recursive: true });",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-process-timeout-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "{ timeout: timeoutMs, maxBuffer: 64 * 1024, windowsHide: true }",
+    replace: "{ maxBuffer: 64 * 1024, windowsHide: true }",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-process-output-echoed",
+    file: "packages/core/src/credentials.ts",
+    find: "        reject(new CredentialsFileError(`profile [${profile}]: credential_process ${why}`));",
+    replace: "        reject(new CredentialsFileError(`profile [${profile}]: credential_process ${why}: ${String(out)}`));",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-parse-error-echoes-line",
+    file: "packages/core/src/credentials.ts",
+    find: "throw new CredentialsFileError(`${path} line ${i + 1}: expected \\`[profile]\\` or \\`name = value\\``);",
+    replace: "throw new CredentialsFileError(`${path} line ${i + 1}: expected \\`[profile]\\` or \\`name = value\\`, got ${t}`);",
+    tests: [T.credentials],
+  },
+  {
+    id: "credentials-mask-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "  return key.length <= 8 ? \"…\" : `…${key.slice(-4)}`;",
+    replace: "  return key;",
+    tests: [T.credentials, T.cliAuth],
+  },
+  {
+    id: "credentials-hermetic-guard-dropped",
+    file: "packages/core/src/credentials.ts",
+    find: "  return env.VITEST !== undefined && env.CORK_CREDENTIALS_FILE === undefined;",
+    replace: "  return false;",
+    tests: [T.credentials],
+  },
+  {
+    id: "apikey-401-teaches-resigning",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      const fix = usedApiKey\n",
+    replace: "      const fix = false\n",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "cli-auth-argv-key-accepted",
+    file: "packages/cli/src/app.ts",
+    find: "      if (keyArg !== undefined) return authFail(",
+    replace: "      if (false) return authFail(",
+    tests: [T.cliAuth],
+  },
+  {
+    id: "cli-profile-flag-not-threaded",
+    file: "packages/cli/src/app.ts",
+    find: ", ...(opts[\"profile\"] ? { profile: opts[\"profile\"] as string } : {}) };",
+    replace: " };",
+    tests: [T.cliAuth],
+  },
+  {
+    id: "submit-rfq-open-proof-refusal-ignored",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "      const proof = await proveRfqWrite(ctx, plan, auth.auth);\n      if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);\n      // ── which cover",
+    replace: "      const proof = await proveRfqWrite(ctx, plan, auth.auth);\n      // ── which cover",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "submit-rfq-409-refusal-as-conflict",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "return !/request_id was (already|concurrently) used/.test(message);",
+    replace: "return false;",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "submit-rfq-package-ids-unique-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (packageIdsViolation) return unavailable(chainId, \"invalid_order_terms\", packageIdsViolation, ctx);",
+    replace: "",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "submit-rfq-answer-order-maker-unchecked",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (typeof maker !== \"string\" || maker.toLowerCase() !== underwriter.toLowerCase()) return",
+    replace: "if (typeof maker !== \"string\") return",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "submit-rfq-answer-duplicate-order-admitted",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "    if (seen.has(key)) return",
+    replace: "    if (false) return",
+    tests: [T.rfqWrite],
+  },
+  {
+    id: "teaching-moved-signature-key-dropped",
+    file: "packages/schemas/src/teaching.ts",
+    find: "    if (movedKey !== undefined) out.suggestion = moved![movedKey]!;",
+    replace: "",
+    tests: [T.rfqWrite],
+  },
+  {
+    // A quote's collateral is the order's taker asset: the premium is paid in it.
+    id: "quote-terms-collateral-dropped",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "if (typeof collateral !== \"string\" || collateral.toLowerCase() !== order.takerAsset.toLowerCase()) {",
+    replace: "if (false) {",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // A quote whose order already expired cannot be filled.
+    id: "quote-terms-dead-order-allowed",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "if (orderExpiry !== 0n && orderExpiry <= a.nowSeconds) {",
+    replace: "if (false) {",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // fresh_until cannot outlive the order: the quote would read fresh while dead.
+    id: "quote-terms-fresh-until-dropped",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "if (orderExpiry !== 0n && typeof freshUntil === \"number\" && BigInt(freshUntil) > orderExpiry) {",
+    replace: "if (false) {",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // The order sells no more cover than the option's stated capacity.
+    id: "quote-terms-capacity-dropped",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "notional > BigInt(capacity)) {",
+    replace: "false) {",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // The unsigned premium is held to what the signed amounts mean.
+    id: "quote-terms-premium-dropped",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "if (t * 100n < low * (100n - QUOTE_PREMIUM_TOLERANCE_PERCENT) || t * 100n > high * (100n + QUOTE_PREMIUM_TOLERANCE_PERCENT)) {",
+    replace: "if (false) {",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // An order priced an hour ago still matches its quote: the tenor has only shrunk.
+    id: "quote-terms-signing-age-dropped",
+    file: "packages/core/src/rfq-quotes.ts",
+    find: "const high = premiumAmount(premium, notional, tenor + QUOTE_MAX_SIGNING_AGE_SECONDS);",
+    replace: "const high = premiumAmount(premium, notional, tenor);",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // An option's order is hashed for the RFQ's chain; another chain is a 400.
+    id: "quoted-chain-check-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (option.chain_id !== rfqChain) return refuse(",
+    replace: "if (false) return refuse(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // Two spellings of one order are one order: the HASH decides, not the text.
+    id: "quoted-duplicate-hash-dropped",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (twin !== undefined) return refuse(",
+    replace: "if (false) return refuse(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // An order signature by another key is refused, not relayed with a warning.
+    id: "quoted-signature-mismatch-relayed",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "if (verdict.codeProbe === \"no-code\") return refused(",
+    replace: "if (false) return refused(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // rfq-write checks the orders before handing out what to sign.
+    id: "quoted-checks-skipped-on-prepare",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "quotedCheck = await checkQuotedOptions(ctx, chainId, target.rfq, request.underwriter, request.options ?? []);",
+    replace: "quotedCheck = { ok: true, quoted: [], warnings: [] };",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // cork_submit re-checks the orders before relay [K3].
+    id: "quoted-checks-skipped-on-submit",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "const quotedCheck = action.status === \"quoted\" && target.kind !== \"rollover\" ? await checkQuotedOptions(",
+    replace: "const quotedCheck = false ? await checkQuotedOptions(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // Under a v2 citation the underwriter posts only the order the quote carries.
+    id: "citation-quoted-order-skipped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (quotedOrderProblem) return unavailable(",
+    replace: "if (false) return unavailable(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // The match is the stored order re-hashed against this order's hash.
+    id: "citation-quoted-order-any-hash",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "if (quotedHash !== undefined && quotedHash.toLowerCase() === a.orderHash.toLowerCase()) return null;",
+    replace: "return null;",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // answer-rfq's option is fresh exactly as long as its order can fill.
+    id: "answer-option-fresh-until-off",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "fresh_until: Number(orderExpiry),",
+    replace: "fresh_until: Number(orderExpiry) + 1,",
+    tests: [T.answer],
+  },
+  {
+    // A fixed option declares the rate it freezes at (the venue's fixed_rate rule).
+    id: "answer-option-template-rate-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "...(a.rateOverride !== undefined ? { rate_override: a.rateOverride.toString() } : {})",
+    replace: "...{}",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // A refreshed quoted order needs a superseding answer carrying it.
+    id: "refresh-requote-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "const requote = cite ? await supersedingQuote(",
+    replace: "const requote = false ? await supersedingQuote(",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // The superseding quote shows what the unchanged amounts mean now.
+    id: "refresh-requote-not-repriced",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "option.premium_annualized = wadToFraction(impliedPremiumWad(a.order.takingAmount, notional, poolExpiry - nowSecs));",
+    replace: "void 0;",
+    tests: [T.rfqQuotes],
+  },
+  {
+    // A rollover open must not carry cover fields.
+    id: "rollover-open-new-position-fields-allowed",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (stray.length > 0) {\n      return `${stray.join(\", \")} ${stray.length === 1 ? \"belongs\" : \"belong\"} to a new_position RFQ only:",
+    replace: "    if (false) {\n      return `${stray.join(\", \")} ${stray.length === 1 ? \"belongs\" : \"belong\"} to a new_position RFQ only:",
+    tests: [T.rfqRollover, T.rfqWrite],
+  },
+  {
+    // A rollover open names its position.
+    id: "rollover-open-source-optional",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (a.source === undefined) return",
+    replace: "    if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A rollover counter is priced per share.
+    id: "rollover-counter-unit-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (a.premiumAnnualized !== undefined) return \"premiumAnnualized prices a new_position counter",
+    replace: "    if (false) return \"premiumAnnualized prices a new_position counter",
+    tests: [T.rfqRollover, T.rfqWrite],
+  },
+  {
+    // The venue compares lowercased addresses.
+    id: "rollover-premium-token-case-sensitive",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "const same = (a: unknown, b: unknown): boolean => typeof a === \"string\" && typeof b === \"string\" && a.toLowerCase() === b.toLowerCase();",
+    replace: "const same = (a: unknown, b: unknown): boolean => typeof a === \"string\" && typeof b === \"string\" && a === b;",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An omitted salt is the zero salt.
+    id: "rollover-jit-salt-default-dropped",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    oracleSalt: jm.oracleSalt ?? zeroHash,",
+    replace: "    oracleSalt: jm.oracleSalt,",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Two different recipe byte strings refuse.
+    id: "rollover-jit-extradata-alias-conflict-ignored",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (extra !== undefined && alias !== undefined && String(extra).toLowerCase() !== String(alias).toLowerCase()) {",
+    replace: "  if (false) {",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A quote is on the RFQ's chain.
+    id: "rollover-option-chain-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (option.chain_id !== req.chainId) return",
+    replace: "  if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A quote is paid in an accepted token.
+    id: "rollover-option-premium-token-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (typeof option.premium_token !== \"string\" || !premiumTokenAllowed(req.premiumToken, option.premium_token)) return",
+    replace: "  if (typeof option.premium_token !== \"string\") return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A quote covers at most the shares asked.
+    id: "rollover-option-shares-max-comparator",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "BigInt(option.shares_max) > BigInt(req.sourceShares)) {",
+    replace: "BigInt(option.shares_max) > BigInt(req.sourceShares) + 1n) {",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A rollover moves to another pool.
+    id: "rollover-option-source-destination-allowed",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (same(dest.pool_id, req.sourcePoolId)) return",
+    replace: "    if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A rollover quote carries no order.
+    id: "rollover-option-order-fields-allowed",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (k in option) return `${at}.${k} belongs to a new_position quote:",
+    replace: "    if (false) return `${at}.${k} belongs to a new_position quote:",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A truncated embed cannot prove an answer absent.
+    id: "rollover-quote-truncated-not-unresolved",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "unresolved: rfq.truncated === true || rfq.answers_truncated === true };",
+    replace: "unresolved: false };",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Only a quote backs an order.
+    id: "rollover-quote-status-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (status !== \"quoted\") return",
+    replace: "  if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The order's user is the requester.
+    id: "rollover-quoteref-user-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (!same(requester, order.user)) return",
+    replace: "  if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The order leaves the RFQ's source pool.
+    id: "rollover-quoteref-source-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (!same(req.sourcePoolId, order.srcPoolId)) return",
+    replace: "  if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The order enters the quoted pool.
+    id: "rollover-quoteref-destination-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (!same(destination.pool_id, order.dstPoolId)) return",
+    replace: "    if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An existing-pool quote takes a zero jitMarketHash.
+    id: "rollover-quoteref-pool-jit-allowed",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (!zero) return \"the quoted option is an existing pool",
+    replace: "    if (false) return \"the quoted option is an existing pool",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A just-in-time quote binds its market hash.
+    id: "rollover-quoteref-jit-hash-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "    if (zero || !same(option.jit_market_hash, order.jitMarketHash)) return",
+    replace: "    if (zero) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The order pays in the quoted token.
+    id: "rollover-quoteref-premium-token-unchecked",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  if (!same(option.premium_token, order.premiumToken)) return",
+    replace: "  if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An equal premium per share is accepted.
+    id: "rollover-quoteref-pps-comparator",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "order.minPremiumPerShare < quotedPps) return",
+    replace: "order.minPremiumPerShare <= quotedPps) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An equal size is accepted.
+    id: "rollover-quoteref-size-comparator",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "order.orderSize > sharesMax) return",
+    replace: "order.orderSize >= sharesMax) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The default size is the smaller of the two.
+    id: "rollover-defaults-size-max-not-min",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "orderSize: (sharesMax < sourceShares ? sharesMax : sourceShares).toString(),",
+    replace: "orderSize: (sharesMax < sourceShares ? sourceShares : sharesMax).toString(),",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An expired pool is refused.
+    id: "rollover-pool-expiry-unchecked",
+    file: "packages/core/src/handlers/rfq-rollover.ts",
+    find: "    if (tokens.expiryTimestamp <= nowSecondsOf(ctx)) return",
+    replace: "    if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A pool no manager knows is refused, not waved through.
+    id: "rollover-pool-missing-reads-as-unread",
+    file: "packages/core/src/handlers/rfq-rollover.ts",
+    find: "      return { status: \"missing\", message: r.message };",
+    replace: "      return { status: \"unread\", reason: r.message };",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The venue hashes a quoted market on the 0.2 layout.
+    id: "rollover-jit-hash-rc2-wire",
+    file: "packages/core/src/handlers/rfq-rollover.ts",
+    find: "    const jitMarketHash = hashJitMarketParams(jitMarketParamsOfWire(jit), \"0.2\");",
+    replace: "    const jitMarketHash = hashJitMarketParams({ ...jitMarketParamsOfWire(jit), oracleSalt: undefined }, \"rc.2\");",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A counter bids in an accepted token.
+    id: "rollover-counter-token-unchecked",
+    file: "packages/core/src/handlers/rfq-rollover.ts",
+    find: "    if (!premiumTokenAllowed(rfq.premium_token, request.premiumToken!)) return",
+    replace: "    if (false) return",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Submit re-runs the rollover quote rules.
+    id: "rollover-answer-checks-skipped-on-submit",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "    if (target.kind === \"rollover\") {\n      const checked = await checkRolloverWrite(ctx, chainId, action, target.rfq);\n      if (!checked.ok) return checked.envelope;\n      rolloverCheck = checked;",
+    replace: "    if (false) {\n      const checked = await checkRolloverWrite(ctx, chainId, action, target.rfq);\n      if (!checked.ok) return checked.envelope;\n      rolloverCheck = checked;",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The rules run before the write is signed.
+    id: "rollover-answer-checks-skipped-on-prepare",
+    file: "packages/core/src/handlers/rfq-write.ts",
+    find: "      const checked = await checkRolloverWrite(ctx, chainId, request, target.rfq);\n      if (!checked.ok) return checked.envelope;\n      rolloverCheck = checked;",
+    replace: "      rolloverCheck = { warnings: [] };",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A rollover open's source pool is checked before relay.
+    id: "rollover-open-source-check-skipped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        const checked = await checkRolloverWrite(ctx, chainId, action, undefined);\n        if (!checked.ok) return checked.envelope;",
+    replace: "        const checked = { ok: true as const, warnings: [] };",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The rollover open body names its position.
+    id: "rollover-body-open-source-dropped",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "      source: { pool_id: lower(a.source?.poolId), shares: a.source?.shares },",
+    replace: "",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A rollover counter body carries premium_per_share.
+    id: "rollover-body-counter-unit-swapped",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "    ...(kind === \"rollover\" ? { premium_per_share: a.premiumPerShare, premium_token: lower(a.premiumToken) } : { premium_annualized: a.premiumAnnualized }),",
+    replace: "    ...{ premium_annualized: a.premiumAnnualized },",
+    tests: [T.rfqRollover],
+  },
+  {
+    // A jitMarket input is sent as the venue's jit_market.
+    id: "rollover-body-jit-not-converted",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "lowerOption(kind === \"rollover\" ? rolloverWireOption(o) : o)",
+    replace: "lowerOption(o)",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An explicit term breaking the quote is refused.
+    id: "rollover-intent-quote-mismatch-ignored",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "      if (mismatch) {\n        const wireNote",
+    replace: "      if (false) {\n        const wireNote",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Only the requester accepts its quote.
+    id: "rollover-intent-requester-unchecked",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "        if (typeof read.rfq.requester !== \"string\" || !isAddressEqual(read.rfq.requester as `0x${string}`, input.account)) {",
+    replace: "        if (false) {",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An omitted premium per share comes from the quote.
+    id: "rollover-intent-quote-premium-not-filled",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "        if (action.minPremiumPerShare === undefined) filled.minPremiumPerShare = d.minPremiumPerShare;",
+    replace: "        if (action.minPremiumPerShare === undefined) filled.minPremiumPerShare = \"1\";",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Submit holds a rollover order to the quote it cites.
+    id: "submit-rollover-order-quote-unchecked",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        if (mismatch) return unavailable(chainId, \"invalid_order_terms\", `quoteRef does not back this order:",
+    replace: "        if (false) return unavailable(chainId, \"invalid_order_terms\", `quoteRef does not back this order:",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The venue records the accepted quote.
+    id: "submit-rollover-order-quoteref-not-relayed",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "        ...(action.quoteRef ? { quoteRef: action.quoteRef } : {}),\n      });",
+    replace: "      });",
+    tests: [T.rfqRollover],
+  },
+  {
+    // An order the chain could not confirm backs nothing.
+    id: "rollover-firm-unverified-counts",
+    file: "packages/core/src/handlers/query-offers.ts",
+    find: "    if (row.verification !== \"confirmed\") continue;",
+    replace: "",
+    tests: [T.rfqRollover],
+  },
+  {
+    // The rollover feed is filtered by rfqId.
+    id: "rollover-orders-rfqid-dropped-from-url",
+    file: "packages/core/src/datasources/venue.ts",
+    find: "source: p.source, rfqId: p.rfqId, cursor: p.cursor",
+    replace: "source: p.source, cursor: p.cursor",
+    tests: [T.rfqRollover],
+  },
+  {
+    // Only fillable rollover orders can back a quote.
+    id: "rollover-firmness-fillable-dropped",
+    file: "packages/core/src/handlers/query.ts",
+    find: "filters: { kind: \"orders\", rfqId: r.rfq_id as string, fillable: true } }",
+    replace: "filters: { kind: \"orders\", rfqId: r.rfq_id as string } }",
+    tests: [T.rfqRollover],
   },
 ];
 

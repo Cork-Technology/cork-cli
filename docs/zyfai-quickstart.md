@@ -68,7 +68,7 @@ artifact or a plain read. You sign and broadcast with your own stack.
 | # | Step | What happens | Tool |
 |---|---|---|---|
 | 1 | **Select the asset and open an RFQ** (off-chain) | Pick REF, CA, recipe and term from the registry. Derive the market they name. Open a request-for-quote on the venue. | `ch query registry-*`, `ch query derive-cork-pool`, `ch submit rfq-open` |
-| 2 | **The underwriter answers and rests a SELL order** | The underwriter answers with priced options, then rests a signed SELL: makerAsset is the cST, takerAsset is CA. The cST does not exist yet; the order carries the market. | `ch query rfq`, `ch query orderbook`, `ch decode order` |
+| 2 | **The underwriter answers and rests a SELL order** | The underwriter answers with priced options, each carrying its signed SELL order, then rests that order on the book: makerAsset is the cST, takerAsset is CA. The cST does not exist yet; the order carries the market. | `ch query rfq`, `ch query orderbook`, `ch decode order` |
 | 3 | **You buy the cST** by filling that order | Verify, build, simulate, fill on the LOP. The adapter creates the market if it is new and mints the cST to your Safe in the same transaction. | `ch fill`, `ch track simulate` |
 | 4 | **You exercise** the cST | Hand in cST plus REF, receive CA at the market's rate. A direct Phoenix call, not an LOP fill. | `ch compute cst-swap-rate`, `ch exercise`, `ch track simulate` |
 
@@ -367,16 +367,21 @@ The steps below use this market: `poolId` `0x22eeb2b1…b858`, cST `0xE3a3b5Df�
 An RFQ is an off-chain venue posting: the parameter envelope underwriters answer against. Every
 field is one of the choices from 1a to 1c.
 
+Every RFQ write is proven (venue RFQ v2). Send the same request through
+`ch prepare order rfq-write --chain-id 8453 --account 0xYOUR_SAFE --client-request-id rfq-0001 --request '{"type":"rfq-open",…}'`
+first, sign its `data.typedData` with your Safe, and pass that signature as `--auth`. The tool
+checks your Safe's `isValidSignature` before it relays.
+
 ```sh
 VU=$(( $(date +%s) + 3600 ))
 ch submit rfq-open --chain-id 8453 --client-request-id rfq-0001 --json \
-  --requester 0xYOUR_SAFE \
+  --kind new_position --requester 0xYOUR_SAFE \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
   --modes '["liquidity_only"]' --package-ids '["balanced-v1"]' \
   --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
   --market-template "{\"inline\":{\"oracle_recipe\":\"0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3\",\"oracle_params\":{\"schema\":\"cork-inline-liquidity/1\",\"anchor_rate\":\"871637111019090856\",\"expiry\":\"$EXP\",\"swap_fee_wad\":\"0\",\"unwind_swap_fee_wad\":\"0\"}}}" \
-  --notional-assets … --valid-until $VU --signature 0x…
+  --notional-assets … --valid-until $VU --auth '{"method":"signature","signature":"0x…"}'
 ```
 
 Conventions the live flow uses:
@@ -397,7 +402,7 @@ Conventions the live flow uses:
   from 1c, the `expiry` you derived with, and the two fees as decimal strings. Never send `{}`.
   Without the block an underwriter falls back to the window's end and zero fees, and a different
   expiry or fee names a different pool.
-- You sign the RFQ with your own stack. `ch submit` only relays.
+- You sign the RFQ with your own stack. `ch submit` checks the signer and relays; it never signs.
 
 To ask for **impairment (credit-risk) cover** instead, change three things: the mode, the recipe, and the
 block. The block is `cork-inline-impairment/1`: the liquidity block plus `duration_seconds` and
@@ -406,13 +411,13 @@ filled in with zeros.
 
 ```sh
 ch submit rfq-open --chain-id 8453 --client-request-id rfq-0002 --json \
-  --requester 0xYOUR_SAFE \
+  --kind new_position --requester 0xYOUR_SAFE \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --collateral-asset '{"exact":"0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2"}' \
   --modes '["liquidity_impairment"]' --package-ids '["balanced-v1"]' \
   --expiry-window "{\"notBefore\":$((EXP-1)),\"notAfter\":$EXP}" \
   --market-template "{\"inline\":{\"oracle_recipe\":\"0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9\",\"oracle_params\":{\"schema\":\"cork-inline-impairment/1\",\"anchor_rate\":\"871637111019090856\",\"expiry\":\"$EXP\",\"swap_fee_wad\":\"0\",\"unwind_swap_fee_wad\":\"0\",\"duration_seconds\":\"1209600\",\"apy_spread_percentage\":\"10000000000000000000\"}}}" \
-  --notional-assets … --valid-until $VU --signature 0x…
+  --notional-assets … --valid-until $VU --auth '{"method":"signature","signature":"0x…"}'
 ```
 
 Read the answers before you rely on the cover. Supply is each underwriter's own decision: a
@@ -430,7 +435,9 @@ ch query rfqs --chain-id 8453 --watch              # alert when a requester acce
 ### Step 2: the underwriter answers and rests a SELL order
 
 This step belongs to the underwriter, but you can watch every part of it and you should verify the
-result before you buy. An answer carries priced options that echo your template:
+result before you buy. An answer carries priced options that echo your template. Each quoted
+option also carries the full signed SELL order it stands for (`order`, plus the venue's
+`order_hash` when you read it back):
 
 ```jsonc
 { "status": "quoted", "options": [ {

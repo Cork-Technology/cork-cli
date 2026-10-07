@@ -9,7 +9,7 @@ import { decodeFunctionData, parseAbi } from "viem";
 import { normalizeRfqRow } from "../src/datasources/venue.ts";
 import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, BUNDLED_DEFAULTS, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, generationsOf, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, primaryOf, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { ORDERS_TOPIC_REFERENCE, TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { stubResolved, stubRpc, type StubCall } from "./helpers.ts";
+import { proveRfqWrite, rfqRecord, stubResolved, stubRpc, type StubCall, coverQuoteOrder, signQuotes } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 
@@ -277,7 +277,7 @@ describe("cork_query venue-backed resources", () => {
     const found = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1/rfq_abc", body: { rfq_id: "rfq_abc", state: "open" } }]),
+      ctxWith([{ match: "/rfqs/v2/rfq_abc", body: { rfq_id: "rfq_abc", state: "open" } }]),
     );
     expect(found.state).toBe("ok");
     expect((found.data as { items: unknown[] }).items).toHaveLength(1);
@@ -441,13 +441,14 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
 
   it("rfq-open: clientRequestId becomes the venue request_id (idempotency [K2] on the wire)", async () => {
     const seen: Seen[] = [];
-    const example2 = TOOL_EXAMPLES.cork_submit![1]!.input;
-    const env = await runTool("cork_submit", example2, ctxWith([{ match: "/rfqs/v1", status: 201, body: { rfq_id: "rfq_001", state: "open" } }], seen));
+    const example2 = await proveRfqWrite(SIGNER, TOOL_EXAMPLES.cork_submit![1]!.input as never);
+    const env = await runTool("cork_submit", example2, ctxWith([{ match: "/rfqs/v2", status: 201, body: { rfq_id: "rfq_001", state: "open" } }], seen));
     expect(env.state).toBe("ok");
     expect((env.data as { rfqId: string }).rfqId).toBe("rfq_001");
     const body = seen[0]!.body as Record<string, unknown>;
     expect(body.request_id).toBe("demo-rfq-0001");
-    expect(body.schema_version).toBe("1");
+    expect(body.schema_version).toBe("2");
+    expect(body.kind).toBe("new_position");
     expect(body.chain_id).toBe(42161);
   });
 });
@@ -550,7 +551,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const env = await runTool(
       "cork_submit",
       await lop({ premiumAnnualized: "4.10", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
@@ -561,7 +562,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const env = await runTool(
       "cork_submit",
       await lop({ quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("quote_ref_unverifiable");
@@ -569,18 +570,19 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   });
 
   it("F5: the rfq-answer 0.5 cap replicates the venue's parseFloat refine — a 17-digit just-under value fails THERE, so it fails here", async () => {
-    const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
+    const collateral = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
+    const answer = async (p: string) => proveRfqWrite(SIGNER, { chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: SIGNER.address, status: "quoted", options: await signQuotes(SIGNER, [{ option_id: "1", chain_id: 42161, collateral_asset: collateral, premium_annualized: p, order: coverQuoteOrder(SIGNER.address, collateral) }]) } }, "new_position");
     // 16 digits: parseFloat = 0.4999999999999999 < 0.5 — the venue accepts, so we relay.
-    const justUnder = await runTool("cork_submit", answer("0.4999999999999999"), ctxWith([{ match: "/rfqs/v1/rfq_1/answers", status: 201, body: { answer_id: "a" } }]));
+    const justUnder = await runTool("cork_submit", await answer("0.4999999999999999"), ctxWith([{ match: "/rfqs/v2/rfq_1/answers", status: 201, body: { answer_id: "a" } }, { match: "/rfqs/v2/rfq_1", body: rfqRecord({ requester: zeroAddress }) }]));
     expect(justUnder.state).toBe("ok");
     // 17 digits: a smaller decimal, but Number.parseFloat rounds it to exactly 0.5 — and the
     // venue's PremiumFractionSchema refines with THAT parse, so it 400s. A pre-flight that
     // predicts the venue must refuse it too (the earlier string-decided form let it through
     // to a burnt round-trip).
-    const ulpUnder = await runTool("cork_submit", answer("0.49999999999999999"), ctxWith([]));
+    const ulpUnder = await runTool("cork_submit", await answer("0.49999999999999999"), ctxWith([]));
     expect(ulpUnder.state).toBe("unavailable");
     expect(ulpUnder.warnings[0]?.message).toContain("parseFloat");
-    const atCap = await runTool("cork_submit", answer("0.5"), ctxWith([]));
+    const atCap = await runTool("cork_submit", await answer("0.5"), ctxWith([]));
     expect(atCap.state).toBe("unavailable");
     expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
     // The cap is POLICY (pilot posture, spec-invisible, relaxable) — the message must say so
@@ -592,12 +594,12 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
   });
 
   it("F5: a wrong-SCALE premium (percent number / wad integer) is a STRUCTURE reject with the units-table route", async () => {
-    const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0002", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], signature: "0x00" } });
+    const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0002", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], auth: { method: "signature", signature: "0x00" } } });
     // "4.1" is the book listing's percent number; "41000000000000000" is 4.1% as a wad — both
     // are the classic cross-surface scale mistakes, both fail the R13-pinned wire shape.
     for (const bad of ["4.1", "41000000000000000"]) {
       const seen: Seen[] = [];
-      const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/v1/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
+      const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/v2/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
       expect(env.state, bad).toBe("unavailable");
       expect(env.warnings[0]?.code, bad).toBe("invalid_order_terms");
       // Structure, not policy: this rejection is permanent under R13 and the message says so.
@@ -616,13 +618,13 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const inverted = JSON.parse(JSON.stringify(base));
     (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
     (inverted.action.expiryWindow as { notBefore: number; notAfter: number }).notAfter = 1795000000;
-    const r1 = await runTool("cork_submit", inverted, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
+    const r1 = await runTool("cork_submit", inverted, ctxWith([{ match: "/rfqs/v2", status: 201, body: {} }], seen));
     expect(r1.state).toBe("unavailable");
     expect(r1.warnings[0]?.message).toContain("inverted");
 
     const expired = JSON.parse(JSON.stringify(base));
     (expired.action as { validUntil: number }).validUntil = Number(NOW) - 10;
-    const r2 = await runTool("cork_submit", expired, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
+    const r2 = await runTool("cork_submit", expired, ctxWith([{ match: "/rfqs/v2", status: 201, body: {} }], seen));
     expect(r2.state).toBe("unavailable");
     expect(r2.warnings[0]?.message).toContain("validUntil");
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
@@ -633,7 +635,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     const equal = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
     (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
     (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notAfter = 1795604800;
-    const r = await runTool("cork_submit", equal, ctxWith([{ match: "/rfqs/v1", status: 201, body: {} }], seen));
+    const r = await runTool("cork_submit", equal, ctxWith([{ match: "/rfqs/v2", status: 201, body: {} }], seen));
     expect(r.state).toBe("unavailable");
     expect(r.warnings[0]?.code).toBe("invalid_order_terms");
     expect(r.warnings[0]?.message).toMatch(/strictly before not_after.*notBefore = expiry − 1/u);
@@ -649,7 +651,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
       const input = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
       input.action.modes = ["liquidity_only"]; // a liquidity recipe priced as liquidity cover: no cover_mode_mismatch (cover.test.ts owns that rule)
       input.action.marketTemplate = { inline: { oracle_recipe: recipe, oracle_params: { schema: "cork-inline-liquidity/1", anchor_rate: "1000000000000000000", expiry: "1795604800", swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } };
-      const env = await runTool("cork_submit", input, ctxWith([{ match: "/rfqs/v1", status: 201, body: { rfq_id: "rfq_r", state: "open" } }], seen));
+      const env = await runTool("cork_submit", await proveRfqWrite(SIGNER, input as never), ctxWith([{ match: "/rfqs/v2", status: 201, body: { rfq_id: "rfq_r", state: "open" } }], seen));
       return { env, posted: seen.filter((s) => s.method === "POST").length };
     };
     const p = await open(primaryLiq);
@@ -749,7 +751,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.00036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }], seen),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }], seen),
     );
     // declared 0.036 percent vs cited 3.6 percent = 1/100x divergence
     expect(env.state).toBe("conflict");
@@ -764,7 +766,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([...extraRoutes, { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
+        ctxWith([...extraRoutes, { match: "/rfqs/v2/rfq_1", body: { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } }]),
       );
     const ok = [{ match: "/limit-orders/v1", status: 201, body: {} }];
 
@@ -800,7 +802,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: declared, quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }]),
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v2/rfq_1", body: rfq }]),
       );
     const goodOption = { option_id: "1", premium_annualized: "0.036" };
     const BUYER = "0xdddddddddddddddddddddddddddddddddddddddd";
@@ -852,7 +854,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId, optionId: "1" } } },
-        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }], seen),
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v2/rfq_1", body: rfq }], seen),
       );
     const BUYER = "0xdddddddddddddddddddddddddddddddddddddddd";
     const RIVAL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -879,7 +881,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       runTool(
         "cork_submit",
         { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v1/rfq_1", body: rfq }], seen),
+        ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }, { match: "/rfqs/v2/rfq_1", body: rfq }], seen),
       );
     const option = { option_id: "1", premium_annualized: "0.036" };
     // The requester is someone else and the answer row carries no underwriter: half a proof.
@@ -903,7 +905,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "9.99", quoteRef: { rfqId: "rfq_1", answerId: "ans_beyond_horizon", optionId: "1" } } },
       ctxWith([
         { match: "/limit-orders/v1", status: 201, body: {} },
-        { match: "/rfqs/v1/rfq_1", body: { rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, truncated: true, answers: [{ answer_id: "ans_1", underwriter: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
+        { match: "/rfqs/v2/rfq_1", body: { rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, truncated: true, answers: [{ answer_id: "ans_1", underwriter: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", answer: { options: [{ option_id: "1", premium_annualized: "0.036" }] } }] } },
       ], seen),
     );
     expect(env.state).toBe("ok");
@@ -919,7 +921,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const env = await runTool(
       "cork_submit",
       { ...lopBase, action: { ...lopBase.action, premiumAnnualized: "0.036", quoteRef: { rfqId: "rfq_1", answerId: "ans_1", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: rfq }, { match: "/limit-orders/v1", status: 201, body: {} }]),
     );
     expect(env.state).toBe("ok");
   });
@@ -927,7 +929,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
   it("rfq-answer options must carry fraction-string premiums (< 0.5)", async () => {
     const bad = await runTool(
       "cork_submit",
-      { chainId: 42161, clientRequestId: "test-ans-r4-01", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: 4.1 }], signature: "0x00" } },
+      { chainId: 42161, clientRequestId: "test-ans-r4-01", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: 4.1 }], auth: { method: "signature", signature: "0x00" } } },
       ctxWith([]),
     );
     expect(bad.state).toBe("unavailable");
@@ -959,11 +961,11 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const seen: Seen[] = [];
     const env = await runTool(
       "cork_submit",
-      { chainId: 42161, clientRequestId: "test-pass-0001", action: { type: "rfq-answer", rfqId: "rfq_9", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "pass", reasonCode: "NO_CAPACITY", signature: "0x00" } },
-      ctxWith([{ match: "/rfqs/v1/rfq_9/answers", status: 201, body: { answer_id: "ans_9" } }], seen),
+      await proveRfqWrite(SIGNER, { chainId: 42161, clientRequestId: "test-pass-0001", action: { type: "rfq-answer", rfqId: "rfq_9", underwriter: SIGNER.address, status: "pass", reasonCode: "NO_CAPACITY" } }, "new_position"),
+      ctxWith([{ match: "/rfqs/v2/rfq_9/answers", status: 201, body: { answer_id: "ans_9" } }, { match: "/rfqs/v2/rfq_9", body: rfqRecord({ rfqId: "rfq_9", requester: zeroAddress }) }], seen),
     );
     expect(env.state).toBe("ok");
-    const body = seen[0]!.body as Record<string, unknown>;
+    const body = seen.find((x) => x.method === "POST")!.body as Record<string, unknown>;
     expect(body.reason_code).toBe("NO_CAPACITY");
     expect(body.options).toBeUndefined();
     expect(body.status).toBe("pass");
@@ -1039,7 +1041,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     const env = await runTool(
       "cork_submit",
       { chainId: 1, clientRequestId: "test-qr-0001", action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premiumAnnualized: "0.036", expiry: 0, nonce: "0", allowsPartialFills: true, quoteRef: { rfqId: "rfq_missing", answerId: "a", optionId: "1" } } },
-      ctxWith([{ match: "/rfqs/v1/rfq_missing", status: 404, body: { message: "not found" } }], seen),
+      ctxWith([{ match: "/rfqs/v2/rfq_missing", status: 404, body: { message: "not found" } }], seen),
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1049,8 +1051,8 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
   it("venue POST with an empty (non-JSON) error body keeps the HTTP status", async () => {
     const env = await runTool(
       "cork_submit",
-      TOOL_EXAMPLES.cork_submit![1]!.input,
-      { nowSeconds: NOW, venueFetch: async () => new Response(null, { status: 503 }) },
+      await proveRfqWrite(SIGNER, TOOL_EXAMPLES.cork_submit![1]!.input as never),
+      { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async () => new Response(null, { status: 503 }) },
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("venue_unreachable"); // 5xx = server fault, retryable
@@ -1075,13 +1077,13 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     const env = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "healthcheck-" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen),
+      ctxWith([{ match: "/rfqs/v2?", body: { items: [], next_cursor: null } }], seen),
     );
     expect(env.state).toBe("ok");
     expect(seen[0]!.url).toContain("exclude_request_prefix=healthcheck-");
     // A prefix with a LIKE wildcard is sent literally (encoded), never pre-escaped here — the
     // venue's escaping is its own contract; double-escaping would exclude a different prefix.
-    await runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "50%_off" }, pageSize: 25, format: "concise" }, ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen));
+    await runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "50%_off" }, pageSize: 25, format: "concise" }, ctxWith([{ match: "/rfqs/v2?", body: { items: [], next_cursor: null } }], seen));
     expect(seen[1]!.url).toContain("exclude_request_prefix=50%25_off");
     // The venue's 1..64 bound is a teachable input error here, not a venue 400.
     await expect(runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { excludeRequestPrefix: "x".repeat(65) }, pageSize: 25, format: "concise" }, ctxWith([]))).rejects.toThrow(ToolInputError);
@@ -1092,7 +1094,7 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     const env = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { state: "open", account: "0xc0ffee0000000000000000000000000000000001", withAnswers: true }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
+      ctxWith([{ match: "/rfqs/v2?", body: { items: [{ rfq_id: "rfq_abc", state: "open", answer_count: 2, request: {} }], next_cursor: null } }], seen),
     );
     expect(env.state).toBe("ok");
     expect(env.provenance.mode).toBe("hybrid");
@@ -1114,7 +1116,7 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
       { resource: "rfqs", chainId: 42161, pageSize: 25, format: "concise" },
       ctxWith([
         { match: "cursor=rfq_a", body: { items: [{ rfq_id: "rfq_b" }], next_cursor: null } },
-        { match: "/rfqs/v1?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } },
+        { match: "/rfqs/v2?", body: { items: [{ rfq_id: "rfq_a" }], next_cursor: "rfq_a" } },
       ]),
     );
     expect(env.state).toBe("ok");
@@ -1129,16 +1131,16 @@ describe("cork_query rfqs (venue RFQ discovery feed)", () => {
     const hit = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1/rfq_abc123", body: { rfq_id: "rfq_abc123", state: "open", answers: [], answer_count: 0, truncated: false, request: {} } }], seen),
+      ctxWith([{ match: "/rfqs/v2/rfq_abc123", body: { rfq_id: "rfq_abc123", state: "open", answers: [], answer_count: 0, truncated: false, request: {} } }], seen),
     );
     expect(hit.state).toBe("ok");
     expect((hit.data as { items: Array<{ rfq_id: string }> }).items[0]!.rfq_id).toBe("rfq_abc123");
-    expect(seen[0]!.url).toContain("/rfqs/v1/rfq_abc123");
+    expect(seen[0]!.url).toContain("/rfqs/v2/rfq_abc123");
 
     const miss = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_missing" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1/rfq_missing", status: 404, body: { message: "Unknown rfq_id" } }]),
+      ctxWith([{ match: "/rfqs/v2/rfq_missing", status: 404, body: { message: "Unknown rfq_id" } }]),
     );
     expect(miss.state).toBe("unavailable");
     expect(miss.warnings[0]?.code).toBe("rfq_not_found");
@@ -1693,38 +1695,37 @@ describe("taker-fill of an auction-priced resting order", () => {
 });
 
 describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue contract", () => {
-  const REQUESTER = "0xc0ffee0000000000000000000000000000000001";
-  const counter = (over: Record<string, unknown> = {}) => ({
-    chainId: 42161,
-    clientRequestId: "test-ctr-0001",
-    action: { type: "rfq-counter", rfqId: "rfq_1", requester: REQUESTER, premiumAnnualized: "0.035", signature: "0x00", ...over },
-  });
+  const REQUESTER = SIGNER.address;
+  // Every v2 counter is signed by the requester over the RFQ's kind, and reads the RFQ first.
+  const counter = (over: Record<string, unknown> = {}) =>
+    proveRfqWrite(SIGNER, { chainId: 42161, clientRequestId: "test-ctr-0001", action: { type: "rfq-counter", rfqId: "rfq_1", requester: REQUESTER, premiumAnnualized: "0.035", ...over } }, "new_position");
+  const RECORD = { match: "/rfqs/v2/rfq_1", body: rfqRecord({ requester: REQUESTER }) };
 
-  it("rfq-counter relays the snake_case body with clientRequestId as request_id — and NO pre-flight GET without optionRef", async () => {
+  it("rfq-counter relays the snake_case v2 body with clientRequestId as request_id — after ONE read of the RFQ (its kind enters the signed body)", async () => {
     const seen: Seen[] = [];
     const env = await runTool(
       "cork_submit",
-      counter({ freshUntil: 1795000000 }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_1" } }], seen),
+      await counter({ freshUntil: 1795000000 }),
+      ctxWith([{ match: "/rfqs/v2/rfq_1/counters", status: 201, body: { counter_id: "ctr_1" } }, RECORD], seen),
     );
     expect(env.state).toBe("ok");
     expect((env.data as { kind: string; counterId: string | null }).kind).toBe("rfq-counter");
     expect((env.data as { counterId: string | null }).counterId).toBe("ctr_1");
-    // Exactly ONE venue request: the POST. No optionRef → no pre-flight round-trip.
-    expect(seen.length).toBe(1);
-    expect(seen[0]!.method).toBe("POST");
-    const body = seen[0]!.body as Record<string, unknown>;
+    // Two venue requests: the RFQ read, then the POST.
+    expect(seen.map((x) => x.method)).toEqual(["GET", "POST"]);
+    const body = seen[1]!.body as Record<string, unknown>;
     expect(body.request_id).toBe("test-ctr-0001");
     // The Address primitive normalizes to EIP-55 checksum form — compare case-insensitively.
     expect(String(body.requester).toLowerCase()).toBe(REQUESTER.toLowerCase());
     expect(body.premium_annualized).toBe("0.035");
     expect(body.fresh_until).toBe(1795000000);
     expect(body.option_ref).toBeUndefined();
-    expect(body.schema_version).toBe("1");
+    expect(body.schema_version).toBe("2");
+    expect(body.kind).toBe("new_position");
   });
 
   it("rfq-counter premium replicates the venue's fraction contract: percent-string rejected, 0.5 rejected, the parseFloat boundary matches the venue's", async () => {
-    const at = async (p: string) => runTool("cork_submit", counter({ premiumAnnualized: p }), ctxWith([{ match: "/counters", status: 201, body: { counter_id: "ctr_x" } }]));
+    const at = async (p: string) => runTool("cork_submit", await counter({ premiumAnnualized: p }), ctxWith([{ match: "/counters", status: 201, body: { counter_id: "ctr_x" } }, RECORD]));
     const percent = await at("4.1");
     expect(percent.state).toBe("unavailable");
     expect(percent.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1741,8 +1742,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     const seen: Seen[] = [];
     const miss = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", status: 404, body: { message: "Unknown rfq_id" } }], seen),
+      await counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", status: 404, body: { message: "Unknown rfq_id" } }], seen),
     );
     expect(miss.state).toBe("unavailable");
     expect(miss.warnings[0]?.code).toBe("rfq_not_found");
@@ -1752,8 +1753,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     const rfqOtherRequester = { rfq_id: "rfq_1", request: { requester: "0xdddddddddddddddddddddddddddddddddddddddd" }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }], truncated: false };
     const forbidden = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: rfqOtherRequester }], seen2),
+      await counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: rfqOtherRequester }], seen2),
     );
     expect(forbidden.state).toBe("unavailable");
     expect(forbidden.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1762,11 +1763,11 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
   });
 
   it("optionRef pre-flight: missing option refuses on a COMPLETE record, relays on a truncated one (venue stays authoritative)", async () => {
-    const base = { rfq_id: "rfq_1", request: { requester: REQUESTER }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
+    const base = { rfq_id: "rfq_1", kind: "new_position", request: { requester: REQUESTER }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
     const refuse = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_1", optionId: "99" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: { ...base, truncated: false } }]),
+      await counter({ optionRef: { answerId: "ans_1", optionId: "99" } }),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: { ...base, truncated: false } }]),
     );
     expect(refuse.state).toBe("unavailable");
     expect(refuse.warnings[0]?.message).toContain("optionRef");
@@ -1774,10 +1775,10 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     const seen: Seen[] = [];
     const relayed = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_old", optionId: "1" } }),
+      await counter({ optionRef: { answerId: "ans_old", optionId: "1" } }),
       ctxWith([
-        { match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_2" } },
-        { match: "/rfqs/v1/rfq_1", body: { ...base, truncated: true } },
+        { match: "/rfqs/v2/rfq_1/counters", status: 201, body: { counter_id: "ctr_2" } },
+        { match: "/rfqs/v2/rfq_1", body: { ...base, truncated: true } },
       ], seen),
     );
     expect(relayed.state).toBe("ok");
@@ -1789,22 +1790,22 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     // Happy path: cited option exists on a complete record → relayed.
     const ok = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      await counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
       ctxWith([
-        { match: "/rfqs/v1/rfq_1/counters", status: 201, body: { counter_id: "ctr_3" } },
-        { match: "/rfqs/v1/rfq_1", body: { ...base, truncated: false } },
+        { match: "/rfqs/v2/rfq_1/counters", status: 201, body: { counter_id: "ctr_3" } },
+        { match: "/rfqs/v2/rfq_1", body: { ...base, truncated: false } },
       ]),
     );
     expect(ok.state).toBe("ok");
   });
 
-  it("rfq-counter pre-flight refuses an EXPIRED RFQ (the venue's 410) — but only when the fetch already happened (optionRef given)", async () => {
+  it("rfq-counter pre-flight refuses an EXPIRED RFQ (the venue's 410) before the POST", async () => {
     const seen: Seen[] = [];
     const expired = { rfq_id: "rfq_1", state: "expired", request: { requester: REQUESTER }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }], truncated: false };
     const env = await runTool(
       "cork_submit",
-      counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
-      ctxWith([{ match: "/rfqs/v1/rfq_1", body: expired }], seen),
+      await counter({ optionRef: { answerId: "ans_1", optionId: "1" } }),
+      ctxWith([{ match: "/rfqs/v2/rfq_1", body: expired }], seen),
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
@@ -1815,25 +1816,24 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
   it("rfq-counter idempotent replay: the venue's 200 (vs 201) surfaces as replay:true", async () => {
     const env = await runTool(
       "cork_submit",
-      counter(),
-      ctxWith([{ match: "/rfqs/v1/rfq_1/counters", status: 200, body: { counter_id: "ctr_1" } }]),
+      await counter(),
+      ctxWith([{ match: "/rfqs/v2/rfq_1/counters", status: 200, body: { counter_id: "ctr_1" } }, RECORD]),
     );
     expect(env.state).toBe("ok");
     expect((env.data as { replay: boolean }).replay).toBe(true);
   });
 
   it("rfq-answer relays supersedes verbatim when given, omits it otherwise", async () => {
-    const answer = (over: Record<string, unknown> = {}) => ({
-      chainId: 42161,
-      clientRequestId: "test-sup-0001",
-      action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: REQUESTER, status: "quoted", options: [{ option_id: "1", premium_annualized: "0.04" }], signature: "0x00", ...over },
-    });
+    const collateral = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
+    const answer = async (over: Record<string, unknown> = {}) =>
+      proveRfqWrite(SIGNER, { chainId: 42161, clientRequestId: "test-sup-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: SIGNER.address, status: "quoted", options: await signQuotes(SIGNER, [{ option_id: "1", chain_id: 42161, collateral_asset: collateral, premium_annualized: "0.04", order: coverQuoteOrder(SIGNER.address, collateral) }]), ...over } }, "new_position");
+    const posted = (seen: Seen[]) => seen.find((x) => x.method === "POST")!.body as Record<string, unknown>;
     const seen: Seen[] = [];
-    expect((await runTool("cork_submit", answer({ supersedes: "ans_prev" }), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_2" } }], seen))).state).toBe("ok");
-    expect((seen[0]!.body as Record<string, unknown>).supersedes).toBe("ans_prev");
+    expect((await runTool("cork_submit", await answer({ supersedes: "ans_prev" }), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_2" } }, RECORD], seen))).state).toBe("ok");
+    expect(posted(seen).supersedes).toBe("ans_prev");
     const seen2: Seen[] = [];
-    expect((await runTool("cork_submit", answer(), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_3" } }], seen2))).state).toBe("ok");
-    expect("supersedes" in (seen2[0]!.body as Record<string, unknown>)).toBe(false);
+    expect((await runTool("cork_submit", await answer(), ctxWith([{ match: "/answers", status: 201, body: { answer_id: "ans_3" } }, RECORD], seen2))).state).toBe("ok");
+    expect("supersedes" in posted(seen2)).toBe(false);
   });
 
   it("filters.view forwards to BOTH rfqs GETs; a bad value is a teachable filter error", async () => {
@@ -1841,7 +1841,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     const list = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { withAnswers: true, view: "current" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1?", body: { items: [], next_cursor: null } }], seen),
+      ctxWith([{ match: "/rfqs/v2?", body: { items: [], next_cursor: null } }], seen),
     );
     expect(list.state).toBe("ok");
     expect(seen[0]!.url).toContain("view=current");
@@ -1850,7 +1850,7 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
     const single = await runTool(
       "cork_query",
       { resource: "rfqs", chainId: 42161, filters: { rfqId: "rfq_abc123", view: "current" }, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/rfqs/v1/rfq_abc123", body: { rfq_id: "rfq_abc123", version: 3, answers: [], counter: null } }], seen2),
+      ctxWith([{ match: "/rfqs/v2/rfq_abc123", body: { rfq_id: "rfq_abc123", version: 3, answers: [], counter: null } }], seen2),
     );
     expect(single.state).toBe("ok");
     expect(seen2[0]!.url).toContain("view=current");
@@ -1880,6 +1880,19 @@ describe("normalizeRfqRow — the venue's RFQ envelope is flattened ONCE at the 
     expect(n.state).toBe("open"); // the venue's lifecycle, not the body's same-named field
     expect(n.version).toBe(4);
     expect(n.request).toEqual(row.request);
+  });
+
+  it("RFQ v2: the row's `kind` is served, and each option's served order_hash / jit_market_hash stays reachable", () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    const v2 = {
+      rfq_id: "rfq_v2", kind: "rollover", state: "open", version: 1,
+      answers: [{ answer_id: "ans_1", underwriter: "0x254cC9692102bd73779d7e218DCe9cfe66a1EFA7", answer: { status: "quoted", options: [{ option_id: "o1", order_hash: hash, jit_market_hash: hash }] } }],
+      request: { schema_version: "2", kind: "rollover", chain_id: 42161 },
+    };
+    const n = normalizeRfqRow(v2) as { kind: string; answers: Array<{ answer: { options: Array<Record<string, unknown>> } }> };
+    expect(n.kind).toBe("rollover");
+    expect(n.answers[0]!.answer.options[0]!.order_hash).toBe(hash);
+    expect(n.answers[0]!.answer.options[0]!.jit_market_hash).toBe(hash);
   });
 
   it("a row without `request` (a flat fixture, an older venue) passes through untouched; a non-object `request` is left alone", () => {

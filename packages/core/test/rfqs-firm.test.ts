@@ -4,6 +4,7 @@
 // reserved for a nobody). The chain is the stub's (rows read live), the same stack `offers` uses.
 import { describe, expect, it } from "vitest";
 import { runTool, ToolInputError } from "@cork/core";
+import { citedOptionKeys, markFirmOptions } from "../src/handlers/query-offers.ts";
 import { FIRM_ANSWER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, SOFT_ANSWER_ID, SOFT_UNDERWRITER, stubContext } from "../../../evals/stub.ts";
 
 // The stub's book (and the resting row's signature) live on chainId 1; its RFQ feed answers any
@@ -87,5 +88,52 @@ describe("cork_query rfqs — filters.underwriter (venue-side: only RFQs that un
   it("underwriter is an address (teaching error otherwise) and applies to rfqs only", async () => {
     expect(await issueOf(read({ underwriter: "not-an-address" }))).toContain("valid EVM address");
     expect(await issueOf(runTool("cork_query", { resource: "orderbook", chainId: CHAIN, filters: { underwriter: RESTING_MAKER_ADDRESS }, pageSize: 25, format: "concise" }, ctx))).toContain("does not apply to resource 'orderbook'");
+  });
+});
+
+describe("RFQ v2 firmness — the option's own order backs it; rollover rows are never labeled", () => {
+  const HASH = `0x${"cd".repeat(32)}`;
+  const OTHER = `0x${"ef".repeat(32)}`;
+  const rfqRow = (kind: string, orderHash: string) => ({ rfq_id: "rfq_k", kind, answers: [{ answer_id: "a1", answer: { status: "quoted", options: [{ option_id: "o1", order_hash: orderHash }] } }] });
+
+  it("a live book row whose orderHash is the option's order_hash makes it firm (case-insensitive); another hash does not", () => {
+    const cited = citedOptionKeys({ items: [{ orderHash: HASH.toUpperCase().replace("0X", "0x") }] });
+    const [hit] = markFirmOptions([rfqRow("new_position", HASH)], cited) as Array<{ firmQuotes: number }>;
+    expect(hit!.firmQuotes).toBe(1);
+    const [miss] = markFirmOptions([rfqRow("new_position", OTHER)], cited) as Array<{ firmQuotes: number; indicativeQuotes: number }>;
+    expect(miss!.firmQuotes).toBe(0);
+    expect(miss!.indicativeQuotes).toBe(1);
+  });
+
+  it("an order excluded only as reserved-for-other still backs its option; a dead exclusion does not", () => {
+    const live = citedOptionKeys({ items: [], excluded: [{ orderHash: HASH, exclusion: "reserved-for-other" }] });
+    expect((markFirmOptions([rfqRow("new_position", HASH)], live)[0] as { firmQuotes: number }).firmQuotes).toBe(1);
+    const dead = citedOptionKeys({ items: [], excluded: [{ orderHash: HASH, exclusion: "dead" }] });
+    expect((markFirmOptions([rfqRow("new_position", HASH)], dead)[0] as { firmQuotes: number }).firmQuotes).toBe(0);
+  });
+
+  it("a rollover RFQ passes through unlabeled — the book cannot vouch for a rollover answer either way", () => {
+    const row = rfqRow("rollover", HASH);
+    const [out] = markFirmOptions([row], citedOptionKeys({ items: [{ orderHash: HASH }] }));
+    expect(out).toBe(row);
+  });
+});
+
+describe("cork_query rfqs — filters.rfqKind (the venue's v2 `kind`)", () => {
+  it("rfqKind reaches the venue as kind=; the stub's new-position RFQ is listed for new_position and absent for rollover", async () => {
+    const seen: string[] = [];
+    const spy = { ...ctx, venueFetch: async (url: string, init?: RequestInit) => (seen.push(url), ctx.venueFetch!(url, init)) };
+    const np = await runTool("cork_query", { resource: "rfqs", chainId: CHAIN, filters: { rfqKind: "new_position" }, format: "concise" }, spy);
+    expect((np.data as Data).count).toBe(1);
+    const ro = await runTool("cork_query", { resource: "rfqs", chainId: CHAIN, filters: { rfqKind: "rollover" }, format: "concise" }, spy);
+    expect((ro.data as Data).count).toBe(0);
+    expect(seen.filter((u) => u.includes("/rfqs/v2?")).map((u) => new URL(u).searchParams.get("kind"))).toEqual(["new_position", "rollover"]);
+  });
+
+  it("rfqKind is a closed enum, and a single-record read refuses it (the record carries its own kind)", async () => {
+    expect(await issueOf(read({ rfqKind: "rollovers" }))).toContain("'new_position'");
+    expect(await issueOf(read({ rfqId: RFQ_OPEN_ID, rfqKind: "rollover" }))).toContain("single record");
+    // The flows selector and the RFQ kind share a word: a caller reaching for `kind` is pointed over.
+    expect(await issueOf(read({ kind: "rollover" }))).toContain("filters.rfqKind");
   });
 });

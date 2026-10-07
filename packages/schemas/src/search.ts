@@ -70,6 +70,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage extraData additionalData oracle salt oracleSalt nested generation" },
     { variant: "maker-ladder", text: "ladder rungs several orders at once one cancels the other oco revision ladder better price reserved then open split standing offer many takers capacity" },
     { variant: "answer-rfq", text: "answer an rfq quote firm offer underwriter reserved for requester premium notional tenor act 365 kernel amounts cite option quote ref re-rest one capacity many rfqs" },
+    { variant: "rfq-write", text: "sign prove rfq v2 write signature typed data eip-712 cork rfq corkrfqwrite body hash open answer counter requester underwriter auth proof" },
     { variant: "refresh-order", text: "re-rest refresh renew extend expiry resting order same nonce same bit revision before expiry ttl window" },
     { variant: "taker-fill", text: "fill take order taker execute against" },
     { variant: "cancel", text: "cancel invalidate order remove resting" },

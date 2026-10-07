@@ -24,6 +24,7 @@ export interface QueryFilters {
   mode?: string;
   expiry?: bigint;
   rfqId?: string;
+  rfqKind?: "new_position" | "rollover";
   state?: "open" | "expired";
   withAnswers?: boolean;
   view?: "full" | "current";
@@ -63,6 +64,7 @@ export const KNOWN_FILTER_KEYS = [
   "mode",
   "expiry",
   "rfqId",
+  "rfqKind",
   "state",
   "withAnswers",
   "view",
@@ -101,7 +103,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "cork-pool": ["poolId"],
   "pool-whitelist": ["poolId", "account"],
   "whitelisted-addresses": ["poolId"],
-  "rollover-orders": ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest", "filler", "address", "factory"],
+  "rollover-orders": ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest", "filler", "address", "factory", "rfqId"],
   "trading-pairs": ["poolId"],
   "orderbook": ["poolId", "side", "status", "orderHash", "account"],
   "fills": ["orderHash", "poolId"],
@@ -113,7 +115,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "registry-denominations": ["label", "address", "legacy"],
   "registry-feeds": ["base", "quote", "legacy"],
   "derive-cork-pool": ["collateralAsset", "referenceAsset", "expiry", "recipe", "mode", "args", "rate", "rateOracle", "oracleSalt", "swapFeePercentage", "unwindSwapFeePercentage"],
-  "rfqs": ["rfqId", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix", "underwriter"],
+  "rfqs": ["rfqId", "rfqKind", "state", "account", "referenceAsset", "withAnswers", "view", "excludeRequestPrefix", "underwriter"],
   "offers": ["poolId", "side", "account", "rfqId"],
 };
 
@@ -128,7 +130,7 @@ export function variantFilterKeys(resource: string, raw: Record<string, unknown>
   if (resource === "rfqs" && raw?.rfqId !== undefined) return { variant: "rfqs (single record, filters.rfqId)", keys: ["rfqId", "view"] };
   if (resource === "rollover-orders") {
     const kind = raw?.kind === undefined ? "orders" : String(raw.kind);
-    if (kind === "orders") return { variant: "rollover-orders kind=orders", keys: ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest"] };
+    if (kind === "orders") return { variant: "rollover-orders kind=orders", keys: ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest", "rfqId"] };
     if (kind === "fills") return { variant: "rollover-orders kind=fills", keys: ["kind", "orderDigest", "filler", "settler"] };
     if (kind === "contracts") return { variant: "rollover-orders kind=contracts", keys: ["kind", "account", "address", "factory"] };
   }
@@ -188,7 +190,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
   }
   if (raw?.kind !== undefined) {
     const v = String(raw.kind);
-    if (v !== "orders" && v !== "fills" && v !== "contracts") fail("kind", "expected 'orders' | 'fills' | 'contracts'");
+    if (v !== "orders" && v !== "fills" && v !== "contracts") fail("kind", v === "new_position" || v === "rollover" ? `kind selects the flows feed ('orders' | 'fills' | 'contracts'); the RFQ kind '${v}' is filters.rfqKind (CLI --rfq-kind)` : "expected 'orders' | 'fills' | 'contracts'");
     else out.kind = v;
   }
   if (raw?.side !== undefined) {
@@ -230,6 +232,13 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
     const v = String(raw.rfqId);
     if (!/^rfq_[0-9a-z]+$/.test(v)) fail("rfqId", "expected a venue RFQ id (rfq_ prefix, lowercase alphanumeric)");
     else out.rfqId = v;
+  }
+  // The venue's `kind` (RFQ v2). Named rfqKind here because `kind` already selects the
+  // rollover-orders feed — one filter key, one meaning.
+  if (raw?.rfqKind !== undefined) {
+    const v = String(raw.rfqKind);
+    if (v !== "new_position" && v !== "rollover") fail("rfqKind", "expected 'new_position' (a fresh cover position) | 'rollover' (roll a held position to a new pool)");
+    else out.rfqKind = v;
   }
   if (raw?.state !== undefined) {
     const v = String(raw.state);

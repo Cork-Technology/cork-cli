@@ -2,19 +2,22 @@
 // call each. Split from prepare-orders.ts (2026-09-03). Both re-enter the maker-order path through
 // injected deps (`prepare` = handlePrepareOrders, `annotateApprovals` = its approval annotator), so
 // this module has no import cycle with the dispatcher.
-import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionAnswerRfq, executionRefreshOrder, PrepareOrdersInput, venueInstant } from "@cork/schemas";
-import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, LOP_ADDRESSES, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
+import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionAnswerRfq, executionRefreshOrder, PrepareOrdersInput, RFQ_MODES, type RfqMode, venueInstant } from "@cork/schemas";
+import { keccak256, stringToHex } from "viem";
+import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
 import { answerOcoGroup, coverMakingAmount, fixedRateOverrideOfTemplate, impliedPremiumWad, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, inlineParamsOfTemplate, premiumAmount, premiumFraction, recipeAddressOfTemplate, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
-import { type CoverKind, coverKindOfRecipeName, inlineBlockWarnings } from "../cover.ts";
+import { COVER_RFQ_MODE, type CoverKind, coverKindOfRecipeName, inlineBlockWarnings } from "../cover.ts";
+import { quotedOrderWire } from "../rfq-quotes.ts";
 import { impairmentDurationOfArgs } from "../market-registry.ts";
 import type { MarketRegistryWire } from "../generations.ts";
 import { blockBytesFor, blockIsRecipesOwn, classifyRecipeAddress, durationBeyondLifeNote, readFixedRatePosition, readRecipeSource, readReferenceLoss } from "./cover-reading.ts";
 import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
+import { quoteRefOf } from "./query-offers.ts";
 
 type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-order" }>;
 
@@ -45,6 +48,24 @@ function findRfqOption(rfq: Record<string, unknown>, answerId: string, optionId:
   const options = Array.isArray(inner.options) ? (inner.options as unknown[]) : [];
   const option = options.find((o) => o && typeof o === "object" && String((o as { option_id?: unknown }).option_id) === optionId) as Record<string, unknown> | undefined;
   return option ? { answer, option } : "no-option";
+}
+
+/** The option's market template: the one it answers (the cited option's, else the RFQ's) with
+ *  the recipe this order builds on, and — for a fixed recipe — the rate it freezes at (a rate
+ *  on any other recipe is dropped: the order does not carry it). The venue
+ *  requires a template on every option, and an inline one with the rate for fixed_rate. */
+export function answerTemplate(a: { base: unknown; recipe: `0x${string}`; rateOverride: bigint | undefined }): Record<string, unknown> {
+  const base = a.base !== null && typeof a.base === "object" ? (a.base as Record<string, unknown>) : undefined;
+  const inline = base?.inline !== null && typeof base?.inline === "object" ? (base.inline as Record<string, unknown>) : undefined;
+  if (base && !inline && a.rateOverride === undefined) return base;
+  const { rate_override: _strayRate, ...params } = inline?.oracle_params !== null && typeof inline?.oracle_params === "object" ? (inline.oracle_params as Record<string, unknown>) : {};
+  return {
+    inline: {
+      ...(inline ?? {}),
+      oracle_recipe: a.recipe.toLowerCase(),
+      oracle_params: { ...params, ...(a.rateOverride !== undefined ? { rate_override: a.rateOverride.toString() } : {}) },
+    },
+  };
 }
 
 export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerRfqAction, ctx: HandlerContext, sugar: SugarDeps): Promise<Envelope> {
@@ -110,7 +131,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // ── the quote: a cited option or the caller's own terms ──
   let premiumAnnualized: string;
   let expiryTimestamp: bigint;
-  let quoteRef: { rfqId: string; answerId: string; optionId: string } | undefined;
+  let citedTemplate: unknown;
   let templateRecipe: `0x${string}` | undefined = recipeAddressOfTemplate(rfq.market_template);
   // The frozen rate the REQUEST names (cork-api 0.4.4 `rate_override`). An uncited answer builds
   // at it. A CITED answer builds at the cited option's own rate and never at the request's:
@@ -127,14 +148,14 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     if (found === "no-option") return unavailable(chainId, "invalid_order_terms", `option ${action.optionId} is not on answer ${action.answerId}`, ctx);
     const underwriter = str(found.answer.underwriter) ?? str((found.answer.answer as Record<string, unknown> | undefined)?.underwriter);
     if (underwriter !== undefined && underwriter.toLowerCase() !== input.account.toLowerCase()) {
-      return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} was posted by ${underwriter}, not by ${input.account} — a maker may cite only its OWN answer (the RFQ requester may cite any; cork-api 0.4.1 party rule). Post your own answer first (cork_submit rfq-answer) or answer uncited with premiumAnnualized`, ctx);
+      return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} was posted by ${underwriter}, not by ${input.account} — an underwriter re-quotes only its OWN answer (the new answer supersedes it). Answer uncited with premiumAnnualized + expiryTimestamp instead`, ctx);
     }
     const p = str(found.option.premium_annualized);
     const e = venueInstant(found.option.expiry)?.seconds; // the cited option's pool expiry: seconds or strict ISO, canonicalised to seconds
     if (p === undefined || e === undefined || !/^\d+$/.test(e)) return unavailable(chainId, "invalid_service_response", `option ${action.optionId} carries no usable premium_annualized/expiry`, ctx);
     premiumAnnualized = p;
     expiryTimestamp = BigInt(e);
-    quoteRef = { rfqId: action.rfqId, answerId: action.answerId!, optionId: action.optionId! };
+    citedTemplate = found.option.market_template;
     templateRecipe = recipeAddressOfTemplate(found.option.market_template) ?? templateRecipe;
     templateRate = fixedRateOverrideOfTemplate(found.option.market_template);
     const optionInline = inlineParamsOfTemplate(found.option.market_template);
@@ -384,11 +405,52 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     usePermit2: action.usePermit2,
     ocoGroup,
     ...(allowedSender !== undefined ? { allowedSender } : {}),
-    ...(quoteRef ? { quoteRef } : {}),
     jitMarket: { collateralAsset, referenceAsset, expiryTimestamp: expiryTimestamp.toString(), recipe, rateOverride: rateOverride?.toString() ?? "0", enableJitMint: false, ...jitFromInline, ...jitExplicit } as NonNullable<MakerOrderAction["jitMarket"]>,
   };
+  // ── the v2 answer option: the terms the requester reads, beside the order they describe ──
+  // cork-api RFQ v2 (0.4.5): a quoted option carries the exact order the underwriter stands
+  // behind, so the option is built from the SAME numbers as the order. Its mode names the
+  // recipe's cover; its template names the recipe (and the frozen rate a fixed recipe builds at).
+  const rfqModes = (Array.isArray(rfq.modes) ? (rfq.modes as unknown[]) : []).filter((m): m is RfqMode => (RFQ_MODES as readonly unknown[]).includes(m));
+  const mode: RfqMode | undefined = action.mode ?? (kind !== undefined ? COVER_RFQ_MODE[kind] : rfqModes.length === 1 ? rfqModes[0] : undefined);
+  if (mode === undefined) {
+    throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "mode"], message: `the recipe ${recipe} is not one a configured generation names, so its cover — and the option's mode — cannot be read; pass mode (one of ${RFQ_MODES.join(", ")}) for the cover this recipe gives` }]);
+  }
+  if (rfqModes.length > 0 && !rfqModes.includes(mode)) {
+    warnings.push({ code: "invalid_order_terms", message: `this answer quotes mode ${mode}, which RFQ ${action.rfqId} does not ask for (${rfqModes.join(", ")}) — a visible counter-proposal the requester may ignore; the option still builds` });
+  }
+  const rfqPackages = (Array.isArray(rfq.package_ids) ? (rfq.package_ids as unknown[]) : []).filter((p): p is string => typeof p === "string");
+  const packageId = action.packageId ?? (rfqPackages.length === 1 ? rfqPackages[0] : undefined);
+  if (packageId === undefined) {
+    throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "packageId"], message: rfqPackages.length === 0 ? "the RFQ names no package_ids — pass packageId for the option" : `the RFQ names ${rfqPackages.length} packages (${rfqPackages.join(", ")}) — pick the one this option quotes with packageId` }]);
+  }
+  if (rfqPackages.length > 0 && !rfqPackages.includes(packageId)) {
+    warnings.push({ code: "invalid_order_terms", message: `packageId ${packageId} is not among the RFQ's packages (${rfqPackages.join(", ")}) — a visible counter-proposal; the option still builds` });
+  }
+  const optionId = action.answerOptionId ?? (cited ? action.optionId! : `opt-${keccak256(stringToHex(input.clientRequestId)).slice(2, 14)}`);
   const env = await sugar.prepare({ ...input, action: makerAction }, ctx);
   if (env.state !== "ok") return { ...env, warnings: [...warnings, ...env.warnings] };
+  // The envelope serialises the order's integers as decimal strings.
+  const makerData = env.data as { typedData: { message: Record<keyof LopOrder, string | bigint> }; orderHash: `0x${string}` };
+  const m = makerData.typedData.message;
+  const signedOrder: LopOrder = { salt: BigInt(m.salt), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount), takingAmount: BigInt(m.takingAmount), makerTraits: BigInt(m.makerTraits) };
+  const orderExpiry = decodeMakerTraits(signedOrder.makerTraits).expiry;
+  const quotedOption = {
+    option_id: optionId,
+    chain_id: chainId,
+    collateral_asset: collateralAsset.toLowerCase(),
+    reference_asset: referenceAsset.toLowerCase(),
+    mode,
+    package_id: packageId,
+    expiry: Number(expiryTimestamp),
+    market_template: answerTemplate({ base: cited ? citedTemplate : rfq.market_template, recipe, rateOverride: isFixed ? rateOverride : undefined }),
+    premium_annualized: premiumAnnualized,
+    notional_max_assets: notional.toString(),
+    // The quote reads fresh exactly as long as its order can fill: a later fresh_until shows a
+    // dead order as live, an earlier one hides a live order.
+    fresh_until: Number(orderExpiry),
+    order: quotedOrderWire(signedOrder),
+  };
   const impliedWad = impliedPremiumWad(takingAmount, notional, tenorSeconds);
   return {
     ...env,
@@ -398,8 +460,12 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
       answer: {
         rfqId: action.rfqId,
         requester: requester ?? null,
-        quoteRef: quoteRef ?? null,
+        // The answer this order belongs to is posted AFTER signing, so its id is not known yet.
+        quoteRef: { rfqId: action.rfqId, answerId: null, optionId },
         option: optionEcho,
+        quotedOption,
+        supersedes: cited ? action.answerId! : null,
+        orderHash: makerData.orderHash,
         premiumAnnualized,
         collateralAsset,
         referenceAsset,
@@ -438,7 +504,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         ...(notRead.length > 0 ? { notRead } : {}),
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
       },
-      execution: executionAnswerRfq(),
+      execution: executionAnswerRfq(cited),
     },
   };
 }
@@ -523,6 +589,11 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
   const approvals = await sugar.annotateApprovals(ctx, chainId, makerApprovalRequirements({ maker: input.account, makerAsset: old.makerAsset, makingAmount: old.makingAmount, lop, usePermit2: traits.usePermit2, orderExpiry: decodeMakerTraits(built.order.makerTraits).expiry }));
   const makerApprovalWarn = approvalMissingWarning(approvals, "before signing and listing the refreshed order");
   if (makerApprovalWarn) warnings.push(makerApprovalWarn);
+  // An order that executes an RFQ v2 quote is refreshed together with its quote: the book only
+  // takes, under that citation, the exact order the answer carries, so the new order needs a
+  // superseding answer that carries it before it rests.
+  const cite = quoteRefOf(row);
+  const requote = cite ? await supersedingQuote({ ctx, chainId, cite, account: input.account, order: built.order, freshUntil: nowSecs + BigInt(action.expirySeconds), client: resolved?.client, warnings }) : null;
   warnings.push({ code: "oco_group_notice", message: `the refreshed order shares invalidator nonce ${built.nonce} with ${action.orderHash}: whichever of the two fills or is cancelled first retires the other (one bit) — the refresh is a revision, not a second exposure. The venue lists both as OPEN; re-read the bit before ranking or filling either. Vocabulary: ${ORDERS_TOPIC_REFERENCE}` });
   return envelope({
     state: "ok",
@@ -536,9 +607,10 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
       ocoGroup: null,
       allowedSender: decodeMakerTraits(built.order.makerTraits).allowedSender,
       approvals,
+      ...(requote ? { requote } : {}),
       refreshes: { orderHash: localHash, nonce: traits.nonce.toString(), previousExpiry: traits.expiry.toString(), newExpiry: (nowSecs + BigInt(action.expirySeconds)).toString(), sameTerms: ["makerAsset", "takerAsset", "makingAmount", "takingAmount", "allowedSender", "allowsPartialFills", "usePermit2", "extension"], extensionCarried: extension !== "0x" },
       scales: { makingAmount: "base units of makerAsset (the token's own decimals)", takingAmount: "base units of takerAsset", approvalsAmount: "approvals[].amount is base units of that entry's own token", unitsTopic: UNITS_TOPIC_REFERENCE },
-      execution: executionRefreshOrder(),
+      execution: executionRefreshOrder(requote !== null),
       clientRequestId: input.clientRequestId,
     },
     chainId,
@@ -546,4 +618,60 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
     warnings,
     ctx,
   });
+}
+
+/** The fields a v2 answer option carries (cork-api 0.4.5 AnswerOptionSchema, strict); a served
+ *  option also carries the venue's own order_hash, which is never sent back. */
+const ANSWER_OPTION_KEYS = ["option_id", "chain_id", "collateral_asset", "reference_asset", "mode", "package_id", "expiry", "market_template", "premium_annualized", "notional_max_assets", "fresh_until", "order"] as const;
+
+/** A WAD fraction (1e18 = 1.0) as the venue's decimal-fraction string, at most 18 decimals. */
+export function wadToFraction(wad: bigint): string {
+  const whole = wad / 10n ** 18n;
+  const frac = (wad % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/u, "");
+  return frac.length > 0 ? `${whole}.${frac}` : whole.toString();
+}
+
+/**
+ * The superseding answer a refreshed quoted order needs: the cited option again, carrying the
+ * new order, fresh until the new order's expiry, and priced at what the unchanged amounts mean
+ * NOW (the tenor has shrunk since the order was first priced, so the same amounts are a higher
+ * annual premium — the quote shows that, not the stale figure). Null, with the reason in a
+ * warning, when the quote cannot be read back.
+ */
+async function supersedingQuote(a: { ctx: HandlerContext; chainId: PrepareOrdersInput["chainId"]; cite: { rfqId: string; answerId: string; optionId: string }; account: string; order: LopOrder; freshUntil: bigint; client: NonNullable<Awaited<ReturnType<typeof getRpc>>>["client"] | undefined; warnings: Array<{ code: string; message: string }> }): Promise<Record<string, unknown> | null> {
+  const skip = (why: string): null => {
+    a.warnings.push({ code: "venue_reported", message: `this order cites quote ${a.cite.rfqId}/${a.cite.answerId}/${a.cite.optionId}, and ${why} — no superseding answer was built. Re-quote with cork_prepare_orders answer-rfq (answerId + optionId) before posting the refreshed order under that citation: the venue takes only the exact order the answer carries` });
+    return null;
+  };
+  if (!a.cite.rfqId) return skip("the citation names no RFQ");
+  let rfq: Record<string, unknown> | null;
+  try {
+    rfq = await getRfq(venueDepsOf(a.ctx), a.cite.rfqId, "full");
+  } catch (err) {
+    return skip(`the RFQ could not be read (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (!rfq) return skip("the venue no longer serves that RFQ");
+  const found = findRfqOption(rfq, a.cite.answerId, a.cite.optionId);
+  if (found === "no-answer" || found === "no-option") return skip(`the ${found === "no-answer" ? "answer" : "option"} is not in the RFQ's answers embed`);
+  const underwriter = str(found.answer.underwriter);
+  if (underwriter !== undefined && underwriter.toLowerCase() !== a.account.toLowerCase()) return skip(`that answer is ${underwriter}'s, not ${a.account}'s`);
+  const option: Record<string, unknown> = {};
+  for (const k of ANSWER_OPTION_KEYS) if (found.option[k] !== undefined) option[k] = found.option[k];
+  option.order = quotedOrderWire(a.order);
+  option.fresh_until = Number(a.freshUntil);
+  const poolExpiry = typeof found.option.expiry === "number" ? BigInt(found.option.expiry) : undefined;
+  const nowSecs = nowSecondsOf(a.ctx);
+  let repriced = false;
+  if (a.client && poolExpiry !== undefined && poolExpiry > nowSecs) {
+    try {
+      const decimals = Number(await a.client.readContract({ address: a.order.takerAsset, abi: erc20Abi, functionName: "decimals" }));
+      const notional = decimals <= 18 ? a.order.makingAmount / 10n ** BigInt(18 - decimals) : a.order.makingAmount * 10n ** BigInt(decimals - 18);
+      option.premium_annualized = wadToFraction(impliedPremiumWad(a.order.takingAmount, notional, poolExpiry - nowSecs));
+      repriced = true;
+    } catch {
+      repriced = false;
+    }
+  }
+  if (!repriced) a.warnings.push({ code: "venue_reported", message: `the superseding quote keeps premium_annualized ${String(found.option.premium_annualized)} unchanged: the collateral's decimals or the pool expiry could not be read, so what the unchanged amounts mean now was not computed — rfq-write checks the quote against its order before you sign it` });
+  return { rfqId: a.cite.rfqId, supersedes: a.cite.answerId, option };
 }

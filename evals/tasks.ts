@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
+import { RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
 import corkDefaults from "../cork-defaults.v2.json";
 
 // The mainnet adapter, read from the SAME schema-2 config the stub resolves (the pinned-literal
@@ -364,7 +364,7 @@ export const TASKS: EvalTask[] = [
   // ── submit (the ONE side-effecting tool had ZERO coverage until 2026-08-17) ──
   {
     id: "submit-rfq-open",
-    prompt: `Open a Cork request-for-quote on Arbitrum (chain 42161) as requester 0xc0ffee0000000000000000000000000000000001: reference asset 0xdDb46999F8891663a8F2828d25298f70416d7610, collateral exactly 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, mode liquidity_only, package "pkg_default", pool expiry between 1900000000 and 1910000000 (unix seconds), notional 1000e18 of the collateral, valid until 1795000000, my signature is 0x${"ab".repeat(65)}, request id "eval-rfq-0001". Report the RFQ id the venue assigned.`,
+    prompt: `Open a new_position Cork request-for-quote on Arbitrum (chain 42161) as requester ${RFQ_WRITER_ADDRESS}: reference asset 0xdDb46999F8891663a8F2828d25298f70416d7610, collateral exactly 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, mode liquidity_only, package "pkg_default", pool expiry between 1900000000 and 1910000000 (unix seconds), notional 1000e18 of the collateral, valid until 1795000000, request id "eval-rfq-0001". I already signed exactly that write (no market template); my signature is ${(SIGNED_RFQ_OPEN.auth as { signature: string }).signature}. Report the RFQ id the venue assigned.`,
     expect: { tool: "cork_submit", prelude: ["cork_capabilities"], params: { action: { type: "rfq-open" } }, state: "ok", answer: /rfq_eval1/, maxCalls: 3 },
   },
   // ── decode / track ─────────────────────────────────────────────────────
@@ -706,7 +706,7 @@ export const TASKS: EvalTask[] = [
     // The traps: a number instead of a string, the percent scale, a template id, or the rate in
     // a field of the agent's own invention. Graded on the relayed body.
     id: "submit-rfq-open-fixed",
-    prompt: `Open a Cork request-for-quote on Arbitrum (chain 42161) for FIXED-RATE cover as requester 0xc0ffee0000000000000000000000000000000001: reference asset ${JIT_TASK_PAIR.referenceAsset}, collateral exactly ${JIT_TASK_PAIR.collateralAsset}, the fixed-rate recipe ${FIXED_RECIPE}, the rate frozen at 0.75 collateral per reference, package "pkg_default", pool expiry exactly ${RFQ_IMPAIRMENT_EXPIRY} (unix seconds), zero fees, notional 1000 units of the 6-decimal collateral, valid until 1790086400, my signature is 0x${"ab".repeat(65)}, request id "eval-rfq-fixed-0001". Report the RFQ id the venue assigned and how the frozen rate compares with the reference's rate today.`,
+    prompt: `Open a Cork request-for-quote on Arbitrum (chain 42161) for FIXED-RATE cover (a new_position request) as requester ${RFQ_WRITER_ADDRESS}: reference asset ${JIT_TASK_PAIR.referenceAsset}, collateral exactly ${JIT_TASK_PAIR.collateralAsset}, the fixed-rate recipe ${FIXED_RECIPE}, the rate frozen at 0.75 collateral per reference, package "pkg_default", pool expiry exactly ${RFQ_IMPAIRMENT_EXPIRY} (unix seconds), zero fees, notional 1000 units of the 6-decimal collateral, valid until 1790086400, request id "eval-rfq-fixed-0001". I already signed exactly that write, with the inline block {schema: "cork-inline-fixed/1", rate_override, expiry, swap_fee_wad: "0", unwind_swap_fee_wad: "0"}; my signature is ${(SIGNED_RFQ_OPEN_FIXED.auth as { signature: string }).signature}. Report the RFQ id the venue assigned and how the frozen rate compares with the reference's rate today.`,
     expect: {
       tool: "cork_submit",
       prelude: ["cork_capabilities", "cork_query"],
@@ -809,7 +809,7 @@ export const TASKS: EvalTask[] = [
     // is a decimal FRACTION string ("0.038" = 3.8%), and the venue's own gate refuses anything
     // else — so this grades the unit translation at the option level, not the listing level.
     id: "submit-rfq-answer",
-    prompt: `I underwrite Cork cover and I want to quote RFQ ${RFQ_OPEN_ID} on Arbitrum (chain 42161) as underwriter ${A}: one option, id "opt1", at an annualized premium of 3.8%. My signature is 0x${"ab".repeat(65)}, request id "eval-ans-0001". Report the answer id the venue assigned.`,
+    prompt: `I underwrite Cork cover and I want to quote RFQ ${RFQ_OPEN_ID} on Arbitrum (chain 42161) as underwriter ${RFQ_WRITER_ADDRESS}: one option, id "opt1", at an annualized premium of 3.8%, standing behind this signed limit order: ${JSON.stringify((SIGNED_RFQ_ANSWER.options as unknown[])[0])}. I signed the answer too; my signature is ${(SIGNED_RFQ_ANSWER.auth as { signature: string }).signature}, request id "eval-ans-0001". Report the answer id the venue assigned.`,
     expect: {
       tool: "cork_submit",
       prelude: ["cork_capabilities", "cork_query"],

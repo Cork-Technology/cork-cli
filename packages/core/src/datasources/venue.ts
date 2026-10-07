@@ -37,17 +37,29 @@ export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
  * enumerate them instead of trusting memory.
  */
 export const MIRRORED_VENUE_LOGIC = [
-  { gate: "rfq-open expiry_window: not_before must be STRICTLY < not_after (equality is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqOpenWindowViolation", venueSource: "src/modules/rfq/v1/schemas/post-rfq.schema.ts (expiry_window refine)" },
-  { gate: "rfq-open modes: each alternative named once (a repeated mode is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqModesViolation", venueSource: "src/modules/rfq/v1/schemas/post-rfq.schema.ts (modes unique refine)" },
-  { gate: "fixed_rate (request modes, answer option mode): an INLINE template with oracle_params.rate_override — a string of 1..78 digits, no leading zero, at most uint256 max (0.4.4)", mirror: "packages/core/src/handlers/submit.ts#fixedRateTemplateViolation", venueSource: "src/modules/rfq/v1/schemas/rfq-common.schema.ts (FixedRateMarketTemplateSchema) + post-rfq / post-answer refines" },
+  { gate: "rfq-open expiry_window: not_before must be STRICTLY < not_after (equality is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqOpenWindowViolation", venueSource: "src/modules/rfq/v2/schemas/rfq-common.schema.ts (ExpiryWindowSchema refine)" },
+  { gate: "rfq-open modes: each alternative named once (a repeated mode is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqModesViolation", venueSource: "src/modules/rfq/v2/schemas/post-rfq.schema.ts (modes unique refine)" },
+  { gate: "fixed_rate (request modes, answer option mode): an INLINE template with oracle_params.rate_override — a string of 1..78 digits, no leading zero, at most uint256 max (0.4.4)", mirror: "packages/core/src/handlers/submit.ts#fixedRateTemplateViolation", venueSource: "src/modules/rfq/v2/schemas/rfq-common.schema.ts (FixedRateMarketTemplateSchema) + post-rfq / post-answer refines" },
   { gate: "quote_ref citation: answer existence, PARTY rule (requester or the cited answer's underwriter), option/chain/collateral coherence", mirror: "packages/core/src/handlers/submit.ts#resolveCitation", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (Verify RFQ provenance)" },
   { gate: "quote_ref premium acceptance band (parseFloat, fraction x100 canonicalization, strict ratio > 10 || < 0.1, both premiums > 0)", mirror: "packages/core/src/handlers/submit.ts#resolveListingPremium", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (premium scale signal)" },
-  { gate: "premiumAnnualized caps: RFQ fraction pattern + < 0.5; book pattern + <= 100 (patterns are structure/R13, caps are policy)", mirror: "packages/core/src/handlers/submit.ts#premiumFractionViolation", venueSource: "rfq + limit-orders write schemas" },
+  { gate: "premiumAnnualized caps: RFQ fraction pattern + < 0.5; book pattern + <= 100 (patterns are structure/R13, caps are policy)", mirror: "packages/core/src/handlers/submit.ts#premiumFractionViolation", venueSource: "src/modules/rfq/v2/schemas/rfq-common.schema.ts (premium fraction) + limit-orders write schemas" },
   { gate: "listing traits cross-check: expiry/nonce/allowsPartialFills vs the signed makerTraits", mirror: "packages/core/src/handlers/submit.ts#handleSubmit", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (trait decode)" },
   { gate: "rollover admission battery (deadline ordering, positive premium, distinct tokens/pools, hook shape)", mirror: "packages/core/src/rollover.ts#checkRolloverOrderTerms", venueSource: "rollover post route deterministic checks" },
-  { gate: "rfq-counter gates: requester-only (403), expired RFQ (410), optionRef existence", mirror: "packages/core/src/handlers/submit.ts#handleSubmit", venueSource: "rfq post-counter route" },
+  { gate: "rfq-counter gates: requester-only (403), expired RFQ (410), optionRef existence", mirror: "packages/core/src/handlers/rfq-write.ts#readRfqTarget", venueSource: "src/modules/rfq/v2/routes/post-counter.ts" },
+  { gate: "rfq v2 write targets: unknown or v1-opened RFQ (404 on v2), another kind (409), expired (410) — answers and counters alike", mirror: "packages/core/src/handlers/rfq-write.ts#readRfqTarget", venueSource: "src/modules/rfq/v2/routes/post-answer.ts + post-counter.ts + src/modules/rfq/v2/kind.ts#requireSameKind" },
+  { gate: "rfq v2 write proof: CorkRfqWrite(operation, ref, bodyHash) over the canonical body (signature and order_signature excluded; addresses/bytes32 lowercased as stored), EOA or ERC-1271", mirror: "packages/core/src/rfq-bodies.ts#planRfqWrite", venueSource: "src/modules/rfq/v2/signing.ts + src/modules/rfq/v2/auth.ts + src/lib/typed-signature.ts" },
+  { gate: "rfq-open package_ids: each named once (a repeated id is a 400)", mirror: "packages/core/src/handlers/submit.ts#rfqPackageIdsViolation", venueSource: "src/modules/rfq/v2/schemas/post-rfq.schema.ts (package_ids unique refine)" },
+  { gate: "rfq v2 quoted answer: every option carries an order made by the underwriter, its order_signature, and a distinct order", mirror: "packages/core/src/handlers/rfq-write.ts#answerOptionOrderViolation", venueSource: "src/modules/rfq/v2/schemas/post-answer.schema.ts (NewPositionAnswerSchema) + routes/post-answer.ts (one order, one quote)" },
+  { gate: "rfq v2 quoted orders: each option on the RFQ's chain, a LOP on that chain, each order re-hashed and distinct, each order_signature proving the underwriter (EOA or ERC-1271)", mirror: "packages/core/src/handlers/rfq-write.ts#checkQuotedOptions", venueSource: "src/modules/rfq/v2/routes/post-answer.ts (order checks + requireTypedSignatures)" },
+  { gate: "quote_ref on a v2 quote: an underwriter's book order must be the exact order the cited option carries (the stored order re-hashed); a requester's order is not covered", mirror: "packages/core/src/handlers/submit.ts#quotedOrderCitationViolation", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (quoted order match)" },
+  { gate: "rollover rfq kind fields: a rollover open names source + premium_token and never modes/package_ids/notional_assets (and the reverse); a counter is priced in its kind's unit", mirror: "packages/core/src/rfq-rollover.ts#rfqOpenKindFieldsViolation", venueSource: "src/modules/rfq/v2/schemas/post-rfq.schema.ts (NewPositionRfqSchema / RolloverRfqSchema, strict) + post-counter.schema.ts" },
+  { gate: "rollover rfq pools: the open's source pool and an answer's destination pool are known Cork pools and not expired (the venue asks its index; mirrored against the chain)", mirror: "packages/core/src/handlers/rfq-rollover.ts#readPoolLiveness", venueSource: "src/modules/rfq/v2/routes/post-rfq.ts + post-answer.ts#checkRolloverOptions + src/modules/rfq/v2/kind.ts#findPool/poolExpired" },
+  { gate: "rollover rfq quote options: the RFQ's chain, a premium_token the requester accepts, shares_max <= source.shares, exactly one destination that is not the source pool, no order fields", mirror: "packages/core/src/rfq-rollover.ts#rolloverOptionViolation", venueSource: "src/modules/rfq/v2/schemas/post-answer.schema.ts (RolloverAnswerOptionSchema) + routes/post-answer.ts#checkRolloverOptions" },
+  { gate: "rollover rfq counter premium_token: one of the RFQ's premium_token set", mirror: "packages/core/src/rfq-rollover.ts#premiumTokenAllowed", venueSource: "src/modules/rfq/v2/routes/post-counter.ts + schemas/rfq-common.schema.ts#premiumTokenAllowed" },
+  { gate: "rollover jit_market_hash: BaseFiller's JITMarketParams hash on the 0.2 layout (oracleSalt in, enableJitMint out)", mirror: "packages/core/src/rollover.ts#hashJitMarketParams", venueSource: "src/lib/jit-market-hash.ts" },
+  { gate: "rollover order quoteRef: a v2 rollover RFQ on this chain, a quoted answer holding the option, user = requester, source pool, quoted destination (pool with zero jitMarketHash, or the stored jit_market_hash), premium token, minPremiumPerShare >= premium_per_share, orderSize <= shares_max", mirror: "packages/core/src/rfq-rollover.ts#rolloverQuoteRefMismatch", venueSource: "src/modules/rollover/v1/quote-ref.ts#quoteRefMismatch" },
   { gate: "orderbook allowedSender decode (makerTraits low 80 bits, null = open)", mirror: "packages/core/src/handlers/hybrid-verify.ts#annotateBookRows", venueSource: "src/modules/limit-orders/v1/routes/get-orderbook.ts#decodeAllowedSenderSuffix" },
-  { gate: "rfqs exclude_request_prefix bounds (1..64, LITERAL — the venue escapes LIKE wildcards itself)", mirror: "packages/core/src/handlers/filters.ts#parseQueryFilters", venueSource: "src/modules/rfq/v1/schemas/get-rfqs.schema.ts" },
+  { gate: "rfqs exclude_request_prefix bounds (1..64, LITERAL — the venue escapes LIKE wildcards itself)", mirror: "packages/core/src/handlers/filters.ts#parseQueryFilters", venueSource: "src/modules/rfq/v2/schemas/get-rfqs.schema.ts" },
 ] as const;
 
 export function venueBaseUrl(override?: string): string {
@@ -370,11 +382,13 @@ export interface RolloverOrdersParams extends PageParams {
   status?: string;
   fillable?: boolean;
   source?: string;
+  /** Only orders whose quoteRef cites this rollover RFQ (venue 0.4.5). */
+  rfqId?: string;
 }
 
 /** GET /rollover/v1/orders — the rollover order feed (solver feed with fillable=true). */
 export async function getRolloverOrders(deps: VenueDeps, p: RolloverOrdersParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/rollover/v1/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
+  return asList(await getJson(deps, `/rollover/v1/orders${qs({ chainId: p.chainId, user: p.user, poolId: p.poolId, settler: p.settler, status: p.status, fillable: p.fillable, source: p.source, rfqId: p.rfqId, cursor: p.cursor, limit: p.limit })}`), "rollover orders");
 }
 
 /** GET /rollover/v1/orders/{orderDigest} — one order fully resolved ({order, fills, slots}).
@@ -402,8 +416,13 @@ export async function getRolloverContracts(deps: VenueDeps, p: { chainId: number
   return asList(await getJson(deps, `/rollover/v1/contracts${qs({ chainId: p.chainId, owner: p.owner, address: p.address, factory: p.factory, cursor: p.cursor, limit: p.limit })}`), "rollover contracts");
 }
 
+/** What an RFQ asks for (venue RFQ v2): a fresh cover position, or a rollover of one held. */
+export type RfqKind = "new_position" | "rollover";
+
 export interface RfqListParams extends PageParams {
   chainId?: number;
+  /** Only RFQs of this kind; omitted = every kind. */
+  kind?: RfqKind;
   state?: "open" | "expired";
   referenceAsset?: string;
   requester?: string;
@@ -418,7 +437,7 @@ export interface RfqListParams extends PageParams {
 }
 
 /**
- * GET /rfqs/v1 — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
+ * GET /rfqs/v2 — the RFQ discovery feed (how a quoter finds work; poll, no webhooks).
  * Server defaults: state=open, newest first, keyset-paged on rfq_id ({items, next_cursor}).
  * with_answers=true embeds each RFQ's answers (newest first, venue-capped per row);
  * view=current narrows the embed to the negotiation frontier (one current answer per
@@ -446,17 +465,17 @@ export async function getRfqs(deps: VenueDeps, p: RfqListParams): Promise<VenueL
   const list = asList(
     await getJson(
       deps,
-      `/rfqs/v1${qs({ chain_id: p.chainId, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, underwriter: p.underwriter, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
+      `/rfqs/v2${qs({ chain_id: p.chainId, kind: p.kind, state: p.state, reference_asset: p.referenceAsset, requester: p.requester, underwriter: p.underwriter, with_answers: p.withAnswers, view: p.view, exclude_request_prefix: p.excludeRequestPrefix, cursor: p.cursor, limit: p.limit })}`,
     ),
     "rfqs",
   );
   return { ...list, items: list.items.map(normalizeRfqRow) };
 }
 
-/** GET /rfqs/v1/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
+/** GET /rfqs/v2/{rfq_id} — the full RFQ record with answers (for quote_ref cross-checks). */
 export async function getRfq(deps: VenueDeps, rfqId: string, view?: "full" | "current"): Promise<Record<string, unknown> | null> {
   try {
-    const raw = await getJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}${qs({ view })}`);
+    const raw = await getJson(deps, `/rfqs/v2/${encodeURIComponent(rfqId)}${qs({ view })}`);
     return normalizeRfqRow(Row.parse(raw.body));
   } catch (err) {
     if (err instanceof VenueHttpError && err.status === 404) return null;
@@ -561,12 +580,12 @@ export function parseSignedLopOrder(row: unknown): { ok: true; value: SignedLopO
 
 // ── Writes (relays of caller-authored/signed payloads [K1]) ─────────────────
 
-async function postJson(deps: VenueDeps, path: string, body: unknown): Promise<VenuePostResult> {
+async function postJson(deps: VenueDeps, path: string, body: unknown, extraHeaders: Record<string, string> = {}): Promise<VenuePostResult> {
   // Deliberately NO transport retry here (contrast getFetch): a relay retries only under the
   // caller's [K2] clientRequestId idempotency contract, never silently at the transport layer.
   const res = await rawFetch(deps, path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
     body: JSON.stringify(body),
   });
   let parsed: unknown = null;
@@ -590,17 +609,28 @@ export async function postLopOrder(deps: VenueDeps, body: unknown): Promise<Venu
   return postJson(deps, "/limit-orders/v1", body);
 }
 
-/** POST /rfqs/v1 — open an RFQ (parameter envelope). */
-export async function postRfq(deps: VenueDeps, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, "/rfqs/v1", body);
+/** How an RFQ v2 write proves its author: the signature rides in the body; an API key rides
+ *  ONLY in this header. The key is a credential — it goes to the venue and nowhere else (never
+ *  into a result, warning, error or log). */
+export interface RfqWriteAuth {
+  apiKey?: string;
 }
 
-/** POST /rfqs/v1/{rfqId}/answers — answer an RFQ with priced options or a typed pass. */
-export async function postRfqAnswer(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}/answers`, body);
+function rfqAuthHeaders(auth: RfqWriteAuth | undefined): Record<string, string> {
+  return auth?.apiKey !== undefined ? { "x-cork-api-key": auth.apiKey } : {};
 }
 
-/** POST /rfqs/v1/{rfqId}/counters — the requester's non-committal counter-bid (requester-only). */
-export async function postRfqCounter(deps: VenueDeps, rfqId: string, body: unknown): Promise<VenuePostResult> {
-  return postJson(deps, `/rfqs/v1/${encodeURIComponent(rfqId)}/counters`, body);
+/** POST /rfqs/v2 — open an RFQ (parameter envelope). */
+export async function postRfq(deps: VenueDeps, body: unknown, auth?: RfqWriteAuth): Promise<VenuePostResult> {
+  return postJson(deps, "/rfqs/v2", body, rfqAuthHeaders(auth));
+}
+
+/** POST /rfqs/v2/{rfqId}/answers — answer an RFQ with priced options or a typed pass. */
+export async function postRfqAnswer(deps: VenueDeps, rfqId: string, body: unknown, auth?: RfqWriteAuth): Promise<VenuePostResult> {
+  return postJson(deps, `/rfqs/v2/${encodeURIComponent(rfqId)}/answers`, body, rfqAuthHeaders(auth));
+}
+
+/** POST /rfqs/v2/{rfqId}/counters — the requester's non-committal counter-bid (requester-only). */
+export async function postRfqCounter(deps: VenueDeps, rfqId: string, body: unknown, auth?: RfqWriteAuth): Promise<VenuePostResult> {
+  return postJson(deps, `/rfqs/v2/${encodeURIComponent(rfqId)}/counters`, body, rfqAuthHeaders(auth));
 }

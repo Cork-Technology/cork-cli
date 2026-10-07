@@ -10,12 +10,13 @@ import { defaultProbeBudget, PROBE_SUCCESS_TARGET, probeAccountTypeOf, probeUnti
 
 // ── offers: the unified discovery view (owner ruling 2026-09-02) ─────────────────────────────
 // An OFFER is a price somebody can actually buy: a live, signed resting order. A quote (an RFQ
-// answer option) is FIRM only when a live order cites it via quoteRef — otherwise it is
+// answer option) is FIRM only when a live order cites it — via quoteRef, or (RFQ v2) by being
+// the very order the option carries (its served `order_hash`) — otherwise it is
 // INDICATIVE, a price nobody can buy, and it is counted here, never ranked. The view composes
 // the two reads it needs by re-entering this handler — the ranked orderbook (hybrid-verified,
 // best-first for filters.account) and the RFQ feed with the current answers embedded — and joins
 // them on the citation. It adds no venue call the two reads do not already make.
-type OfferQuote = { rfqId: string; answerId: string; optionId: string; underwriter: string | null; requester: string | null; premiumAnnualized: string | null; optionExpiry: string | null };
+type OfferQuote = { rfqId: string; answerId: string; optionId: string; underwriter: string | null; requester: string | null; premiumAnnualized: string | null; optionExpiry: string | null; orderHash: string | null };
 type IndicativeOption = OfferQuote & { reason: string };
 
 function offerQuoteOf(rfq: Record<string, unknown>, answer: Record<string, unknown>, option: Record<string, unknown>): OfferQuote {
@@ -29,6 +30,7 @@ function offerQuoteOf(rfq: Record<string, unknown>, answer: Record<string, unkno
     requester: s(rfq.requester),
     premiumAnnualized: s(option.premium_annualized),
     optionExpiry: s(option.expiry),
+    orderHash: s(option.order_hash),
   };
 }
 
@@ -58,30 +60,58 @@ export function quoteRefOf(row: Record<string, unknown>): { answerId: string; op
   return typeof answerId === "string" && typeof optionId === "string" ? { answerId, optionId, rfqId: typeof rfqId === "string" ? rfqId : "" } : null;
 }
 
-/** The (answer_id|option_id) keys LIVE resting rows cite: every ranked row, plus rows excluded
- *  ONLY for being reserved for another sender — live, just not yours. Dead or unreadable
- *  exclusions back nothing. Shared by `offers` and the `firm` flag on `rfqs` rows, so the two
- *  views never disagree on what backs a quote. */
+/** The option a v2 answer's served `order_hash` names, as a citation key. */
+export function orderHashKey(hash: unknown): string | null {
+  return typeof hash === "string" && /^0x[0-9a-fA-F]{64}$/u.test(hash) ? `order:${hash.toLowerCase()}` : null;
+}
+
+/** What LIVE resting rows back: each row's (answer_id|option_id) citation and its own orderHash
+ *  (an RFQ v2 option carries its order, so the resting order IS the quote). Every ranked row
+ *  counts, plus rows excluded ONLY for being reserved for another sender — live, just not
+ *  yours. Dead or unreadable exclusions back nothing. Shared by `offers` and the `firm` flag on
+ *  `rfqs` rows, so the two views never disagree on what backs a quote. */
 export function citedOptionKeys(bookData: { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>> }): Set<string> {
   const cited = new Set<string>();
-  for (const row of bookData.items) {
+  const add = (row: Record<string, unknown>) => {
     const ref = quoteRefOf(row);
     if (ref) cited.add(`${ref.answerId}|${ref.optionId}`);
-  }
+    const byHash = orderHashKey(row.orderHash);
+    if (byHash) cited.add(byHash);
+  };
+  for (const row of bookData.items) add(row);
   for (const row of bookData.excluded ?? []) {
-    if ((row as { exclusion?: string }).exclusion !== "reserved-for-other") continue;
+    if ((row as { exclusion?: string }).exclusion === "reserved-for-other") add(row);
+  }
+  return cited;
+}
+
+/** Is this served option backed by a live order — cited by ids, or resting as its own order? */
+export function optionIsCited(cited: ReadonlySet<string>, answerId: unknown, option: Record<string, unknown>): boolean {
+  if (cited.has(`${String(answerId)}|${String(option.option_id)}`)) return true;
+  const byHash = orderHashKey(option.order_hash);
+  return byHash !== null && cited.has(byHash);
+}
+
+/** What backs a rollover quote: each LIVE rollover order (fillable, and confirmed by its
+ *  settler's orderStatus) that cites it by quoteRef. A rollover order the chain could not
+ *  confirm backs nothing. */
+export function citedRolloverOptionKeys(rows: Array<Record<string, unknown>>): Set<string> {
+  const cited = new Set<string>();
+  for (const row of rows) {
+    if (row.verification !== "confirmed") continue;
     const ref = quoteRefOf(row);
     if (ref) cited.add(`${ref.answerId}|${ref.optionId}`);
   }
   return cited;
 }
 
-/** Label every embedded answer option `firm` (a live resting order cites it) or not, and
- *  count per RFQ. Rows without an `answers` embed pass through untouched. A pass has no options
- *  and is never firm. */
-export function markFirmOptions(rows: Array<Record<string, unknown>>, cited: ReadonlySet<string>): Array<Record<string, unknown>> {
+/** Label every embedded answer option `firm` (a live order cites it) or not, and count per RFQ.
+ *  `kind` picks which RFQs the citations can vouch for: the 1inch book backs new_position
+ *  quotes, rollover orders back rollover quotes, and neither speaks for the other. Rows without
+ *  an `answers` embed pass through untouched. A pass has no options and is never firm. */
+export function markFirmOptions(rows: Array<Record<string, unknown>>, cited: ReadonlySet<string>, kind: "new_position" | "rollover" = "new_position"): Array<Record<string, unknown>> {
   return rows.map((rfq) => {
-    if (!Array.isArray(rfq.answers)) return rfq;
+    if (!Array.isArray(rfq.answers) || (rfq.kind === "rollover") !== (kind === "rollover")) return rfq;
     let firmQuotes = 0;
     let indicativeQuotes = 0;
     const answers = (rfq.answers as unknown[]).map((a) => {
@@ -94,7 +124,7 @@ export function markFirmOptions(rows: Array<Record<string, unknown>>, cited: Rea
       const labeled = options.map((o) => {
         if (!o || typeof o !== "object") return o;
         const option = o as Record<string, unknown>;
-        const firm = cited.has(`${String(answer.answer_id)}|${String(option.option_id)}`);
+        const firm = optionIsCited(cited, answer.answer_id, option);
         if (firm) { anyFirm = true; firmQuotes += 1; } else indicativeQuotes += 1;
         return { ...option, firm };
       });
@@ -113,16 +143,22 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
   // join, the tally, and the ranking one coherent answer.
   const book = await read({ ...input, probeBudget: undefined, resource: "orderbook", sort: "best", filters: { ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.account ? { account: filters.account } : {}) } }, ctx);
   if (book.state !== "ok") return book;
+  // Only new-position RFQs: a rollover answer executes through a rollover order, never this book.
   const rfqs = filters.rfqId
     ? await read({ ...input, probeBudget: undefined, resource: "rfqs", filters: { rfqId: filters.rfqId, view: "current" } }, ctx)
-    : await read({ ...input, probeBudget: undefined, resource: "rfqs", filters: { withAnswers: true, view: "current" } }, ctx);
+    : await read({ ...input, probeBudget: undefined, resource: "rfqs", filters: { withAnswers: true, view: "current", rfqKind: "new_position" } }, ctx);
   const rfqRows: Array<Record<string, unknown>> = rfqs.state === "ok" ? ((rfqs.data as { items?: Array<Record<string, unknown>> }).items ?? []) : [];
 
-  // The citation index: (answer_id, option_id) → the quote it names.
+  // The citation index: (answer_id, option_id) → the quote it names, and (v2) the order hash
+  // each option carries → the same quote.
   const quotes = new Map<string, OfferQuote>();
+  const quotesByOrder = new Map<string, OfferQuote>();
   for (const { rfq, answer, option } of rfqOptions(rfqRows)) {
+    if (rfq.kind === "rollover") continue;
     const q = offerQuoteOf(rfq, answer, option);
     quotes.set(`${q.answerId}|${q.optionId}`, q);
+    const byHash = orderHashKey(q.orderHash);
+    if (byHash) quotesByOrder.set(byHash, q);
   }
   const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; count: number; fillableCount?: number; rankedFor?: string | null; verification?: unknown; pagination?: unknown; scales?: Record<string, string> };
   // A row this sender may not fill but that is LIVE (reserved for someone else) still backs the
@@ -132,15 +168,18 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
   const items = bookData.items.map((row) => {
     const ref = quoteRefOf(row);
     // A row is FIRM-cited only when BOTH ids resolve to an option the venue currently serves;
-    // an answer id alone could name a different option's terms.
-    const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : null;
-    return { ...row, provenance: ref ? (quote ? "cited" : "cited-unresolved") : "uncited", quote: quote ?? (ref ? { rfqId: ref.rfqId, answerId: ref.answerId, optionId: ref.optionId, resolved: false } : null) };
+    // an answer id alone could name a different option's terms. A row with no quoteRef that IS
+    // an option's own order (same hash) executes that option too.
+    const byHash = orderHashKey(row.orderHash);
+    const quote = ref ? (quotes.get(`${ref.answerId}|${ref.optionId}`) ?? null) : byHash ? (quotesByOrder.get(byHash) ?? null) : null;
+    return { ...row, provenance: ref ? (quote ? "cited" : "cited-unresolved") : quote ? "cited" : "uncited", quote: quote ?? (ref ? { rfqId: ref.rfqId, answerId: ref.answerId, optionId: ref.optionId, resolved: false } : null) };
   });
   // If an rfqId was asked for, only offers executing THAT request qualify.
   const scoped = filters.rfqId ? items.filter((it) => it.quote !== null && (it.quote as { rfqId: string }).rfqId === filters.rfqId) : items;
   const indicative: IndicativeOption[] = [];
   for (const q of quotes.values()) {
-    if (!cited.has(`${q.answerId}|${q.optionId}`)) indicative.push({ ...q, reason: "no live resting order cites this option — a price nobody can buy yet" });
+    const byHash = orderHashKey(q.orderHash);
+    if (!cited.has(`${q.answerId}|${q.optionId}`) && !(byHash && cited.has(byHash))) indicative.push({ ...q, reason: "no live resting order cites this option — a price nobody can buy yet" });
   }
 
   // Probe-fill each side FROM THE TOP with the REAL fill calldata (threshold 0) from the fill

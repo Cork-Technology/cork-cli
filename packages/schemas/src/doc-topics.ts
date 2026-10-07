@@ -84,8 +84,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "availability",
     envelope: "mixed",
     contract:
-      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
-    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "config_override_active", "config_override_invalid", "no_lop", "request_aborted"],
+      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop; api_key_missing: an RFQ write chose auth {method:'apiKey'} and no key resolved — env var, then the profile's credential_process, then the key stored for that venue host; nothing sent) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
+    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "config_override_active", "config_override_invalid", "no_lop", "request_aborted", "api_key_missing"],
   },
   {
     family: "gates",
@@ -216,6 +216,19 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
 - **Rollover intents** go straight to \`cork_submit\` rollover-order.
 - \`cork_submit\` relays only — it recomputes every commitment locally before relaying [K3] and
   never signs [K1].
+
+## Signing from the \`ch\` CLI with a keystore
+
+This server never signs. The \`ch\` CLI can, for a human at a terminal: \`ch wallet new|import\`
+stores a key as a password-protected keystore (the standard v3 JSON format) in
+\`~/.config/cork-helper-cli/keystores/\` only (\`CORK_KEYSTORE_DIR\` moves it; no other tool's
+keystore folder is read). \`ch sign --account <name>\` signs a prepare result's typed data, or a
+COMPLETE transaction (nonce, gas and fees filled in from your own RPC), and prints the signature;
+\`ch submit rfq-open|rfq-answer|rfq-counter --account <name>\` prepares the RFQ write, signs it and
+submits it in one command. Before every signature the CLI shows what will be signed and asks
+yes/no; only then does it ask for the password. The password is read from the terminal only —
+never from an environment variable, a file or piped input — so an agent with shell access cannot
+sign. Nothing is broadcast: send a signed transaction through your own RPC as in Family A.
 
 ## Security norms
 
@@ -356,7 +369,7 @@ they are the same claim, so a field description and this table can be checked ag
 | \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
 | \`D3{gwei}\` | 1000 = 1 gwei | \`5000\` = 5 gwei | gasPriceEstimate (uint32, auction gas-bump term — a DECODE OUTPUT, not an input) | 1inch Fusion auction extraData |
 | \`{qTok}\` token quantum | the token's own smallest unit (base units) | \`2500000000000000000\` = 2.5 @18dp; \`1000000000\` = 1000 USDC @6dp | every amount: makingAmount, collateralAssetsIn, orderSize, every min*/max* bound | the token itself, via \`decimals()\` |
-| \`{qPremiumTok/cST}\` | base units of the premium asset per 1e18 share | \`12000000000000000\` = 0.012/share @18dp; \`12000\` @6dp | minPremiumPerShare — premium-asset base units per one WHOLE (1e18-quanta) cST share; no D-prefix: the 1e18 in the formula is the share's own decimals, not a fixed-point scaling of the ratio | Cork rollover contract (\`floor = shares * value / 1e18\`) |
+| \`{qPremiumTok/cST}\` | base units of the premium asset per 1e18 share | \`12000000000000000\` = 0.012/share @18dp; \`12000\` @6dp | minPremiumPerShare, and a rollover RFQ's \`premium_per_share\` / counter \`premiumPerShare\` (the same number: a quote's price IS the order's floor) — premium-asset base units per one WHOLE (1e18-quanta) cST share; no D-prefix: the 1e18 in the formula is the share's own decimals, not a fixed-point scaling of the ratio | Cork rollover contract (\`floor = shares * value / 1e18\`) |
 
 ## The three collisions
 
@@ -480,7 +493,7 @@ knows, the venue does not — the row keeps reading OPEN until a status sync, so
 
 ## The underwriter's moves, as one call each (cork_prepare_orders)
 
-- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; a cited option (\`answerId\` + \`optionId\`, YOUR own answer) or your \`premiumAnnualized\` + \`expiryTimestamp\` supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for \`fillSender\` or the RFQ's declared fill_sender; when neither exists the order is OPEN and \`fill_sender_unknown\` says why (the requester account may not be the LOP caller — a reservation is never guessed); \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. The tool never chooses a premium.
+- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; your \`premiumAnnualized\` + \`expiryTimestamp\`, or an option of YOUR own earlier answer (\`answerId\` + \`optionId\`, re-quoted: the new answer supersedes it), supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for \`fillSender\` or the RFQ's declared fill_sender; when neither exists the order is OPEN and \`fill_sender_unknown\` says why (the requester account may not be the LOP caller — a reservation is never guessed); \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. Under the venue's RFQ v2 the quote CARRIES the signed order: \`answer.quotedOption\` is the answer option built from the same numbers (fresh_until = the order's expiry), so the answer is posted first (rfq-write → cork_submit rfq-answer, which hold each option to its order and prove the order signature) and the order goes to the book after it, citing it — the venue refuses a quote whose order already rests there. The tool never chooses a premium.
 - \`refresh-order\` — re-rest a resting order of yours before it expires: the same terms on the SAME nonce (one bit — the old order and the new one cannot both fill) with a new expiry; refused when the bit is already spent (a refresh of a dead order could never fill — post a maker-order).
 - Lifting the best offer is not a sugar: \`offers\` (or the ranked \`orderbook\`) names the order, and \`taker-fill\` with that \`orderHash\` sets the cap from the signed price (the ceiling for a decaying row) — two calls, no derived cap to trust.
 
@@ -514,7 +527,8 @@ decaying row at its price NOW (\`dutch-auction-price\`), and label it as moving.
 
 A **cited** order names the quote it executes (\`quoteRef\`: the RFQ answer option this order executes). The venue
 accepts the citation from the request's requester or from the underwriter of the cited answer;
-anyone else is refused. An **uncited** order stands alone. A quote is **firm** when a live cited
+anyone else is refused. Under RFQ v2 an option CARRIES its order, so the underwriter's cited order
+must be that exact order (the venue re-hashes the stored one). An **uncited** order stands alone. A quote is **firm** when a live cited
 order backs it, **indicative** otherwise — \`cork_query offers\` lists the live orders (cited or not) and counts the indicative quotes.
 
 ## Liveness: the states an order can be in, and who knows
@@ -893,6 +907,36 @@ provenance of a prepared artifact is exact.
 4. **Verify.** \`cork_track\` mode \`reconcile\` with each txHash, then the positions read again: the
    old rows are gone, the new row carries the primary's label.
 
+## Ask for a rollover price first: rollover RFQs
+
+A cST holder who does not know what a roll is worth can ask for a price (venue RFQ v2, kind
+\`rollover\`). Every write is signed: build it with \`cork_prepare_orders\` \`rfq-write\`, sign the
+typed data, relay it with \`cork_submit\` (topic:"signing").
+
+1. **Ask.** \`cork_submit\` \`rfq-open\` with \`kind: "rollover"\`, \`source {poolId, shares}\` (the
+   pool your position is in, and how many shares; the pool must exist and not be expired) and
+   \`premiumToken\` (\`{exact}\` or \`{one_of}\`: the tokens you accept the premium in). A rollover
+   RFQ carries no modes, packages or notional.
+2. **Quote.** An underwriter answers with \`rfq-answer\` options of \`{option_id, chain_id,
+   destination, premium_token, premium_per_share, shares_max, fresh_until}\`. The destination is
+   an existing live pool that is not the source (\`{pool_id}\`) or a market the filler creates at
+   fill time (\`{jitMarket}\`, written like every jitMarket input). \`premium_per_share\` is raw
+   premium-token units per 1e18 destination shares, exactly the order's \`minPremiumPerShare\`.
+   A just-in-time quote's result names \`jitMarketHash\`, the commitment your order must sign.
+   A quote carries no order: you sign the rollover order, not the underwriter.
+3. **Counter** (optional). \`rfq-counter\` with \`premiumPerShare\` and a \`premiumToken\` you accept.
+4. **Accept.** \`cork_prepare_orders\` \`rollover-intent\` with \`quoteRef {rfqId, answerId,
+   optionId}\`: the RFQ is read, every term you leave out comes from the quote (source pool,
+   destination, premium token, premium per share, and the smaller of shares_max and your
+   source.shares), and the order is held to the venue's rules — you are the requester, a premium
+   per share at least the quoted one, no more shares than quoted, and for a just-in-time quote
+   the quoted market hash (sign on a 0.2 settler; for that quote pass \`dstPoolId\` when the pool
+   it derives to cannot be computed here). Relay with \`cork_submit\` \`rollover-order\` and the
+   same \`quoteRef\`, which the venue records.
+5. **Watch.** \`cork_query\` \`rfqs\` with \`filters.rfqId\` marks a rollover quote \`firm\` when a live
+   rollover order (fillable, confirmed by its settler) cites it; \`rollover-orders\` takes
+   \`filters.rfqId\` for the orders that accepted one RFQ.
+
 ## Two standing facts (2026-09-22)
 
 - The primary's Market Registry (0.5.0) holds **registered assets since 2026-09-23** (the owner's
@@ -905,7 +949,7 @@ provenance of a prepared artifact is exact.
   into this build: a prepare against code that is not on the list warns
   \`implementation_not_approved\`.`,
     searchText:
-      "migration migrate move funds move my funds previous generation old pool new pool old generation current generation both generations at the same time withdraw from old deposit into new list my positions what do I hold where positions across generations account-state without poolId generation previous generation primary generation all exit old pool enter new pool rollover to new generation upgrade to new contracts",
+      "migration migrate move funds move my funds previous generation old pool new pool old generation current generation both generations at the same time withdraw from old deposit into new list my positions what do I hold where positions across generations account-state without poolId generation previous generation primary generation all exit old pool enter new pool rollover to new generation upgrade to new contracts rollover rfq rollover quote price to roll premium per share accept a quote quoteRef",
   },
   warnings: {
     name: "warnings",
@@ -990,22 +1034,31 @@ export function executionMakerOrder(): ExecutionBlock {
   ]);
 }
 
-/** Family B, answer-rfq: one maker order that executes an RFQ answer — completed like one, then re-rested. */
-export function executionAnswerRfq(): ExecutionBlock {
+/** Family B, answer-rfq (venue RFQ v2): the quote CARRIES its signed order, so the answer is
+ *  posted first and the order goes to the book after it, citing it. */
+export function executionAnswerRfq(supersedes = false): ExecutionBlock {
   return executionTypedData([
-    "sign the typed-data client-side (eth_signTypedData_v4, LOP v4 domain)",
-    "cork_prepare_orders finalize-maker-order (recovers + verifies the signature; the listing carries quoteRef when the answer cites an option)",
-    "cork_submit lop-order (pass submitInput verbatim — the venue cross-checks premiumAnnualized against the cited option)",
-    "before the order expires, re-rest it with cork_prepare_orders refresh-order (same terms, same bit, new expiry) until it is lifted or the RFQ lapses",
+    "sign the order typed-data client-side as the underwriter (eth_signTypedData_v4, LOP v4 domain)",
+    "cork_prepare_orders finalize-maker-order (recovers + verifies the signature) — keep its submitInput",
+    `cork_prepare_orders rfq-write with request {type:'rfq-answer', rfqId, underwriter, status:'quoted', options:[answer.quotedOption plus order_signature = your signature]${supersedes ? ", supersedes: answer.supersedes" : ""}} — checks each order against its option, returns the CorkRfqWrite typed data`,
+    "sign that typed-data, then cork_submit rfq-answer with the same request plus auth {method:'signature', signature} and the SAME clientRequestId as the rfq-write — the result carries answerId",
+    "cork_submit lop-order with finalize's submitInput plus quoteRef {rfqId, answerId, optionId: answer.quotedOption.option_id} — the venue checks the book order is the exact order the answer quotes",
+    "before the order expires, re-quote with cork_prepare_orders refresh-order (same terms, same bit, new expiry): it supersedes the answer with the new order before re-resting it",
   ]);
 }
 
-/** Family B, refresh-order: the re-rested order is completed like the one it replaces. */
-export function executionRefreshOrder(): ExecutionBlock {
+/** Family B, refresh-order: the re-rested order is completed like the one it replaces — and an
+ *  order that executes an RFQ v2 quote first supersedes that quote with the new order. */
+export function executionRefreshOrder(requote = false): ExecutionBlock {
   return executionTypedData([
     "sign the typed-data client-side (eth_signTypedData_v4, LOP v4 domain)",
     "cork_prepare_orders finalize-maker-order (the listing carries the SAME nonce as the order it refreshes)",
-    "cork_submit lop-order (pass submitInput verbatim); the old row may keep reading OPEN at the venue — it shares this order's bit, so whichever fills first retires the other",
+    ...(requote
+      ? [
+          "cork_prepare_orders rfq-write with request {type:'rfq-answer', rfqId: requote.rfqId, underwriter, status:'quoted', supersedes: requote.supersedes, options:[requote.option plus order_signature = your signature]}, sign it, then cork_submit rfq-answer with auth and the same clientRequestId — the result carries the new answerId",
+          "cork_submit lop-order with finalize's submitInput plus quoteRef {rfqId, answerId: the NEW answerId, optionId} — the venue takes, under a citation, only the exact order that answer carries; the old row may keep reading OPEN — it shares this order's bit, so whichever fills first retires the other",
+        ]
+      : ["cork_submit lop-order (pass submitInput verbatim); the old row may keep reading OPEN at the venue — it shares this order's bit, so whichever fills first retires the other"]),
   ]);
 }
 

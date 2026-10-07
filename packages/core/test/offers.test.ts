@@ -39,9 +39,9 @@ const rfq = (rfq_id: string, answers: unknown[]) => ({ rfq_id, state: "open", ch
 const venueWith = (book: unknown[], rfqs: unknown[], seen: string[] = []) => async (url: string) => {
   seen.push(url);
   if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: book, hasMore: false }), { status: 200 });
-  const single = /\/rfqs\/v1\/([^/?]+)/.exec(url)?.[1];
+  const single = /\/rfqs\/v2\/([^/?]+)/.exec(url)?.[1];
   if (single) { const hit = (rfqs as Array<{ rfq_id: string }>).find((r) => r.rfq_id === decodeURIComponent(single)); return new Response(JSON.stringify(hit ?? { message: "not found" }), { status: hit ? 200 : 404 }); }
-  if (url.includes("/rfqs/v1")) return new Response(JSON.stringify({ items: rfqs, next_cursor: null }), { status: 200 });
+  if (url.includes("/rfqs/v2")) return new Response(JSON.stringify({ items: rfqs, next_cursor: null }), { status: 200 });
   return new Response(JSON.stringify({ items: [] }), { status: 200 });
 };
 // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
@@ -72,6 +72,22 @@ describe("cork_query offers — live orders joined with the quotes they cite; th
     expect(d.note).toContain("FIRM only when a live order cites it");
   });
 
+  it("RFQ v2: a resting order with NO quoteRef that IS an option's own order (same order_hash) is cited, and that option is not indicative", async () => {
+    const own = await row("o-v2", { taking: 5n * 10n ** 16n });
+    const rfqs = [rfq("rfq_v2", [answer("ans_v2", maker.address, [{ ...option("opt1", "0.05"), order_hash: own.orderHash.toUpperCase().replace("0X", "0x") } as ReturnType<typeof option>])])];
+    const d = (await offers(venueWith([own], rfqs))).data as OffersData;
+    expect(d.items.map((i) => [i.orderHash, i.provenance])).toEqual([[own.orderHash, "cited"]]);
+    expect(d.items[0]!.quote).toMatchObject({ rfqId: "rfq_v2", answerId: "ans_v2", optionId: "opt1" });
+    expect(d.indicative.count).toBe(0);
+  });
+
+  it("offers reads new-position RFQs only: a rollover answer never executes through this book", async () => {
+    const seen: string[] = [];
+    await offers(venueWith([], [], seen));
+    const feed = seen.find((u) => /\/rfqs\/v2\?/.test(u));
+    expect(feed).toContain("kind=new_position");
+  });
+
   it("the citation must resolve on BOTH ids: an answer id with a different option id is cited-unresolved, and the real option stays indicative", async () => {
     const wrongOption = await row("o-3", { quoteRef: { rfq_id: "rfq_1", answer_id: "ans_firm", option_id: "optX" } });
     const env = await offers(venueWith([wrongOption], [rfq("rfq_1", [answer("ans_firm", maker.address, [option("opt1", "0.05")])])]));
@@ -90,7 +106,7 @@ describe("cork_query offers — live orders joined with the quotes they cite; th
     const d = env.data as OffersData;
     expect(d.items.map((i) => i.orderHash)).toEqual([forOne.orderHash]);
     expect(d.count).toBe(1);
-    expect(seen.some((u) => /\/rfqs\/v1\/rfq_1/.test(u))).toBe(true);
+    expect(seen.some((u) => /\/rfqs\/v2\/rfq_1/.test(u))).toBe(true);
   });
 
   it("exclusion is the book's: a row reserved for another fill sender rides under excluded, not among the offers", async () => {

@@ -9,12 +9,17 @@ import { fixedRateOverrideViolation, inlineOfTemplate, oracleParamsOf } from "..
 import { classifyInlineRecipe, coverChainReadings, singleCollateral } from "./cover-reading.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
 import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
+import { planRfqWrite } from "../rfq-bodies.ts";
+import { parseQuotedOrder } from "../rfq-quotes.ts";
+import { answerOptionOrderViolation, checkQuotedOptions, proveRfqWrite, readRfqTarget, resolveRfqAuth, rfqKindFieldsViolation, signatureRefused } from "./rfq-write.ts";
+import { checkRolloverWrite, readRolloverQuote } from "./rfq-rollover.ts";
+import { rolloverQuoteRefMismatch } from "../rfq-rollover.ts";
 import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
 
 /**
  * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-api
- * src/modules/rfq/v1/schemas/rfq-common.schema.ts): shape by the same regex, the < 0.5 cap by
+ * src/modules/rfq/v2/schemas/rfq-common.schema.ts): shape by the same regex, the < 0.5 cap by
  * the SAME `Number.parseFloat` its zod refine runs. An earlier form here decided the cap on
  * the string ("first fractional digit >= 5") on the theory that floats falsely rejected a
  * 17-digit "0.49999999999999999" — but the venue itself parses that value to exactly 0.5 and
@@ -126,6 +131,8 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
   const chainId = input.chainId;
   const action = input.action;
   const deps = venueDepsOf(ctx);
+  const isRfqWrite = action.type === "rfq-open" || action.type === "rfq-answer" || action.type === "rfq-counter";
+  const usedApiKey = (action.type === "rfq-open" || action.type === "rfq-answer" || action.type === "rfq-counter") && action.auth.method === "apiKey";
 
   /** Shared POST-outcome mapping (201 created / 200 idempotent replay / 4xx per venue docs).
    *  Successful relays also surface the venue's own in-band notices — the body `warnings[]`
@@ -142,7 +149,18 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       return envelope({ state: "ok", data: okData(body, res.httpStatus === 200), chainId, source: "service", warnings: [...okWarnings, ...notices], ctx });
     }
     if (res.httpStatus === 409) {
+      // RFQ v2 also answers 409 for a write that can never land (an RFQ of another kind or
+      // version, an order already quoted or on the book) — a refusal, not an idempotency clash.
+      if (isRfqWrite && rfqWriteRefusal409(msg)) return unavailable(chainId, "venue_rejected", `venue 409: ${msg}${orderReuseTeaching(msg)}`, ctx);
       return envelope({ state: "conflict", data: { venueResponse: body }, chainId, source: "service", warnings: [{ code: "venue_conflict", message: `venue 409: ${msg} (same id/digest already stored with a DIFFERENT payload — use a fresh clientRequestId for a genuinely new request [K2])` }], ctx });
+    }
+    if (isRfqWrite && (res.httpStatus === 401 || res.httpStatus === 403)) {
+      // RFQ v2 proof failures (cork-api 0.4.5 src/modules/rfq/v2/auth.ts): 401 = missing or
+      // refused proof, 403 = an API key not allowed for this operation, or not the requester.
+      const fix = usedApiKey
+        ? "the venue did not accept the API key, or the key is not allowed for this operation — check which key resolved (`ch auth status`) and that the venue owner issued it for this venue and operation"
+        : "the venue did not accept the write's proof or sender; rebuild the typed data with cork_prepare_orders rfq-write and sign it as the named address";
+      return unavailable(chainId, "venue_rejected", `venue ${res.httpStatus}: ${msg} — ${fix}`, ctx);
     }
     if (res.httpStatus === 429) {
       return unavailable(chainId, "venue_rate_limited", `venue 429: ${msg}${res.retryAfterSeconds !== undefined ? ` — retry after ${res.retryAfterSeconds}s` : ""} (per-user open-order caps / 100 req/min per IP)`, ctx);
@@ -285,6 +303,22 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         },
       };
       const localDigest = computeOrderDigest(chainId, orderStruct);
+      // A cited rollover quote must describe this order (the venue's quoteRefMismatch rule,
+      // mirrored): refused here rather than relayed into a 400.
+      if (action.quoteRef) {
+        const quote = await readRolloverQuote(ctx, chainId, action.quoteRef);
+        if (!quote.ok) return quote.envelope;
+        const mismatch = rolloverQuoteRefMismatch(quote.rfq, quote.option, {
+          user: o.user,
+          premiumToken: o.premiumToken,
+          orderSize: BigInt(o.orderSize),
+          minPremiumPerShare: BigInt(o.minPremiumPerShare),
+          srcPoolId: o.rolloverParams.srcPoolId,
+          dstPoolId: o.rolloverParams.dstPoolId,
+          jitMarketHash: o.rolloverParams.jitMarketHash,
+        });
+        if (mismatch) return unavailable(chainId, "invalid_order_terms", `quoteRef does not back this order: ${mismatch} — NOT relayed (the venue would 400: Invalid quoteRef). Build the order with cork_prepare_orders rollover-intent and the same quoteRef, which takes these terms from the quote`, ctx);
+      }
       // [F14/K3] Recover the signature against the locally recomputed EIP-712 digest: a garbage-
       // or foreign-signed order must not relay (it would rest at the venue but never fill).
       try {
@@ -315,6 +349,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         intent: action.intent,
         signature: action.signature,
         envelope: { orderDataType: ORDER_DATA_TYPEHASH },
+        ...(action.quoteRef ? { quoteRef: action.quoteRef } : {}),
       });
       const out = mapPost(res, (body, replay) => ({ kind: "rollover-order", accepted: true, replay, orderDigest: body.orderDigest ?? localDigest, localDigest }), settlerWarnings);
       // Venue digest disagreement is a conflict, not a success — surface it [K7]. Read the
@@ -514,6 +549,8 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           if (typeof optCollateral === "string" && ![action.order.makerAsset.toLowerCase(), action.order.takerAsset.toLowerCase()].includes(optCollateral.toLowerCase())) {
             return unavailable(chainId, "invalid_order_terms", `quote_ref option's collateral asset ${optCollateral} is not a leg of this order (${action.order.makerAsset} / ${action.order.takerAsset}) — the cited option must describe THIS order (venue 400)`, ctx);
           }
+          const quotedOrderProblem = quotedOrderCitationViolation({ chainId, option, underwriter: cited.answer?.underwriter, maker: action.order.maker, orderHash });
+          if (quotedOrderProblem) return unavailable(chainId, "invalid_order_terms", quotedOrderProblem, ctx);
           // Deliberately STRICTER than the venue on one point: a cited premium that does not
           // parse to a positive number makes the venue skip its band silently — here that is a
           // conflict, not a silent skip (the silent skip was exactly this guard's blind spot).
@@ -626,6 +663,10 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     }
 
     if (action.type === "rfq-open") {
+      const auth = await resolveRfqAuth(ctx, chainId, action.auth);
+      if (!auth.ok) return auth.envelope;
+      const fieldsProblem = rfqKindFieldsViolation(action, undefined);
+      if (fieldsProblem) return unavailable(chainId, "invalid_order_terms", fieldsProblem, ctx);
       // ── refusals first: everything the venue would 400, said here with the recipe ──
       // [F6] An inverted, empty or already-past window was once relayed untouched and failed
       // (or half-worked) only at the venue.
@@ -641,12 +682,30 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (BigInt(action.validUntil) <= nowSecs) {
         return unavailable(chainId, "invalid_order_terms", `validUntil (${action.validUntil}) is not in the future (now ${nowSecs}) — the RFQ would be born expired`, ctx);
       }
-      const modesViolation = rfqModesViolation(action.modes);
+      if (action.kind === "rollover") {
+        // A rollover open names a position, not cover: no modes, packages or cover reading —
+        // its source pool must be live (the venue asks its index; this asks the chain).
+        const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action });
+        const proof = await proveRfqWrite(ctx, plan, auth.auth);
+        if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
+        const checked = await checkRolloverWrite(ctx, chainId, action, undefined);
+        if (!checked.ok) return checked.envelope;
+        const res = await postRfq(deps, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
+        return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure }), [...proof.warnings, ...checked.warnings]);
+      }
+      const modes = action.modes!;
+      const modesViolation = rfqModesViolation(modes);
       if (modesViolation) return unavailable(chainId, "invalid_order_terms", modesViolation, ctx);
-      if (action.modes.includes("fixed_rate")) {
+      const packageIdsViolation = rfqPackageIdsViolation(action.packageIds!);
+      if (packageIdsViolation) return unavailable(chainId, "invalid_order_terms", packageIdsViolation, ctx);
+      if (modes.includes("fixed_rate")) {
         const fixedViolation = fixedRateTemplateViolation(action.marketTemplate);
         if (fixedViolation) return unavailable(chainId, "invalid_order_terms", `modes names fixed_rate, and ${fixedViolation}. The venue refuses the request without it (cork-api 0.4.4). ${UNITS_TOPIC_REFERENCE}`, ctx);
       }
+      // ── the proof (before any chain read): the signature must be the requester's, over exactly this body [K3] ──
+      const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action });
+      const proof = await proveRfqWrite(ctx, plan, auth.auth);
+      if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
       // ── which cover the request buys ──
       // The recipe an inline template names decides the GENERATION the cover is created on and
       // the COVER itself; `modes` are what the requester accepts and nothing on chain reads
@@ -655,7 +714,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       // contradicts itself is named before relay.
       const classified = await classifyInlineRecipe(chainId, action.marketTemplate);
       const { cover, warnings: coverWarnings } = readRfqCover({
-        modes: action.modes,
+        modes,
         marketTemplate: action.marketTemplate,
         recipe: classified.recipe,
         unknownRecipe: classified.address,
@@ -676,71 +735,55 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // The KIND comes from the configured hint; without one there is no generation to ask.
         cover.notRead = ["the recipe is not one a configured generation names, so nothing was asked of the chain: no constraint, no reference rate, no loss reading"];
       }
-      const res = await postRfq(deps, {
-        schema_version: "1",
-        request_id: input.clientRequestId,
-        requester: action.requester,
-        chain_id: chainId,
-        reference_asset: action.referenceAsset,
-        collateral_asset: action.collateralAsset,
-        modes: action.modes,
-        package_ids: action.packageIds,
-        expiry_window: { not_before: action.expiryWindow.notBefore, not_after: action.expiryWindow.notAfter },
-        ...(action.marketTemplate ? { market_template: action.marketTemplate } : {}),
-        notional_assets: action.notionalAssets,
-        valid_until: action.validUntil,
-        signature: action.signature,
-      });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, cover }), [...classified.warnings, ...coverWarnings, ...chainWarnings]);
+      const res = await postRfq(deps, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
+      return mapPost(res, (body, replay) => ({ kind: "rfq-open", accepted: true, replay, rfqId: body.rfq_id ?? null, state: body.state ?? null, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure, cover }), [...proof.warnings, ...classified.warnings, ...coverWarnings, ...chainWarnings]);
     }
 
     // rfq-counter — the requester's non-committal counter-bid (the buyer's side of the
     // negotiation loop; the venue broadcasts it to every underwriter, newest counter wins).
     if (action.type === "rfq-counter") {
+      const auth = await resolveRfqAuth(ctx, chainId, action.auth);
+      if (!auth.ok) return auth.envelope;
       // The venue's fraction contract (§2.1), replicated exactly — see premiumFractionViolation.
-      const fractionProblem = premiumFractionViolation(action.premiumAnnualized);
+      // A rollover counter bids per share instead; its unit is checked once the RFQ's kind is known.
+      const fractionProblem = action.premiumAnnualized === undefined ? null : premiumFractionViolation(action.premiumAnnualized);
       if (fractionProblem !== null) {
         return unavailable(chainId, "invalid_order_terms", `premiumAnnualized must be a decimal-string FRACTION < 0.5 ("0.041" = 4.1% annualized) — got ${JSON.stringify(action.premiumAnnualized)} (${fractionProblem}); percent numbers (4.1) belong only on the book listing field, wads (1e18-scaled) never appear on the RFQ surface. Full scale table: ${UNITS_TOPIC_REFERENCE}`, ctx);
       }
-      // optionRef pre-flight [K3-style]: one venue GET, only when the counter cites an option.
-      // The same fetch replays the venue's own POST gate order (post-counter.ts): 404 unknown
-      // RFQ, 403 wrong requester, 410 expired, 400 bad citation — each refused here with
-      // teaching BEFORE the POST burns its request_id. A TRUNCATED answers embed cannot prove
-      // absence (superseded answers stay citable by design), so a not-found citation refuses
-      // only on a complete record and otherwise relays flagged — the venue validates against
-      // its full store either way.
+      // One venue GET replays the venue's own POST gate order (post-counter.ts): 404 unknown
+      // RFQ, 409 another kind, 403 wrong requester, 410 expired, 400 bad citation — each refused
+      // here with teaching BEFORE the POST burns its request_id. The RFQ's kind also enters the
+      // signed body. A TRUNCATED answers embed cannot prove a citation absent (superseded
+      // answers stay citable by design), so a not-found citation refuses only on a complete
+      // record and otherwise relays flagged — the venue validates against its full store.
+      const target = await readRfqTarget(ctx, chainId, action);
+      if (!target.ok) return unavailable(chainId, target.code, target.message, ctx);
+      const fieldsProblem = rfqKindFieldsViolation(action, target.kind);
+      if (fieldsProblem) return unavailable(chainId, "invalid_order_terms", fieldsProblem, ctx);
+      if (target.kind === "rollover") {
+        const checked = await checkRolloverWrite(ctx, chainId, action, target.rfq);
+        if (!checked.ok) return checked.envelope;
+      }
       const counterWarnings: Array<{ code: string; message: string }> = [];
-      if (action.optionRef) {
-        const rfq = await getRfq(deps, action.rfqId);
-        if (!rfq) return unavailable(chainId, "rfq_not_found", `RFQ '${action.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
-        const storedRequester = (rfq.request as Record<string, unknown> | undefined)?.requester;
-        if (typeof storedRequester === "string" && storedRequester.toLowerCase() !== action.requester.toLowerCase()) {
-          return unavailable(chainId, "invalid_order_terms", `only the RFQ's requester may counter: RFQ '${action.rfqId}' was opened by ${storedRequester}, not ${action.requester} — the venue would 403 this on relay`, ctx);
-        }
-        if (rfq.state === "expired") {
-          return unavailable(chainId, "invalid_order_terms", `RFQ '${action.rfqId}' is expired — the venue no longer accepts counters on it (would 410 on relay); post a fresh RFQ instead`, ctx);
-        }
-        const { option, unresolved } = resolveCitation(rfq, action.optionRef.answerId, action.optionRef.optionId);
+      if (action.optionRef && target.rfq) {
+        const { option, unresolved } = resolveCitation(target.rfq, action.optionRef.answerId, action.optionRef.optionId);
         if (unresolved) {
           counterWarnings.push({ code: "citation_unresolved", message: `optionRef could not be resolved client-side: RFQ '${action.rfqId}' serves a TRUNCATED answers embed and answer '${action.optionRef.answerId}' is not within it — relayed; the venue checks citations against its full store (superseded answers stay citable by design)` });
         } else if (!option) {
           return unavailable(chainId, "invalid_order_terms", `optionRef option '${action.optionRef.optionId}' not found in answer '${action.optionRef.answerId}' of RFQ '${action.rfqId}' — a counter's optionRef must cite an option of an answer on this RFQ (the venue would 400 this on relay); drop optionRef to counter the envelope at large`, ctx);
         }
       }
-      const res = await postRfqCounter(deps, action.rfqId, {
-        schema_version: "1",
-        request_id: input.clientRequestId,
-        requester: action.requester,
-        premium_annualized: action.premiumAnnualized,
-        ...(action.optionRef ? { option_ref: { answer_id: action.optionRef.answerId, option_id: action.optionRef.optionId } } : {}),
-        ...(action.freshUntil !== undefined ? { fresh_until: action.freshUntil } : {}),
-        signature: action.signature,
-      });
-      return mapPost(res, (body, replay) => ({ kind: "rfq-counter", accepted: true, replay, counterId: body.counter_id ?? null, rfqId: action.rfqId }), counterWarnings);
+      const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
+      const proof = await proveRfqWrite(ctx, plan, auth.auth);
+      if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
+      const res = await postRfqCounter(deps, action.rfqId, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
+      return mapPost(res, (body, replay) => ({ kind: "rfq-counter", accepted: true, replay, counterId: body.counter_id ?? null, rfqId: action.rfqId, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure }), [...proof.warnings, ...counterWarnings]);
     }
 
     // rfq-answer — enforce the fraction contract on quoted options before relaying (§2.1: the
     // venue's own regex + parseFloat cap, replicated exactly — see premiumFractionViolation).
+    const auth = await resolveRfqAuth(ctx, chainId, action.auth);
+    if (!auth.ok) return auth.envelope;
     if (action.status === "quoted") {
       for (const [i, o] of (action.options ?? []).entries()) {
         const p = o.premium_annualized;
@@ -761,18 +804,37 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         }
       }
     }
-    const res = await postRfqAnswer(deps, action.rfqId, {
-      schema_version: "1",
-      request_id: input.clientRequestId,
-      underwriter: action.underwriter,
-      status: action.status,
-      ...(action.status === "quoted" ? { options: action.options ?? [] } : { reason_code: action.reasonCode ?? "PASS" }),
-      // Optional revision link, relayed verbatim (venue-validated: must cite an OWN prior
-      // answer on this same RFQ). Supersession is implicit either way — audit trail only.
-      ...(action.supersedes !== undefined ? { supersedes: action.supersedes } : {}),
-      signature: action.signature,
-    });
-    return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId }));
+    // A rollover quote names a destination and a premium per share, never an order: it is held
+    // to the venue's rollover rules instead (handlers/rfq-rollover.ts).
+    const rolloverShaped = (action.options ?? []).some((o) => o.destination !== undefined);
+    // RFQ v2 "one order, one quote": a quoted new_position option carries the exact signed
+    // limit order the underwriter stands behind (cork-api 0.4.5 post-answer.schema.ts).
+    if (action.status === "quoted" && !rolloverShaped) {
+      const orderProblem = answerOptionOrderViolation(action.underwriter, action.options ?? []);
+      if (orderProblem) return unavailable(chainId, "invalid_order_terms", orderProblem, ctx);
+    }
+    const target = await readRfqTarget(ctx, chainId, action);
+    if (!target.ok) return unavailable(chainId, target.code, target.message, ctx);
+    let rolloverCheck: { warnings: Array<{ code: string; message: string }>; options?: unknown[] } = { warnings: [] };
+    if (target.kind === "rollover") {
+      const checked = await checkRolloverWrite(ctx, chainId, action, target.rfq);
+      if (!checked.ok) return checked.envelope;
+      rolloverCheck = checked;
+    } else if (action.status === "quoted" && rolloverShaped) {
+      const orderProblem = answerOptionOrderViolation(action.underwriter, action.options ?? []);
+      if (orderProblem) return unavailable(chainId, "invalid_order_terms", orderProblem, ctx);
+    }
+    // Each quoted order held to its option and proven by the underwriter before relay [K3].
+    const quotedCheck = action.status === "quoted" && target.kind !== "rollover" ? await checkQuotedOptions(ctx, chainId, target.rfq, action.underwriter, action.options ?? []) : { ok: true as const, quoted: [], warnings: [] };
+    if (!quotedCheck.ok) return quotedCheck.envelope;
+    const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
+    // This top-level signature covers the option terms the order signatures do not. The venue
+    // verifies it on quoted answers from cork-api PR #113 onward; older 0.4.5 builds did not.
+    // With an API key, the key is the proof and the venue checks it.
+    const proof = await proveRfqWrite(ctx, plan, auth.auth);
+    if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
+    const res = await postRfqAnswer(deps, action.rfqId, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
+    return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure, quotedOrders: quotedCheck.quoted, ...(rolloverCheck.options !== undefined ? { rolloverOptions: rolloverCheck.options } : {}) }), [...proof.warnings, ...quotedCheck.warnings, ...rolloverCheck.warnings]);
   } catch (err) {
     return venueFailed(chainId, err, ctx);
   }
@@ -808,4 +870,40 @@ export function fixedRateTemplateViolation(template: unknown): string | null {
   }
   const problem = fixedRateOverrideViolation(oracleParamsOf(template)?.["rate_override"]);
   return problem === null ? null : `market_template.inline.oracle_params.rate_override is required as a positive decimal uint256 STRING, ABSOLUTE 1e18 = 1.0 ("1075000000000000000" = 1.075): ${problem}`;
+}
+
+/** The RFQ v2 409s that refuse the write outright (cork-api 0.4.5: a v1-opened RFQ, an RFQ of
+ *  another kind, an order already quoted elsewhere or resting on the book) — as opposed to the
+ *  idempotency 409, a request_id already stored with a different body. */
+export function rfqWriteRefusal409(message: string): boolean {
+  return !/request_id was (already|concurrently) used/.test(message);
+}
+
+/** The venue's `package_ids must be unique` refine (cork-api 0.4.5 post-rfq.schema.ts),
+ *  mirrored — registered in MIRRORED_VENUE_LOGIC. */
+export function rfqPackageIdsViolation(packageIds: readonly string[]): string | null {
+  const repeated = packageIds.filter((p, i) => packageIds.indexOf(p) !== i);
+  return repeated.length > 0 ? `packageIds must name each package once: ${[...new Set(repeated)].join(", ")} is repeated (the venue rejects a repeated package id with a 400)` : null;
+}
+
+/** The venue's "one order, one quote" 409 (cork-api 0.4.5 post-answer.ts findReusedOrder), taught:
+ *  the order a quote carries must not already rest on the book or back a quote on another open
+ *  RFQ. Empty for every other 409. */
+export function orderReuseTeaching(message: string): string {
+  if (!/already on the limit-order book|already quoted on another RFQ/.test(message)) return "";
+  return " — a quote must carry an order nobody else shows: post the answer BEFORE its order goes to the book, and build a new order for each RFQ (a new clientRequestId gives a new salt). Re-quoting the same order on the SAME RFQ, as a revision, is allowed";
+}
+
+/** The venue's RFQ v2 quoted-order citation rule (cork-api 0.4.5 limit-orders post-order.ts):
+ *  when the cited option quotes an order and the book order's maker is the underwriter who
+ *  quoted it, the book order must BE that order — the stored order re-hashed, never a served
+ *  hash. A requester's order citing the quote is not covered (the venue has not decided who
+ *  posts it). Mirrored, registered in MIRRORED_VENUE_LOGIC. Returns the refusal, or null. */
+export function quotedOrderCitationViolation(a: { chainId: number; option: Record<string, unknown>; underwriter: unknown; maker: string; orderHash: string }): string | null {
+  if (a.option.order === undefined || typeof a.underwriter !== "string" || a.underwriter.toLowerCase() !== a.maker.toLowerCase()) return null;
+  const lop = LOP_ADDRESSES[a.chainId];
+  const parsed = parseQuotedOrder(a.option.order);
+  const quotedHash = lop && parsed.ok ? hashLopOrder(a.chainId, lop, parsed.order) : undefined;
+  if (quotedHash !== undefined && quotedHash.toLowerCase() === a.orderHash.toLowerCase()) return null;
+  return `quote_ref cites an option that quotes order ${quotedHash ?? "(unreadable)"}, and this order hashes to ${a.orderHash} — an underwriter may post only the exact order it quoted (the venue would 400). Post the order the answer carries (its finalize-maker-order submitInput), or answer again with this order (cork_prepare_orders answer-rfq, then cork_submit rfq-answer) and cite that answer`;
 }

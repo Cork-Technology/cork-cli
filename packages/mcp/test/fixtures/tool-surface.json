@@ -70,7 +70,7 @@
               "type": "string"
             },
             "additionalProperties": {},
-            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/pool-whitelist/flows/rfqs — pool-whitelist REQUIRES it beside poolId; rfqs maps it to the requester; orderbook — the FILL SENDER each row's exclusivity is classified against: the taker account on a raw fill, the ForSelf adapter on a wrapper fill), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), settler (flows: orders by settler on the venue; kind=fills scopes the event scan to that settler’s generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's extraData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), oracleSalt (registry-oracle / derive-cork-pool on a nested-wire generation — the bytes32 salt of the pair's FIRST oracle wrapper, default zero; refused non-zero on flat), swapFeePercentage + unwindSwapFeePercentage (derive-cork-pool — 1e18 = 1%, default 0; PART OF THE POOL ID on a 10-field generation), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup on a FLAT-wire generation — EXACT BYTES, case-sensitive; a nested-wire registry keys denominations by unit ADDRESS: use address there), address (also registry-denominations on a nested-wire generation — the unit address), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter), excludeRequestPrefix (rfqs list: drop RFQs whose request_id starts with this LITERAL prefix server-side, 1–64 chars — 'healthcheck-' skips status-page heartbeats), underwriter (rfqs list: only RFQs this underwriter has ANSWERED — at least one stored answer row by that address, server-side; the answering side's mirror of account/requester, so an underwriter polls its own book in one call). Unknown keys are a teachable error, and keys are validated PER RESOURCE: a known key the named resource does not consume is refused with teaching that lists the resource's own keys (it would otherwise be silently unapplied)"
+            "description": "resource-specific filters. Known keys: poolId (cork-pool/account-state/pool-whitelist), account (account-state/pool-whitelist/flows/rfqs — pool-whitelist REQUIRES it beside poolId; rfqs maps it to the requester; orderbook — the FILL SENDER each row's exclusivity is classified against: the taker account on a raw fill, the ForSelf adapter on a wrapper fill), kind ('orders'|'fills'|'contracts' for flows), side, status, orderDigest, orderHash, filler, address (flows contracts / registry-assets single lookup by asset address), factory (flows contracts: only clones deployed by this factory — one wallet can own one clone PER factory generation), settler (flows: orders by settler on the venue; kind=fills scopes the event scan to that settler’s generation), fillable, source, collateralAsset+referenceAsset (registry-oracle & derive-cork-pool — ORDER MATTERS, collateral first), recipe (registry-recipes single lookup / derive-cork-pool — the approved recipe CONTRACT ADDRESS), args (derive-cork-pool — the recipe's extraData as raw hex, e.g. abi.encode(anchorRate) for the liquidity recipe), rate (registry-oracle fixed-rate lookup / derive-cork-pool FIXED recipes — 18-decimal integer string, 1e18=1.0), rateOracle (derive-cork-pool — explicit oracle override), oracleSalt (registry-oracle / derive-cork-pool on a nested-wire generation — the bytes32 salt of the pair's FIRST oracle wrapper, default zero; refused non-zero on flat), swapFeePercentage + unwindSwapFeePercentage (derive-cork-pool — 1e18 = 1%, default 0; PART OF THE POOL ID on a 10-field generation), mode (registry-oracle: 'price'|'nav', default price; registry-recipes/derive-cork-pool: DEPRECATED sugar that maps a legacy mode name to a configured recipe address, with a deprecation_notice), label (registry-denominations single lookup on a FLAT-wire generation — EXACT BYTES, case-sensitive; a nested-wire registry keys denominations by unit ADDRESS: use address there), address (also registry-denominations on a nested-wire generation — the unit address), base+quote (registry-feeds single lookup — direction matters), expiry (derive-cork-pool — the pool's expiry as unix seconds, decimal string), legacy (registry-* reads: route to the DEPRECATED pre-2.1.0 registry generation; requires CORK_ENABLE_DEPRECATED=1), rfqId (rfqs single get, 'rfq_…'), rfqKind (rfqs list: 'new_position'|'rollover' — the venue's RFQ v2 `kind`; omitted = every kind; named rfqKind because `kind` selects the flows feed), state ('open'|'expired' for rfqs; default open), withAnswers (rfqs list: embed each RFQ's answers), view (rfqs: 'full' [default] = every stored answer row, newest first; 'current' = the negotiation FRONTIER — one current answer per underwriter, each with `underwriter`+`revisions`, plus the requester's current counter), excludeRequestPrefix (rfqs list: drop RFQs whose request_id starts with this LITERAL prefix server-side, 1–64 chars — 'healthcheck-' skips status-page heartbeats), underwriter (rfqs list: only RFQs this underwriter has ANSWERED — at least one stored answer row by that address, server-side; the answering side's mirror of account/requester, so an underwriter polls its own book in one call). Unknown keys are a teachable error, and keys are validated PER RESOURCE: a known key the named resource does not consume is refused with teaching that lists the resource's own keys (it would otherwise be silently unapplied)"
           },
           "since": {
             "type": "string",
@@ -2716,9 +2716,11 @@
                     "$ref": "#/$defs/Address"
                   },
                   "srcPoolId": {
+                    "description": "the pool the position leaves — required unless quoteRef supplies it (the RFQ's source pool)",
                     "$ref": "#/$defs/MarketId"
                   },
                   "dstPoolId": {
+                    "description": "the pool the position moves to — required unless quoteRef names an existing destination pool; for a quoted just-in-time market pass the pool its instruction derives (cork_query derive-cork-pool)",
                     "$ref": "#/$defs/MarketId"
                   },
                   "srcCstToken": {
@@ -2728,14 +2730,37 @@
                     "$ref": "#/$defs/Address"
                   },
                   "premiumToken": {
+                    "description": "the token the premium is paid in — required unless quoteRef supplies it (the quoted premium_token)",
                     "$ref": "#/$defs/Address"
                   },
                   "orderSize": {
-                    "description": "src cST shares to roll — cST is always 18 decimals",
+                    "description": "src cST shares to roll (cST is always 18 decimals) — required unless quoteRef supplies it (the quote's shares_max, at most the RFQ's source.shares)",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "minPremiumPerShare": {
+                    "description": "premium floor RATE: base units of the premium asset per 1e18 dst shares — required unless quoteRef supplies it (the quoted premium_per_share; a value below it breaks the quote)",
                     "$ref": "#/$defs/PremiumPerShareRate"
+                  },
+                  "quoteRef": {
+                    "type": "object",
+                    "properties": {
+                      "rfqId": {
+                        "type": "string"
+                      },
+                      "answerId": {
+                        "type": "string"
+                      },
+                      "optionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "rfqId",
+                      "answerId",
+                      "optionId"
+                    ],
+                    "additionalProperties": false,
+                    "description": "accept a rollover RFQ quote: the RFQ is read and the order held to the venue's quote rules (your account is the requester, the RFQ's source pool, the quoted destination — an existing pool with no jitMarket, or the quoted just-in-time market whose hash must match —, the quoted premium token, a premium per share at least the quoted one, no more shares than quoted); every term above left out is taken from the quote, and an explicit term that breaks a rule is refused. Pass the same quoteRef to cork_submit rollover-order so the venue records the acceptance"
                   },
                   "openDeadline": {
                     "$ref": "#/$defs/UnixSeconds"
@@ -3052,13 +3077,8 @@
                   "type",
                   "settler",
                   "rolloverContract",
-                  "srcPoolId",
-                  "dstPoolId",
                   "srcCstToken",
                   "dstCstToken",
-                  "premiumToken",
-                  "orderSize",
-                  "minPremiumPerShare",
                   "openDeadline",
                   "fillDeadline"
                 ],
@@ -3599,12 +3619,33 @@
                   "answerId": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "CITED answer: the id of YOUR posted answer on this RFQ (with optionId) — the option's premium_annualized and expiry set the amounts, its market_template the recipe, and the order carries quoteRef so the venue can cross-check the premium. The maker must be the answer's underwriter (cork-api 0.4.1 party rule)"
+                    "description": "RE-QUOTE: the id of YOUR earlier answer on this RFQ (with optionId) — the option's premium_annualized and expiry set the amounts, its market_template the recipe, and the new answer SUPERSEDES that one with a fresh order (its option id kept). Only your own answer can be re-quoted"
                   },
                   "optionId": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "CITED answer: the option on that answer to execute"
+                    "description": "RE-QUOTE: the option on that answer to quote again"
+                  },
+                  "answerOptionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "the option_id the new answer option carries; default: the re-quoted option's id, else one derived from clientRequestId"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "liquidity_only",
+                      "liquidity_impairment",
+                      "fixed_rate"
+                    ],
+                    "description": "the option's cover mode; default: the mode that names the recipe's cover (liquidity_only, liquidity_impairment, fixed_rate), else the RFQ's only mode. A mode the RFQ did not ask for is a visible counter-proposal (warned, built)"
+                  },
+                  "packageId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "the option's package_id; default: the RFQ's only package id — required when the RFQ names several"
                   },
                   "premiumAnnualized": {
                     "type": "string",
@@ -3787,7 +3828,7 @@
                   "rfqId"
                 ],
                 "additionalProperties": false,
-                "description": "answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the cited option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), cites the option (quoteRef), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns (sign → finalize-maker-order → submit lop-order), plus `answer` with the derivation. Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"
+                "description": "answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"
               },
               {
                 "type": "object",
@@ -3821,6 +3862,349 @@
                 ],
                 "additionalProperties": false,
                 "description": "re-rest a resting order of yours before it expires: the SAME terms (assets, amounts, reach, partial-fill flag, Permit2 sourcing, extension — a JIT or auction extension verbatim) with a new expiry and a fresh clientRequestId, on the SAME invalidator nonce — so the old order and the new one share one bit and cannot both fill (the refresh is a revision, not a second exposure). Refused when the maker is not `account`, when the row does not hash to orderHash, or when the chain says the bit is already spent (a refresh of a dead order could never fill — post a maker-order). Returns the same signable maker-order artifact, plus `refreshes`"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "rfq-write"
+                  },
+                  "request": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "rfq-open"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "new_position",
+                              "rollover"
+                            ],
+                            "description": "what the RFQ asks for (venue RFQ v2, required, no default): new_position = cover for a NEW position, answered with signed limit orders and filled on the 1inch book; rollover = a price to roll a held cPT position into another pool, answered with a destination and a premium per share and executed by a rollover order"
+                          },
+                          "requester": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "referenceAsset": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "collateralAsset": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "exact": {
+                                    "$ref": "#/$defs/Address"
+                                  }
+                                },
+                                "required": [
+                                  "exact"
+                                ],
+                                "additionalProperties": false,
+                                "description": "exactly this collateral token"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "one_of": {
+                                    "minItems": 1,
+                                    "maxItems": 8,
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/$defs/Address"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "one_of"
+                                ],
+                                "additionalProperties": false,
+                                "description": "any of these collateral tokens is acceptable"
+                              }
+                            ]
+                          },
+                          "modes": {
+                            "minItems": 1,
+                            "maxItems": 3,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "liquidity_only",
+                                "liquidity_impairment",
+                                "fixed_rate"
+                              ]
+                            },
+                            "description": "new_position only, required there: the cover alternatives this request accepts — one to three, each named once: liquidity_only, liquidity_impairment, fixed_rate. Nothing on chain reads them: the COVER a pool gives is decided by the recipe in its market template. A liquidity recipe gives liquidity (duration-risk) cover, an exit that pays nothing for a loss in the reference; the impairment recipe gives impairment (credit-risk) cover, downside protection with a deductible band; the fixed recipe gives fixed-rate cover, a frozen rate that pays every loss below it. marketTemplate describes ONE alternative and an answer for another mode must bring its own template, so name the single mode that matches the template's recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe, fixed_rate for the fixed recipe); a mode that names another cover is warned cover_mode_mismatch. fixed_rate REQUIRES marketTemplate.inline.oracle_params.rate_override — the venue refuses the request without it (cork_capabilities topic:'cover')"
+                          },
+                          "packageIds": {
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "new_position only, required there: the cover packages this request accepts, each named once"
+                          },
+                          "expiryWindow": {
+                            "type": "object",
+                            "properties": {
+                              "notBefore": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 4102444800,
+                                "description": "earliest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100)"
+                              },
+                              "notAfter": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 4102444800,
+                                "description": "latest acceptable pool expiry, absolute unix SECONDS (not ms; bounded to year 2100) — must not precede notBefore"
+                              }
+                            },
+                            "required": [
+                              "notBefore",
+                              "notAfter"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "marketTemplate": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {},
+                            "description": "venue market template: either {market_template_id} or {inline:{oracle_recipe, oracle_params}} — oracle_params is REQUIRED on an inline template and is one of three blocks answer-rfq reads (decimal strings; the expiry and fees are part of pool identity; never send {}): cork-inline-liquidity/1 = {schema, anchor_rate, expiry, swap_fee_wad, unwind_swap_fee_wad}, cork-inline-impairment/1 = the same plus duration_seconds and apy_spread_percentage (1e18 = 1%) for the impairment recipe, or cork-inline-fixed/1 = {schema, rate_override, expiry, swap_fee_wad, unwind_swap_fee_wad} for the fixed recipe — rate_override is the frozen rate as a decimal string, ABSOLUTE 1e18 = 1.0 (\"1075000000000000000\" = 1.075), the venue's own key and REQUIRED whenever modes names fixed_rate; it becomes the order's rateOverride, and the fixed recipe takes no anchor and no recipe bytes. The venue types the rest of the block as a free-form bag, so the schema name is the contract between requester and underwriter. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"
+                          },
+                          "notionalAssets": {
+                            "description": "new_position only, required there: requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals",
+                            "$ref": "#/$defs/TokenAmount"
+                          },
+                          "validUntil": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4102444800,
+                            "description": "RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"
+                          },
+                          "source": {
+                            "type": "object",
+                            "properties": {
+                              "poolId": {
+                                "description": "the pool your cPT position is in — it must exist and not be expired (checked on the chain here; the venue checks its index)",
+                                "$ref": "#/$defs/MarketId"
+                              },
+                              "shares": {
+                                "description": "how many cPT shares you want priced — cPT is always 18 decimals; quotes cover at most this many",
+                                "$ref": "#/$defs/TokenAmount"
+                              }
+                            },
+                            "required": [
+                              "poolId",
+                              "shares"
+                            ],
+                            "additionalProperties": false,
+                            "description": "rollover only, required there: the position to roll"
+                          },
+                          "premiumToken": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "exact": {
+                                    "$ref": "#/$defs/Address"
+                                  }
+                                },
+                                "required": [
+                                  "exact"
+                                ],
+                                "additionalProperties": false,
+                                "description": "exactly this premium token"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "one_of": {
+                                    "minItems": 1,
+                                    "maxItems": 8,
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/$defs/Address"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "one_of"
+                                ],
+                                "additionalProperties": false,
+                                "description": "any of these premium tokens, each named once"
+                              }
+                            ],
+                            "description": "rollover only, required there: the token(s) you accept the rollover premium in — every quote and counter must name one of them"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "kind",
+                          "requester",
+                          "referenceAsset",
+                          "collateralAsset",
+                          "expiryWindow",
+                          "validUntil"
+                        ],
+                        "additionalProperties": false,
+                        "description": "open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "rfq-answer"
+                          },
+                          "rfqId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "underwriter": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "quoted",
+                              "pass"
+                            ],
+                            "description": "quoted=submitting priced options; pass=declining (give reasonCode)"
+                          },
+                          "options": {
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            },
+                            "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
+                          },
+                          "reasonCode": {
+                            "type": "string",
+                            "enum": [
+                              "NO_CAPACITY",
+                              "PAIR_UNSUPPORTED",
+                              "TENOR_NOT_QUOTED",
+                              "PASS"
+                            ]
+                          },
+                          "supersedes": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "optional revision link: the answerId of YOUR prior answer on this SAME RFQ that this one replaces (venue-validated, 400 otherwise). Purely an audit trail — supersession is already implicit (an underwriter's newest answer is its current one), so omitting this loses nothing"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "new_position",
+                              "rollover"
+                            ],
+                            "description": "the RFQ's kind — read from the RFQ itself, so it may be omitted; when given it must match (the venue refuses an answer or counter of another kind)"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "rfqId",
+                          "underwriter",
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "description": "answer an open RFQ as an underwriter: priced options or a pass. Answers are REVISIONS — your newest answer on an RFQ is your current one; post again to update your quote (up to 500 revisions per underwriter thread)"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "rfq-counter"
+                          },
+                          "rfqId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "requester": {
+                            "$ref": "#/$defs/Address"
+                          },
+                          "premiumAnnualized": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
+                            "x-units": "{%}"
+                          },
+                          "optionRef": {
+                            "type": "object",
+                            "properties": {
+                              "answerId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "optionId": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "answerId",
+                              "optionId"
+                            ],
+                            "additionalProperties": false,
+                            "description": "optional: point the bid at a specific quoted option on THIS RFQ when it is about those terms rather than the envelope at large (venue-validated, 400 otherwise; pre-flighted here when an RPC-free venue read succeeds)"
+                          },
+                          "freshUntil": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4102444800,
+                            "description": "advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"
+                          },
+                          "premiumPerShare": {
+                            "description": "rollover counters only, required there: the bid in a rollover answer's unit — raw premium-token units per 1e18 destination shares (the rollover order's minPremiumPerShare)",
+                            "$ref": "#/$defs/PremiumPerShareRate"
+                          },
+                          "premiumToken": {
+                            "description": "rollover counters only, required there: the token the bid is priced in — one the RFQ's premiumToken accepts",
+                            "$ref": "#/$defs/Address"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "new_position",
+                              "rollover"
+                            ],
+                            "description": "the RFQ's kind — read from the RFQ itself, so it may be omitted; when given it must match (the venue refuses an answer or counter of another kind)"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "rfqId",
+                          "requester"
+                        ],
+                        "additionalProperties": false,
+                        "description": "counter-bid an open RFQ as its REQUESTER (the buyer's side of the negotiation): non-committal like answers — it binds nobody; commitment stays the signed limit order. Broadcast to every underwriter; your newest counter is the current bid. Requester-only: the venue 403s anyone else"
+                      }
+                    ],
+                    "description": "the RFQ write to prove — the SAME fields cork_submit rfq-open / rfq-answer / rfq-counter takes, without `auth`; this call's clientRequestId becomes the write's request_id, so reuse it on the submit"
+                  }
+                },
+                "required": [
+                  "type",
+                  "request"
+                ],
+                "additionalProperties": false,
+                "description": "the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs [K1]"
               }
             ]
           },
@@ -5113,6 +5497,27 @@
                   "signature": {
                     "description": "the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs [K1]",
                     "$ref": "#/$defs/Hex"
+                  },
+                  "quoteRef": {
+                    "type": "object",
+                    "properties": {
+                      "rfqId": {
+                        "type": "string"
+                      },
+                      "answerId": {
+                        "type": "string"
+                      },
+                      "optionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "rfqId",
+                      "answerId",
+                      "optionId"
+                    ],
+                    "additionalProperties": false,
+                    "description": "the rollover RFQ quote this order accepts — checked here against the RFQ before relay with the venue's rules (user = requester, source pool, quoted destination and jitMarketHash, premium token, minPremiumPerShare ≥ the quote's, orderSize ≤ shares_max) and recorded by the venue with the order"
                   }
                 },
                 "required": [
@@ -5260,6 +5665,14 @@
                     "type": "string",
                     "const": "rfq-open"
                   },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "new_position",
+                      "rollover"
+                    ],
+                    "description": "what the RFQ asks for (venue RFQ v2, required, no default): new_position = cover for a NEW position, answered with signed limit orders and filled on the 1inch book; rollover = a price to roll a held cPT position into another pool, answered with a destination and a premium per share and executed by a rollover order"
+                  },
                   "requester": {
                     "$ref": "#/$defs/Address"
                   },
@@ -5313,7 +5726,7 @@
                         "fixed_rate"
                       ]
                     },
-                    "description": "the cover alternatives this request accepts — one to three, each named once: liquidity_only, liquidity_impairment, fixed_rate. Nothing on chain reads them: the COVER a pool gives is decided by the recipe in its market template. A liquidity recipe gives liquidity (duration-risk) cover, an exit that pays nothing for a loss in the reference; the impairment recipe gives impairment (credit-risk) cover, downside protection with a deductible band; the fixed recipe gives fixed-rate cover, a frozen rate that pays every loss below it. marketTemplate describes ONE alternative and an answer for another mode must bring its own template, so name the single mode that matches the template's recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe, fixed_rate for the fixed recipe); a mode that names another cover is warned cover_mode_mismatch. fixed_rate REQUIRES marketTemplate.inline.oracle_params.rate_override — the venue refuses the request without it (cork_capabilities topic:'cover')"
+                    "description": "new_position only, required there: the cover alternatives this request accepts — one to three, each named once: liquidity_only, liquidity_impairment, fixed_rate. Nothing on chain reads them: the COVER a pool gives is decided by the recipe in its market template. A liquidity recipe gives liquidity (duration-risk) cover, an exit that pays nothing for a loss in the reference; the impairment recipe gives impairment (credit-risk) cover, downside protection with a deductible band; the fixed recipe gives fixed-rate cover, a frozen rate that pays every loss below it. marketTemplate describes ONE alternative and an answer for another mode must bring its own template, so name the single mode that matches the template's recipe (liquidity_only for a liquidity recipe, liquidity_impairment for the impairment recipe, fixed_rate for the fixed recipe); a mode that names another cover is warned cover_mode_mismatch. fixed_rate REQUIRES marketTemplate.inline.oracle_params.rate_override — the venue refuses the request without it (cork_capabilities topic:'cover')"
                   },
                   "packageIds": {
                     "minItems": 1,
@@ -5321,7 +5734,8 @@
                     "type": "array",
                     "items": {
                       "type": "string"
-                    }
+                    },
+                    "description": "new_position only, required there: the cover packages this request accepts, each named once"
                   },
                   "expiryWindow": {
                     "type": "object",
@@ -5354,7 +5768,7 @@
                     "description": "venue market template: either {market_template_id} or {inline:{oracle_recipe, oracle_params}} — oracle_params is REQUIRED on an inline template and is one of three blocks answer-rfq reads (decimal strings; the expiry and fees are part of pool identity; never send {}): cork-inline-liquidity/1 = {schema, anchor_rate, expiry, swap_fee_wad, unwind_swap_fee_wad}, cork-inline-impairment/1 = the same plus duration_seconds and apy_spread_percentage (1e18 = 1%) for the impairment recipe, or cork-inline-fixed/1 = {schema, rate_override, expiry, swap_fee_wad, unwind_swap_fee_wad} for the fixed recipe — rate_override is the frozen rate as a decimal string, ABSOLUTE 1e18 = 1.0 (\"1075000000000000000\" = 1.075), the venue's own key and REQUIRED whenever modes names fixed_rate; it becomes the order's rateOverride, and the fixed recipe takes no anchor and no recipe bytes. The venue types the rest of the block as a free-form bag, so the schema name is the contract between requester and underwriter. CONVENTION (2.1.0): put the approved recipe CONTRACT ADDRESS in inline.oracle_recipe — the venue types it as free text (it would happily accept a legacy mode name like 'liquidity'), but the fill path only accepts a registered recipe address, so both sides must put the address here for the quote to be executable"
                   },
                   "notionalAssets": {
-                    "description": "requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals",
+                    "description": "new_position only, required there: requested cover notional in the COLLATERAL asset's base units. CAUTION with collateralAsset.one_of spanning tokens of DIFFERENT decimals: the same digits mean a different value per candidate — prefer `exact`, or pick a notional you intend under every candidate's decimals",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "validUntil": {
@@ -5363,24 +5777,111 @@
                     "maximum": 4102444800,
                     "description": "RFQ validity cutoff, absolute unix SECONDS (not ms; bounded to year 2100) — must be in the future"
                   },
-                  "signature": {
-                    "$ref": "#/$defs/Hex"
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "poolId": {
+                        "description": "the pool your cPT position is in — it must exist and not be expired (checked on the chain here; the venue checks its index)",
+                        "$ref": "#/$defs/MarketId"
+                      },
+                      "shares": {
+                        "description": "how many cPT shares you want priced — cPT is always 18 decimals; quotes cover at most this many",
+                        "$ref": "#/$defs/TokenAmount"
+                      }
+                    },
+                    "required": [
+                      "poolId",
+                      "shares"
+                    ],
+                    "additionalProperties": false,
+                    "description": "rollover only, required there: the position to roll"
+                  },
+                  "premiumToken": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "exact": {
+                            "$ref": "#/$defs/Address"
+                          }
+                        },
+                        "required": [
+                          "exact"
+                        ],
+                        "additionalProperties": false,
+                        "description": "exactly this premium token"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "one_of": {
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/Address"
+                            }
+                          }
+                        },
+                        "required": [
+                          "one_of"
+                        ],
+                        "additionalProperties": false,
+                        "description": "any of these premium tokens, each named once"
+                      }
+                    ],
+                    "description": "rollover only, required there: the token(s) you accept the rollover premium in — every quote and counter must name one of them"
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "signature"
+                          },
+                          "signature": {
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "$ref": "#/$defs/Hex"
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "signature"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "apiKey"
+                          }
+                        },
+                        "required": [
+                          "method"
+                        ],
+                        "additionalProperties": false,
+                        "description": "prove the write with a partner API key (the x-cork-api-key header) instead of a signature — the key is never an input: it is read from the CORK_RFQ_API_KEY environment variable, else the profile's credential_process, else the key stored for this venue host (`ch auth set-key`), and a write with no key refuses api_key_missing before anything is sent"
+                      }
+                    ],
+                    "description": "how the venue learns the write is really from the requester (open, counter) or the underwriter (answer): a signature by that address, or a partner API key"
                   }
                 },
                 "required": [
                   "type",
+                  "kind",
                   "requester",
                   "referenceAsset",
                   "collateralAsset",
-                  "modes",
-                  "packageIds",
                   "expiryWindow",
-                  "notionalAssets",
                   "validUntil",
-                  "signature"
+                  "auth"
                 ],
                 "additionalProperties": false,
-                "description": "open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against"
+                "description": "open a request-for-quote as a coverage buyer: the parameter envelope underwriters answer against. The write is PROVEN (venue RFQ v2): build what to sign with cork_prepare_orders rfq-write, sign it, and pass auth {method:'signature', signature} as the requester"
               },
               {
                 "type": "object",
@@ -5414,7 +5915,7 @@
                       },
                       "additionalProperties": {}
                     },
-                    "description": "priced quote options; premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
+                    "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
                   },
                   "reasonCode": {
                     "type": "string",
@@ -5430,8 +5931,50 @@
                     "minLength": 1,
                     "description": "optional revision link: the answerId of YOUR prior answer on this SAME RFQ that this one replaces (venue-validated, 400 otherwise). Purely an audit trail — supersession is already implicit (an underwriter's newest answer is its current one), so omitting this loses nothing"
                   },
-                  "signature": {
-                    "$ref": "#/$defs/Hex"
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "new_position",
+                      "rollover"
+                    ],
+                    "description": "the RFQ's kind — read from the RFQ itself, so it may be omitted; when given it must match (the venue refuses an answer or counter of another kind)"
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "signature"
+                          },
+                          "signature": {
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "$ref": "#/$defs/Hex"
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "signature"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "apiKey"
+                          }
+                        },
+                        "required": [
+                          "method"
+                        ],
+                        "additionalProperties": false,
+                        "description": "prove the write with a partner API key (the x-cork-api-key header) instead of a signature — the key is never an input: it is read from the CORK_RFQ_API_KEY environment variable, else the profile's credential_process, else the key stored for this venue host (`ch auth set-key`), and a write with no key refuses api_key_missing before anything is sent"
+                      }
+                    ],
+                    "description": "how the venue learns the write is really from the requester (open, counter) or the underwriter (answer): a signature by that address, or a partner API key"
                   }
                 },
                 "required": [
@@ -5439,10 +5982,10 @@
                   "rfqId",
                   "underwriter",
                   "status",
-                  "signature"
+                  "auth"
                 ],
                 "additionalProperties": false,
-                "description": "answer an open RFQ as an underwriter: priced options or a pass. Answers are REVISIONS — your newest answer on an RFQ is your current one; post again to update your quote (up to 500 revisions per underwriter thread)"
+                "description": "answer an open RFQ as an underwriter: priced options or a pass. Answers are REVISIONS — your newest answer on an RFQ is your current one; post again to update your quote (up to 500 revisions per underwriter thread). The write is PROVEN (venue RFQ v2): build what to sign with cork_prepare_orders rfq-write, sign it, and pass auth {method:'signature', signature} as the underwriter"
               },
               {
                 "type": "object",
@@ -5461,7 +6004,7 @@
                   "premiumAnnualized": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
+                    "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
                     "x-units": "{%}"
                   },
                   "optionRef": {
@@ -5489,19 +6032,68 @@
                     "maximum": 4102444800,
                     "description": "advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"
                   },
-                  "signature": {
-                    "$ref": "#/$defs/Hex"
+                  "premiumPerShare": {
+                    "description": "rollover counters only, required there: the bid in a rollover answer's unit — raw premium-token units per 1e18 destination shares (the rollover order's minPremiumPerShare)",
+                    "$ref": "#/$defs/PremiumPerShareRate"
+                  },
+                  "premiumToken": {
+                    "description": "rollover counters only, required there: the token the bid is priced in — one the RFQ's premiumToken accepts",
+                    "$ref": "#/$defs/Address"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "new_position",
+                      "rollover"
+                    ],
+                    "description": "the RFQ's kind — read from the RFQ itself, so it may be omitted; when given it must match (the venue refuses an answer or counter of another kind)"
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "signature"
+                          },
+                          "signature": {
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "$ref": "#/$defs/Hex"
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "signature"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "const": "apiKey"
+                          }
+                        },
+                        "required": [
+                          "method"
+                        ],
+                        "additionalProperties": false,
+                        "description": "prove the write with a partner API key (the x-cork-api-key header) instead of a signature — the key is never an input: it is read from the CORK_RFQ_API_KEY environment variable, else the profile's credential_process, else the key stored for this venue host (`ch auth set-key`), and a write with no key refuses api_key_missing before anything is sent"
+                      }
+                    ],
+                    "description": "how the venue learns the write is really from the requester (open, counter) or the underwriter (answer): a signature by that address, or a partner API key"
                   }
                 },
                 "required": [
                   "type",
                   "rfqId",
                   "requester",
-                  "premiumAnnualized",
-                  "signature"
+                  "auth"
                 ],
                 "additionalProperties": false,
-                "description": "counter-bid an open RFQ as its REQUESTER (the buyer's side of the negotiation): non-committal like answers — it binds nobody; commitment stays the signed limit order. Broadcast to every underwriter; your newest counter is the current bid. Requester-only: the venue 403s anyone else"
+                "description": "counter-bid an open RFQ as its REQUESTER (the buyer's side of the negotiation): non-committal like answers — it binds nobody; commitment stays the signed limit order. Broadcast to every underwriter; your newest counter is the current bid. Requester-only: the venue 403s anyone else. The write is PROVEN (venue RFQ v2): build what to sign with cork_prepare_orders rfq-write, sign it, and pass auth {method:'signature', signature} as the requester"
               }
             ]
           },

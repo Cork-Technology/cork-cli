@@ -25,6 +25,7 @@ import { colorEnabled, makeStyle } from "./ansi.ts";
 import { explainWantsJson, formatExplainText } from "./explain.ts";
 import { renderEnvelope, renderError, renderWatchTick } from "./render.ts";
 import { diffRfqWatch, rfqWatchRows, type RfqWatchRow } from "./watch-rfqs.ts";
+import { applyAccountSugar, registerWalletCommands, type WalletIo } from "./wallet.ts";
 
 /** The CLI's own pause for --watch (the core's default sleep is handler-internal): a timer that resolves early on abort. */
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -36,6 +37,8 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 import { runSelfUpdate } from "./self-update.ts";
+import { listCredentials, removeStoredApiKey, resolveRfqApiKey, selectedProfile, setStoredApiKey, venueHost } from "../../core/src/credentials.ts";
+import { venueBaseUrl } from "../../core/src/datasources/venue.ts";
 
 export const EXIT = { ok: 0, error: 1, invalid: 2, unavailable: 3, conflict: 4 } as const;
 
@@ -339,7 +342,14 @@ export async function runCli(
   // TTY-ness is an input, not a probe: runCli captures strings and never touches process.*,
   // so bin.ts reports what its real streams are and tests/embedders default to "not a TTY"
   // (plain output). Per stream, because stdout piped + stderr on the terminal is common.
-  io: { stdoutIsTTY?: boolean; stderrIsTTY?: boolean } = {},
+  // `readSecret` is how `ch auth set-key` gets a key: a hidden prompt or a pipe, supplied by
+  // bin.ts (tests inject one). A key never comes from argv — argv lands in shell history.
+  // prompter/readStdin: the CLI-only signing path (wallet.ts); tests inject them, the binary asks the terminal.
+  io: {
+    stdoutIsTTY?: boolean;
+    stderrIsTTY?: boolean;
+    readSecret?: (prompt: string) => Promise<string>;
+  } & WalletIo = {},
 ): Promise<CliResult> {
   let out = "";
   let err = "";
@@ -501,6 +511,7 @@ export async function runCli(
         .option("--json [json]", "with a value: tool input as JSON. Bare: print JSON instead of prose.")
         .option("--input <json>", "tool input as a JSON string (unambiguous form of --json <json>)")
         .option("--rpc-url <url>", "RPC endpoint for chain-backed reads/compute")
+        .option("--profile <name>", "credentials-file profile an RFQ API key is read from (else CORK_PROFILE, else default) — see `ch auth`")
         .option("--enable-deprecated", "unlock DEPRECATED features (e.g. the pre-2.1.0 registry generation via legacy:true) — same effect as CORK_ENABLE_DEPRECATED=1; every result they produce is labelled")
         .option("--explain", "print the tool's contract and exit (prose; JSON Schema under --json)")
         .option("--allow-unapproved-code", "build JIT bytes even when the adapter's live code is NOT on this build's approved-implementations list — same effect as CORK_ALLOW_UNAPPROVED_CODE=1; every such result is labeled implementation_gate_bypassed. For the window between a redeploy and the release that ships its hash, after you verified the code yourself");
@@ -536,6 +547,12 @@ export async function runCli(
 
     const cmd = baseOptions(parent.command(leafName(tool)).description(`[phase ${tool.phase}] ${tool.description}`));
     for (const alias of tool.cliAliases ?? []) cmd.alias(alias);
+    // CLI-only: sign an RFQ write with a keystore before relaying it. Not a schema field — the
+    // MCP surface never signs [K1].
+    const accountOption = (c: Command): void => {
+      if (tool.name === "cork_submit") c.option("--account <keystore>", "rfq-open/rfq-answer/rfq-counter: prepare the write, sign it with this keystore (password typed at a prompt), then submit");
+    };
+    accountOption(cmd);
     if (positional) cmd.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : `${positional} to act on`);
     const cmdRegistered = new Set<string>();
     for (const [name, node] of Object.entries(props)) {
@@ -784,7 +801,7 @@ export async function runCli(
         if (opts["enableDeprecated"]) process.env["CORK_ENABLE_DEPRECATED"] = "1";
         const prevUnapproved = process.env["CORK_ALLOW_UNAPPROVED_CODE"];
         if (opts["allowUnapprovedCode"]) process.env["CORK_ALLOW_UNAPPROVED_CODE"] = "1";
-        const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}) };
+        const callCtx: HandlerContext = { ...ctx, ...(opts["rpcUrl"] ? { rpcUrl: opts["rpcUrl"] as string } : {}), ...(opts["profile"] ? { profile: opts["profile"] as string } : {}) };
         const stateCode = (envelope: unknown): number => {
           const state = (envelope as { state?: string }).state;
           return state === "ok" ? EXIT.ok : state === "conflict" ? EXIT.conflict : EXIT.unavailable;
@@ -848,7 +865,18 @@ export async function runCli(
             }
             return;
           }
-          const envelope = await runTool(tool.name, input, callCtx);
+          let callInput = input;
+          if (tool.name === "cork_submit" && typeof opts["account"] === "string") {
+            const signed = await applyAccountSugar({ input, name: opts["account"], ctx: callCtx, env, io }, { fail });
+            if (signed === null) return;
+            if ("envelope" in signed) {
+              out += wantsJson ? `${JSON.stringify(signed.envelope, null, 2)}\n` : renderEnvelope(signed.envelope, tool, outStyle);
+              code = stateCode(signed.envelope);
+              return;
+            }
+            callInput = signed.input;
+          }
+          const envelope = await runTool(tool.name, callInput, callCtx);
           out += wantsJson ? `${JSON.stringify(envelope, null, 2)}\n` : renderEnvelope(envelope, tool, outStyle);
           code = stateCode(envelope);
         } catch (e) {
@@ -914,6 +942,7 @@ export async function runCli(
         // The parent's positional works here too (`ch prepare pool exercise 1`): rejecting an
         // operand the long form accepts was the R4 class in miniature.
         if (positional) target.argument(`[${positional}]`, props[positional]?.description ? firstSentence(props[positional]!.description!) : positional);
+        accountOption(target);
         const registered = new Set<string>();
         // Top-level fields ride as flags here (chainId included — the variant owns the slot).
         for (const [name, node] of Object.entries(props)) {
@@ -954,6 +983,94 @@ export async function runCli(
       }
     }
   }
+
+  // `ch auth`: RFQ API keys for venue writes, kept the AWS CLI way — one private credentials
+  // file of named profiles, each key bound to one venue host. Keys never print: listings mask
+  // them, and set-key takes the key from a prompt or a pipe, never from argv.
+  const credEnv = { ...process.env, ...env };
+  const authVenue = (venue: string | undefined): string => venueBaseUrl(venue ?? ctx.venueUrl ?? credEnv["CORK_VENUE_URL"]);
+  const authFail = (message: string, exit: number = EXIT.unavailable, asJson = envWantsJson): void => {
+    const payload = { error: { code: "auth", tool: "ch auth", message } };
+    err += asJson ? `${JSON.stringify(payload)}\n` : `${message}\n`;
+    code = exit;
+  };
+  const authGroup = program
+    .command("auth")
+    .description("RFQ API keys for venue writes (auth {method:'apiKey'}): a key is read from CORK_RFQ_API_KEY, else the profile's credential_process, else the key stored for the venue host in ~/.config/cork-helper-cli/credentials (override CORK_CREDENTIALS_FILE)");
+  authGroup
+    .command("set-key")
+    .description("store a key for one venue host in a profile (the file is created 0600). The key is read from a hidden prompt, or from stdin when piped: printf %s \"$KEY\" | ch auth set-key")
+    .argument("[key]", "refused: a key on the command line lands in shell history")
+    .option("--profile <name>", "profile to store it in (else CORK_PROFILE, else default)")
+    .option("--venue <url>", "venue the key belongs to (else CORK_VENUE_URL, else production)")
+    .option("--json", "print as JSON")
+    .action(async (keyArg: string | undefined, opts: { profile?: string; venue?: string; json?: boolean }) => {
+      const asJson = opts.json === true || envWantsJson;
+      if (keyArg !== undefined) return authFail("refused: never pass a key on the command line — it lands in shell history and the process list. Pipe it instead: printf %s \"$KEY\" | ch auth set-key", EXIT.invalid, asJson);
+      if (!io.readSecret) return authFail("set-key reads the key from a terminal prompt or a pipe, and neither is available here", EXIT.invalid, asJson);
+      try {
+        const profile = selectedProfile(opts.profile, credEnv);
+        const host = venueHost(authVenue(opts.venue));
+        const key = (await io.readSecret(`RFQ API key for ${host} (profile ${profile}): `)).trim();
+        const path = setStoredApiKey(profile, host, key, credEnv);
+        out += asJson ? `${JSON.stringify({ stored: true, profile, host, path })}\n` : `stored the key for ${host} in profile [${profile}] (${path})\n`;
+      } catch (e) {
+        authFail((e as Error).message, EXIT.invalid, asJson);
+      }
+    });
+  authGroup
+    .command("list")
+    .description("list profiles, their venue hosts and masked keys (last 4 characters), and which profiles run a credential_process")
+    .option("--json", "print as JSON")
+    .action((opts: { json?: boolean }) => {
+      const asJson = opts.json === true || envWantsJson;
+      try {
+        const listing = listCredentials(credEnv);
+        const envKey = credEnv["CORK_RFQ_API_KEY"] ? { set: true, note: "CORK_RFQ_API_KEY is set: it wins over every profile, for whatever venue is configured" } : { set: false };
+        if (asJson) {
+          out += `${JSON.stringify({ ...listing, env: envKey }, null, 2)}\n`;
+          return;
+        }
+        if (envKey.set) out += `${envKey.note}\n`;
+        if (listing.profiles.length === 0) out += `no profiles in ${listing.path}\n`;
+        for (const p of listing.profiles) {
+          out += `[${p.profile}]${p.credentialProcess ? "  credential_process (wins over the stored keys below)" : ""}\n`;
+          for (const k of p.keys) out += `  ${k.host}  ${k.masked}\n`;
+        }
+      } catch (e) {
+        authFail((e as Error).message, EXIT.unavailable, asJson);
+      }
+    });
+  authGroup
+    .command("remove")
+    .description("remove the key stored for one venue host from a profile (or every stored key of the profile with --all); a credential_process line stays — edit the file to remove it")
+    .option("--profile <name>", "profile (else CORK_PROFILE, else default)")
+    .option("--venue <url>", "venue whose key to remove (else CORK_VENUE_URL, else production)")
+    .option("--all", "remove every stored key of the profile")
+    .option("--json", "print as JSON")
+    .action((opts: { profile?: string; venue?: string; all?: boolean; json?: boolean }) => {
+      const asJson = opts.json === true || envWantsJson;
+      try {
+        const profile = selectedProfile(opts.profile, credEnv);
+        const host = opts.all ? undefined : venueHost(authVenue(opts.venue));
+        const removed = removeStoredApiKey(profile, host, credEnv);
+        out += asJson ? `${JSON.stringify({ removed, profile, host: host ?? null })}\n` : `removed ${removed} key(s) from profile [${profile}]${host ? ` for ${host}` : ""}\n`;
+      } catch (e) {
+        authFail((e as Error).message, EXIT.invalid, asJson);
+      }
+    });
+  authGroup
+    .command("status")
+    .description("which source would serve an RFQ API key for the configured venue now — never the key itself")
+    .option("--profile <name>", "profile (else CORK_PROFILE, else default)")
+    .option("--venue <url>", "venue to check (else CORK_VENUE_URL, else production)")
+    .option("--json", "print as JSON")
+    .action(async (opts: { profile?: string; venue?: string; json?: boolean }) => {
+      const asJson = opts.json === true || envWantsJson;
+      const r = await resolveRfqApiKey({ venueUrl: authVenue(opts.venue), env: credEnv, ...(opts.profile ? { profile: opts.profile } : {}) });
+      if (!r.ok) return authFail(r.message, EXIT.unavailable, asJson);
+      out += asJson ? `${JSON.stringify({ resolved: true, ...r.disclosure })}\n` : `a key for ${r.disclosure.host} resolves from ${r.disclosure.source} (profile ${r.disclosure.profile})\n`;
+    });
 
   // Non-tool commands: version/build identity, the MCP server, and self-update. These are CLI
   // plumbing, not registry tools — no envelope, no --explain.
@@ -1005,6 +1122,21 @@ export async function runCli(
       err += res.err;
       code = res.code === 0 ? EXIT.ok : EXIT.error;
     });
+
+  registerWalletCommands(program, {
+    env,
+    io,
+    ctx,
+    sink: {
+      out: (s) => (out += s),
+      fail: (payload, c) => {
+        err += argvWantsJson ? `${JSON.stringify(payload)}\n` : renderError(payload, errStyle);
+        code = c;
+      },
+      setCode: (c) => (code = c),
+      wantsJson: (opts) => opts["json"] !== undefined || envWantsJson,
+    },
+  });
 
   const pre = preParseVariants(normaliseArgv(argv, knownFlags));
   if ("error" in pre) {

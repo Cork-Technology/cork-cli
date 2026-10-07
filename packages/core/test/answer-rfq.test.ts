@@ -83,7 +83,23 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(d.answer.expiryRule).toContain("re-rest rule");
     expect(BigInt(decodeMakerTraits(BigInt(d.typedData.message.makerTraits!)).expiry)).toBe(NOW + 600n);
     expect(d.ocoGroup).toBe(`rfq:${RFQ_OPEN_ID}`);
-    expect(d.answer.quoteRef).toBeNull();
+    // RFQ v2: the answer option is built from the SAME numbers as the order, and carries it.
+    const q = (d.answer as unknown as { quotedOption: Record<string, unknown>; supersedes: string | null; orderHash: string }).quotedOption;
+    expect(q).toMatchObject({ chain_id: 42161, collateral_asset: JIT_TASK_PAIR.collateralAsset.toLowerCase(), reference_asset: JIT_TASK_PAIR.referenceAsset.toLowerCase(), mode: "liquidity_only", package_id: "pkg_default", expiry: Number(expiry), premium_annualized: "0.04", notional_max_assets: notional.toString(), fresh_until: Number(NOW + 600n) });
+    expect(q.option_id).toMatch(/^opt-[0-9a-f]{12}$/u);
+    expect((q.market_template as { inline: { oracle_recipe: string } }).inline.oracle_recipe).toBe(LIQUIDITY_RECIPE.toLowerCase());
+    const sent = q.order as Record<string, string>;
+    for (const k of ["salt", "makingAmount", "takingAmount", "makerTraits"]) expect(sent[k]).toBe(d.typedData.message[k]);
+    for (const k of ["maker", "receiver", "makerAsset", "takerAsset"]) expect(sent[k]).toBe(d.typedData.message[k]!.toLowerCase());
+    expect((d.answer as unknown as { orderHash: string }).orderHash).toBe(d.orderHash);
+    expect((d.answer as unknown as { supersedes: string | null }).supersedes).toBeNull();
+    // The answer id is known only once the answer is posted.
+    expect(d.answer.quoteRef).toEqual({ rfqId: RFQ_OPEN_ID, answerId: null, optionId: q.option_id });
+    // The answer goes before the book: the venue refuses a quote whose order already rests there.
+    const steps = d.execution.then;
+    const at = (needle: string) => steps.findIndex((x) => x.includes(needle));
+    expect(at("finalize-maker-order")).toBeLessThan(at("rfq-write"));
+    expect(at("cork_submit rfq-answer")).toBeLessThan(at("cork_submit lop-order"));
     expect(d.execution.then.some((s) => s.includes("refresh-order"))).toBe(true);
     expect(env.warnings.some((w) => w.code === "oco_group_notice")).toBe(true);
   });
@@ -168,7 +184,7 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(env.warnings.some((w) => w.code === "invalid_order_terms" && w.message.includes("expiry_window"))).toBe(true);
   });
 
-  it("cited: a maker may cite only its OWN answer; the answer's underwriter gets quoteRef + the option's premium and expiry", async () => {
+  it("re-quote: an underwriter re-quotes only its OWN answer; the new option keeps the option id and the option's premium and expiry, and supersedes the answer", async () => {
     const other = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-0003", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, answerId: FIRM_ANSWER_ID, optionId: "opt1", jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
     expect(other.state).toBe("unavailable");
     expect(other.warnings[0]!.code).toBe("invalid_order_terms");
@@ -177,7 +193,11 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     const mine = await runTool("cork_prepare_orders", { ...base, account: underwriter, clientRequestId: "answer-0004", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, answerId: FIRM_ANSWER_ID, optionId: "opt1", jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
     expect(mine.state, JSON.stringify(mine.warnings)).toBe("ok");
     const d = mine.data as Answered;
-    expect(d.answer.quoteRef).toEqual({ rfqId: RFQ_OPEN_ID, answerId: FIRM_ANSWER_ID, optionId: "opt1" });
+    expect(d.answer.quoteRef).toEqual({ rfqId: RFQ_OPEN_ID, answerId: null, optionId: "opt1" });
+    const requoted = d.answer as unknown as { quotedOption: Record<string, unknown>; supersedes: string };
+    expect(requoted.supersedes).toBe(FIRM_ANSWER_ID);
+    expect(requoted.quotedOption).toMatchObject({ option_id: "opt1", premium_annualized: "0.05", expiry: 1_900_000_000 });
+    expect(d.execution.then.some((x) => x.includes("supersedes: answer.supersedes"))).toBe(true);
     // The option's terms (premium 0.05, expiry 1900000000), not the caller's — and that expiry is
     // the JIT task fixture's, so the pool is the fixture pair's derivation at that expiry (the
     // 10-field id of the nested primary, zero fees — DERIVED_JIT_POOL is its 8-field twin, the
@@ -699,7 +719,7 @@ describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate ride
     ...ctx,
     venueFetch: async (url: string, init?: RequestInit) => {
       const res = await ctx.venueFetch!(url, init);
-      if (!new URL(url).pathname.endsWith(`/rfqs/v1/${RFQ_FIXED_ID}`)) return res;
+      if (!new URL(url).pathname.endsWith(`/rfqs/v2/${RFQ_FIXED_ID}`)) return res;
       const row = (await res.json()) as { answers: Array<{ answer: { options: Array<{ market_template: { inline: { oracle_params: Record<string, unknown> } } }> } }> };
       change(row.answers[0]!.answer.options[0]!.market_template.inline.oracle_params);
       return new Response(JSON.stringify(row), { status: 200, headers: { "content-type": "application/json" } });

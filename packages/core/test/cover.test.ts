@@ -53,6 +53,11 @@ import { DEPLOYED_FIXED_RATE, FIXED_RECIPE, IMPAIRMENT_RECIPE, JIT_TASK_PAIR, LI
 import { blockBytesFor, classifyInlineRecipe, durationBeyondLifeNote, readFixedRatePosition, readRecipeSource, singleCollateral } from "../src/handlers/cover-reading.ts";
 import { readPairLiveRate } from "../src/handlers/registry.ts";
 import { fixedRateTemplateViolation, rfqModesViolation } from "../src/handlers/submit.ts";
+import { privateKeyToAccount } from "viem/accounts";
+import { asStored, proveRfqWrite, coverQuoteOrder, signQuotes } from "./helpers.ts";
+
+// RFQ v2 writes are proven: the requester (open) and the underwriter (answer) sign each one.
+const WRITER = privateKeyToAccount(`0x${"4c".repeat(32)}`);
 
 const NOW = 1_790_000_000n; // the eval stub's clock
 const CHAIN = 8453;
@@ -510,14 +515,14 @@ function world(over: { client?: (inner: Rpc["client"]) => Record<string, unknown
   return { ctx, posts };
 }
 let seq = 0;
-const openOn = (w: ReturnType<typeof world>, action: Record<string, unknown>) =>
+const openOn = async (w: ReturnType<typeof world>, action: Record<string, unknown>) =>
   runTool(
     "cork_submit",
-    {
+    await proveRfqWrite(WRITER, {
       chainId: 42161,
       clientRequestId: `cover-open-${++seq}`,
-      action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: JIT_TASK_PAIR.referenceAsset, collateralAsset: { exact: JIT_TASK_PAIR.collateralAsset }, modes: ["fixed_rate"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: STUB_EXPIRY - 1, notAfter: STUB_EXPIRY }, notionalAssets: "1000000000", validUntil: Number(NOW) + 86_400, signature: "0x", ...action },
-    },
+      action: { type: "rfq-open", kind: "new_position", requester: DEMO_ACCOUNT, referenceAsset: JIT_TASK_PAIR.referenceAsset, collateralAsset: { exact: JIT_TASK_PAIR.collateralAsset }, modes: ["fixed_rate"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: STUB_EXPIRY - 1, notAfter: STUB_EXPIRY }, notionalAssets: "1000000000", validUntil: Number(NOW) + 86_400, ...action },
+    }),
     w.ctx,
   );
 const stubFixed = (rate: unknown) => ({ inline: { oracle_recipe: FIXED_RECIPE, oracle_params: { schema: "cork-inline-fixed/1", rate_override: rate, expiry: String(STUB_EXPIRY), swap_fee_wad: "0", unwind_swap_fee_wad: "0" } } });
@@ -533,7 +538,7 @@ describe("cork_submit rfq-open, fixed-rate (cork-api 0.4.4) — refused where th
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     expect(w.posts).toHaveLength(1);
     expect(w.posts[0]!.body["modes"]).toEqual(["fixed_rate"]);
-    expect(w.posts[0]!.body["market_template"]).toEqual(stubFixed("750000000000000000"));
+    expect(w.posts[0]!.body["market_template"]).toEqual(asStored(stubFixed("750000000000000000")));
     const cover = coverOf(env);
     expect(cover).toMatchObject({ kind: "fixed-rate", modesAgree: true, recipe: FIXED_RECIPE });
     // No FixedRateOracle exists at this rate: a plain recipe.resolve reverts RateOracleNotDeployed,
@@ -678,8 +683,8 @@ describe("cork_submit rfq-open, fixed-rate (cork-api 0.4.4) — refused where th
 });
 
 describe("cork_submit rfq-answer — a fixed_rate option carries its OWN frozen rate (cork-api 0.4.4)", () => {
-  const option = (over: Record<string, unknown>) => ({ option_id: "opt1", chain_id: 42161, collateral_asset: JIT_TASK_PAIR.collateralAsset, reference_asset: JIT_TASK_PAIR.referenceAsset, mode: "fixed_rate", package_id: "balanced-v1", expiry: STUB_EXPIRY, premium_annualized: "0.05", notional_max_assets: "1000000000", fresh_until: Number(NOW) + 600, ...over });
-  const post = (w: ReturnType<typeof world>, options: Array<Record<string, unknown>>) => runTool("cork_submit", { chainId: 42161, clientRequestId: `cover-answer-${++seq}`, action: { type: "rfq-answer", rfqId: "rfq_open7", underwriter: DEMO_ACCOUNT, status: "quoted", options, signature: "0x" } }, w.ctx);
+  const option = (over: Record<string, unknown>) => ({ option_id: "opt1", chain_id: 42161, collateral_asset: JIT_TASK_PAIR.collateralAsset, reference_asset: JIT_TASK_PAIR.referenceAsset, mode: "fixed_rate", package_id: "balanced-v1", expiry: STUB_EXPIRY, premium_annualized: "0.05", notional_max_assets: "1000000000", fresh_until: Number(NOW) + 600, order: coverQuoteOrder(WRITER.address, JIT_TASK_PAIR.collateralAsset, ++seq), ...over });
+  const post = async (w: ReturnType<typeof world>, options: Array<Record<string, unknown>>) => runTool("cork_submit", await proveRfqWrite(WRITER, { chainId: 42161, clientRequestId: `cover-answer-${++seq}`, action: { type: "rfq-answer", rfqId: "rfq_open7", underwriter: WRITER.address, status: "quoted", options: await signQuotes(WRITER, options) } }, "new_position"), w.ctx);
 
   it("an option with its template and rate is relayed verbatim; another rate than the request's is the option's to propose", async () => {
     const w = world();
@@ -687,7 +692,7 @@ describe("cork_submit rfq-answer — a fixed_rate option carries its OWN frozen 
     const env = await post(w, options);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     expect(w.posts).toHaveLength(1);
-    expect(w.posts[0]!.body["options"]).toEqual(options);
+    expect(w.posts[0]!.body["options"]).toEqual(asStored(await signQuotes(WRITER, options)));
   });
 
   it("a fixed_rate option without an admissible rate is refused before relay, naming the option — whichever option it is", async () => {
@@ -883,7 +888,7 @@ describe("cork_submit rfq-open — the chain's side of the reading (best-effort,
     const fix = TOOL_EXAMPLES.cork_submit!.find((e) => e.title.includes("FIXED-RATE"))!;
     for (const [example, kind, mode] of [[imp, "impairment", "liquidity_impairment"], [fix, "fixed-rate", "fixed_rate"]] as const) {
       const w = world({ resolveRpc: async () => null });
-      const env = await runTool("cork_submit", JSON.parse(JSON.stringify(example.input)), w.ctx);
+      const env = await runTool("cork_submit", await proveRfqWrite(WRITER, JSON.parse(JSON.stringify(example.input))), w.ctx);
       expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
       expect(w.posts).toHaveLength(1);
       expect(w.posts[0]!.body["modes"]).toEqual([mode]);
@@ -897,7 +902,7 @@ describe("cork_submit rfq-open — the chain's side of the reading (best-effort,
     const input = JSON.parse(JSON.stringify(example.input)) as { action: Record<string, unknown> };
     input.action["marketTemplate"] = { inline: { oracle_recipe: NAV, oracle_params: liqBlock({ expiry: "1796256000" }) } };
     const w = world({ resolveRpc: async () => null });
-    const env = await runTool("cork_submit", input, w.ctx);
+    const env = await runTool("cork_submit", await proveRfqWrite(WRITER, input as never), w.ctx);
     expect(env.state).toBe("ok");
     expect(w.posts).toHaveLength(1);
     expect(coverOf(env).kind).toBe("liquidity");
