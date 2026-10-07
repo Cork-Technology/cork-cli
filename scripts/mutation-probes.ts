@@ -23,6 +23,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { baselineOk, verdictOf, type VitestJsonReport } from "./mutation-verdict.ts";
+import { suiteVerdict } from "./suite-verdict.ts";
 import { dirname, join, resolve } from "node:path";
 
 interface Mutant {
@@ -61,6 +62,8 @@ const T = {
   credentials: "packages/core/test/credentials.test.ts",
   cliAuth: "packages/cli/test/auth.test.ts",
   mcpHttp: "packages/mcp/test/http.test.ts",
+  suiteVerdict: "scripts/suite-verdict.test.ts",
+  testGate: "scripts/test-gate.test.ts",
   venueTransport: "packages/core/test/venue-transport.test.ts",
   venueRedirect: "packages/core/test/venue-redirect.test.ts",
   venuePremium: "packages/core/test/venue-premium.test.ts",
@@ -8180,6 +8183,65 @@ const CATALOG: Mutant[] = [
     tests: [T.rfqWrite],
   },
   {
+    // The 2026-10-07 defect class: a run that stopped early reads green because files with no
+    // result are not counted.
+    id: "suite-verdict-missing-files-ignored",
+    file: "scripts/suite-verdict.ts",
+    find: "  if (missing.length > 0) {",
+    replace: "  if (false) {",
+    tests: [T.suiteVerdict],
+  },
+  {
+    // A failed file status that comes without a failing TEST (an error at load) reads green.
+    id: "suite-verdict-failed-files-ignored",
+    file: "scripts/suite-verdict.ts",
+    find: "  if (report.numFailedTestSuites > 0 || failedFiles.length > 0) {",
+    replace: "  if (report.numFailedTestSuites > 0 && failedFiles.length === 0) {",
+    tests: [T.suiteVerdict, T.testGate],
+  },
+  {
+    // Zero tests executed reads green.
+    id: "suite-verdict-zero-tests-green",
+    file: "scripts/suite-verdict.ts",
+    find: "  if (ran === 0) return { ok: false, reason: `no test executed across the discovered files (${String(report.numTotalTests)} known, all skipped)`, ...verdict };",
+    replace: "",
+    tests: [T.suiteVerdict, T.testGate],
+  },
+  {
+    // Skipped tests are counted as executed: an all-skipped suite reads green.
+    id: "suite-verdict-skipped-counted-as-ran",
+    file: "scripts/suite-verdict.ts",
+    find: "return report.numPassedTests === undefined ? report.numTotalTests : report.numPassedTests + report.numFailedTests;",
+    replace: "return report.numTotalTests;",
+    tests: [T.suiteVerdict, T.testGate],
+  },
+  {
+    // The exit code is ignored once every file reported — an error outside any test passes.
+    id: "suite-verdict-exit-code-ignored",
+    file: "scripts/suite-verdict.ts",
+    find: "  if (exitCode !== 0) return { ok: false, reason: `every file has a green result but vitest exited",
+    replace: "  if (false) return { ok: false, reason: `every file has a green result but vitest exited",
+    tests: [T.suiteVerdict],
+  },
+  {
+    // The gate judges by vitest's exit code instead of the verdict — the step that passed on
+    // 2026-10-07.
+    id: "test-gate-exit-code-not-verdict",
+    file: "scripts/test-gate.ts",
+    find: "process.exit(verdict.ok ? 0 : 1);",
+    replace: "process.exit(exitCode);",
+    tests: [T.testGate],
+  },
+  {
+    // The discovery ignores the caller's filters: a filtered run is judged against every file
+    // and reads RED for files it was never asked to run.
+    id: "test-gate-discovery-unfiltered",
+    file: "scripts/test-gate.ts",
+    find: "expected = (await vitest.globTestSpecifications(filters)).map((s) => s.moduleId);",
+    replace: "expected = (await vitest.globTestSpecifications()).map((s) => s.moduleId);",
+    tests: [T.testGate],
+  },
+  {
     // cork-cli-private#6: the posture seam is removed and responses leave bare.
     id: "http-security-headers-not-applied",
     file: "packages/mcp/src/http.ts",
@@ -9378,7 +9440,12 @@ async function vitest(tests: string[]): Promise<{ exitCode: number; report: Vite
 const allTests = [...new Set(catalog.flatMap((m) => m.tests))];
 console.log(`baseline: ${allTests.length} test files clean-run…`);
 const base = await vitest(allTests);
-const baseVerdict = baselineOk(base.report, base.exitCode);
+// Two rules, both must hold: tests ran and none failed (baselineOk), AND every targeted file
+// reported (suiteVerdict) — a baseline that silently ran 1 of 106 files (the 2026-10-07 shape of
+// the CI tests step) would otherwise read green and every later kill would be judged against
+// a suite that never executed.
+const baseRan = baselineOk(base.report, base.exitCode);
+const baseVerdict = baseRan.ok ? suiteVerdict(base.report, base.exitCode, allTests.map((t) => resolve(sandbox, t))) : baseRan;
 if (!baseVerdict.ok) {
   console.error(`BASELINE RED (${baseVerdict.reason})`);
   console.error("BASELINE RED — fix the suite before running mutation probes (a red baseline would fake 'caught'). If the plain tree is green, the sandbox copy is the suspect: a test may depend on something git ls-files does not enumerate.");

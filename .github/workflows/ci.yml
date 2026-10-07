@@ -37,11 +37,15 @@ jobs:
       - name: Typecheck (tsc strict)
         run: bun run typecheck
 
+      # test:ci drives vitest through its programmatic API and judges the run from the JSON
+      # report against the files vitest discovered — every file must report, none may fail.
+      # `bun run test` judged by exit code, and on 2026-10-07 (run 37622917869) vitest on Bun
+      # exited 0 after ONE file in 3 s with no summary; the step passed. Never again by exit code.
       - name: Tests (offline gates — examples, teaching, maturity, surface drift, venue/rollover/hypersync stubs)
         env:
           # Deterministic: never fetch cork-defaults.json from GitHub in CI.
           CORK_CONFIG_NO_FETCH: "1"
-        run: bun run test
+        run: bun run test:ci
 
       - name: Mutation probes (bytes-critical logic — every catalogued mutant must be CAUGHT)
         env:

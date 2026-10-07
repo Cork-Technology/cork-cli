@@ -133,7 +133,7 @@ specifiers; Node's type-stripping rejects both). Bun 1.3 pinned in `mise.toml`.
   (89 MB) + binding (16.6 MB) + ~2.4 MB app — `--minify` saves ~1 %, so no binary-level slimming
   is on the table. OCI annotations ride `packaging/cork-cli.apko.yaml` (+ version/revision
   stamped by apk-repo.yml).
-- Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip) ·
+- Typecheck / test: `bun run typecheck` · `bun run test` (network suites self-skip) · `bun run test:ci` (what CI's Tests step runs since 2026-10-07: `scripts/test-gate.ts` drives vitest through `createVitest` → `globTestSpecifications` → `start` → `close`, each awaited, and judges the run with `scripts/suite-verdict.ts` from the JSON report against the files vitest discovered — every file must report, none may fail, at least one test must run; the exit code decides nothing. On 2026-10-07 `bun --bun vitest run` on main exited 0 after ONE file in 3 s with no summary (run 37622917869) and the step passed; the mutation baseline is held to the same every-file rule) ·
   `bun run test:unit` (offline) · `bun run test:live` (vnet/live; needs `CORK_TEST_RPC` /
   `CORK_RPC_LIVE=1`) · `bun run test:mutation` (scripts/mutation-probes.ts: applies catalogued
   semantic mutants — struct/tuple order, enum ordinals, bit flags, hash inputs, rounding,
