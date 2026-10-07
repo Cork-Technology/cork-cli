@@ -11,6 +11,7 @@ import { resolveGenerations } from "../config-remote.ts";
 import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
 import { chainReadFailed, diagnoseOracleDeployFailure, envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, isTransportFailure, localComputeFailed, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, unavailable, ZERO_ADDR, generationRefusal } from "./shared.ts";
 import { type QueryFilters } from "./filters.ts";
+import { fixedRateBoundaryNote } from "../cover.ts";
 
 
 /** Resolve the MarketRegistry stack + an RPC for registry-backed calls, or an honest gate. The
@@ -850,7 +851,13 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     }
     const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, extraData: filters.args, oracleSalt, wire, wantConstraint: true });
     warnings.push(...res.warnings);
-    if (res.gate) return res.gate;
+    if (res.gate) {
+      // A refusal at uint256's maximum is the helper's, not pool creation's (cork-cli#5): say so.
+      const boundary = filters.rate !== undefined ? fixedRateBoundaryNote(filters.rate) : undefined;
+      const first = res.gate.warnings[0];
+      if (boundary !== undefined && first?.code === "recipe_refused") return unavailable(chainId, "recipe_refused", `${first.message} ${boundary}`, ctx);
+      return res.gate;
+    }
     const { recipe, source, oracle, constraint } = res;
     const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.deployed ? oracleRateEcho(oracle) : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
     // Identity needs an oracle ADDRESS, not a deployed oracle: the pool id's only oracle-derived

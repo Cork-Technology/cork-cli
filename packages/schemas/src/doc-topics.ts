@@ -819,7 +819,26 @@ Know these before you ask:
 - A \`rate_override\` on a liquidity or an impairment recipe is not carried: a fill with a
   non-zero rate on such a recipe reverts \`UnexpectedRateOverride\`. The venue does not check
   this; rfq-open warns.
-- The venue admits uint256's maximum as a rate; the recipe overflows on it. rfq-open warns.
+- The venue admits uint256's maximum as a rate; the recipe HELPER overflows on it (resolve computes
+  rate + 1: Panic 0x11), so the helper resolves 1 .. MAX − 1 and every resolving path — rfq-open's
+  reading, derive-cork-pool, answer-rfq — refuses \`recipe_refused\` and says so. The pool itself is
+  creatable: create-pool with the explicit constraint [MAX − 1, MAX] and rateOverride MAX passes the
+  creator (fork-simulated 2026-10-07); [MAX, MAX] reverts InvalidParams.
+
+## Which cover a quote delivers, and which cover a fill buys
+
+A label is not a cover. answer-rfq reads the recipe the order's JIT block names and reports
+\`answer.cover\` (kind, mode, the request's modes, \`agrees\`); a mode the request did not ask for
+is \`cover_mode_mismatch\` (info — the option still builds). cork_submit rfq-answer reads each
+option's template recipe against the option's \`mode\` label and against the request's modes: a
+\`fixed_rate\` label on a NAV template, or a mode the request did not name, is
+\`cover_mode_mismatch\` (info — relayed as asked). A fill of a cited order through the venue book
+(taker-fill by orderHash) reads the order's JIT block — the recipe it names, else the limits it
+carries — against the cited RFQ's modes and the cited option's label, and reports
+\`data.cover\`; a cover the request did not ask for is \`cover_mode_mismatch\` (info — the bytes
+build; the requester accepts or refuses the counter-proposal). An order without a JIT block
+fills on an existing pool, whose cover is not in its bytes: \`data.cover.delivered.kind\` is null
+and the note says to read the pool.
 
 ## One request, one cover
 

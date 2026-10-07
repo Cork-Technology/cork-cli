@@ -2185,6 +2185,10 @@
       "kind": "value"
     },
     {
+      "name": "fixedRateBoundaryNote",
+      "kind": "value"
+    },
+    {
       "name": "fixedRateInTheMoneyWarning",
       "kind": "value"
     },
@@ -5338,6 +5342,10 @@
     },
     {
       "name": "finalizeMakerOrder",
+      "kind": "value"
+    },
+    {
+      "name": "fixedRateBoundaryNote",
       "kind": "value"
     },
     {

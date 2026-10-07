@@ -30,6 +30,7 @@ type RolloverIntentAction = Extract<PrepareOrdersInput["action"], { type: "rollo
 type QuoteFilledTerm = "srcPoolId" | "dstPoolId" | "premiumToken" | "orderSize" | "minPremiumPerShare";
 type RolloverIntentTerms = Omit<RolloverIntentAction, QuoteFilledTerm> & { [K in QuoteFilledTerm]-?: NonNullable<RolloverIntentAction[K]> };
 import { authenticateSignedOrder, makerCodeUnknownWarning, verifyMakerSignatureLadder } from "./order-auth.ts";
+import { requesterCoverReading } from "./cover-mode.ts";
 
 /** The sugars re-enter this dispatcher and its approval annotator; handed in, never imported back. */
 const SUGAR_DEPS: SugarDeps = { prepare: (input, ctx) => handlePrepareOrders(input, ctx), annotateApprovals: (ctx, chainId, entries) => annotateIfExplicitRpc(ctx, chainId, entries) };
@@ -966,7 +967,11 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const authenticated: SignedLopOrder = { ...signed, makerAccountType: auth.makerAccountType };
       // The venue's in-band notices ride the book pages this search read (e.g. the premium
       // deprecation) — the fill path is exactly who they are for.
-      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed: authenticated, localOrderHash, acquisitionWarnings: [...venueNoticeWarnings(book), ...auth.warnings], artifactSource: "service" });
+      // The cover this fill BUYS against the cover the cited RFQ asked for (cork-cli#6): read from
+      // the order's own JIT block, never from the option's label. Venue path only — an inline
+      // signedOrder carries no citation. Build-and-warn: the requester decides with the facts.
+      const quoteCover = await requesterCoverReading({ ctx, chainId, row, extension: authenticated.extension, account: input.account });
+      return await buildTakerFillArtifact({ ctx, chainId, account: input.account, clientRequestId: input.clientRequestId, action, lop, signed: authenticated, localOrderHash, acquisitionWarnings: [...venueNoticeWarnings(book), ...auth.warnings, ...(quoteCover?.warnings ?? [])], artifactSource: "service", ...(quoteCover ? { quoteCover: quoteCover.cover } : {}) });
     } catch (err) {
       return venueFailed(chainId, err, ctx);
     }
@@ -1130,6 +1135,8 @@ async function buildTakerFillArtifact(a: {
   /** Warnings from the acquisition path: venue notices, or the inline path's disclosures. */
   acquisitionWarnings: Array<{ code: string; message: string }>;
   artifactSource: "service" | "config" | "chain";
+  /** The requester-side cover reading of a cited venue row (cover-mode.ts); absent off the venue path or for an uncited row. */
+  quoteCover?: Record<string, unknown> | undefined;
 }): Promise<Envelope> {
   const { ctx, chainId, account, clientRequestId, action, lop, signed, localOrderHash } = a;
   // Exclusivity pre-flight, chain-free from the signed bytes [K3]: a reserved order admits ONE
@@ -1435,6 +1442,7 @@ async function buildTakerFillArtifact(a: {
       // The maker-side verdict behind the warnings above; "unknown" = no client resolved or a
       // needed read failed (indeterminate is never a verdict).
       makerReadiness,
+      ...(a.quoteCover !== undefined ? { cover: a.quoteCover } : {}),
       // A caller-assembled interaction is opaque bytes: whatever tokens the interaction
       // contract itself pulls mid-fill are invisible here — say so instead of implying the
       // report is complete (jitMarket-built interactions ARE characterized, in `jit`).
