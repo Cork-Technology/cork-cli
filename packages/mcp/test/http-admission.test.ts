@@ -293,10 +293,15 @@ describe("trustForwardedFor is EXPLICIT (audit DB-002): a non-loopback bind alon
     await settle();
   });
 
-  it("/readyz discloses the trust posture so an operator can see which way the deployment counts clients", async () => {
-    const off = await createHttpHandler({ host: "0.0.0.0" })(new Request("http://mcp.test/readyz"));
+  it("/readyz discloses the trust posture to the OPERATOR (full view, by bearer) so they can see which way the deployment counts clients", async () => {
+    // The posture is part of the full view (cork-cli-private#6): a caller with no bearer learns
+    // only the degraded flags, never how clients are keyed.
+    const authed = new Request("http://mcp.test/readyz", { headers: { authorization: "Bearer diag" } });
+    const off = await createHttpHandler({ host: "0.0.0.0", diagnosticsToken: "diag" })(authed);
     expect(((await off.json()) as { subsystems: { admission: { trustForwardedFor: boolean } } }).subsystems.admission.trustForwardedFor).toBe(false);
-    const on = await createHttpHandler({ host: "0.0.0.0", trustForwardedFor: true })(new Request("http://mcp.test/readyz"));
+    const on = await createHttpHandler({ host: "0.0.0.0", trustForwardedFor: true, diagnosticsToken: "diag" })(authed);
     expect(((await on.json()) as { subsystems: { admission: { trustForwardedFor: boolean } } }).subsystems.admission.trustForwardedFor).toBe(true);
+    const pub = await createHttpHandler({ host: "0.0.0.0", trustForwardedFor: true, diagnosticsToken: "diag" })(new Request("http://mcp.test/readyz"));
+    expect(((await pub.json()) as { subsystems: { admission: Record<string, unknown> } }).subsystems.admission).toEqual({ degraded: false });
   });
 });

@@ -96,7 +96,7 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
 - `.github/workflows/release-toolchain.yml` — runs on every push to `main`: the release's
   `apk add` lines in the pinned image, and a REHEARSAL that builds the apk and the image with
   the release's own scripts, a throwaway key and no push.
-- Runtime secrets (`CORK_MCP_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
+- Runtime secrets (`CORK_MCP_TOKEN`, `CORK_MCP_DIAGNOSTICS_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 
 ## One-time setup this channel is blocked on (owner ops)

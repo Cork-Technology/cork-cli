@@ -255,8 +255,9 @@ The same server also speaks **Streamable HTTP** — the shape a hosted deploymen
 ```sh
 ch mcp --http                # serves on :8080 — endpoint /mcp, health /healthz, docs /docs/signing
 ch mcp --http --port 9090    # custom port
-# in a container: bind all interfaces and publish the port — /healthz and /readyz answer 200,
-# GET /mcp answers 405 by design (Streamable HTTP is POST):
+# in a container: bind all interfaces and publish the port — /healthz and /readyz answer 200
+# (/readyz is a summary without a bearer; see the env table), GET /mcp answers 405 by design
+# (Streamable HTTP is POST):
 docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cork-technology/cork-cli:v0.5.0 mcp --http --host 0.0.0.0
 
 # connect a client to a running HTTP deployment:
@@ -271,7 +272,8 @@ are always client-side (see `cork_capabilities topic:"signing"`).
 
 | Env | Effect |
 |---|---|
-| `CORK_MCP_TOKEN` | When set, `/mcp` requires `Authorization: Bearer <token>`; unset = open (put auth/rate-limits at your ingress). Never logged. |
+| `CORK_MCP_TOKEN` | When set, `/mcp` requires `Authorization: Bearer <token>`; unset = open (put auth/rate-limits at your ingress). Never logged. Also unlocks the full `/readyz` view. |
+| `CORK_MCP_DIAGNOSTICS_TOKEN` | A read-only bearer that unlocks the full `/readyz` view (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) without gating `/mcp`. Without a bearer `/readyz` answers the summary: one `degraded` flag per subsystem. Never logged. |
 | `CORK_RPC_URL` | Explicit RPC endpoint override for chain reads (else built-in defaults + chainlist fallback). |
 | `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target (Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl — those builds say so); `ch version` shows which binding a binary carries. |
 | `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech). |

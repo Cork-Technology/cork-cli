@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DOC_TOPICS } from "@cork/schemas";
 import { DEFAULT_RPCS } from "@cork/core";
-import { createCorkServer, createHttpHandler } from "@cork/mcp";
+import { createCorkServer, createHttpHandler, MCP_HTTP_LIMITS, MCP_SECURITY_HEADERS, readyzBody, withSecurityHeaders } from "@cork/mcp";
 
 const NOW = 1_800_000_000n;
 
@@ -163,12 +163,14 @@ describe("/readyz diagnostics", () => {
     const prev = process.env.CORK_RPC_CACHE_FILE;
     process.env.CORK_RPC_CACHE_FILE = file;
     try {
-      const handler = createHttpHandler({ token: "sekrit" }); // like /healthz, no bearer required
-      const res = await handler(new Request("http://cork.test/readyz"));
+      const handler = createHttpHandler({ token: "sekrit" });
+      // The FULL view needs a bearer (cork-cli-private#6); the MCP token is one of the two.
+      const res = await handler(new Request("http://cork.test/readyz", { headers: { authorization: "Bearer sekrit" } }));
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         status: string;
         version: string;
+        detail: string;
         subsystems: {
           rpc: { chosen: Record<string, { host: string }>; breakers: Array<{ host: string; open: boolean }>; degraded: boolean };
           venue: { host: string; degraded: boolean };
@@ -176,6 +178,7 @@ describe("/readyz diagnostics", () => {
         };
       };
       expect(body.status).toBe("ok");
+      expect(body.detail).toBe("full");
       expect(body.subsystems.rpc.chosen["1"]!.host).toBe(new URL(tokened).host);
       expect(body.subsystems.rpc.degraded).toBe(true); // the seeded breaker is open
       expect(body.subsystems.venue.host).toBe("api-phoenix.cork.tech");
@@ -185,9 +188,176 @@ describe("/readyz diagnostics", () => {
       // appear anywhere in the payload.
       const tokenSegment = tokened.split("/").pop()!;
       expect(JSON.stringify(body)).not.toContain(tokenSegment);
+      // The PUBLIC view, same process, same seeded state: the degraded flags survive, the host
+      // does not — not as a redaction of the full body, but because the summary never carried it.
+      const pub = await handler(new Request("http://cork.test/readyz"));
+      expect(pub.status).toBe(200);
+      const summary = (await pub.json()) as { detail: string; degraded: boolean; subsystems: Record<string, Record<string, unknown>> };
+      expect(summary.detail).toBe("summary");
+      expect(summary.degraded).toBe(true);
+      expect(summary.subsystems.rpc).toEqual({ degraded: true });
+      expect(JSON.stringify(summary)).not.toContain(new URL(tokened).host);
+      expect(JSON.stringify(summary)).not.toContain(tokenSegment);
     } finally {
       if (prev === undefined) delete process.env.CORK_RPC_CACHE_FILE;
       else process.env.CORK_RPC_CACHE_FILE = prev;
     }
+  });
+});
+
+describe("/readyz: two views (cork-cli-private#6)", () => {
+  const SUMMARY_KEYS = ["admission", "config", "rpc", "venue"];
+  const body = async (res: Response) => (await res.json()) as { status: string; detail: string; degraded: boolean; note?: string; subsystems: Record<string, Record<string, unknown>> };
+
+  it("a request with no bearer gets the SUMMARY: degraded flags only, still 200, no challenge", async () => {
+    const handler = createHttpHandler({ token: "sekrit", diagnosticsToken: "diag" });
+    const res = await handler(new Request("http://cork.test/readyz"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("www-authenticate")).toBeNull();
+    const b = await body(res);
+    expect(b.status).toBe("ok");
+    expect(b.detail).toBe("summary");
+    expect(Object.keys(b.subsystems).sort()).toEqual(SUMMARY_KEYS);
+    for (const sub of Object.values(b.subsystems)) expect(Object.keys(sub)).toEqual(["degraded"]);
+    expect(b.note).toContain("summary view");
+    // Nothing operational: no hosts, no bounds, no posture, no counts, no config source.
+    const text = JSON.stringify(b);
+    for (const leak of ["host", "limits", "trustForwardedFor", "global", "breakers", "chosen", "source", "lastOutcome", "bodyBytes"]) expect(text, leak).not.toContain(`"${leak}"`);
+  });
+
+  it("a WRONG bearer gets the summary too — never a 401 (a liveness probe is never told to authenticate)", async () => {
+    const handler = createHttpHandler({ token: "sekrit", diagnosticsToken: "diag" });
+    for (const header of ["Bearer nope", "Bearer ", "Basic c2Vrcml0", "sekrit"]) {
+      const res = await handler(new Request("http://cork.test/readyz", { headers: { authorization: header } }));
+      expect(res.status, header).toBe(200);
+      expect((await body(res)).detail, header).toBe("summary");
+    }
+  });
+
+  it("the MCP bearer unlocks the FULL view; so does the diagnostics bearer, which does NOT unlock /mcp", async () => {
+    const handler = createHttpHandler({ token: "sekrit", diagnosticsToken: "diag" });
+    for (const header of ["Bearer sekrit", "Bearer diag"]) {
+      const res = await handler(new Request("http://cork.test/readyz", { headers: { authorization: header } }));
+      const b = await body(res);
+      expect(b.detail, header).toBe("full");
+      expect(b.subsystems.admission).toMatchObject({ limits: MCP_HTTP_LIMITS, trustForwardedFor: false, global: expect.any(Number) });
+      expect(b.subsystems.venue).toHaveProperty("host");
+      expect(b.subsystems.config).toHaveProperty("source");
+      expect(b.note).toBeUndefined();
+    }
+    // The diagnostics bearer is READ-ONLY: /mcp still wants the MCP token.
+    const mcp = await handler(new Request("http://cork.test/mcp", { method: "POST", headers: { authorization: "Bearer diag", "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) }));
+    expect(mcp.status).toBe(401);
+  });
+
+  it("with NEITHER token configured the summary is all anyone gets — an empty bearer never unlocks", async () => {
+    const handler = createHttpHandler({});
+    for (const headers of [{}, { authorization: "Bearer " }, { authorization: "Bearer undefined" }]) {
+      const res = await handler(new Request("http://cork.test/readyz", { headers }));
+      expect((await body(res)).detail).toBe("summary");
+    }
+  });
+
+  /** The same diagnostics with every upstream quiet: no open breaker, no venue outcome. */
+  const quietOf = (diag: Parameters<typeof readyzBody>[1]) => ({ ...diag, rpc: { ...diag.rpc, breakers: [] } as typeof diag.rpc, venue: { host: "v", breaker: undefined, lastOutcome: undefined } as unknown as typeof diag.venue });
+
+  it("readyzBody is pure: the summary is BUILT from the degraded flags, the full view carries the diagnostics", () => {
+    const diag = {
+      rpc: { source: "default", chosen: { 8453: { host: "rpc.example.test" } }, breakers: [{ host: "rpc.example.test", open: true }] } as unknown as Parameters<typeof readyzBody>[1]["rpc"],
+      venue: { host: "venue.example.test", breaker: { open: false }, lastOutcome: { ok: false } } as unknown as Parameters<typeof readyzBody>[1]["venue"],
+      config: { source: "bundled", degraded: false } as unknown as Parameters<typeof readyzBody>[1]["config"],
+      admission: { global: 3, principals: 2 },
+      trustForwardedFor: true,
+    };
+    const summary = readyzBody("summary", diag);
+    expect(summary.degraded).toBe(true);
+    expect(summary.subsystems).toEqual({ rpc: { degraded: true }, venue: { degraded: true }, admission: { degraded: false }, config: { degraded: false } });
+    expect(JSON.stringify(summary)).not.toContain("example.test");
+    const full = readyzBody("full", diag);
+    expect(full.degraded).toBe(true);
+    expect(full.subsystems.rpc).toMatchObject({ degraded: true, breakers: [{ host: "rpc.example.test", open: true }] });
+    expect(full.subsystems.venue).toMatchObject({ degraded: true, host: "venue.example.test" });
+    expect(full.subsystems.admission).toMatchObject({ global: 3, principals: 2, limits: MCP_HTTP_LIMITS, trustForwardedFor: true, degraded: false });
+    expect(full.subsystems.config).toMatchObject({ source: "bundled", degraded: false });
+    // The config resolver's own flag is CARRIED into both views and the aggregate — a remote
+    // fetch that fell back to the bundled copy with a warning must show (the first draft of the
+    // trim overwrote it with false).
+    const configDown = { ...quietOf(diag), config: { source: "bundled", ageMs: 5, ttlMs: 3_600_000, degraded: true } as unknown as typeof diag.config };
+    expect(readyzBody("summary", configDown).subsystems.config).toEqual({ degraded: true });
+    expect(readyzBody("summary", configDown).degraded).toBe(true);
+    expect(readyzBody("full", configDown).subsystems.config).toMatchObject({ source: "bundled", ageMs: 5, degraded: true });
+    expect(readyzBody("full", configDown).degraded).toBe(true);
+    // No config resolution yet: not degraded, and the full view says why.
+    const noConfig = { ...quietOf(diag), config: null };
+    expect(readyzBody("summary", noConfig).subsystems.config).toEqual({ degraded: false });
+    expect(readyzBody("full", noConfig).subsystems.config).toMatchObject({ source: null, degraded: false, note: expect.stringContaining("no config resolution") });
+    // A quiet process is not degraded in either view.
+    const quiet = quietOf(diag);
+    expect(readyzBody("summary", quiet).degraded).toBe(false);
+    expect(readyzBody("full", quiet).degraded).toBe(false);
+  });
+});
+
+describe("security headers ride EVERY response (cork-cli-private#6)", () => {
+  const expectSecured = (res: Response, label: string) => {
+    for (const [name, value] of Object.entries(MCP_SECURITY_HEADERS)) expect(res.headers.get(name), `${label}: ${name}`).toBe(value);
+  };
+
+  it("the header set is the hardening posture, stated once", () => {
+    expect(MCP_SECURITY_HEADERS).toEqual({
+      "x-content-type-options": "nosniff",
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "x-frame-options": "DENY",
+      "cross-origin-resource-policy": "same-origin",
+    });
+    // HSTS is the TLS terminator's to set — never from a plain-HTTP bind.
+    expect(Object.keys(MCP_SECURITY_HEADERS)).not.toContain("strict-transport-security");
+  });
+
+  it("every route, every status: healthz, readyz (both views), docs, 404, 405, 401, admission 413, and the transport's own 200", async () => {
+    const gated = createHttpHandler({ token: "sekrit" });
+    const open = createHttpHandler({});
+    const cases: Array<[string, Promise<Response>, number]> = [
+      ["healthz", open(new Request("http://cork.test/healthz")), 200],
+      ["readyz summary", open(new Request("http://cork.test/readyz")), 200],
+      ["readyz full", gated(new Request("http://cork.test/readyz", { headers: { authorization: "Bearer sekrit" } })), 200],
+      ["docs", open(new Request("http://cork.test/docs/signing")), 200],
+      ["docs 404", open(new Request("http://cork.test/docs/not-a-topic")), 404],
+      ["unknown route", open(new Request("http://cork.test/nope")), 404],
+      ["GET /mcp", open(new Request("http://cork.test/mcp", { headers: { accept: "application/json, text/event-stream" } })), 405],
+      ["401", gated(new Request("http://cork.test/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) })), 401],
+      ["413", open(new Request("http://cork.test/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "content-length": String(MCP_HTTP_LIMITS.bodyBytes + 1) }, body: "{}" })), 413],
+      ["transport 200", open(new Request("http://cork.test/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }) })), 200],
+    ];
+    for (const [label, pending, status] of cases) {
+      const res = await pending;
+      expect(res.status, label).toBe(status);
+      expectSecured(res, label);
+    }
+    // Route-set headers survive beside the posture: content types and the 405's Allow.
+    expect((await cases[3]![1]).headers.get("content-type")).toContain("text/markdown");
+    expect((await cases[6]![1]).headers.get("allow")).toBe("POST");
+    expect((await cases[7]![1]).headers.get("www-authenticate")).toBe("Bearer");
+  });
+
+  it("the posture WINS over a route or transport header of the same name; status, body and other headers pass through", async () => {
+    const res = withSecurityHeaders(new Response("body", { status: 418, statusText: "teapot", headers: { "cache-control": "public, max-age=600", "x-frame-options": "SAMEORIGIN", "content-type": "text/plain", "x-custom": "kept" } }));
+    expect(res.status).toBe(418);
+    expect(res.statusText).toBe("teapot");
+    expect(await res.text()).toBe("body");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(res.headers.get("x-custom")).toBe("kept");
+    // A streaming body is passed through, not buffered away.
+    const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode("chunk")); c.close(); } });
+    expect(await withSecurityHeaders(new Response(stream)).text()).toBe("chunk");
+  });
+
+  it("a tool call over the SDK client still works with the headers on (the transport's Response was rebuilt, not broken)", async () => {
+    const client = await httpClient();
+    expect((await client.listTools()).tools).toHaveLength(9);
   });
 });

@@ -8097,6 +8097,71 @@ const CATALOG: Mutant[] = [
     tests: [T.rfqWrite],
   },
   {
+    // cork-cli-private#6: the posture seam is removed and responses leave bare.
+    id: "http-security-headers-not-applied",
+    file: "packages/mcp/src/http.ts",
+    find: "return async (req, peerAddress) => withSecurityHeaders(await route(req, peerAddress));",
+    replace: "return route;",
+    tests: [T.mcpHttp],
+  },
+  {
+    // One header of the set is dropped — the test holds the exact set.
+    id: "http-security-nosniff-dropped",
+    file: "packages/mcp/src/http.ts",
+    find: '  "x-content-type-options": "nosniff",',
+    replace: "",
+    tests: [T.mcpHttp],
+  },
+  {
+    // A route's own cache-control would win over the posture.
+    id: "http-security-headers-yield-to-route",
+    file: "packages/mcp/src/http.ts",
+    find: "for (const [name, value] of Object.entries(MCP_SECURITY_HEADERS)) headers.set(name, value);",
+    replace: "for (const [name, value] of Object.entries(MCP_SECURITY_HEADERS)) if (!headers.has(name)) headers.set(name, value);",
+    tests: [T.mcpHttp],
+  },
+  {
+    // The full /readyz view is served to anyone again.
+    id: "http-readyz-detail-ungated",
+    file: "packages/mcp/src/http.ts",
+    find: 'const detail = presentsBearer(req, [opts.token, opts.diagnosticsToken]) ? "full" : "summary";',
+    replace: 'const detail = "full";',
+    tests: [T.mcpHttp, T.httpAdmission],
+  },
+  {
+    // The diagnostics bearer stops unlocking the full view (only the MCP token would).
+    id: "http-readyz-diagnostics-token-ignored",
+    file: "packages/mcp/src/http.ts",
+    find: "presentsBearer(req, [opts.token, opts.diagnosticsToken])",
+    replace: "presentsBearer(req, [opts.token])",
+    tests: [T.mcpHttp],
+  },
+  {
+    // The summary leaks the rpc diagnostics (hosts, breakers) — the summary must be built from
+    // the flags alone.
+    id: "http-readyz-summary-carries-rpc",
+    file: "packages/mcp/src/http.ts",
+    find: "subsystems: { rpc: { degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: false } },",
+    replace: "subsystems: { rpc: { ...diag.rpc, degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: false } },",
+    tests: [T.mcpHttp],
+  },
+  {
+    // The config resolver's own degraded flag is overwritten (the first draft's regression).
+    id: "http-readyz-config-degraded-ignored",
+    file: "packages/mcp/src/http.ts",
+    find: "const configDegraded = diag.config?.degraded ?? false;",
+    replace: "const configDegraded = false;",
+    tests: [T.mcpHttp],
+  },
+  {
+    // The venue's failed last outcome no longer degrades the summary.
+    id: "http-readyz-venue-outcome-ignored",
+    file: "packages/mcp/src/http.ts",
+    find: "const venueDegraded = diag.venue.breaker?.open === true || diag.venue.lastOutcome?.ok === false;",
+    replace: "const venueDegraded = diag.venue.breaker?.open === true;",
+    tests: [T.mcpHttp],
+  },
+  {
     id: "apikey-http-endpoint-not-marked",
     file: "packages/mcp/src/http.ts",
     find: "const server = createCorkServer({ ...(opts.ctx ?? {}), signal, apiKeys: \"refuse\" });",
