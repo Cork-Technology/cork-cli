@@ -13,6 +13,15 @@ Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.5 at `4f
 
 Public-port preparation also preserves executable release-script modes and handles the actual SDK Git repository URLs and current release-graph validator, including historical spellings. Cache-isolation tests cover either build channel. The public candidate remains unpublished and subject to independent review and release approval.
 The SDK installation guide now selects the public release repository by default and no longer includes private-preparation instructions. Archive verification still binds every download to its repository, signing workflow, release tag and approved source commit.
+Release candidates now tag only the advertised head of their public `release/vX.Y.Z` branch; final versions still tag public `main`. CI and release-toolchain rehearsals run on both main and release branches. Push the transformed candidate to `release/v0.7.0`, wait for its checks, then run `sh scripts/release-tag.sh v0.7.0-rc.1 <public-commit> cork-cli`. The script refuses missing branches and mismatched heads before signing.
+
+### Release exceptions
+
+The release owner accepted the following exceptions for this opt-in candidate on 2026-10-07. They do not authorize production promotion, API-v1 retirement or automatic upgrades. Follow-up owner: Filip Malachowicz.
+
+1. **Author-only review (R17/G15):** independent release review and review-mirror approval were skipped by the release owner. This candidate is **unreviewed**, not peer-reviewed. Obtain a non-author review before stable promotion.
+2. **Pending removal notice and usage evidence (R16):** the Telegram notification and usage read were deferred by the release owner for this opt-in RC. Record the posted notice, recipient coverage and usage read before retiring any existing integration path. Existing releases and API-v1 routes are not retired by this cut.
+3. **Existing main-branch layout (G6):** candidate commits were already merged into main under the former workflow. The release owner requested the branch-workflow correction be pushed to main without a PR; that history is retained. RC tags now require release/vX.Y.Z. Restore the stable-main convention when promoting the first stable release.
 
 ### Breaking
 

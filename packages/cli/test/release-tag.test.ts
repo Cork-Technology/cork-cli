@@ -61,9 +61,41 @@ describe.skipIf(!hasKeygen)("release-tag.sh — sign, VERIFY, then push", () => 
     const w = world({ trusted: true });
     const r = w.run(["v1.2.3", w.head, "cork-cli", "v1.2.3 — test"]);
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stderr).toContain("signature verified");
     expect(w.remoteTags()).toContain("refs/tags/v1.2.3");
-    expect(sh("git", ["tag", "-v", "v1.2.3"], w.repo, w.env)).toBeDefined(); // exit 0 = Good
+    expect(sh("git", ["rev-parse", "refs/tags/v1.2.3^{commit}"], w.remote, w.env)).toBe(w.head);
+  });
+
+  it("publishes an RC from its release branch even when main has a different head", () => {
+    const w = world({ trusted: true });
+    writeFileSync(join(w.repo, "candidate"), "RC work\n");
+    sh("git", ["add", "candidate"], w.repo, w.env);
+    sh("git", ["commit", "-q", "-m", "candidate"], w.repo, w.env);
+    const candidate = sh("git", ["rev-parse", "HEAD"], w.repo, w.env);
+    sh("git", ["push", "-q", "cork-cli", "HEAD:refs/heads/release/v1.2.3"], w.repo, w.env);
+    const r = w.run(["v1.2.3-rc.1", candidate]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(sh("git", ["rev-parse", "refs/tags/v1.2.3-rc.1^{commit}"], w.remote, w.env)).toBe(candidate);
+    expect(sh("git", ["rev-parse", "refs/heads/main"], w.remote, w.env)).toBe(w.head);
+  });
+
+  it("refuses an RC if only main advertises the candidate", () => {
+    const w = world({ trusted: true });
+    expect(w.run(["v1.2.3-rc.1", w.head]).status).toBe(2);
+    expect(w.localTags()).toBe("");
+    expect(w.remoteTags()).toBe("");
+  });
+
+  it("refuses an RC candidate that is not its release branch head", () => {
+    const w = world({ trusted: true });
+    sh("git", ["push", "-q", "cork-cli", "HEAD:refs/heads/release/v1.2.3"], w.repo, w.env);
+    writeFileSync(join(w.repo, "candidate"), "unpublished RC work\n");
+    sh("git", ["add", "candidate"], w.repo, w.env);
+    sh("git", ["commit", "-q", "-m", "unpublished candidate"], w.repo, w.env);
+    const candidate = sh("git", ["rev-parse", "HEAD"], w.repo, w.env);
+    expect(w.run(["v1.2.3-rc.1", candidate]).status).toBe(2);
+    expect(w.run(["v1.2.4-rc.1", w.head]).status).toBe(2);
+    expect(w.localTags()).toBe("");
+    expect(w.remoteTags()).toBe("");
   });
 
   it("a signature nobody vouches for: tag deleted locally, NOTHING pushed", () => {

@@ -6,7 +6,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/v*"]
   pull_request:
 
 concurrency:
@@ -78,7 +78,7 @@ jobs:
             exit 1
           fi
 
-  # Live smoke on main pushes: continuous REAL-transport coverage for the RPC resolver — the
+  # Live smoke on main/release pushes: continuous REAL-transport coverage for the RPC resolver — the
   # failover-wrapped client resolves the committed default and a real chainlist fallback (the one
   # code path the offline suite exercises only with injected transports). The registry-parity legs
   # self-skip (early return) when the sandbox read API is unreachable, so transient flake stays
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: test
-    # Only on main pushes — eval runs cost real tokens; PRs get Layer A.
+    # Only on main/release pushes — eval runs cost real tokens; PRs get Layer A.
     if: github.event_name == 'push'
     permissions:
       contents: read

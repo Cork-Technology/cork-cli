@@ -7,14 +7,12 @@
 # the tag name. The tag must start with v; the commit must resolve; a tag of that name must not
 # already exist locally (delete one deliberately, never through this script).
 #
-# The candidate must ALSO be the exact head of the advertised public main (audit SUPPLY-001,
-# 2026-08-24). `git push <remote> refs/tags/<tag>` sends every object the tag reaches that the
-# remote lacks: tagging a private-only commit would publish that commit AND its whole reachable
-# history to the public repo. scripts/port-to-public.ts prints a ported head; that head must be
-# pushed to public main FIRST, and this script re-fetches main and requires equality before it
-# signs anything. The remote is compared by IDENTITY (host/owner/repo, normalised), not by URL
-# literal: ssh and https spellings of the same repo are the same repo, and a look-alike host is
-# not.
+# The candidate must be the exact head of its advertised public release branch: prereleases
+# use release/vX.Y.Z; final versions use main. A tag push sends every object it reaches that
+# the remote lacks, so the ported candidate must be pushed to that public branch FIRST.
+# This script re-fetches the branch and requires equality before signing anything.
+# The remote is compared by IDENTITY (host/owner/repo, normalised), not by URL literal:
+# ssh and https spellings of the same repo are the same repo, and a look-alike host is not.
 #
 # Why a script: with an ssh-sk (FIDO) signing key, an untouched key makes the middleware return
 # a ZERO-FILLED signature with a clean exit. `git tag -s` then reports success, and only
@@ -27,6 +25,10 @@ set -eu
 tag="${1:?tag}"; commit="${2:?commit}"; remote="${3:-cork-cli}"; message="${4:-$1}"
 canonical_repo="${CORK_RELEASE_REPO:-github.com/cork-technology/cork-cli}"
 case "$tag" in v[0-9]*) ;; *) echo "release-tag: tag must start with v (got: $tag)" >&2; exit 2 ;; esac
+case "$tag" in
+  *-*) release_branch="release/${tag%%-*}" ;;
+  *) release_branch="main" ;;
+esac
 sha="$(git rev-parse --verify --quiet "$commit^{commit}")" || { echo "release-tag: $commit is not a commit" >&2; exit 2; }
 if git show-ref --verify --quiet "refs/tags/$tag"; then
   echo "release-tag: $tag already exists locally — inspect it (git tag -v $tag) and delete it deliberately first" >&2
@@ -46,16 +48,15 @@ if [ "$push_repo" != "$canonical_repo" ]; then
   exit 2
 fi
 
-# The candidate must be the exact head the public repo already advertises. Anything else — a
-# private commit, an ancestor, a commit ahead of main — would publish objects main does not have.
-if ! git fetch --quiet --no-tags "$remote" refs/heads/main; then
-  echo "release-tag: could not fetch $remote refs/heads/main — the candidate cannot be checked against public main" >&2
+# Require the exact head already advertised on the branch selected by the version.
+if ! git fetch --quiet --no-tags "$remote" "refs/heads/$release_branch"; then
+  echo "release-tag: could not fetch $remote refs/heads/$release_branch — the candidate cannot be checked against its public release branch" >&2
   exit 2
 fi
-public_main="$(git rev-parse --verify --quiet FETCH_HEAD^{commit})" || { echo "release-tag: fetched $remote refs/heads/main is not a commit" >&2; exit 2; }
-if [ "$sha" != "$public_main" ]; then
-  echo "release-tag: $sha is not the head of public main ($public_main)." >&2
-  echo "release-tag: pushing a tag also pushes every object it reaches — port and push the commit to public main FIRST, then tag that head." >&2
+public_head="$(git rev-parse --verify --quiet FETCH_HEAD^{commit})" || { echo "release-tag: fetched $remote refs/heads/$release_branch is not a commit" >&2; exit 2; }
+if [ "$sha" != "$public_head" ]; then
+  echo "release-tag: $sha is not the head of public $release_branch ($public_head)." >&2
+  echo "release-tag: pushing a tag also pushes every object it reaches — port and push the commit to public $release_branch FIRST, then tag that head." >&2
   exit 2
 fi
 

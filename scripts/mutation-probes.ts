@@ -5314,12 +5314,12 @@ const CATALOG: Mutant[] = [
     tests: [T.decodeLop],
   },
   {
-    // The public-main equality check inverts: the ONE candidate that is publishable is refused
+    // The public-branch equality check inverts: the ONE candidate that is publishable is refused
     // and every unpublished commit is tagged (and its history pushed with the tag).
-    id: "releasetag-public-main-gate-inverted",
+    id: "releasetag-public-branch-gate-inverted",
     file: "scripts/release-tag.sh",
-    find: 'if [ "$sha" != "$public_main" ]; then',
-    replace: 'if [ "$sha" = "$public_main" ]; then',
+    find: 'if [ "$sha" != "$public_head" ]; then',
+    replace: 'if [ "$sha" = "$public_head" ]; then',
     tests: [T.releaseTag],
   },
   {

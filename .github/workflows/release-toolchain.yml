@@ -9,7 +9,7 @@
 #   - every Monday, and on demand: the same, PLUS the image must be at most 30 days old. A
 #     quiet week must not hide an aging pin, and an old pin keeps the signing job on old base
 #     libraries. The fix is one command: sh scripts/bump-wolfi-pin.sh, then commit.
-#   - on every push to main, on Mondays and on demand, in either component repository: the REHEARSAL.
+#   - on every push to main or release/v*, on Mondays and on demand: the REHEARSAL.
 #     It builds the apk for both architectures and the image, with the release's own scripts
 #     and command lines, a throwaway signing key, and no push. The preflight proves that the
 #     tools install; the rehearsal proves that they still build this commit (melange moved
@@ -23,7 +23,7 @@ name: release-toolchain
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/v*"]
   pull_request:
   schedule:
     - cron: "17 6 * * 1" # Mondays 06:17 UTC — off the hour, where scheduled runs queue
